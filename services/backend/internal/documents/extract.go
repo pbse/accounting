@@ -115,6 +115,11 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 		}
 	}
 	if hasLayer {
+		// With Gemini configured, a page it did not compare with its image says so; without it, a page is plain PDF
+		// text, as it always was.
+		if r.Gemini != nil {
+			return layer, "PDF text" + imageUnchecked, nil
+		}
 		return layer, "PDF text", nil
 	}
 	png, err := rendered()
@@ -133,6 +138,12 @@ var errRender, errOCR = errors.New("render"), errors.New("ocr")
 // imageDiffers ends the label of a page whose image Gemini read differently from its text layer; Check turns it into
 // a question that holds the document's facts until a person compares the original.
 const imageDiffers = " read it differently, so check the original"
+
+// imageUnchecked ends the label of a text page Gemini, though configured, did not compare with its image (it failed or
+// read nothing, the image was too large, or the firm's limit or the document's time ruled it out). The page is then
+// exactly what it was before Gemini: its own text, unchecked. Check names it; it holds nothing, since an unchecked
+// page is the product's standing case without Gemini.
+const imageUnchecked = "; Gemini could not compare it with the page image"
 
 // Extract retains page numbers and labels machine readings separately from the PDF text layer.
 // ponytail: English OCR, 20 pages, 5 MiB originals; larger documents need a separate intake budget.

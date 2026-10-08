@@ -103,12 +103,27 @@ func QuoteLocation(name, content, quote string) (string, bool) {
 
 // Check reports only explicit page-number and labeled-value conflicts; it does
 // not infer that an unnumbered document is complete or choose a correct value.
+// pageList names pages for a warning: "PDF page 2", or "PDF pages 2, 3 and 5".
+func pageList(pages []int) string {
+	if len(pages) == 1 {
+		return fmt.Sprintf("PDF page %d", pages[0])
+	}
+	names := make([]string, len(pages))
+	for i, p := range pages {
+		names[i] = strconv.Itoa(p)
+	}
+	return "PDF pages " + strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
 // ImageDisputed lists the pages of extracted PDF text whose image Gemini read differently from their text layer, as
 // the extractor's own page markers say.
-func ImageDisputed(content string) []int {
+func ImageDisputed(content string) []int { return markedPages(content, imageDiffers) }
+
+// markedPages lists the pages whose extractor marker ends with ending.
+func markedPages(content, ending string) []int {
 	pages := []int{}
 	for i, at := range extractedPage.FindAllStringIndex(content, -1) {
-		if marker, _, _ := strings.Cut(content[at[0]:], "\n"); strings.HasSuffix(marker, imageDiffers+" ---") {
+		if marker, _, _ := strings.Cut(content[at[0]:], "\n"); strings.HasSuffix(marker, ending+" ---") {
 			pages = append(pages, i+1)
 		}
 	}
@@ -150,6 +165,9 @@ func Check(name, content string) CheckResult {
 			// prepared from such a document without a person confirming its facts.
 			for _, page := range ImageDisputed(content) {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("PDF page %d: Gemini's reading of the page image differs from its PDF text; compare that page with the original before using its facts.", page))
+			}
+			if unchecked := markedPages(content, imageUnchecked); len(unchecked) > 0 {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("Gemini could not compare %s with the page image; the PDF text is used as it is, so inspect the original for anything only the image shows.", pageList(unchecked)))
 			}
 			if pagesWithPrinted == 0 {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("PDF has %d extracted pages but no printed page total; compare with the original to confirm completeness.", len(pages)))

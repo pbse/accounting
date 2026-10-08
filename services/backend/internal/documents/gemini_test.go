@@ -86,8 +86,8 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 		if text, method, err = reading.page(ctx, "", render, tesseract); err != nil || text != "SCANNED INVOICE 6000.00" || method != "OCR (English; verify against original)" {
 			t.Fatalf("%+v: a scanned page falls back to Tesseract: %q %q %v", failing, text, method, err)
 		}
-		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text" {
-			t.Fatalf("%+v: a page with text keeps it: %q %q", failing, text, method)
+		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Gemini could not compare it with the page image" {
+			t.Fatalf("%+v: a page with text keeps it, saying it went unchecked: %q %q", failing, text, method)
 		}
 	}
 
@@ -147,7 +147,7 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 	// A page that cannot be rendered fails only when nothing else can read it.
 	broken := func() ([]byte, error) { return nil, errors.New("pdftoppm failed") }
 	reading = Reading{Gemini: &fakeReader{text: "never sent"}}
-	if text, method, err = reading.page(ctx, layer, broken, noTesseract); err != nil || text != layer || method != "PDF text" {
+	if text, method, err = reading.page(ctx, layer, broken, noTesseract); err != nil || text != layer || method != "PDF text; Gemini could not compare it with the page image" {
 		t.Fatalf("an unrenderable page with text keeps it: %q %q %v", text, method, err)
 	}
 	if _, _, err = reading.page(ctx, "", broken, noTesseract); err != errRender {
@@ -201,5 +201,13 @@ func TestAPageGeminiReadDifferentlyIsNamedToCompare(t *testing.T) {
 	// Only the extractor's own marker counts: the same words inside a page's text do not.
 	if inText := Check("statement.pdf", "--- Page 1 · PDF text ---\nGemini"+imageDiffers+" ---\nPage 1 of 1\n"); len(inText.Warnings) != 0 || len(inText.Questions) != 0 {
 		t.Fatalf("a page's text cannot raise the warning: %+v", inText)
+	}
+	// Pages Gemini could not compare are named together, in a warning that holds nothing.
+	unchecked := Check("statement.pdf", "--- Page 1 · PDF text"+imageUnchecked+" ---\nPage 1 of 3\n--- Page 2 · PDF text ---\nPage 2 of 3\n--- Page 3 · PDF text"+imageUnchecked+" ---\nPage 3 of 3\n")
+	if len(unchecked.Questions) != 0 || len(unchecked.Warnings) != 1 || !strings.HasPrefix(unchecked.Warnings[0], "Gemini could not compare PDF pages 1 and 3 with the page image") {
+		t.Fatalf("pages Gemini could not compare are named: %+v", unchecked)
+	}
+	if !strings.Contains(strings.Join(Check("invoice.pdf", "--- Page 1 · PDF text"+imageUnchecked+" ---\nTotal 5\n").Warnings, " "), "Gemini could not compare PDF page 1 with") {
+		t.Fatal("one page Gemini could not compare is named")
 	}
 }
