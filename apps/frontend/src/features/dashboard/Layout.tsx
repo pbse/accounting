@@ -11,13 +11,13 @@ import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
 
 type NavItem = { to: string; label: string; icon: IconName; end?: boolean };
 
-// The firm's pages. Security and Measure open from Firm and the preparation forms from a close; neither needs a place
-// in the bar. Only Krith's own firm has the worked example (see examples.go), and sees it here.
+// The firm's pages. Settings holds the person's and the firm's settings; Measure opens from Settings and the
+// preparation forms from a close, so neither needs a place in the bar. Only Krith's own firm has the worked example (see examples.go), and sees it here.
 const firmNav: NavItem[] = [
   { to: "/dashboard", label: "Work", icon: "work", end: true },
   { to: "/dashboard/attention", label: "Attention", icon: "decision" },
   { to: "/dashboard/closes", label: "Clients", icon: "clients" },
-  { to: "/dashboard/firm", label: "Firm", icon: "firm" },
+  { to: "/dashboard/settings", label: "Settings", icon: "settings" },
 ];
 const exampleNav: NavItem = { to: "/dashboard/close", label: "Example", icon: "book" };
 

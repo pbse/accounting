@@ -46,7 +46,7 @@ function SignedIn({ children }: { children: ReactNode }) {
   );
 }
 
-// The account menu in the top bar: the person's initial, and under it their session, their own settings and the way out.
+// The account menu in the top bar: the person's initial, and under it their session, their profile and the way out.
 export function AccountMenu() {
   const unlocked = useUnlocked();
   const session = authKitClientId ? useSession() : undefined;
@@ -61,7 +61,7 @@ export function AccountMenu() {
       <div>
         {(session?.user || unlocked) && (
           <Link to="/dashboard/settings" onClick={(event) => event.currentTarget.closest("details")?.removeAttribute("open")}>
-            Your settings
+            Your profile
           </Link>
         )}
         {authKitClientId ? (

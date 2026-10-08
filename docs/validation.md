@@ -3853,3 +3853,14 @@ Request: turn Gemini on with a single Cloudflare step, not a separate GitHub var
   - Script and frontend tests: 47/47.
 
 Not verified: live Gemini.
+
+
+## 2026-10-08: one Settings page for the person and the firm
+
+Branch `claude/settings-hub`. Firm settings, the Security center and Your settings become one page at `/dashboard/settings`, named Settings in the top bar, in vertical tabs under two group names: **You** (Profile, Notifications, Connections) and **Firm** (Firm, People, Clients, Policies, Security). The old routes redirect to their sections. Each firm policy is one row (`SettingList`, `Setting`): its state as a pill and a one-line summary, opening to what it means and, for an administrator, the way to change it with a reason; the agent chat's consent text and the stopped-answers notice are kept whole. The Firm section links to Human effort, which left the top bar with the shell. People holds the roster of people and roles, invitations, client assignments and enrolment decisions; Security holds connected services, posting authority in force, people's agents and recent changes, with the connector operations, what outside services receive, usage and the firm suspension under Advanced. The policy read gains `can_manage_members` (clients:all and members:manage) and `can_read_roster` (clients:all, or the local workspace), which decide whether People, Security and Clients show.
+
+- `npm run check`, `npm run build` and `go vet` pass. `go test ./internal/transport/` against a fresh local database migrated through 134 passes except the pre-existing Poppler-dependent test: the export test proves the local workspace reads the roster and manages no members, and the OCR test that clients:all alone opens the roster and nothing more; the security and setup tests take the renamed messages and links.
+- The layout check passes 89 page views across both apps at desktop and phone width, with every settings section a route.
+- Screenshots at 1280px and 390px of all eight sections, with a policy row open: the strip of sections scrolls sideways on a phone, status pills stay short, and no section is wider than the screen.
+
+Not verified: the hosted People and Security sections with a real administrator (locally the member-management reads refuse, so those sections render only their refusal, and the Firm group shows Firm, Clients and Policies).

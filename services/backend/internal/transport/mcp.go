@@ -333,7 +333,7 @@ func mcpHandler(store http.Handler, token string, db *sql.DB) http.Handler {
 					return
 				}
 				if scope == "" {
-					problem(w, 403, "Ask a firm administrator to approve agent access for your account under Firm settings.")
+					problem(w, 403, "Ask a firm administrator to approve agent access for your account under Settings → Connections.")
 					return
 				}
 				actor, err = agentActor(*claims, scope), nil

@@ -1,10 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { PageHeader } from "@close/ui/components/PageHeader";
-import { AgentAccess } from "./AgentAccess";
-import { ClientAccess } from "./ClientAccess";
-import { FirmOperations } from "./Enterprise";
-import { workspaceRequest } from "./workspace";
+import { RowList } from "@close/ui/components/RowList";
+import { OperationsSnapshot } from "../closes/Enterprise";
+import { workspaceRequest } from "../closes/workspace";
 
 type Person = {
   subject: string;
@@ -51,6 +49,7 @@ type Operation = {
 };
 
 const day = (at: string) => new Date(at).toLocaleDateString();
+const settings = (closeId: string) => `/dashboard/closes/${closeId}?tab=settings`;
 
 function OperationRecord({ operation, stage, onSaved }: { operation: Operation; stage: "sandbox_checked" | "accountant_accepted"; onSaved: () => void }) {
   const [error, setError] = useState("");
@@ -112,7 +111,6 @@ function OperationRecord({ operation, stage, onSaved }: { operation: Operation; 
     </div>
   );
 }
-const settings = (closeId: string) => `/dashboard/closes/${closeId}?tab=settings`;
 
 function SuspendFirm({ organizationId }: { organizationId: string }) {
   const [message, setMessage] = useState("");
@@ -132,8 +130,7 @@ function SuspendFirm({ organizationId }: { organizationId: string }) {
     }
   }
   return (
-    <details>
-      <summary>Suspend the whole firm</summary>
+    <>
       <p>For a suspected compromise: every member, agent and client link of this firm is refused until an operator restores it. Requires org:manage.</p>
       <form onSubmit={(e) => void suspend(e)}>
         <fieldset disabled={busy}>
@@ -145,108 +142,176 @@ function SuspendFirm({ organizationId }: { organizationId: string }) {
             Reason
             <textarea name="reason" required minLength={10} maxLength={2000} />
           </label>
-          <label>
+          <label className="checkbox-label">
             <input name="confirmed" type="checkbox" required /> I am suspending every member's and agent's access to this firm.
           </label>
           <button>Suspend the firm</button>
         </fieldset>
       </form>
       {message && <p role="status">{message}</p>}
-    </details>
+    </>
   );
 }
 
-// One place for who can do what, which services and agents act for the firm, what they receive, and what changed.
-export default function SecurityCenter() {
+const state = (s: string) => s.replaceAll("_", " ");
+
+// One place for which services and agents act for the firm, what they may write, what they receive, and what
+// changed; the operator's tables and the controls that stop things sit folded below.
+export function SecurityTab() {
   const [security, setSecurity] = useState<Security>();
   const [error, setError] = useState("");
   const [version, setVersion] = useState(0);
+  // The usage snapshot aggregates across the firm's work, so it is read only once someone opens it.
+  const [usage, setUsage] = useState(false);
   useEffect(() => {
     let live = true;
     workspaceRequest("/security")
       .then((data) => live && (setSecurity(data), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "The security center is unavailable."));
+      .catch((e) => live && setError(e instanceof Error ? e.message : "Security is unavailable."));
     return () => {
       live = false;
     };
   }, [version]);
+  const refresh = () => setVersion((n) => n + 1);
+  // A failed read shows with a way to try again; a view already read stays in place under it.
+  const failed = error && (
+    <section aria-label="Security unavailable">
+      {!security && <h2>Security</h2>}
+      <p role="alert">{error}</p>
+      <p className="setting-actions">
+        <button type="button" onClick={refresh}>
+          Try again
+        </button>
+      </p>
+    </section>
+  );
+  if (!security) return failed || <p role="status">Opening…</p>;
   return (
     <>
-      <PageHeader icon="shield" title="Security center">
-        People, client assignments, agents, connected services, posting authority, what outside services receive, and recent changes. Firm administrators only.
-      </PageHeader>
-      {error && <p role="alert">{error}</p>}
-      {security && (
-        <div className="stack">
-          <section aria-label="People">
-            <h2>People and their agents</h2>
-            <p className="note">Firm-wide access comes from each person's WorkOS role; client assignments below apply only while their membership is enrolled.</p>
-            <ul>
-              {security.people.map((p) => (
-                <li key={p.subject}>
-                  <strong>{p.subject}</strong> · {p.granted ? "enrolled" : "revoked"} by {p.decided_by} on {day(p.decided_at)}: {p.reason}
-                  <br />
+      {failed}
+      <section aria-label="Connected services">
+        <h2>Connected services</h2>
+        <p>Each client's books and payouts, and who connected them. A connection is managed from the client's close.</p>
+        {security.services.length === 0 ? (
+          <p className="empty">No ledger or payout connections yet.</p>
+        ) : (
+          <RowList>
+            {security.services.map((s) => (
+              <div className="row" key={s.provider + s.close_id + s.connected_at}>
+                <span>
+                  <strong>
+                    {s.provider}
+                    {s.mode && ` (${s.mode})`} · {s.client}
+                  </strong>
+                  <small>
+                    {s.account && `${s.account} · `}connected by {s.connected_by} on {day(s.connected_at)}
+                    {s.confirmed_by && `, confirmed by ${s.confirmed_by}`}
+                  </small>
+                </span>
+                <span className={`pill ${s.state === "connected" || s.state === "active" ? "" : "muted"}`}>{state(s.state)}</span>
+                <span />
+                <Link className="button" to={settings(s.close_id)}>
+                  Manage
+                </Link>
+              </div>
+            ))}
+          </RowList>
+        )}
+        <p>
+          Email sending: {security.email ? `${security.email.sender}, ${security.email.enabled ? "enabled" : "disabled"}${security.email.verified_at ? ", verified" : ", not verified"}, set by ${security.email.connected_by}` : "not set up"} ·{" "}
+          <Link to="/dashboard/settings?tab=firm">Manage under Firm</Link>
+        </p>
+        <p className="note">Google Drive grants are held by the sign-in provider for each person, not stored here.</p>
+      </section>
+      <section aria-label="Posting authority">
+        <h2>Posting authority in force</h2>
+        <p className="note">Only grants posting would honour now: unrevoked, unexpired, granted by a current member, on an active connection to the granted company.</p>
+        {security.posting_grants.length === 0 ? (
+          <p className="empty">No grant allows writing to a client's live ledger.</p>
+        ) : (
+          <RowList>
+            {security.posting_grants.map((g) => (
+              <div className="row" key={g.provider + g.client + g.granted_at}>
+                <span>
+                  <strong>
+                    {g.provider} · {g.client}
+                  </strong>
+                  <small>
+                    {g.kinds.join(", ")} to accounts {g.account_ids.join(", ")}, up to {g.max_amount}, until {day(g.expires_at)}
+                  </small>
+                  <small>
+                    Granted by {g.granted_by} on {day(g.granted_at)}: {g.reason}
+                  </small>
+                </span>
+                <span />
+                <span />
+                {g.close_id ? (
+                  <Link className="button" to={settings(g.close_id)}>
+                    Revoke
+                  </Link>
+                ) : (
+                  <span />
+                )}
+              </div>
+            ))}
+          </RowList>
+        )}
+      </section>
+      <section aria-label="People">
+        <h2>People and their agents</h2>
+        <p className="note">Firm-wide access comes from each person's role; client assignments apply only while their membership is enrolled.</p>
+        <RowList>
+          {security.people.map((p) => (
+            <div className="row" key={p.subject}>
+              <span>
+                <strong>{p.subject}</strong>
+                <small>
+                  {p.granted ? "Enrolled" : "Revoked"} by {p.decided_by} on {day(p.decided_at)}: {p.reason}
+                </small>
+                <small>
                   Clients: {p.assignments.length ? p.assignments.join(", ") : "none assigned"}
                   {!p.granted && p.assignments.length > 0 && " (recorded, not in effect while revoked)"}
-                  <br />
-                  Agent in force: {p.agent_scope_in_force ?? "none"}
-                  {p.agent && ` · latest decision: ${p.agent.state} for ${p.agent.scope} by ${p.agent.decided_by} on ${day(p.agent.decided_at)}`}
-                </li>
-              ))}
-            </ul>
-            {security.invitations.length > 0 && (
-              <p>
-                Pending invitations: {security.invitations.map((i) => `${i.email} as ${i.role} (by ${i.invited_by}${i.expires_at ? `, expires ${day(i.expires_at)}` : ""})`).join("; ")}
-              </p>
-            )}
-          </section>
-          <section aria-label="Connected services">
-            <h2>Connected services</h2>
-            {security.services.length === 0 ? (
-              <p className="empty">No ledger or payout connections.</p>
-            ) : (
-              <ul>
-                {security.services.map((s) => (
-                  <li key={s.provider + s.close_id + s.connected_at}>
-                    <strong>{s.provider}</strong> {s.mode && `(${s.mode})`} · {s.client}
-                    {s.account && ` · ${s.account}`} · {s.state.replaceAll("_", " ")} · connected by {s.connected_by} on {day(s.connected_at)}
-                    {s.confirmed_by && `, confirmed by ${s.confirmed_by}`} · <Link to={settings(s.close_id)}>Manage or disconnect</Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p>
-              Email sending: {security.email ? `${security.email.sender}, ${security.email.enabled ? "enabled" : "disabled"}${security.email.verified_at ? ", verified" : ", not verified"}, set by ${security.email.connected_by}` : "not set up"} ·{" "}
-              <Link to="/dashboard/firm">Manage in Firm settings</Link>
-            </p>
-            <p className="note">Google Drive grants are held by WorkOS for each person, not stored here; manage them in WorkOS.</p>
-          </section>
-          <section aria-label="Posting authority">
-            <h2>Posting authority in force</h2>
-            <p className="note">Only grants posting would honour now: unrevoked, unexpired, granted by a current member, on an active connection to the granted company.</p>
-            {security.posting_grants.length === 0 ? (
-              <p className="empty">No grant allows writing to a client's live ledger.</p>
-            ) : (
-              <ul>
-                {security.posting_grants.map((g) => (
-                  <li key={g.provider + g.client + g.granted_at}>
-                    <strong>{g.provider}</strong> · {g.client} · {g.kinds.join(", ")} to accounts {g.account_ids.join(", ")}, up to {g.max_amount}, until {day(g.expires_at)} · granted by {g.granted_by} on {day(g.granted_at)}: {g.reason}
-                    {g.close_id && (
-                      <>
-                        {" "}
-                        · <Link to={settings(g.close_id)}>Revoke</Link>
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-          <section aria-label="Connector operations">
-            <h2>Connector operations</h2>
-            <p className="note">
-              How far each QuickBooks, Xero and Stripe operation is proven and enabled here: documented, sandbox tested, production approved by this server, or enabled for the clients whose grant or connection covers it. Connected never means every operation is available. Checks done outside the app and the firm's accountant acceptance are dated records with their evidence; they never enable an operation, and an operation enabled without acceptance says so.
-            </p>
+                </small>
+              </span>
+              <span className={`pill ${p.granted ? "" : "danger"}`}>{p.granted ? "Enrolled" : "Revoked"}</span>
+              <small>
+                Agent: {p.agent_scope_in_force ?? "none"}
+                {p.agent && ` · last ${p.agent.state} for ${p.agent.scope} by ${p.agent.decided_by} on ${day(p.agent.decided_at)}`}
+              </small>
+              <span />
+            </div>
+          ))}
+        </RowList>
+        {security.invitations.length > 0 && (
+          <p>Pending invitations: {security.invitations.map((i) => `${i.email} as ${i.role} (by ${i.invited_by}${i.expires_at ? `, expires ${day(i.expires_at)}` : ""})`).join("; ")}</p>
+        )}
+      </section>
+      <section aria-label="Recent changes">
+        <h2>Recent changes</h2>
+        <p className="note">The newest 100 recorded access decisions, connection and grant changes, and records agents made for members. Derived from those histories; not a complete audit trail.</p>
+        {security.activity.length === 0 ? (
+          <p className="empty">Nothing recorded yet.</p>
+        ) : (
+          <ol>
+            {security.activity.map((e, i) => (
+              <li key={i}>
+                {new Date(e.at).toLocaleString()} · {e.actor}: {e.text}
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+      <section aria-label="Advanced">
+        <h2>Advanced</h2>
+        <p>What the operator proved and enabled, what outside services receive, the firm's usage, and the control that stops everything.</p>
+        <details>
+          <summary>Connector operations</summary>
+          <p className="note">
+            How far each QuickBooks, Xero and Stripe operation is proven and enabled here: documented, sandbox tested, production approved by this server, or enabled for the
+            clients whose grant or connection covers it. Connected never means every operation is available. Checks done outside the app and the firm's accountant acceptance
+            are dated records with their evidence; they never enable an operation, and an operation enabled without acceptance says so.
+          </p>
+          <div className="table-scroll">
             <table>
               <thead>
                 <tr>
@@ -285,53 +350,45 @@ export default function SecurityCenter() {
                     </td>
                     <td>
                       {o.status === "enabled" && !o.accountant_accepted?.accepted && <p role="status">Enabled without the accountant's acceptance.</p>}
-                      <OperationRecord operation={o} stage="sandbox_checked" onSaved={() => setVersion((n) => n + 1)} />
-                      <OperationRecord operation={o} stage="accountant_accepted" onSaved={() => setVersion((n) => n + 1)} />
+                      <OperationRecord operation={o} stage="sandbox_checked" onSaved={refresh} />
+                      <OperationRecord operation={o} stage="accountant_accepted" onSaved={refresh} />
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </section>
-          <section aria-label="What outside services receive">
-            <h2>What outside services receive</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>Service</th>
-                  <th>Receives</th>
-                  <th>In use here</th>
+          </div>
+        </details>
+        <details>
+          <summary>What outside services receive</summary>
+          <table>
+            <thead>
+              <tr>
+                <th>Service</th>
+                <th>Receives</th>
+                <th>In use here</th>
+              </tr>
+            </thead>
+            <tbody>
+              {security.providers.map((p) => (
+                <tr key={p.provider}>
+                  <td>{p.provider}</td>
+                  <td>{p.receives}</td>
+                  <td>{p.evidence}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {security.providers.map((p) => (
-                  <tr key={p.provider}>
-                    <td>{p.provider}</td>
-                    <td>{p.receives}</td>
-                    <td>{p.evidence}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-          <section aria-label="Recent changes">
-            <h2>Recent changes</h2>
-            <p className="note">The newest 100 recorded access decisions, connection and grant changes, and records agents made for members. Derived from those histories; not a complete audit trail.</p>
-            <ol>
-              {security.activity.map((e, i) => (
-                <li key={i}>
-                  {new Date(e.at).toLocaleString()} · {e.actor}: {e.text}
-                </li>
               ))}
-            </ol>
-          </section>
-          <h2>Controls</h2>
-          <FirmOperations />
-          <ClientAccess entities={security.clients} />
-          <AgentAccess />
+            </tbody>
+          </table>
+        </details>
+        <details onToggle={(e) => e.currentTarget.open && setUsage(true)}>
+          <summary>Usage and alerts</summary>
+          {usage && <OperationsSnapshot />}
+        </details>
+        <details>
+          <summary>Suspend the whole firm</summary>
           <SuspendFirm organizationId={security.organization_id} />
-        </div>
-      )}
+        </details>
+      </section>
     </>
   );
 }

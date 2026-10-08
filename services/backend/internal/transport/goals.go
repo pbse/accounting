@@ -966,7 +966,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if left {
-				problem(w, 409, entity+" is inactive on the firm's roster, so it owes no new months. A firm administrator reactivates it in Firm settings.")
+				problem(w, 409, entity+" is inactive on the firm's roster, so it owes no new months. A firm administrator reactivates it under Settings → Clients.")
 				return
 			}
 		}
@@ -986,7 +986,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if left {
-				problem(w, 409, entity+" is inactive on the firm's roster, so it owes no new months. A firm administrator reactivates it in Firm settings.")
+				problem(w, 409, entity+" is inactive on the firm's roster, so it owes no new months. A firm administrator reactivates it under Settings → Clients.")
 				return
 			}
 			// Months that ended before the hand-over was set up are not new; it starts after this close or with the current month.

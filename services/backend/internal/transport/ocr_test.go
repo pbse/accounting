@@ -57,15 +57,28 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
 		var policy struct {
-			OCR string `json:"ocr_provider"`
+			OCR     string `json:"ocr_provider"`
+			Members bool   `json:"can_manage_members"`
+			Roster  bool   `json:"can_read_roster"`
 		}
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &policy) != nil {
 			t.Fatalf("policy: %d %s", w.Code, w.Body.String())
+		}
+		// Reading every client opens the firm's clients, not its people or security.
+		if policy.Members || !policy.Roster {
+			t.Fatalf("clients:all alone reads the roster and nothing more: %s", w.Body.String())
 		}
 		return policy.OCR
 	}
 	if got := read(); !strings.HasPrefix(got, "Not reported") {
 		t.Fatalf("before the worker reports, Firm settings say so: %q", got)
+	}
+	// An administrator who manages members opens the firm's people and security sections as well as its clients.
+	admin := httptest.NewRequest("GET", "/v1/closes/organization/policy", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: org, Permissions: []string{"clients:all", "members:manage"}}))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, admin)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"can_manage_members":true`) || !strings.Contains(w.Body.String(), `"can_read_roster":true`) {
+		t.Fatalf("a member administrator manages the firm's sections: %d %s", w.Code, w.Body.String())
 	}
 
 	// The worker's heartbeat reports how it reads PDFs, keeping what earlier beats recorded (a panic, say).

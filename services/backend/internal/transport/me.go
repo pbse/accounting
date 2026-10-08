@@ -12,7 +12,7 @@ import (
 
 // A member's own settings (Your settings): who they are to WorkOS, their time zone in this firm, their attention
 // notification kinds and their own Google Drive connection. Firm policy, ledger connections and posting authority are
-// the firm's, under Firm settings and the Security center, and are not here.
+// the firm's, under the firm's sections of Settings, and are not here.
 func registerMe(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/me", func(w http.ResponseWriter, r *http.Request) {
 		if subject(r) == "" {

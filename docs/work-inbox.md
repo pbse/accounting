@@ -93,7 +93,7 @@ The review queue can approve up to 20 drafts at once, but only drafts that chang
 
 ## The client roster and monthly template
 
-Every active client on the firm's roster owes a close each month (`client_roster`, migration 127). The **Clients and monthly closes** section of Firm settings (`GET`/`POST /v1/closes/roster`) shows each client:
+Every active client on the firm's roster owes a close each month (`client_roster`, migration 127). The **Clients** section of Settings (`GET`/`POST /v1/closes/roster`) shows each client:
 - whether it is active, and the first month it owes;
 - its latest close, and every ended month it owes that nobody opened;
 - any terms of its own.
@@ -105,7 +105,7 @@ How a client joins and leaves the roster:
 - a new monthly hand-over is refused, and a running one stops instead of opening a month or handing over one already open;
 - carrying its work into another month is refused, and the carry at sign-off skips it.
 
-An administrator reactivates it in Firm settings.
+An administrator reactivates it under Settings → Clients.
 - When the roster began, every client with a close was put on it. A client with a close in the three months before is active. It owes every month from its earliest close of the last twelve, so a month missing between its recent closes shows, while older history does not. Any other client is listed inactive with "To confirm…", for an administrator to reactivate if it is still a client.
 
 **Months not opened.** A month nobody opened shows in Work's own **Months not opened** section (the morning brief's `not_opened`) to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. The "Due in 7 days" tile also counts the months not opened that are overdue or due within the week, and says how many those are. Its section lists them under the due closes, each with its Open button. A month whose close was deleted under the retention policy was done, and is not owed again. Deleting a close never changes which client its name belongs to. A month the client's monthly hand-over is set to open still shows until a close exists, marked as the hand-over's.
