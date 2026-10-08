@@ -142,8 +142,8 @@ export default function WorkspaceLayout() {
             </form>
           )}
           {known && !executive && signedIn && (
-            <button type="button" className="button primary" onClick={openAssistant}>
-              <Icon name="agent" /> Ask the agent
+            <button type="button" className="button primary" aria-label="Ask the agent" onClick={openAssistant}>
+              <Icon name="agent" /> <span>Ask the agent</span>
             </button>
           )}
           <AccountMenu />
