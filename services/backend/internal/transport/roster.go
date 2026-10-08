@@ -227,14 +227,31 @@ type rosterClient struct {
 	Rev        string   `json:"rev"` // the entry's row, new with every change
 	LastPeriod string   `json:"last_period"`
 	Owed       []string `json:"owed"`
+	// Closes is every month opened under any of the client's names, newest first, with whether its sign-off stands.
+	Closes []rosterClose `json:"closes"`
+}
+
+type rosterClose struct {
+	ID        string `json:"id"`
+	Entity    string `json:"entity"`
+	Period    string `json:"period"`
+	SignedOff bool   `json:"signed_off"`
+	// Rechecked says SignedOff was confirmed against the close as it is now; an older close's sign-off is shown as
+	// recorded, not as standing, since rechecking every one on each read reads the whole close.
+	Rechecked bool `json:"rechecked"`
+	// Unchecked says the recheck itself failed: the sign-off is neither standing nor known to have changed.
+	Unchecked bool `json:"unchecked,omitempty"`
+	// The close's planning, as the closes list gives it: due date, priority, whether it is held and by the reader.
+	DueOn     string `json:"due_on,omitempty"`
+	Priority  string `json:"priority,omitempty"`
+	Assigned  bool   `json:"assigned,omitempty"`
+	OwnedByMe bool   `json:"owned_by_me,omitempty"`
 }
 
 func registerRoster(mux *http.ServeMux, db *sql.DB) {
+	// The whole roster is the firm's to read; a member assigned to clients reads those clients' entries alone (by the
+	// same exact assignment the work endpoints require), with no template and nothing to manage.
 	mux.HandleFunc("GET /v1/closes/roster", func(w http.ResponseWriter, r *http.Request) {
-		if !firmAccess(r) {
-			problem(w, 403, "The client roster requires clients:all.")
-			return
-		}
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 		if err != nil {
 			problem(w, 503, "The client roster is unavailable.")
@@ -246,7 +263,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		var dueDays sql.NullInt64
 		var owner, reason, actor, rev string
 		var at time.Time
-		switch err = tx.QueryRowContext(r.Context(), `SELECT due_days,owner,reason,actor,created_at,id::text FROM close_templates WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&dueDays, &owner, &reason, &actor, &at, &rev); err {
+		switch err = tx.QueryRowContext(r.Context(), `SELECT due_days,owner,reason,actor,created_at,id::text FROM close_templates WHERE organization_id=$1 AND $2 ORDER BY id DESC LIMIT 1`, org, firmAccess(r)).Scan(&dueDays, &owner, &reason, &actor, &at, &rev); err {
 		case nil:
 			template = map[string]any{"due_days": nil, "owner": owner, "reason": reason, "actor": actor, "at": at, "rev": rev}
 			if dueDays.Valid {
@@ -258,8 +275,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		rows, err := tx.QueryContext(r.Context(), `SELECT r.client_entity,r.active,r.since,r.due_days,r.owner,r.reason,r.actor,r.created_at,r.id::text,
- COALESCE((SELECT max(c.period) FROM client_closes c WHERE c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)),'')
- FROM current_client_roster r WHERE r.organization_id=$1 ORDER BY NOT r.active,lower(r.client_entity)`, org)
+ COALESCE((SELECT max(c.period) FROM client_closes c WHERE c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)
+  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))),'')
+ FROM current_client_roster r WHERE r.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(r.client_entity)))
+ ORDER BY NOT r.active,lower(r.client_entity)`, org, firmAccess(r), subject(r))
 		if err != nil {
 			problem(w, 503, "The client roster is unavailable.")
 			return
@@ -280,7 +299,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			if override.Valid {
 				c.Owner = &override.String
 			}
-			c.At, c.Owed = when.Format(time.RFC3339), []string{}
+			c.At, c.Owed, c.Closes = when.Format(time.RFC3339), []string{}, []rosterClose{}
 			index[strings.ToLower(c.Entity)] = len(clients)
 			clients = append(clients, c)
 		}
@@ -288,9 +307,51 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		if err == nil {
 			err = rows.Err()
 		}
+		// Every close of each listed client, under any of its names, so the page needs no capped list for its history;
+		// a member sees only the closes they can open (the close endpoints check the close's own name).
+		if err == nil {
+			var closes *sql.Rows
+			closes, err = tx.QueryContext(r.Context(), `SELECT r.client_entity,c.id::text,c.entity,c.period,COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')='signed_off',
+ COALESCE(c.due_on::text,''),c.priority,c.owner<>'',c.owner<>'' AND c.owner=$3
+ FROM current_client_roster r JOIN client_closes c ON c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)
+ WHERE r.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(r.client_entity)))
+ AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))
+ ORDER BY c.period DESC,c.id DESC`, org, firmAccess(r), subject(r))
+			if err == nil {
+				for closes.Next() {
+					var entity string
+					var cl rosterClose
+					if err = closes.Scan(&entity, &cl.ID, &cl.Entity, &cl.Period, &cl.SignedOff, &cl.DueOn, &cl.Priority, &cl.Assigned, &cl.OwnedByMe); err != nil {
+						break
+					}
+					if i, ok := index[strings.ToLower(entity)]; ok {
+						clients[i].Closes = append(clients[i].Closes, cl)
+					}
+				}
+				if err == nil {
+					err = closes.Err()
+				}
+				closes.Close()
+			}
+		}
+		// A recorded sign-off counts only while it still stands. The recheck reads the whole close, so on this list it is
+		// made for the closes of the last three months (at most three a client), the ones still in play; an older one is
+		// shown as recorded, and Home, which rechecks every owed close, still counts it once it changes.
+		since := shiftMonth(time.Now().UTC().Format("2006-01"), -2)
+		for i := range clients {
+			for j := range clients[i].Closes {
+				if err != nil || !clients[i].Closes[j].SignedOff || clients[i].Closes[j].Period < since {
+					continue
+				}
+				var state string
+				if state, err = recheckSignOff(r.Context(), tx, clients[i].Closes[j].ID); err == nil {
+					clients[i].Closes[j].SignedOff, clients[i].Closes[j].Rechecked, clients[i].Closes[j].Unchecked = state == "signed_off", true, state == "unknown"
+				}
+			}
+		}
 		var owed []owedMonth
 		if err == nil {
-			owed, err = owedMonths(r.Context(), tx, time.Now(), org, true, canReview(r), subject(r), "")
+			owed, err = owedMonthsThrough(r.Context(), tx, time.Now().UTC().Format("2006-01"), org, firmAccess(r), canReview(r), subject(r), "")
 		}
 		if err != nil {
 			problem(w, 503, "The client roster is unavailable.")
@@ -301,7 +362,8 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				clients[i].Owed = append(clients[i].Owed, o.Period)
 			}
 		}
-		out := map[string]any{"template": template, "clients": clients, "can_manage": canManageRoster(r)}
+		// A member sees no template, which is not the same as the firm having none: template_hidden says so.
+		out := map[string]any{"template": template, "template_hidden": !firmAccess(r), "clients": clients, "can_manage": canManageRoster(r)}
 		// An administrator chooses owners from the members who can do the work: a role reviewing every client (any
 		// client, and the template), or a reviewer, for the clients assigned to them.
 		if canManageRoster(r) {
@@ -341,6 +403,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		if err != nil {
 			problem(w, 422, "Enter the first month the client owes a close as YYYY-MM, within the last five years.")
 			return
+		}
+		// Adding a client needs no reason beyond the adding; a change to its entry does.
+		if in.Rev == "" && in.Reason == "" {
+			in.Reason = "Added as a client"
 		}
 		if in.Reason == "" || utf8.RuneCountInString(in.Reason) > 500 {
 			problem(w, 422, "Give a reason (1–500 characters).")

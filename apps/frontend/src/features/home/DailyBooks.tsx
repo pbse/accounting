@@ -66,14 +66,14 @@ export function DailyBooks({ refresh, canReview, onReviewed }: { refresh: number
         {unchecked.map((item) => (
           <div className="row" key={`unchecked-${item.close_id}`}>
             <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`Transaction check incomplete in the ${item.source === "xero" ? "Xero" : "QuickBooks"} capture of ${new Date(item.captured_at).toLocaleString()}: ${item.unchecked}`} />
-            <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open the close</Link>
+            <Link to={`/dashboard/closes/${item.close_id}?tab=books`}>Open the close</Link>
           </div>
         ))}
         {open.map((item) => (
           <div className="row" key={item.close_id}>
             <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${item.new.length} new of ${item.total} · captured ${new Date(item.captured_at).toLocaleString()}`} />
             <small>{item.new.slice(0, 2).map((e) => e.question).join(" ")}</small>
-            <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open exceptions</Link>
+            <Link to={`/dashboard/closes/${item.close_id}?tab=books`}>Open exceptions</Link>
             {canReview && (
               <button type="button" disabled={busy === item.close_id} onClick={() => void reviewed(item)}>
                 Mark reviewed

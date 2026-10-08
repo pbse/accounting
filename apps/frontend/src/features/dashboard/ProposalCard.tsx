@@ -125,7 +125,7 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
       <label>
         <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {kind === "approval" ? "Ask for this review." : kind === "open_close" ? `Open this month for ${String(args.entity ?? "")}.` : "Run this goal on exactly these closes; the server refuses a changed selection."}
       </label>
-      <p className="assistant-note">{kind === "open_close" ? "Confirming opens the month as the Clients page would; you must be assigned to the client." : "Confirming needs the workpapers:review permission and runs the same checks as the page."}</p>
+      <p className="assistant-note">{kind === "open_close" ? "Confirming opens the month as the Clients page would; you must be assigned to the client." : "Confirming needs the reviewer role and runs the same checks as the page."}</p>
       <button type="button" className="primary" disabled={busy || !confirmed} onClick={() => void submit()}>
         {busy ? "Confirming…" : title}
       </button>

@@ -30,8 +30,16 @@ import (
 )
 
 type savedClose struct {
-	ID        string `json:"id"`
-	Entity    string `json:"entity"`
+	ID     string `json:"id"`
+	Entity string `json:"entity"`
+	// Client is the client's own name in lower case (a confirmed alias resolves to it), so a list groups a client's
+	// closes under one row whatever name each was opened with; SignedOff says its sign-off is recorded.
+	Client    string `json:"client,omitempty"`
+	SignedOff bool   `json:"signed_off,omitempty"`
+	// Unchecked says a recorded sign-off could not be rechecked: neither standing nor known to have changed.
+	Unchecked bool `json:"unchecked,omitempty"`
+	// Rechecked says SignedOff was confirmed against the close as it is now (the last three months' closes).
+	Rechecked bool   `json:"rechecked,omitempty"`
 	Period    string `json:"period"`
 	DueOn     string `json:"due_on,omitempty"`
 	Priority  string `json:"priority,omitempty"`
@@ -275,34 +283,60 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	mux.HandleFunc("GET /v1/closes/{id}/brief", closeBrief(mux, db))
 	mux.HandleFunc("POST /v1/closes/{id}/replay", replay(db))
 	mux.HandleFunc("GET /v1/closes/{id}/replay", replay(db))
+	// The reader's closes, newest first, matching a client name (its own or a confirmed alias), a month or nothing. A
+	// recorded sign-off counts only while it still stands, as Home and the morning brief count it.
 	mux.HandleFunc("GET /v1/closes", func(w http.ResponseWriter, r *http.Request) {
 		search := strings.TrimSpace(r.URL.Query().Get("q"))
 		if len(search) > 200 {
 			problem(w, 422, "Client search is too long.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$3 FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)) AND ($4='' OR entity ILIKE '%'||$4||'%' OR period=$4) ORDER BY period DESC,client_closes.id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
 			problem(w, 503, "Saved closes are unavailable.")
 			return
 		}
-		defer rows.Close()
+		defer tx.Rollback()
+		rows, err := tx.QueryContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$3,client_identity(organization_id,entity),COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=client_closes.id ORDER BY s.id DESC LIMIT 1),'')='signed_off' FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted))
+ AND ($4='' OR entity ILIKE '%'||$4||'%' OR period=$4 OR client_identity(organization_id,entity) ILIKE '%'||$4||'%' OR client_identity(organization_id,entity)=client_identity(organization_id,$4)) ORDER BY period DESC,client_closes.id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+		if err != nil {
+			problem(w, 503, "Saved closes are unavailable.")
+			return
+		}
 		items := []savedClose{}
 		for rows.Next() {
 			var item savedClose
-			if rows.Scan(&item.ID, &item.Entity, &item.Period, &item.DueOn, &item.Priority, &item.Assigned, &item.OwnedByMe) != nil {
+			if rows.Scan(&item.ID, &item.Entity, &item.Period, &item.DueOn, &item.Priority, &item.Assigned, &item.OwnedByMe, &item.Client, &item.SignedOff) != nil {
+				rows.Close()
 				problem(w, 503, "Could not read saved closes.")
 				return
 			}
 			items = append(items, item)
 		}
-		if rows.Err() != nil {
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
 			problem(w, 503, "Could not read saved closes.")
 			return
 		}
 		more := len(items) > 100
 		if more {
 			items = items[:100]
+		}
+		// The recheck reads the whole close, so the list makes it for the last three months' closes only, as the roster
+		// does; an older recorded sign-off is returned as recorded (Rechecked false).
+		since := shiftMonth(time.Now().UTC().Format("2006-01"), -2)
+		for i := range items {
+			if !items[i].SignedOff || items[i].Period < since {
+				continue
+			}
+			items[i].Rechecked = true
+			state, err := recheckSignOff(r.Context(), tx, items[i].ID)
+			if err != nil {
+				problem(w, 503, "Could not read saved closes.")
+				return
+			}
+			items[i].SignedOff, items[i].Unchecked = state == "signed_off", state == "unknown"
 		}
 		jsonReply(w, 200, map[string]any{"closes": items, "has_more": more})
 	})

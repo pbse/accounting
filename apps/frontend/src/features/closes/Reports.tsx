@@ -257,7 +257,7 @@ function ImportCashFlow({ closeId, pack, onPack }: { closeId: string; pack: Extr
       }}
     >
       <fieldset disabled={busy}>
-        <legend>Import or replace the firm's statement (needs close:signoff)</legend>
+        <legend>Import or replace the firm's statement (needs a role that can both review and sign off)</legend>
         {error && <p role="alert">{error}</p>}
         <label>
           CSV with the columns Section, Line, Amount: a row per line under Operating activities, Investing activities, Financing activities or Effect of exchange rate changes, outflows negative and no totals, plus a Beginning cash and an Ending cash row with an empty Line

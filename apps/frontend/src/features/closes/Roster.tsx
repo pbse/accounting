@@ -10,7 +10,7 @@ type Template = { due_days: number | null; owner: string; reason: string; actor:
 type Client = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; rev: string; last_period: string; owed: string[] };
 // clients are the names (lowercase) a reviewer is assigned to, as access to a client's closes is granted.
 type Person = { subject: string; name: string; firm_wide: boolean; clients: string[] };
-type Roster = { template: Template; clients: Client[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
+type Roster = { template: Template; template_hidden?: boolean; clients: Client[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
 
 const days = Array.from({ length: 60 }, (_, i) => i + 1);
 const endedMonth = () => {
@@ -24,7 +24,7 @@ const endedMonth = () => {
 export function ClientRoster() {
   const [roster, setRoster] = useState<Roster>();
   const [error, setError] = useState("");
-  // A member without firm-wide access (clients:all) cannot read the roster, so the section does not apply to them.
+  // A member reads only the clients assigned to them; a firm the server refuses hides the section.
   const [hidden, setHidden] = useState(false);
   // A save's refusal, kept while the roster is read again: a change made from an entry another administrator has since
   // changed resets to the newest entry, and this says why.
@@ -71,6 +71,8 @@ export function ClientRoster() {
           <>
             {t.due_days ? `a due date ${t.due_days} ${t.due_days === 1 ? "day" : "days"} after the month ends` : "no due date"} and {t.owner ? <>{name(t.owner)} as its owner</> : "no owner"}
           </>
+        ) : roster.template_hidden ? (
+          "the due date and owner of the firm's monthly template"
         ) : (
           "no due date or owner until the firm sets its monthly template"
         )}
@@ -117,7 +119,7 @@ export function ClientRoster() {
           ))}
         </RowList>
       )}
-      {!roster.can_manage && <p className="note">A firm administrator with clients:all and members:manage changes the roster and the template.</p>}
+      {!roster.can_manage && <p className="note">A firm administrator changes the roster and the template.</p>}
       {roster.can_manage && (
         <>
           <Dialog open={editingTemplate} onClose={() => left()} title="The monthly template" description="The due date and owner every client's new month takes, unless the client's own entry says otherwise.">

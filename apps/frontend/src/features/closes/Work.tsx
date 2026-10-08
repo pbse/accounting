@@ -586,12 +586,8 @@ function WorkDetails({
           Open {item.entity} · {item.period}
         </Link>
       </p>
-      <p>
-        Durable job #{item.id} · revision {item.revision}. Preparation does not
-        approve or post a journal.
-      </p>
       {item.agent_checkpoint?.straight_through && <p>{item.agent_checkpoint.straight_through}</p>}
-      {item.coordinated && <p>Agent budget: {item.agent_attempts} of 3 interpretation attempts used. Checkpoint: {item.agent_checkpoint?.stage?.replaceAll("_", " ") ?? "pending"}. Each attempt selects at most 20 sources / 128 KiB and requests at most 8,000 output tokens across selection and interpretation; a fresh client answer or reviewer recheck can reset this budget.</p>}
+      {item.coordinated && item.agent_attempts >= 3 && <p role="status">The agent has read this document three times without settling it; a client answer or a recheck lets it read again.</p>}
       {item.error && <p role="alert">{item.error}</p>}
       {item.blockers?.length > 0 && (
         <section>

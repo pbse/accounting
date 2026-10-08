@@ -46,18 +46,20 @@ import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type 
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { BackLink } from "@close/ui/components/BackLink";
 
+// Overview holds what needs a person; Books holds what the ledger shows; the rest is where each kind of work lives.
 const tabs = [
   ["overview", "Overview"],
+  ["books", "Books"],
   ["workpapers", "Workpapers"],
   ["evidence", "Evidence"],
   ["requests", "Requests"],
   ["reports", "Reports"],
   ["cash", "Cash plan"],
-  ["signoff", "Close & sign-off"],
+  ["signoff", "Sign-off"],
   ["settings", "Settings"],
 ] as const;
 type Tab = (typeof tabs)[number][0];
-const tabActivity: Record<Tab, Activity> = { overview: "prepare", workpapers: "prepare", evidence: "evidence", requests: "requests", reports: "review", cash: "review", signoff: "signoff", settings: "configuration" };
+const tabActivity: Record<Tab, Activity> = { overview: "prepare", books: "review", workpapers: "prepare", evidence: "evidence", requests: "requests", reports: "review", cash: "review", signoff: "signoff", settings: "configuration" };
 const filters: Record<string, [string, (paper: Paper) => boolean]> = {
   all: ["All drafts", () => true],
   ready: ["Ready for review", readyForReview],
@@ -74,43 +76,36 @@ function profileLabel(p: Profile) {
   return `${p.currency} · fiscal year starts ${new Date(2000, p.fiscal_year_start - 1).toLocaleString("en-US", { month: "long" })}`;
 }
 
+// The preparation forms, for work the agent did not prepare from evidence, behind one menu.
 function PrepareActions({ close }: { close: Close }) {
   const query = `close=${close.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}`;
   const accrualWork = close.basis !== "cash" && close.basis !== "modified_cash";
+  const forms: [string, string][] = [
+    ...(accrualWork
+      ? ([
+          ["Prepaid", `/dashboard/prepaids/new?${query}`],
+          ["Accrued expense", `/dashboard/accruals/new?${query}`],
+          ["Deferred revenue", `/dashboard/prepaids/new?${query}&schedule=deferred_revenue`],
+          ["Depreciation", `/dashboard/prepaids/new?${query}&schedule=depreciation`],
+        ] as [string, string][])
+      : []),
+    ["Loan schedule", `/dashboard/loans/new?${query}`],
+    ["Owner item", `/dashboard/owners/new?${query}`],
+    ["Payroll", `/dashboard/payroll/new?${query}`],
+    ["Statement reconciliation", `/dashboard/reconciliations/new?${query}`],
+    ["Stripe payouts", `/dashboard/settlements/new?${query}`],
+  ];
   return (
-    <div className="title-actions">
-      {accrualWork && (
-        <>
-          <Link className="button primary" to={`/dashboard/prepaids/new?${query}`}>
-            Prepare a prepaid
+    <details className="prepare-menu">
+      <summary className="button">Prepare by hand</summary>
+      <div>
+        {forms.map(([label, to]) => (
+          <Link key={to} to={to}>
+            {label}
           </Link>
-          <Link className="button" to={`/dashboard/accruals/new?${query}`}>
-            Accrued expense
-          </Link>
-          <Link className="button" to={`/dashboard/prepaids/new?${query}&schedule=deferred_revenue`}>
-            Deferred revenue
-          </Link>
-          <Link className="button" to={`/dashboard/prepaids/new?${query}&schedule=depreciation`}>
-            Depreciation
-          </Link>
-        </>
-      )}
-      <Link className="button" to={`/dashboard/loans/new?${query}`}>
-        Loan schedule
-      </Link>
-      <Link className="button" to={`/dashboard/owners/new?${query}`}>
-        Owner item
-      </Link>
-      <Link className="button" to={`/dashboard/payroll/new?${query}`}>
-        Payroll
-      </Link>
-      <Link className="button" to={`/dashboard/reconciliations/new?${query}`}>
-        Statement reconciliation
-      </Link>
-      <Link className="button" to={`/dashboard/settlements/new?${query}`}>
-        Stripe payouts
-      </Link>
-    </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -190,11 +185,11 @@ export default function ClientClose() {
   return (
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
-      <BackLink to="/dashboard/closes">Client closes</BackLink>
+      <BackLink to="/dashboard/closes">Clients</BackLink>
       <PageHeader avatar={close.entity} title={close.entity} actions={<PrepareActions close={close} />}>
-        Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
-        {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
-        {close.profile && close.profile.state !== "none" && <span className="chip" role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
+        {new Date(`${close.period}-01T00:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" })} <PlanChips plan={close} />
+        {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]}</span>}
+        {close.profile && close.profile.state !== "none" && <span className={close.profile.state === "conflict" || close.profile.state === "unknown" ? "chip warn" : "chip"} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
       </PageHeader>
       <PlanningControls key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}-${close.can_assign}-${close.can_take_over}`} closeId={close.id} plan={close} onSaved={() => void reload()} />
       <StatGroup>
@@ -212,14 +207,20 @@ export default function ClientClose() {
           <Brief key={`brief-${close.id}-${papers.map((paper) => paper.id + paper.review_state).join()}`} closeId={close.id} />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
+        </div>
+      )}
+      {tab === "books" && (
+        <div className="stack">
+          <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
+          <Flux key={`flux-${close.id}`} closeId={close.id} />
           <Aging key={`aging-${close.id}`} closeId={close.id} />
           <OpenItems key={`open-items-${close.id}`} closeId={close.id} />
           <Matching key={`matching-${close.id}`} closeId={close.id} />
-          <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
-          <Flux key={`flux-${close.id}`} closeId={close.id} />
-          <EmailReplies closeId={close.id} onReleased={() => void reload()} />
-          <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
+          <BillCorrection closeId={close.id} />
+          <BillCorrection closeId={close.id} kind="purchases" />
+          <BillCorrection closeId={close.id} kind="deposits" />
+          <CreditApplications closeId={close.id} />
         </div>
       )}
       {tab === "workpapers" && (
@@ -253,11 +254,6 @@ export default function ClientClose() {
           <Recurring key={`recurring-${close.id}`} closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
           <RecurringAccruals closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
           <CarryForward key={close.id} closeId={close.id} />
-          <BillCorrection closeId={close.id} />
-          <BillCorrection closeId={close.id} kind="purchases" />
-          <BillCorrection closeId={close.id} kind="deposits" />
-          <CreditApplications closeId={close.id} />
-          <Replay key={`replay-${close.id}`} closeId={close.id} />
         </div>
       )}
       {tab === "evidence" && (
@@ -267,9 +263,15 @@ export default function ClientClose() {
           <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} />
           <HistoricalExports key={`history-${close.id}`} closeId={close.id} />
           <Stripe key={`stripe-${close.id}`} closeId={close.id} entity={close.entity} />
+          <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
         </div>
       )}
-      {tab === "requests" && <Requests closeId={close.id} papers={papers} />}
+      {tab === "requests" && (
+        <div className="stack">
+          <Requests closeId={close.id} papers={papers} />
+          <EmailReplies closeId={close.id} onReleased={() => void reload()} />
+        </div>
+      )}
       {tab === "reports" && (
         <>
           <Reports key={`reports-${close.id}`} closeId={close.id} />
@@ -292,6 +294,7 @@ export default function ClientClose() {
           <Memory key={`memory-${close.id}`} closeId={close.id} />
           <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} onApplied={() => void reload()} />
           <ProductionAccess closeId={close.id} entity={close.entity} currency={close.profile?.currency ?? "USD"} />
+          <Replay key={`replay-${close.id}`} closeId={close.id} />
           <RetentionControls close={close} onDeleted={setDeleted} />
         </div>
       )}
