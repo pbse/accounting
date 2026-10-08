@@ -133,6 +133,7 @@ function LedgerWrites() {
   const [policy, setPolicy] = useState<Policy>();
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
+  const [done, setDone] = useState("");
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
@@ -148,8 +149,16 @@ function LedgerWrites() {
   async function change() {
     setBusy(true);
     setMessage("");
+    setDone("");
     try {
-      await workspaceRequest("/organization/policy", { ledger_writes: !policy!.ledger_writes, reason });
+      const result: { ledger_writes: boolean; writes_in_flight: number } = await workspaceRequest("/organization/policy", { ledger_writes: !policy!.ledger_writes, reason });
+      // Turning writing off withdraws approvals not yet acted on; writes already under way finish and are read back.
+      if (!result.ledger_writes)
+        setDone(
+          `Writing is off. Live writes approved and not started need a fresh approval once it is back on.${
+            result.writes_in_flight ? ` ${result.writes_in_flight} ${result.writes_in_flight === 1 ? "write was" : "writes were"} already under way; ${result.writes_in_flight === 1 ? "it finishes" : "they finish"} and ${result.writes_in_flight === 1 ? "is" : "are"} read back.` : ""
+          }`,
+        );
       setReason("");
       setRefresh((n) => n + 1);
     } catch (e) {
@@ -180,6 +189,7 @@ function LedgerWrites() {
       ) : (
         <p className="note">A firm administrator with org:manage can change this setting.</p>
       )}
+      {done && <p role="status">{done}</p>}
       {message && <p role="alert">{message}</p>}
     </section>
   );

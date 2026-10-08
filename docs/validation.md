@@ -3729,9 +3729,14 @@ Request: "We should never be posting unless the User in his settings say so ... 
   - Xero manual journals and bill recodes.
 
   It is checked when a write is previewed, approved or executed. It is checked again inside the approve and execute transaction under a share lock on the firm's row, which a change of the setting updates. Reading back (`verify`) is never refused. QuickBooks sandbox postings are outside it.
+- **Turning it off** (`stopLedgerWrites`, in the same transaction) expires every live approval not yet acted on across the six attempt tables. It returns `writes_in_flight`, the live writes already executing, which finish and are read back. Firm settings says so.
 - **Security center.** A write kind the server allows reads "off in Firm settings" and lists no clients while the setting is off.
 - **Tested.**
-  - `TestProductionPostingSingleDurableAttempt`: a firm with writing off is refused at preview with nothing written. After writing is turned off again, a posted write still verifies, and a new execution is refused.
+  - `TestProductionPostingSingleDurableAttempt`:
+    - a firm with writing off is refused at preview, with nothing written;
+    - after writing is turned off again, a posted write still verifies, and a new execution is refused;
+    - an approval given before writing is turned off is refused at execution (`APPROVAL_EXPIRED`) until approved afresh;
+    - a write left executing is counted as under way.
   - `TestApprovedDraftPostsOnceToXero`: the Xero preview is refused while writing is off.
   - `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`: a firm starts off; turning writing on needs `org:manage`, is applied and recorded; turning it off is applied.
   - `TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly`: no write is enabled while writing is off, and an allowed, granted kind reads "off in Firm settings".

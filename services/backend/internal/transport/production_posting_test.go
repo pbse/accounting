@@ -389,6 +389,29 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	if err = db.QueryRow(`SELECT v.actor,v.note,w.review_state FROM workpaper_reviews v JOIN workpaper_review_state w ON w.id=v.workpaper_id WHERE v.workpaper_id=$1`, paperID).Scan(&reviewer, &note, &reviewState); err != nil || reviewer != "user_accountant" || note != "Approved together with its posting." || reviewState != "approved" {
 		t.Fatalf("the draft approval is recorded with the posting approval: %s %s %s %v", reviewer, note, reviewState, err)
 	}
+	// Turning writing off withdraws an approval not yet acted on: it must be approved afresh.
+	stop := func() int {
+		t.Helper()
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		n, err := stopLedgerWrites(context.Background(), tx, org)
+		if err != nil || tx.Commit() != nil {
+			t.Fatalf("turning writing off: %v", err)
+		}
+		return n
+	}
+	if n := stop(); n != 0 {
+		t.Fatalf("no write was under way: %d", n)
+	}
+	actor.Permissions = []string{"clients:all", "posting:execute"}
+	if body := call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 409); !strings.Contains(string(body), `"code":"APPROVAL_EXPIRED"`) || writes != 1 {
+		t.Fatalf("an approval given before writing was turned off cannot be used: %s", body)
+	}
+	actor.Permissions = []string{"clients:all", "posting:approve"}
+	call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 200)
 	actor.Permissions = []string{"clients:all", "posting:execute"}
 	uncertain = true
 	if body := call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 502); !strings.Contains(string(body), `"code":"EXECUTION_UNKNOWN"`) {
@@ -403,6 +426,10 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	// A request that ended mid-post leaves the attempt executing: in-app resolution waits ten minutes, then takes the found ID.
 	if _, err = db.Exec(`UPDATE production_postings SET state='executing',attempted_at=now() WHERE workpaper_id=$1`, paperID); err != nil {
 		t.Fatal(err)
+	}
+	// A write already under way when writing is turned off is counted, to say it finishes and is read back.
+	if n := stop(); n != 1 {
+		t.Fatalf("the write under way is counted: %d", n)
 	}
 	call(path, map[string]string{"action": "verify", "external_id": "789"}, 409)
 	if _, err = db.Exec(`UPDATE production_postings SET attempted_at=now()-interval '11 minutes' WHERE workpaper_id=$1`, paperID); err != nil {

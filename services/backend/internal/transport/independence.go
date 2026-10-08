@@ -158,10 +158,16 @@ func registerIndependence(mux *http.ServeMux, db *sql.DB) {
 		if err = tx.QueryRowContext(r.Context(), `UPDATE organizations SET require_independent_review=COALESCE($2,require_independent_review),require_link_passcode=COALESCE($3,require_link_passcode),independent_review_min_amount=CASE WHEN $4 THEN NULLIF($5,'')::numeric ELSE independent_review_min_amount END,materiality_amount=CASE WHEN $6 THEN NULLIF($7,'')::numeric ELSE materiality_amount END,reminder_after_days=COALESCE($8,reminder_after_days),reminder_max=COALESCE($9,reminder_max),assistant_model_answers=COALESCE($10,assistant_model_answers),assistant_firm_answers=COALESCE($11,assistant_firm_answers),assistant_investigations=CASE WHEN NOT COALESCE($10,assistant_model_answers) THEN false ELSE COALESCE($12,assistant_investigations) END,allow_ledger_writes=COALESCE($13,allow_ledger_writes) WHERE id=$1 RETURNING require_independent_review,require_link_passcode,COALESCE(independent_review_min_amount::text,''),COALESCE(materiality_amount::text,''),reminder_after_days,reminder_max,assistant_model_answers,assistant_firm_answers,assistant_investigations,allow_ledger_writes`, organization(r), input.IndependentReview, input.LinkPasscode, input.MinAmount != nil, minimum, input.Materiality != nil, materiality, input.ReminderAfterDays, input.ReminderMax, input.ModelAnswers, input.FirmAnswers, input.Investigations, input.LedgerWrites).Scan(&review, &passcode, &current, &currentMateriality, &after, &most, &written, &firmWritten, &investigations, &ledgerWrites); err == nil {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO organization_policy_changes(organization_id,independent_review,link_passcode,independent_review_min_amount,materiality_amount,reminder_after_days,reminder_max,assistant_model_answers,assistant_firm_answers,reason,actor,assistant_investigations,ledger_writes) VALUES($1,$2,$3,NULLIF($4,'')::numeric,NULLIF($5,'')::numeric,$6,$7,$8,$9,$10,$11,$12,$13)`, organization(r), review, passcode, current, currentMateriality, after, most, written, firmWritten, input.Reason, subject(r), investigations, ledgerWrites)
 		}
+		// Turning writing off needs every live write approved and not started to be approved afresh, and says how many
+		// had already started.
+		inFlight := 0
+		if err == nil && input.LedgerWrites != nil && !ledgerWrites {
+			inFlight, err = stopLedgerWrites(r.Context(), tx, organization(r))
+		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Firm policy change could not be confirmed.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"independent_review": review, "independent_review_min_amount": current, "materiality_amount": currentMateriality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_provider": llm.ProviderLabel(r.Context(), "written_answer"), "model_answers": written, "firm_answers": firmWritten, "investigations": investigations, "ledger_writes": ledgerWrites})
+		jsonReply(w, 200, map[string]any{"independent_review": review, "independent_review_min_amount": current, "materiality_amount": currentMateriality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_provider": llm.ProviderLabel(r.Context(), "written_answer"), "model_answers": written, "firm_answers": firmWritten, "investigations": investigations, "ledger_writes": ledgerWrites, "writes_in_flight": inFlight})
 	})
 }
