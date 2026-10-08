@@ -303,7 +303,7 @@ function AgentChatSetting() {
       </p>
       {policy.answers_stopped && (
         <p role="alert">
-          Written answers stopped when this setting replaced them: this firm had turned on written answers without investigations, and the agent now chooses its own reads, which investigations consented to. Choose a level with a reason to turn the agent on again.
+          Written answers stopped when this setting replaced them: this firm had turned on written answers without investigations, and the agent now chooses its own reads, which investigations consented to. Choose a level with a reason to turn the agent on again, or apply Off to keep it off.
         </p>
       )}
       {policy.can_manage_agent_chat ? (
@@ -320,7 +320,7 @@ function AgentChatSetting() {
             Reason for the change
             <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
           </label>
-          <button type="button" disabled={busy || reason.trim().length < 5 || chosen === policy.agent_chat} onClick={() => void change()}>
+          <button type="button" disabled={busy || reason.trim().length < 5 || (chosen === policy.agent_chat && !policy.answers_stopped)} onClick={() => void change()}>
             Apply
           </button>
           <p>
