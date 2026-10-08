@@ -17,8 +17,9 @@ type toolCap struct {
 // answer touched without trusting the model to say. The forms are a path to an array of close ids ("items[].close_id"),
 // optionally followed by "|field": a top-level field that, when true or a number beyond the listed rows, means the
 // result counted or capped across more closes than it lists, so its lineage is not known. A close-scoped read (its
-// path holds {close_id}) needs no declaration: its lineage is the pinned close. lineageNone marks a read that cannot
-// name its closes.
+// path holds {close_id}) needs no declaration: its lineage is the pinned close; one that also draws on another close
+// names where ("+prior.close_id", "+last_close_id"), and that close joins the pinned one. lineageNone marks a read
+// that cannot name its closes.
 const lineageNone = "none"
 
 // capResult keeps a result's first rows. It returns the result unchanged when it has no cap, is not an object or its
@@ -57,7 +58,13 @@ func capResult(raw []byte, c toolCap) ([]byte, bool, int) {
 // across more closes than it lists.
 func lineageOf(raw []byte, lineage, pinned string) ([]string, bool) {
 	if pinned != "" {
-		return []string{pinned}, true
+		closes := []string{pinned}
+		if extra, ok := strings.CutPrefix(lineage, "+"); ok {
+			if id := closeAt(raw, extra); id != "" && id != pinned {
+				closes = append(closes, id)
+			}
+		}
+		return closes, true
 	}
 	if lineage == "" || lineage == lineageNone {
 		return nil, false
@@ -107,13 +114,38 @@ func lineageOf(raw []byte, lineage, pinned string) ([]string, bool) {
 	return closes, true
 }
 
+// closeAt reads a close id at a dotted object path ("prior.close_id"), as a string or a number; "" when absent.
+func closeAt(raw []byte, path string) string {
+	current := json.RawMessage(raw)
+	for _, key := range strings.Split(path, ".") {
+		var object map[string]json.RawMessage
+		if json.Unmarshal(current, &object) != nil || object[key] == nil {
+			return ""
+		}
+		current = object[key]
+	}
+	var id string
+	var number float64
+	if json.Unmarshal(current, &id) == nil {
+		return id
+	}
+	if json.Unmarshal(current, &number) == nil && number > 0 {
+		return strconv.FormatInt(int64(number), 10)
+	}
+	return ""
+}
+
 // modelResult prepares a read's body for the model: its rows capped, and the closes it names collected from the body
-// rather than from anything the model sent.
+// rather than from anything the model sent. A firm-wide read cut by its cap lists fewer closes than it drew on, so its
+// lineage is not known, exactly as a read the route itself capped.
 func modelResult(t mcpTool, raw []byte, pinned string) (body []byte, truncated bool, total int, closes []string, known bool) {
 	if !strings.Contains(t.path, "{close_id}") {
 		pinned = ""
 	}
 	closes, known = lineageOf(raw, t.lineage, pinned)
 	body, truncated, total = capResult(raw, t.cap)
+	if truncated && pinned == "" {
+		closes, known = nil, false
+	}
 	return body, truncated, total, closes, known
 }

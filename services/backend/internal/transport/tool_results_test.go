@@ -55,6 +55,34 @@ func TestLineageComesFromTheReadNotTheModel(t *testing.T) {
 	if _, _, _, closes, known := modelResult(pinned, []byte(`{"rows":[]}`), "41"); !known || !slices.Equal(closes, []string{"41"}) {
 		t.Fatalf("pinned close: %v %v", closes, known)
 	}
+	var pack, flux mcpTool
+	for _, tool := range mcpTools {
+		switch tool.name {
+		case "management_pack":
+			pack = tool
+		case "explain_changes":
+			flux = tool
+		}
+	}
+	if _, _, _, closes, known := modelResult(pack, []byte(`{"prior":{"close_id":"40","period":"2026-08"}}`), "41"); !known || !slices.Equal(closes, []string{"41", "40"}) {
+		t.Fatalf("a comparison read names the prior close too: %v %v", closes, known)
+	}
+	if _, _, _, closes, known := modelResult(flux, []byte(`{"state":"ready","last_close_id":40,"changes":[]}`), "41"); !known || !slices.Equal(closes, []string{"41", "40"}) {
+		t.Fatalf("changes from last month name the prior close too: %v %v", closes, known)
+	}
+	if _, _, _, closes, known := modelResult(pack, []byte(`{"state":"waiting"}`), "41"); !known || !slices.Equal(closes, []string{"41"}) {
+		t.Fatalf("a comparison read without a prior close names its own: %v %v", closes, known)
+	}
+	var listing mcpTool
+	for _, tool := range mcpTools {
+		if tool.name == "list_closes" {
+			listing = tool
+		}
+	}
+	long := `{"closes":[` + strings.Repeat(`{"id":"1"},`, 60) + `{"id":"2"}],"has_more":false}`
+	if body, truncated, _, closes, known := modelResult(listing, []byte(long), ""); !truncated || known || closes != nil || !strings.Contains(string(body), `"truncated":true`) {
+		t.Fatalf("a read cut by its own cap has no known lineage: truncated=%v known=%v %v", truncated, known, closes)
+	}
 	work := []byte(`{"items":[{"id":"1","close_id":"7"},{"id":"2","close_id":"7"},{"id":"3","close_id":9}],"has_more":false,"counts":{"active":3}}`)
 	if closes, known := lineageOf(work, "items[].close_id|has_more", ""); !known || !slices.Equal(closes, []string{"7", "9"}) {
 		t.Fatalf("listed closes: %v %v", closes, known)
