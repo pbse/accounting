@@ -103,6 +103,18 @@ func QuoteLocation(name, content, quote string) (string, bool) {
 
 // Check reports only explicit page-number and labeled-value conflicts; it does
 // not infer that an unnumbered document is complete or choose a correct value.
+// ImageDisputed lists the pages of extracted PDF text whose image Gemini read differently from their text layer, as
+// the extractor's own page markers say.
+func ImageDisputed(content string) []int {
+	pages := []int{}
+	for i, at := range extractedPage.FindAllStringIndex(content, -1) {
+		if marker, _, _ := strings.Cut(content[at[0]:], "\n"); strings.HasSuffix(marker, imageDiffers+" ---") {
+			pages = append(pages, i+1)
+		}
+	}
+	return pages
+}
+
 func Check(name, content string) CheckResult {
 	result := CheckResult{Warnings: []string{}, Questions: []string{}}
 	if strings.HasSuffix(strings.ToLower(name), ".pdf") {
@@ -116,13 +128,6 @@ func Check(name, content string) CheckResult {
 				end := len(content)
 				if i+1 < len(pages) {
 					end = pages[i+1][0]
-				}
-				// A page whose image Gemini read differently from its text layer is named, so whoever uses the document
-				// compares that page with the original: the text kept may lack, or contradict, what the page shows. A
-				// statement is confirmed only once every page is recorded as checked against the original.
-				marker, _, _ := strings.Cut(content[page[0]:end], "\n")
-				if strings.HasSuffix(marker, imageDiffers+" ---") {
-					result.Warnings = append(result.Warnings, fmt.Sprintf("PDF page %d: Gemini's reading of the page image differs from its PDF text; compare that page with the original before using its facts.", i+1))
 				}
 				labels := printedPage.FindAllStringSubmatch(content[page[1]:end], -1)
 				if len(labels) > 0 {
@@ -138,6 +143,13 @@ func Check(name, content string) CheckResult {
 						}
 					}
 				}
+			}
+			// A page whose image Gemini read differently from its text layer is named, so whoever uses the document
+			// compares that page with the original: the text kept may lack, or contradict, what the page shows. A
+			// statement is confirmed only once every page is recorded as checked against the original, and no draft is
+			// prepared from such a document without a person confirming its facts.
+			for _, page := range ImageDisputed(content) {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("PDF page %d: Gemini's reading of the page image differs from its PDF text; compare that page with the original before using its facts.", page))
 			}
 			if pagesWithPrinted == 0 {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("PDF has %d extracted pages but no printed page total; compare with the original to confirm completeness.", len(pages)))
