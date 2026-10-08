@@ -1072,7 +1072,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 						}
 					}
 					linked = reply.citations
-					reply = chatReply{body: "I answered from reads that cannot be tied to particular closes, so the answer was shown once and not kept; ask again to see it.", citations: []chatCitation{{"Work", "/dashboard"}}, action: reply.action, due: reply.due, finish: reply.finish, monthly: reply.monthly}
+					reply = chatReply{body: "I answered from reads that cannot be tied to particular closes, so the answer was shown once and not kept; ask again to see it.", citations: []chatCitation{{"Work", "/dashboard"}}}
+					// A card proposed in such a turn carries the model's words about those reads; it is not kept either.
+					if result.proposal != nil {
+						result.proposal = nil
+						reply.body += " The action it proposed was not kept; ask for it on its own."
+					}
 				}
 				if !emit("text", map[string]any{"body": strings.Join(append([]string{result.reply.body}, result.reply.lines...), "\n"), "citations": result.reply.citations}) {
 					problem(w, 403, "Your access changed. Nothing was saved.")

@@ -610,6 +610,12 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					step.Status, output = "refused", "refused: "+err.Error()
 					break
 				}
+				// Firm-wide, a close the model names is read only if the member can open it now: the read replays the
+				// inner routes, so the access boundary is applied here.
+				if named, isText := args["close_id"].(string); closeID == "" && isText && named != "" && !canOpen(named) {
+					step.Status, output = "refused", "refused: not a close you can open"
+					break
+				}
 				out.calls++
 				if t.name == "select_closes_preview" {
 					// Day names in a goal resolve against the member's own date, as the chat request supplied it.

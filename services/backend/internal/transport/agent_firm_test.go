@@ -53,6 +53,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "mock-only-key")
 	t.Setenv("OPENAI_MODEL", "mock-only-model")
 	var toolsOffered, outputsSeen []string
+	seenCalls := map[string]bool{}
 	var firstRound string
 	headline := ""
 	var answer func() string
@@ -70,10 +71,12 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 		for _, item := range sent.Input {
 			if item["type"] == "function_call_output" {
 				out := item["output"].(string)
-				if !strings.Contains(strings.Join(outputsSeen, "\n"), out) {
+				id, _ := item["call_id"].(string)
+				if !seenCalls[id] {
+					seenCalls[id] = true
 					outputsSeen = append(outputsSeen, out)
 				}
-				if rest, found := strings.CutPrefix(out, "t1: "); found {
+				if rest, found := strings.CutPrefix(out, "t2: "); found {
 					var brief struct {
 						Headline string `json:"headline"`
 					}
@@ -136,9 +139,9 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 		return out
 	}
 	// A hand-over proposed for Beta, after reading it: the card is bound to Beta and the pair records Beta.
-	firstRound = `{"status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"c1","name":"close_brief","arguments":"{\"close_id\":\"` + beta + `\"}"},{"type":"function_call","id":"fc_2","call_id":"c2","name":"select_closes","arguments":"{\"text\":\"prepare my clients due Friday\"}"},{"type":"function_call","id":"fc_0","call_id":"c0","name":"hand_over","arguments":"{\"close_id\":\"999999999\",\"finish\":\"review\"}"},{"type":"function_call","id":"fc_3","call_id":"c3","name":"hand_over","arguments":"{\"close_id\":\"` + beta + `\",\"finish\":\"review\"}"}]}`
+	firstRound = `{"status":"completed","output":[{"type":"function_call","id":"fc_9","call_id":"c9","name":"get_close","arguments":"{\"close_id\":\"999999999\"}"},{"type":"function_call","id":"fc_1","call_id":"c1","name":"close_brief","arguments":"{\"close_id\":\"` + beta + `\"}"},{"type":"function_call","id":"fc_2","call_id":"c2","name":"select_closes","arguments":"{\"text\":\"prepare my clients due Friday\"}"},{"type":"function_call","id":"fc_0","call_id":"c0","name":"hand_over","arguments":"{\"close_id\":\"999999999\",\"finish\":\"review\"}"},{"type":"function_call","id":"fc_3","call_id":"c3","name":"hand_over","arguments":"{\"close_id\":\"` + beta + `\",\"finish\":\"review\"}"}]}`
 	answer = func() string {
-		raw, _ := json.Marshal(map[string]any{"kind": "facts", "answer": "Beta is where it is.", "support": []map[string]any{{"step": "t1", "sentence": 0, "path": "/headline", "value": headline, "quote": ""}}})
+		raw, _ := json.Marshal(map[string]any{"kind": "facts", "answer": "Beta is where it is.", "support": []map[string]any{{"step": "t2", "sentence": 0, "path": "/headline", "value": headline, "quote": ""}}})
 		return string(raw)
 	}
 	out := ask("How is Beta doing? Hand it over.")
@@ -150,7 +153,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 	if slices_contains(toolsOffered, "search_close") || slices_contains(toolsOffered, "open_close") {
 		t.Fatalf("search_close and open_close are not offered firm-wide: %v", toolsOffered)
 	}
-	if len(outputsSeen) != 4 || !strings.HasPrefix(outputsSeen[0], "t1: ") || !strings.Contains(outputsSeen[1], "preview this exact goal") || !strings.Contains(outputsSeen[2], "not a close you can open") || !strings.Contains(outputsSeen[3], `"proposed"`) {
+	if len(outputsSeen) != 5 || !strings.Contains(outputsSeen[0], "not a close you can open") || !strings.HasPrefix(outputsSeen[1], "t2: ") || !strings.Contains(outputsSeen[2], "preview this exact goal") || !strings.Contains(outputsSeen[3], "not a close you can open") || !strings.Contains(outputsSeen[4], `"proposed"`) {
 		t.Fatalf("the read ran, the goal without a preview and the card on a close the member cannot open were refused, the hand-over was proposed: %v", outputsSeen)
 	}
 	last := out.Messages[len(out.Messages)-1]
