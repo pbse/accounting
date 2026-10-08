@@ -231,12 +231,13 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
   // Typing "/" lists the commands, the same list the palette shows; arrows choose, Tab or Enter completes.
   const slash = text.startsWith("/") && !text.includes(" ") ? commands.filter((c) => c.name.startsWith(text.slice(1).toLowerCase()) && (!c.close || closeId || true)) : [];
   const chosen = slash[Math.min(selected, Math.max(slash.length - 1, 0))];
-  function complete(c: (typeof commands)[number]) {
+  // Tab completes the command in the box; Enter on a chosen command sends it when it takes no argument.
+  function complete(c: (typeof commands)[number], run: boolean) {
     const line = `/${c.name}${c.argument ? " " : ""}`;
     setText(line);
     setSelected(0);
     input.current?.focus();
-    if (!c.argument) submitLine(line);
+    if (run && !c.argument) submitLine(line);
   }
   function submit(event?: { preventDefault(): void }) {
     event?.preventDefault();
@@ -249,6 +250,8 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
       return;
     }
     const { command, argument } = parseCommand(line);
+    // A command that cannot run shows its message with nothing to retry: retry belongs to a request that was sent.
+    setLastBody(undefined);
     if (!command) {
       setError("Unknown command. Type / to see the commands.");
       return;
@@ -408,9 +411,9 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
       )}
       <form className="assistant-composer" onSubmit={submit}>
         {slash.length > 0 && (
-          <ul className="assistant-commands" role="listbox" aria-label="Commands">
+          <ul id="assistant-commands" className="assistant-commands" role="listbox" aria-label="Commands">
             {slash.map((c) => (
-              <li key={c.name} role="option" aria-selected={c === chosen} className={c === chosen ? "active" : ""} onMouseDown={(e) => { e.preventDefault(); complete(c); }}>
+              <li key={c.name} id={`assistant-command-${c.name}`} role="option" aria-selected={c === chosen} className={c === chosen ? "active" : ""} onMouseDown={(e) => { e.preventDefault(); complete(c, true); }}>
                 <strong>/{c.name}{c.argument ? ` <${c.argument}>` : ""}</strong> <span>{c.description}</span>
               </li>
             ))}
@@ -420,6 +423,11 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
           <textarea
             ref={input}
             aria-label="Message the agent"
+            role="combobox"
+            aria-expanded={slash.length > 0}
+            aria-controls="assistant-commands"
+            aria-activedescendant={chosen && slash.length > 0 ? `assistant-command-${chosen.name}` : undefined}
+            aria-autocomplete="list"
             value={text}
             maxLength={1000}
             rows={1}
@@ -432,9 +440,12 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
               if (slash.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
                 e.preventDefault();
                 setSelected((n) => (e.key === "ArrowDown" ? n + 1 : n - 1 + slash.length) % slash.length);
-              } else if (slash.length > 0 && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) && chosen) {
+              } else if (slash.length > 0 && chosen && e.key === "Tab") {
                 e.preventDefault();
-                complete(chosen);
+                complete(chosen, false);
+              } else if (slash.length > 0 && chosen && e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                complete(chosen, true);
               } else if (e.key === "Enter" && !e.shiftKey) submit(e);
               else if (e.key === "Escape" && menu) setMenu(false);
             }}
