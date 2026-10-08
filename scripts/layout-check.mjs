@@ -68,7 +68,7 @@ const apps = [
     // Matched against the end of Vite's data-vite-dev-id, which is the stylesheet's absolute file path.
     stylesheet: "/apps/frontend/src/styles.css",
     routes: [
-      "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, `/dashboard/closes/${close}?tab=reports`, "/dashboard/measure", `/dashboard/closes/${close}?tab=cash`,
+      "/dashboard", "/dashboard/work", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, `/dashboard/closes/${close}?tab=reports`, "/dashboard/measure", `/dashboard/closes/${close}?tab=cash`,
       "/dashboard/executive", "/dashboard/settings", "/dashboard/settings?tab=notifications", "/dashboard/settings?tab=connections", "/dashboard/settings?tab=firm", "/dashboard/settings?tab=people", "/dashboard/settings?tab=clients", "/dashboard/settings?tab=policies", "/dashboard/settings?tab=security", "/dashboard/close", "/dashboard/review",
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],
@@ -246,7 +246,7 @@ for (const app of apps) {
       const panelRoute = route === "/dashboard" ? "empty" : route === `/dashboard/closes/${close}` ? "card" : "";
       if (panelRoute && !app.standalone) {
         try {
-          await page.click(".assistant-toggle", { timeout: 5000 });
+          await page.click(".topbar .ask-agent", { timeout: 5000 });
           await page.waitForSelector("aside.assistant", { timeout: 5000 });
           // The drawer slides in over 180ms; it is measured once it has settled.
           await page.waitForTimeout(400);

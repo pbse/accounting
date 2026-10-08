@@ -113,9 +113,15 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 		json.Unmarshal(w.Body.Bytes(), &out)
 		return out
 	}
+	// user_a reviews drafts and sends requests, so every event is theirs to act on; a member without those roles sees
+	// the same events marked as a teammate's, with nothing new to announce.
+	acting := []string{"workpapers:review", "requests:send"}
+	if viewer := call("user_a", nil, "GET", "/v1/closes/attention", nil, 200); viewer.Unread != 0 || len(viewer.Groups) == 0 || viewer.Groups[0].Events[0].Yours {
+		t.Fatalf("a member without the roles sees teammate decisions, none new: %+v", viewer)
+	}
 	mine := func(view string) (inbox, map[string]attentionEvent) {
 		t.Helper()
-		got := call("user_a", nil, "GET", "/v1/closes/attention"+view, nil, 200)
+		got := call("user_a", acting, "GET", "/v1/closes/attention"+view, nil, 200)
 		events := map[string]attentionEvent{}
 		for _, g := range got.Groups {
 			if g.CloseID != alpha {
@@ -129,7 +135,7 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 	}
 	mark := func(action string, keys []string, until string, want int) {
 		t.Helper()
-		call("user_a", nil, "POST", "/v1/closes/attention", map[string]any{"action": action, "keys": keys, "until": until}, want)
+		call("user_a", acting, "POST", "/v1/closes/attention", map[string]any{"action": action, "keys": keys, "until": until}, want)
 	}
 	got, events := mine("")
 	if got.Unread != 1 || len(events) != 1 || events["approve"].Key == "" {
@@ -147,17 +153,17 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 	}
 	submit("first", false)
 	got, events = mine("")
-	if later := call("user_a", nil, "GET", "/v1/closes/attention?page=9223372036854775807", nil, 200); later.Page != 0 || len(later.Groups) != 1 || later.HasMore || len(later.UnreadKeys) != 2 {
+	if later := call("user_a", acting, "GET", "/v1/closes/attention?page=9223372036854775807", nil, 200); later.Page != 0 || len(later.Groups) != 1 || later.HasMore || len(later.UnreadKeys) != 2 {
 		t.Fatalf("a page past the end is the last page, and the unread keys cover every item: %+v", later)
 	}
 	if got.Unread != 2 || len(events) != 2 || events["approve"].Key != "approve:"+alphaDraft || events["answered"].Text != "Client replied to request #"+request+" (partial)" {
 		t.Fatalf("the ready draft and the partial reply need a person, the waiting job does not: %+v", got)
 	}
-	if all := call("user_admin", []string{"clients:all"}, "GET", "/v1/closes/attention", nil, 200); len(all.Groups) != 2 || all.Unread != 3 {
+	if all := call("user_admin", []string{"clients:all", "workpapers:review", "requests:send"}, "GET", "/v1/closes/attention", nil, 200); len(all.Groups) != 2 || all.Unread != 3 {
 		t.Fatalf("firm access sees every client's events: %+v", all)
 	}
 	var betaKey string
-	for _, g := range call("user_admin", []string{"clients:all"}, "GET", "/v1/closes/attention", nil, 200).Groups {
+	for _, g := range call("user_admin", []string{"clients:all", "workpapers:review", "requests:send"}, "GET", "/v1/closes/attention", nil, 200).Groups {
 		if g.CloseID == beta {
 			betaKey = g.Events[0].Key
 		}
@@ -168,7 +174,7 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 	if got, events = mine(""); got.Unread != 1 || !events["answered"].Read {
 		t.Fatalf("a read event stays listed but stops counting: %+v", got)
 	}
-	if all := call("user_admin", []string{"clients:all"}, "GET", "/v1/closes/attention", nil, 200); all.Unread != 3 {
+	if all := call("user_admin", []string{"clients:all", "workpapers:review", "requests:send"}, "GET", "/v1/closes/attention", nil, 200); all.Unread != 3 {
 		t.Fatalf("one member's read mark is not another's: %+v", all)
 	}
 	if _, unread := mine("?view=unread"); unread["answered"].Key != "" || unread["approve"].Key == "" {
@@ -209,12 +215,12 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 	if got, _ = mine("?view=mine"); len(got.Groups) != 1 || got.Groups[0].Owner != "mine" {
 		t.Fatalf("a close the member took is theirs: %+v", got)
 	}
-	for _, g := range call("user_admin", []string{"clients:all"}, "GET", "/v1/closes/attention", nil, 200).Groups {
+	for _, g := range call("user_admin", []string{"clients:all", "workpapers:review", "requests:send"}, "GET", "/v1/closes/attention", nil, 200).Groups {
 		if g.CloseID == alpha && g.Owner != "other" {
 			t.Fatalf("to everyone else it is someone else's: %+v", g)
 		}
 	}
-	if all := call("user_admin", []string{"clients:all"}, "GET", "/v1/closes/attention", nil, 200); all.Unread != 3 {
+	if all := call("user_admin", []string{"clients:all", "workpapers:review", "requests:send"}, "GET", "/v1/closes/attention", nil, 200); all.Unread != 3 {
 		t.Fatalf("marks and preferences are each member's own: %+v", all)
 	}
 

@@ -251,23 +251,162 @@
   color: var(--ink-2);
   font-size: 13px;
 }
-/* A form or panel placed straight on the page is a card, like a section. */
-.app-shell .attention > details {
+/* Home: the trust strip under the cards, and each client's decisions as its own card, the first in the spotlight. */
+.trust-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  margin: calc(-1 * var(--space-12)) 0 var(--space-24);
+}
+.app-shell .chip.warn {
+  background: var(--attention-tint);
+  box-shadow: none;
+  color: var(--attention-text);
+  border: 0;
+  cursor: pointer;
+}
+.app-shell .chip.neutral {
+  background: var(--fill);
+  box-shadow: none;
+  color: var(--ink-2);
+}
+.app-shell .first-client {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  background: var(--spotlight);
+  color: var(--spotlight-text);
+}
+.first-client > span {
+  flex: 1;
+}
+.first-client h2,
+.first-client p {
+  margin: 0;
+}
+.first-client p {
+  margin-top: var(--space-4);
+  font-size: 13px;
+}
+.decision {
+  margin-bottom: var(--space-12);
   padding: var(--space-16) var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow-card);
 }
-/* Attention lists each client's items as its own card. */
-.app-shell .attention > article {
-  margin-bottom: var(--space-16);
-  padding: var(--space-20);
+.decision.spotlight {
+  background: var(--spotlight);
+  color: var(--spotlight-text);
+}
+.decision.spotlight a,
+.decision.spotlight small {
+  color: inherit;
+}
+.decision.spotlight .pill {
+  background: rgb(255 255 255 / 60%);
+  color: var(--spotlight-text);
+}
+.decision > header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+}
+.app-shell details.team {
+  padding: var(--space-12) var(--space-20);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--space-12);
+}
+.app-shell details.team .decision {
+  box-shadow: var(--shadow-tile);
+}
+.app-shell details.owed {
+  padding: var(--space-12) var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow-card);
 }
-.attention > article h2 {
-  margin-top: 0;
+.app-shell details.owed .row-list {
+  margin: var(--space-12) 0 0;
+  padding: 0;
+  box-shadow: none;
+}
+.client-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0;
+}
+.app-shell .client-filter input {
+  width: 11rem;
+  margin: 0;
+  padding: 5px var(--space-10);
+  font-size: 13px;
+}
+.client-filter small {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.decision-title {
+  flex: 1;
+  min-width: 0;
+}
+.decision h3 {
+  margin: 0;
+}
+.decision h3 a {
+  text-decoration: none;
+}
+.decision > header small {
+  display: block;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-2);
+}
+.decision > ul {
+  list-style: none;
+  margin: var(--space-12) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.decision > ul > li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-tile);
+  color: var(--ink);
+}
+.decision > ul > li > a {
+  flex: 1;
+  min-width: 0;
+}
+.decision > ul > li > small {
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.decision > footer {
+  display: flex;
+  gap: var(--space-8);
+  margin-top: var(--space-12);
+}
+.app-shell .decision button {
+  padding: 5px var(--space-12);
+  font-size: 12px;
+}
+.app-shell .section-header > details,
+.app-shell section.bare > details {
+  padding: var(--space-12) var(--space-20);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 .evidence-frame {
   width: 100%;
@@ -276,23 +415,6 @@
 }
 
 /* The agent panel: a drawer beside the page on a desktop, a sheet on a phone; the palette shares its command list. */
-.app-shell .assistant-toggle {
-  position: fixed;
-  right: var(--space-16);
-  bottom: var(--space-16);
-  z-index: 20;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-8);
-  padding: var(--space-10) var(--space-16);
-  border-radius: var(--radius-full);
-  background: var(--blue);
-  color: var(--on-chip);
-  box-shadow: 0 8px 24px rgb(37 99 235 / 28%);
-}
-.app-shell .assistant-toggle:hover:not(:disabled) {
-  background: var(--blue-hover);
-}
 aside.assistant {
   position: fixed;
   top: 0;

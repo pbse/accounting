@@ -3,19 +3,12 @@ import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
-import { AgentComposer } from "@close/ui/components/AgentComposer";
-import { Avatar } from "@close/ui/components/Avatar";
-import { Icon } from "@close/ui/components/Icon";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { Segmented } from "@close/ui/components/Segmented";
-import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
-import { MorningBrief, NotOpened, type Morning } from "./Morning";
-import { DelegatedCloses } from "./Goal";
-import { Setup } from "./Setup";
-import { EntityCell, RowList } from "@close/ui/components/RowList";
+import { EntityCell } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Fact = {
@@ -93,9 +86,6 @@ type WorkItem = Plan & {
     body: string;
   }[];
 };
-type Dependency = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; upstream_workpaper_id: string };
-type Predicted = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; transaction: string; account: string; updated_at: string; approved_at: string; count: number };
-type Untied = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; account: string; balance: string; expected: string; difference: string; captured_at: string };
 const labels: Record<string, string> = {
   waiting_evidence: "Reading evidence",
   needs_confirmation: "Needs your decision",
@@ -126,8 +116,7 @@ const tones: Record<string, string> = {
   waiting_evidence: "status info",
   completed: "status ok",
 };
-type QueueItem = Plan & { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string; digest: string; review_id: string; bulk_reason: string; approval_note?: string; approval_requested_by?: string; approval_agent?: string };
-const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", deferred_revenue: "Deferred revenue", depreciation: "Depreciation", loan: "Loan schedule", owner: "Owner item", payroll: "Payroll" };
+export const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", deferred_revenue: "Deferred revenue", depreciation: "Depreciation", loan: "Loan schedule", owner: "Owner item", payroll: "Payroll" };
 
 const formFor: Record<string, [string, string]> = {
   deferred_revenue: ["prepaids/new", "schedule=deferred_revenue&"],
@@ -137,38 +126,31 @@ const formFor: Record<string, [string, string]> = {
   payroll: ["payroll/new", ""],
 };
 
-export function Work({
-  closeId,
-  onPrepared,
-}: {
-  closeId?: string;
-  onPrepared?: () => void;
-}) {
+
+// The preparation inbox: on a close's Overview, that close's documents; on its own page (/dashboard/work, which the
+// Home card "Prepared by the agent" opens), every document across the reader's clients, filtered by client or month.
+export function Work({ closeId, onPrepared }: { closeId?: string; onPrepared?: () => void }) {
   const [items, setItems] = useState<WorkItem[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [more, setMore] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const [filter, setFilter] = useState(closeId ? "all" : "active");
-  const [clientSearch, setClientSearch] = useState("");
-  const [dependencies, setDependencies] = useState<Dependency[]>([]);
-  const [dependencyMore, setDependencyMore] = useState(false);
-  const [dependencyError, setDependencyError] = useState("");
-  const [dependencyLoaded, setDependencyLoaded] = useState(false);
-  const [predicted, setPredicted] = useState<{ items: Predicted[]; more: boolean }>({ items: [], more: false });
-  const [untied, setUntied] = useState<{ items: Untied[]; more: boolean }>({ items: [], more: false });
-  const [queue, setQueue] = useState<{ items: QueueItem[]; count: number }>();
-  const [queueError, setQueueError] = useState("");
-  const [asOf, setAsOf] = useState<Date>();
-  const [sectionsAt, setSectionsAt] = useState<Date>();
-  // Bumped every 30 seconds, on a changed job and on a recovered poll: every section but the job list reads again.
-  const [cycle, setCycle] = useState(0);
-  const seen = useRef("");
-  const [morning, setMorning] = useState<Morning>();
-  const [morningError, setMorningError] = useState("");
-  // A link to one document of this close shows only that document, open.
+  // A link to one document of this close shows only that document, open; a link to the Preparation page may name
+  // its view (Home's card opens every job, prepared ones included).
   const [params] = useSearchParams();
+  const [offset, setOffset] = useState(0);
+  const linkedView = closeId ? "" : views.some(([key]) => key === params.get("view")) ? params.get("view")! : "";
+  const [filter, setFilter] = useState(closeId ? "all" : linkedView || "active");
+  // A later link naming another view (the agent's citation of blocked work) changes the view on the page already open.
+  useEffect(() => {
+    if (linkedView) {
+      setFilter(linkedView);
+      setOffset(0);
+    }
+  }, [linkedView]);
+  const [client, setClient] = useState("");
+  const [asOf, setAsOf] = useState<Date>();
   const job = closeId ? (params.get("job") ?? "") : "";
   const opened = useRef("");
   useEffect(() => {
@@ -187,12 +169,9 @@ export function Work({
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     let failures = 0;
-    seen.current = "";
     async function load() {
       try {
-        const data = await workspaceRequest(
-          `${closeId ? `/${closeId}/work` : "/work"}?view=${filter}&client=${encodeURIComponent(clientSearch)}${job ? `&jobs=${encodeURIComponent(job)}` : ""}`,
-        );
+        const data = await workspaceRequest(`${closeId ? `/${closeId}/work` : "/work"}?view=${filter}&client=${encodeURIComponent(client)}&offset=${offset}${job ? `&jobs=${encodeURIComponent(job)}` : ""}`);
         if (!live) return;
         setItems(data.items);
         setCounts(data.counts ?? {});
@@ -200,14 +179,11 @@ export function Work({
         setError("");
         setLoaded(true);
         setAsOf(new Date());
-        const state = JSON.stringify([data.items.map((i: WorkItem) => [i.id, i.state, i.revision]), data.counts]);
-        if (!closeId && seen.current && (seen.current !== state || failures > 0)) setCycle((n) => n + 1);
-        seen.current = state;
         failures = 0;
         timer = setTimeout(load, 3000);
       } catch (e) {
         if (!live) return;
-        setError(e instanceof Error ? e.message : "Inbox unavailable.");
+        setError(e instanceof Error ? e.message : "Work is unavailable.");
         failures++;
         timer = setTimeout(load, Math.min(30_000, 3000 * 2 ** failures));
       }
@@ -217,240 +193,62 @@ export function Work({
       live = false;
       clearTimeout(timer);
     };
-  }, [closeId, refresh, filter, clientSearch, job]);
-  useEffect(() => {
-    if (closeId) return;
-    const timer = setInterval(() => setCycle((n) => n + 1), 30_000);
-    return () => clearInterval(timer);
-  }, [closeId]);
-  // A failed read keeps its section's last good result beside the error until a later read succeeds.
-  useEffect(() => {
-    if (closeId) return;
-    let live = true;
-    const dependencies = workspaceRequest(`/dependencies?client=${encodeURIComponent(clientSearch)}`).then(data => {
-      if (live) { setDependencies(data.items); setDependencyMore(data.has_more); setPredicted({ items: data.predicted ?? [], more: data.predicted_more }); setUntied({ items: data.no_longer_ties ?? [], more: data.no_longer_ties_more }); setDependencyError(""); setDependencyLoaded(true); }
-    }).catch(e => {
-      if (live) { setDependencyError(e instanceof Error ? e.message : "Dependency review unavailable."); setDependencyLoaded(true); }
-    });
-    const queue = workspaceRequest(`/review-queue?client=${encodeURIComponent(clientSearch)}`).then(data => {
-      if (live) { setQueue(data); setQueueError(""); }
-    }).catch(e => live && setQueueError(e instanceof Error ? e.message : "The review queue is unavailable."));
-    const brief = workspaceRequest(`/morning?client=${encodeURIComponent(clientSearch)}`)
-      .then((data) => {
-        if (live) { setMorning(data); setMorningError(""); }
-      })
-      .catch((e) => live && setMorningError(e instanceof Error ? e.message : "The morning brief is unavailable."));
-    void Promise.all([dependencies, queue, brief]).then(() => live && setSectionsAt(new Date()));
-    return () => { live = false; };
-  }, [closeId, clientSearch, refresh, cycle]);
-  const filterClients = (value: string) => {
-    if (value === clientSearch) return setRefresh((n) => n + 1);
-    setClientSearch(value);
-    setDependencyLoaded(false);
-    setDependencies([]);
-    setDependencyMore(false);
-    setPredicted({ items: [], more: false });
-    setUntied({ items: [], more: false });
-    setDependencyError("");
-    setQueue(undefined);
-    setQueueError("");
-    setMorning(undefined);
-    setMorningError("");
-  };
-  const dueCounts = morning?.due_counts;
-  // The due tile counts the due closes and the months owed by then that nobody has opened.
-  const unopenedOverdue = dueCounts?.not_opened_overdue ?? 0;
-  const unopenedDue = unopenedOverdue + (dueCounts?.not_opened_upcoming ?? 0);
-  const visiblePredicted = predicted.items.filter(item => !untied.items.some(u => u.workpaper_id === item.workpaper_id));
-  const show = (view: string) => {
-    setFilter(view);
-    document.getElementById("work-list")?.scrollIntoView({ block: "start" });
-  };
+  }, [closeId, refresh, filter, client, offset, job]);
+  const updated = asOf && !error && <small>Updated {asOf.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small>;
   return (
-    <section
-      id={closeId ? "close-work" : undefined}
-      aria-label="Live Work inbox"
-      className={closeId ? undefined : "bare"}
-    >
+    <section id={closeId ? "close-work" : undefined} className={closeId ? undefined : "bare"} aria-label={closeId ? "Work from this close's evidence" : "Preparation across your clients"}>
       {closeId ? (
-        <>
-          <h2>Work from your evidence</h2>
-          <p>
-            Upload evidence to this close. Review proposed facts and questions,
-            confirm assumptions, then preparation runs automatically.
-          </p>
-        </>
+        <SectionHeader title="Work from your evidence">{updated}</SectionHeader>
       ) : (
-        <>
-          <PageHeader
-            icon="work"
-            title="Work"
-            actions={
-              <form
-                className="title-actions"
-                role="search"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  filterClients(String(new FormData(e.currentTarget).get("client") ?? ""));
-                }}
-              >
-                <input name="client" aria-label="Filter by client or close month" placeholder="Client or YYYY-MM" maxLength={200} />
-                <button>Filter</button>
-                <Link className="button primary" to="/dashboard/closes">
-                  Open a client close
-                </Link>
-              </form>
-            }
-          >
-            What needs you, what the agent is handling, and what can finish next.
-          </PageHeader>
-          <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} view={filter} client={clientSearch} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />
-          <StatGroup>
-            <StatTile icon="decision" tone="orange" label="Needs your decision" value={counts.needs_confirmation} caption="Proposed facts and questions to confirm" onClick={() => show("needs_confirmation")} />
-            <StatTile icon="review" label="Ready for review" value={queue?.count} caption="Prepared drafts with evidence and no blockers" onClick={() => document.getElementById("review-queue")?.scrollIntoView({ block: "start" })} />
-            <StatTile icon="waiting" tone="teal" label="Waiting on clients" value={counts.waiting_client} caption="Approved requests awaiting a reply" onClick={() => show("waiting_client")} />
-            <StatTile
-              icon="accrual"
-              tone={dueCounts?.overdue || unopenedOverdue ? "red" : "gray"}
-              label="Due in 7 days"
-              value={dueCounts && dueCounts.overdue + dueCounts.upcoming + unopenedDue}
-              caption={
-                dueCounts
-                  ? `${dueCounts.overdue + unopenedOverdue} overdue · ${dueCounts.upcoming + unopenedDue - unopenedOverdue} upcoming${unopenedDue ? ` · ${unopenedDue} not opened` : ""} · ${dueCounts.no_due_date} without a due date`
-                  : "Closes not yet signed off, or changed since sign-off"
-              }
-              onClick={() => document.getElementById("due-closes")?.scrollIntoView({ block: "start" })}
-            />
-            <StatTile icon="blocked" tone="red" label="Blocked" value={counts.blocked} caption="Failed, replaced or unsupported work" onClick={() => show("blocked")} />
-          </StatGroup>
-        </>
+        <PageHeader
+          icon="work"
+          title="Preparation"
+          actions={
+            <form
+              className="title-actions"
+              role="search"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setClient(String(new FormData(e.currentTarget).get("client") ?? "").trim());
+                setOffset(0);
+              }}
+            >
+              <input name="client" aria-label="Filter by client or close month" placeholder="Client or YYYY-MM" maxLength={200} />
+              <button>Filter</button>
+            </form>
+          }
+        >
+          Every document the agent is reading, waiting on or has prepared across your clients. {updated}
+        </PageHeader>
       )}
-      {!closeId && <Setup onEnrolled={() => setRefresh((n) => n + 1)} />}
-      {error && (
-        <p role="alert">{error} Retrying automatically{asOf ? `; last updated ${asOf.toLocaleTimeString()}` : ""}.</p>
-      )}
-      {asOf && !error && (
-        <p className="note">
-          Jobs updated {asOf.toLocaleTimeString()}
-          {!closeId && sectionsAt && `; the brief, review queue and dependencies ${sectionsAt.toLocaleTimeString()}, read again every 30 seconds and whenever work changes`}.
-        </p>
-      )}
+      {error && <p role="alert">{error} Retrying automatically.</p>}
       {!loaded && !error && <p role="status">Loading work…</p>}
-      {!closeId && morning && morningError && <p role="alert">{morningError} Showing the last brief read.</p>}
-      {!closeId && <MorningBrief brief={morning} error={morningError} />}
-      {!closeId && morning && (
-        <>
-          <SectionHeader title="Due in 7 days" id="due-closes">
-            <small>Overdue or due within a week and not signed off, or changed since sign-off. {unopenedDue > 0 && `${unopenedDue} more ${unopenedDue === 1 ? "month is" : "months are"} due by then and not opened, listed below the closes. `}{morning.due_counts.no_due_date > 0 && `${morning.due_counts.no_due_date} outstanding ${morning.due_counts.no_due_date === 1 ? "close has" : "closes have"} no due date.`}</small>
-          </SectionHeader>
-          <RowList label="Due closes">
-            {morning.due.length === 0 && <p className="empty">No opened close is overdue or due within 7 days.</p>}
-            {morning.due.map((item) => (
-              <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
-                <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`Due ${item.due_on}`} />
-                {item.due_on < morning.as_of.slice(0, 10) ? <span className="status danger">Overdue</span> : <span className="status warn">Due soon</span>}
-                <small>{{ open: "Not signed off", reopen_required: "Changed since sign-off", unknown: "Sign-off could not be rechecked" }[item.state]}</small>
-                <Icon name="arrow" />
-              </Link>
-            ))}
-          </RowList>
-          <NotOpened months={morning.due_not_opened ?? []} due />
-          <NotOpened months={morning.not_opened ?? []} />
-        </>
-      )}
       {loaded && (
         <>
-          {!closeId && <DelegatedCloses key={clientSearch} refresh={refresh + cycle} client={clientSearch} />}
-          {!closeId && (
-            <>
-              <SectionHeader title="Ready for your review" id="review-queue">
-                {queue && queue.count > queue.items.length && <small>Showing {queue.items.length} of {queue.count}</small>}
-              </SectionHeader>
-              {queueError && <p role="alert">{queueError}{queue ? " Showing the last queue read." : ""}</p>}
-              <BulkReview items={queue?.items} onDone={() => setRefresh((n) => n + 1)} />
-              <SectionHeader title="Work needing re-review" id="dependency-review">
-                <small>Source revisions and inherited schedules reopen review; earlier approvals are not reused.</small>
-              </SectionHeader>
-              <RowList label="Portfolio dependency review">
-                {!dependencyLoaded && <p role="status" className="empty">Checking dependencies…</p>}
-                {dependencyError && <p role="alert" className="empty">{dependencyError}</p>}
-                {dependencyLoaded && !dependencyError && dependencies.length === 0 && <p className="empty">No current workpapers have a changed dependency in this client filter.</p>}
-                {dependencies.map(item => (
-                  <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
-                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}`} />
-                    <span className="status danger">Evidence changed</span>
-                    <small>{item.upstream_workpaper_id ? `Linked to prior draft #${item.upstream_workpaper_id}` : "Linked source changed"}</small>
-                    <Icon name="arrow" />
-                  </Link>
-                ))}
-              </RowList>
-              {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
-              {(untied.items.length > 0 || untied.more) && (
-                <RowList label="No longer ties">
-                  <p><strong>No longer ties</strong> · approved drafts in open closes whose account differs from what the approved work supports in a Trial Balance captured after the approval. Sign-off is blocked until it ties; the approval stands until you review again.</p>
-                  {untied.items.map(item => (
-                    <Link className="row" key={`${item.workpaper_id}-${item.account}`} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
-                      <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}`} />
-                      <span className="status danger">No longer ties</span>
-                      <small>{item.account} is {item.balance} in the Trial Balance captured {new Date(item.captured_at).toLocaleString()} but {item.expected} in its support, a difference of {item.difference}.</small>
-                      <Icon name="arrow" />
-                    </Link>
-                  ))}
-                  {untied.more && <p>Checked the 10 open closes with the newest Trial Balances. Filter by client or month to check others.</p>}
-                </RowList>
-              )}
-              {visiblePredicted.length > 0 && (
-                <RowList label="Predicted re-review">
-                  <p><strong>May need re-review</strong> · approved drafts in open closes whose account had a transaction updated in QuickBooks after the approval. The update may not change the balance; the approval stands until you review again.</p>
-                  {visiblePredicted.map(item => (
-                    <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
-                      <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}`} />
-                      <span className="status">May be affected</span>
-                      <small>{item.transaction} on {item.account} updated {new Date(item.updated_at).toLocaleString()}, after approval on {new Date(item.approved_at).toLocaleString()}{item.count > 1 ? ` (${item.count} such transactions)` : ""}</small>
-                      <Icon name="arrow" />
-                    </Link>
-                  ))}
-                  {predicted.more && <p>Showing 100 drafts. Filter by client or month to see more.</p>}
-                </RowList>
-              )}
-              <DailyBooks refresh={refresh + cycle} onReviewed={() => setRefresh((n) => n + 1)} />
-            </>
-          )}
           <div className="toolbar" id="work-list">
             <Segmented
               label="Work view"
               items={views.map(([key, label]) => ({ key, label, count: counts[key], alert: key === "needs_confirmation" && counts[key] > 0 }))}
               value={filter}
-              onChange={setFilter}
+              onChange={(key) => {
+                setFilter(key);
+                setOffset(0);
+              }}
             />
-            <button type="button" onClick={() => setRefresh((n) => n + 1)}>Refresh</button>
           </div>
           {job && (
             <p className="assistant-note">
               Showing the document you opened. <Link to={`/dashboard/closes/${closeId}`}>Show all work</Link>
             </p>
           )}
-          {items.length === 0 && (
-            <p className="empty">
-              No work matches this view. Change the filters or upload evidence
-              in a client close.
-            </p>
-          )}
+          {items.length === 0 && <p className="empty">{closeId ? "No work matches this view. Upload evidence to this close to begin." : "No work matches this view."}</p>}
           <fieldset disabled={!!error} className="row-list">
             {items.map((item) => (
-              <details
-                key={item.id}
-                id={`work-${item.id}`}
-                className="work-item"
-              >
+              <details key={item.id} id={`work-${item.id}`} className="work-item">
                 <summary className="row">
                   <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${item.source_name} · #${item.id}`} />
                   <span className={item.stale || item.blockers.length > 0 ? "status danger" : (tones[item.state] ?? "status")}>
-                    {item.stale
-                      ? "Source replaced"
-                      : item.blockers.length > 0
-                        ? "Prepared · review blockers"
-                        : (labels[item.state] ?? item.state)}
+                    {item.stale ? "Source replaced" : item.blockers.length > 0 ? "Prepared · review blockers" : (labels[item.state] ?? item.state)}
                   </span>
                   <span>
                     <small>{item.proposal.kind && item.proposal.kind !== "unsupported" ? (kindLabels[item.proposal.kind] ?? item.proposal.kind) : ""}</small> <PlanChips plan={item} />
@@ -458,433 +256,30 @@ export function Work({
                   <span className="chip">Open</span>
                 </summary>
                 <div className="work-body">
-                  <WorkDetails
-                    refresh={refresh}
-                    key={`${item.id}:${item.revision}`}
-                    item={item}
-                    onPrepared={onPrepared}
-                    onChange={() => setRefresh((n) => n + 1)}
-                  />
+                  <WorkDetails refresh={refresh} key={`${item.id}:${item.revision}`} item={item} onPrepared={onPrepared} onChange={() => setRefresh((n) => n + 1)} />
                 </div>
               </details>
             ))}
           </fieldset>
-          {more && (
-            <p>
-              Showing the first 100 matching jobs, with decisions first. Filter
-              by client or close month to narrow the inbox.
-            </p>
+          {closeId ? (
+            more && <p className="note">Showing the first 100 jobs, with decisions first.</p>
+          ) : (
+            (offset > 0 || more) && (
+              <p className="toolbar">
+                <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 100))}>
+                  Newer
+                </button>
+                <button type="button" disabled={!more} onClick={() => setOffset(offset + 100)}>
+                  Older
+                </button>
+                <small>Jobs {offset + 1}–{offset + items.length}, decisions first</small>
+              </p>
+            )
           )}
         </>
       )}
     </section>
   );
-}
-
-type Daily = { close_id: string; entity: string; period: string; source: "quickbooks" | "xero"; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[]; unchecked?: string };
-
-// New exceptions from this and last month's captures since each client was last reviewed.
-function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () => void }) {
-  const [items, setItems] = useState<Daily[]>();
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState("");
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/daily")
-      .then((data) => {
-        if (live) { setItems(data.items); setError(""); }
-      })
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Daily books are unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [refresh]);
-  async function reviewed(item: Daily) {
-    setBusy(item.close_id);
-    try {
-      await workspaceRequest(`/${item.close_id}/daily-review`, { sync_id: item.sync_id, source: item.source });
-      onReviewed();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "The review could not be saved.");
-    } finally {
-      setBusy("");
-    }
-  }
-  const open = items?.filter((item) => item.new.length > 0) ?? [];
-  const unchecked = items?.filter((item) => item.unchecked) ?? [];
-  return (
-    <>
-      <SectionHeader title="Daily books" id="daily-books">
-        <small>New since each client's last review. QuickBooks and Xero captures refresh daily, and QuickBooks sandbox companies also after a change.</small>
-      </SectionHeader>
-      <RowList label="Daily books">
-        {!items && !error && <p role="status" className="empty">Checking captures…</p>}
-        {error && <p role="alert" className="empty">{error}</p>}
-        {items && open.length === 0 && unchecked.length === 0 && <p className="empty">No new exceptions since the last review.</p>}
-        {unchecked.map((item) => (
-          <div className="row" key={`unchecked-${item.close_id}`}>
-            <EntityCell
-              name={item.entity}
-              title={`${item.entity} · ${item.period}`}
-              detail={`Transaction check incomplete in the ${item.source === "xero" ? "Xero" : "QuickBooks"} capture of ${new Date(item.captured_at).toLocaleString()}: ${item.unchecked}`}
-            />
-            <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open the close</Link>
-          </div>
-        ))}
-        {open.map((item) => (
-          <div className="row" key={item.close_id}>
-            <EntityCell
-              name={item.entity}
-              title={`${item.entity} · ${item.period}`}
-              detail={`${item.new.length} new of ${item.total} · captured ${new Date(item.captured_at).toLocaleString()}${item.requested_by === "quickbooks-change-hint" ? " after a QuickBooks change" : ""}`}
-            />
-            <small>{item.new.slice(0, 2).map((e) => e.question).join(" ")}</small>
-            <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open exceptions</Link>
-            <button type="button" disabled={busy === item.close_id} onClick={() => void reviewed(item)}>
-              Mark reviewed
-            </button>
-          </div>
-        ))}
-      </RowList>
-    </>
-  );
-}
-
-function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void }) {
-  const [selected, setSelected] = useState<string[]>([]);
-  const [confirming, setConfirming] = useState<QueueItem[]>();
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [results, setResults] = useState<{ workpaper_id: string; review_id?: string; error?: string }[]>([]);
-  const [error, setError] = useState("");
-  const chosen = confirming ?? [];
-  const label = (item: QueueItem) => `${item.entity} · ${item.period} · ${kindLabels[item.kind] ?? item.kind} #${item.workpaper_id}`;
-  async function approve() {
-    setBusy(true);
-    setError("");
-    try {
-      const data = await workspaceRequest("/review-batch", {
-        note,
-        items: chosen.map((item) => ({ close_id: item.close_id, workpaper_id: item.workpaper_id, digest: item.digest, expected_review_id: item.review_id })),
-      });
-      setResults(data.results);
-      setSelected([]);
-      setConfirming(undefined);
-      setNote("");
-      onDone();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Bulk approval failed. Nothing was approved by this request.");
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <>
-      <RowList>
-        {!items && <p className="empty">Review queue unavailable. Open a close to review its drafts.</p>}
-        {items && items.length === 0 && <p className="empty">Nothing is waiting for review in this filter.</p>}
-        {items?.map((item) => (
-          <div className="row" key={item.workpaper_id}>
-            <EntityCell
-              leading={
-                <>
-                  <input
-                    type="checkbox"
-                    aria-label={`Select ${label(item)} for bulk approval`}
-                    disabled={!!item.bulk_reason || busy || (!selected.includes(item.workpaper_id) && selected.length >= 20)}
-                    checked={selected.includes(item.workpaper_id)}
-                    onChange={(e) => {
-                      setConfirming(undefined);
-                      setSelected((current) => (e.target.checked ? [...current, item.workpaper_id] : current.filter((id) => id !== item.workpaper_id)));
-                    }}
-                  />
-                  <Avatar label={item.entity} />
-                </>
-              }
-              title={`${item.entity} · ${item.period}`}
-              detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}${item.bulk_reason ? ` · review individually: ${item.bulk_reason.toLowerCase()}` : ""}`}
-            >
-              {item.approval_note && <small title={item.approval_note}>Approval requested{item.approval_requested_by ? ` by ${item.approval_requested_by}` : ""}{item.approval_agent ? ` via ${item.approval_agent}` : ""}: {item.approval_note}</small>}
-            </EntityCell>
-            <span className="status warn">{item.approval_note ? "Approval requested" : "Awaiting review"}</span>
-            <PlanChips plan={item} />
-            <Link className="button" to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
-              Review
-            </Link>
-          </div>
-        ))}
-      </RowList>
-      {selected.length > 0 && !confirming && (
-        <div className="toolbar">
-          <button type="button" className="primary" onClick={() => setConfirming((items ?? []).filter((item) => selected.includes(item.workpaper_id)))}>
-            Approve {selected.length} selected
-          </button>
-          <button type="button" onClick={() => setSelected([])}>
-            Clear selection
-          </button>
-        </div>
-      )}
-      {confirming && (
-        <section aria-label="Confirm bulk approval">
-          <h3>Approve {chosen.length === 1 ? "1 draft" : `${chosen.length} drafts`}</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Draft</th>
-                <th>Effect</th>
-                <th>Exceptions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {chosen.map((item) => (
-                <tr key={item.workpaper_id}>
-                  <th>{label(item)}</th>
-                  <td>No ledger change</td>
-                  <td>None: evidence linked, no blockers, questions or reviewer classifications</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p>
-            <strong>Total effect:</strong> no ledger changes. Approval records a review decision on each exact draft; it is not posting or sign-off. You approve as yourself and need the reviewer role. Each draft is rechecked individually, so some can succeed while others are refused.
-          </p>
-          <label>
-            What did you check across these drafts?
-            <textarea required maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
-          </label>
-          <div className="toolbar">
-            <button type="button" className="primary" disabled={busy || !note.trim()} onClick={() => void approve()}>
-              {busy ? "Approving…" : `Approve ${chosen.length === 1 ? "1 draft" : `${chosen.length} drafts`}`}
-            </button>
-            <button type="button" disabled={busy} onClick={() => setConfirming(undefined)}>
-              Back
-            </button>
-          </div>
-          {error && <p role="alert">{error}</p>}
-        </section>
-      )}
-      {results.length > 0 && (
-        <section role="status" aria-label="Bulk approval results">
-          <h3>Approval results</h3>
-          <ul>
-            {results.map((result) => (
-              <li key={result.workpaper_id}>
-                Draft #{result.workpaper_id}: {result.review_id ? "approved" : result.error}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-    </>
-  );
-}
-
-type Goal = { id: string; action: "prepare" | "recheck" | "stop" | "delegate" | "show"; finish?: "review" | "signoff"; goal: string; scope: string; has_more: boolean; reason: string; items: { close_id: string; label: string; count: number; state: string; result: string; due_on?: string }[] };
-
-// A goal's exact server-selected closes. Each run acts on at most ten, each checked again against its preview.
-function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void }) {
-  const [current, setCurrent] = useState(goal);
-  // A listing asked again comes back as a new goal with the same key.
-  useEffect(() => setCurrent(goal), [goal]);
-  const [reason, setReason] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const pending = current.items.filter((i) => i.state === "pending").length;
-  const needsReason = current.action === "stop" && !current.reason;
-  const noun = current.action === "prepare" || current.action === "delegate" ? "source document" : "job";
-  const handing = current.action === "delegate";
-  // A hand-over shows each close's deadline for the agent: its own due date when the close page would accept it.
-  const pendingText = (i: Goal["items"][number]) =>
-    handing
-      ? `${i.count} ${noun}${i.count === 1 ? "" : "s"}; hand over ${i.due_on ? `with the deadline ${new Date(`${i.due_on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}` : "with no deadline"}`
-      : `${i.count} ${noun}${i.count === 1 ? "" : "s"} to ${current.action}`;
-  async function run() {
-    setBusy(true);
-    setError("");
-    try {
-      let left = pending;
-      while (left > 0) {
-        const next: Goal = await workspaceRequest("/portfolio/run", { id: current.id, confirmed: true, reason: reason.trim() });
-        setCurrent(next);
-        const now = next.items.filter((i) => i.state === "pending").length;
-        if (now >= left) break;
-        left = now;
-      }
-      onChange();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "The goal could not run.");
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <section aria-label={`Goal: ${current.goal}`}>
-      <h3>{current.goal}</h3>
-      <p>
-        {current.scope}.{current.has_more && " More than 100 closes matched; this goal covers the first 100 by due date."}
-      </p>
-      {current.items.length === 0 ? <p>No closes match this goal.</p> : (
-        <ul>
-          {current.items.map((i, n) => (
-            <li key={i.close_id || n}>
-              {i.close_id ? <Link to={`/dashboard/closes/${i.close_id}`}>{i.label}</Link> : i.label}: {i.state === "pending" ? pendingText(i) : i.result || i.state}
-            </li>
-          ))}
-        </ul>
-      )}
-      {pending > 0 && (
-        <>
-          {needsReason && <label>Reason for stopping<textarea value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></label>}
-          <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {handing
-            ? `Hand the ${pending} pending close${pending === 1 ? "" : "s"} to the agent to get each ${current.finish === "signoff" ? "signed off" : "ready for review"}. A prepaid invoice whose facts the invoice and the QuickBooks capture both prove is drafted under the firm's procedure without field-by-field confirmation; everything else waits for a person. The agent never approves, sends, posts or signs off.`
-            : `${current.action[0].toUpperCase() + current.action.slice(1)} the ${pending} pending close${pending === 1 ? "" : "s"}; facts and methods still need separate review.`}</label>
-          <button type="button" disabled={busy || !confirmed || (needsReason && !reason.trim())} onClick={() => void run()}>{busy ? "Running…" : `Run for ${pending} close${pending === 1 ? "" : "s"}`}</button>
-        </>
-      )}
-      {error && <p role="alert">{error}</p>}
-    </section>
-  );
-}
-
-// One-click asks: the first three only filter this page; preparing shows the server's exact preview first.
-const suggestions = ["Show decisions", "Show blockers", "Show everything waiting on clients", "Prepare my clients due Friday"];
-
-function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem[];view:string;client:string;onFilter:(view:string)=>void;onChange:()=>void}) {
-  const [mode,setMode] = useState<"prepare"|"stop"|"recheck">("prepare");
-  const [params] = useSearchParams();
-  const goalParam = params.get("goal");
-  const [command,setCommand] = useState(goalParam ?? "");
-  useEffect(() => { if (goalParam) setCommand(goalParam); }, [goalParam]);
-  const [goals,setGoals] = useState<Goal[]>([]);
-  useEffect(() => {
-    let live = true;
-    // A listing is never saved, so one shown before the saved goals load is kept.
-    workspaceRequest("/portfolio").then((data: { operations: Goal[] }) => live && setGoals(current => [...current.filter(g => !g.id), ...data.operations])).catch(() => undefined);
-    return () => { live = false; };
-  }, []);
-  const [answer,setAnswer] = useState("");
-  const [answerClose,setAnswerClose] = useState("");
-  const closesFor = (action:"prepare"|"stop"|"recheck") => [...new Map(items.filter(i=>action === "prepare" || (action === "recheck" ? ["failed","needs_confirmation"].includes(i.state) : !["completed","cancelled"].includes(i.state))).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`,entity:i.entity.toLowerCase()}])).values()];
-  const closes = closesFor(mode);
-  const [selected,setSelected] = useState<string[]>([]);
-  const [preview,setPreview] = useState<{id:string;label:string;count:number;digest:string}[]>();
-  const [reason,setReason] = useState("");
-  const [busy,setBusy] = useState(false);
-  const [error,setError] = useState("");
-  const [outcomes,setOutcomes] = useState<string[]>([]);
-  async function inspect(targets = selected, action = mode) {
-    setBusy(true);setError("");setOutcomes([]);
-    try {
-      const next = [];
-      for (const close of closesFor(action).filter(c=>targets.includes(c.id))) {
-        const status = await workspaceRequest(`/${close.id}/prepare-close`);
-        next.push({...close,count:action === "prepare" ? status.inventory.length as number : action === "recheck" ? status.recheck.count as number : status.stop.count as number,digest:action === "prepare" ? status.inventory_digest as string : action === "recheck" ? status.recheck.digest as string : status.stop.digest as string});
-      }
-      setPreview(next);
-    } catch(e) { setPreview(undefined);setError(e instanceof Error?e.message:"Could not inspect selected closes."); }
-    finally { setBusy(false); }
-  }
-  function interpret(text = command, asked = false) {
-    setAnswer("");setAnswerClose("");setError("");
-    const askAgent = (fallback: string): Promise<void> => {
-      if (asked) {setError(fallback);return Promise.resolve();}
-      const labels = [...new Set(items.map(i=>`${i.entity} · ${i.period}`))].slice(0,100);
-      setBusy(true);
-      return workspaceRequest("/work/interpret",{text:text.trim(),labels}).then(r=>interpret(r.command,true)).catch(e=>setError(e instanceof Error?e.message:"Could not interpret that request.")).finally(()=>setBusy(false));
-    };
-    if (/^(?:show|list)(?: me)?(?: everything| all work)? waiting (?:on|for) (?:the )?(?:client|clients|replies)$/i.test(text.trim())) {onFilter("waiting_client");return;}
-    const named = /^(?:show|list)(?: me)? (decisions|blockers|running work|client requests|prepared work|all work|dependencies)$/i.exec(text.trim());
-    if (named) {
-      if (named[1].toLowerCase() === "dependencies") {setAnswer("Changed workpapers are listed in Work needing re-review.");return;}
-      const views:Record<string,string> = {decisions:"needs_confirmation",blockers:"blocked","running work":"running","client requests":"waiting_client","prepared work":"completed","all work":"all"};
-      onFilter(views[named[1].toLowerCase()]);
-      return;
-    }
-    const rehearsal = /^rehearse (.+)$/i.exec(text.trim());
-    if (rehearsal) {
-      const query = rehearsal[1].trim().toLowerCase();
-      const visible = items.find(i=>`${i.entity} · ${i.period}`.toLowerCase() === query);
-      if (visible) {setAnswer(`Open the saved production journal rehearsal for ${visible.entity} · ${visible.period}.`);setAnswerClose(visible.close_id);return;}
-      setBusy(true);
-      void workspaceRequest("").then(data => {
-        const matches = (data.closes as {id:string;entity:string;period:string}[]).filter(c=>c.entity.toLowerCase() === query || `${c.entity} · ${c.period}`.toLowerCase() === query);
-        if(matches.length !== 1) return askAgent(data.has_more ? "Name an exact client and month among the latest 100 closes, or open Client closes." : "Name exactly one accessible client and month for rehearsal.");
-        setAnswer(`Open the saved production journal rehearsal for ${matches[0].entity} · ${matches[0].period}.`);
-        setAnswerClose(matches[0].id);
-      }).catch(e=>setError(e instanceof Error ? e.message : "Could not find that close.")).finally(()=>setBusy(false));
-      return;
-    }
-    const why = /^why is (.+) waiting\??$/i.exec(text.trim());
-    if (why) {
-      const query = why[1].trim().toLowerCase();
-      const matches = [...new Map(items.filter(i=>i.entity.toLowerCase() === query || `${i.entity} · ${i.period}`.toLowerCase() === query).map(i=>[i.close_id,i])).values()];
-      if (matches.length !== 1) {askAgent("Name exactly one visible client and month to explain its work.");return;}
-      const related = items.filter(i=>i.close_id === matches[0].close_id);
-      setError("");setAnswer(related.map(i=>`${i.source_name}: ${labels[i.state] ?? i.state}${i.blockers.length ? ` — ${i.blockers.join("; ")}` : i.error ? ` — ${i.error}` : ""}`).join("\n"));
-      return;
-    }
-    // A listing the server refuses shows its guidance rather than going to the interpreter.
-    const previewGoal = (direct = false) => {
-      setBusy(true);
-      void workspaceRequest("/portfolio",{text:text.trim(),view,client,today:new Date().toLocaleDateString("en-CA")}).then((goal:Goal)=>{setBusy(false);setGoals(current=>[goal,...current.filter(g=>g.id!==goal.id)]);}).catch(e=>{setBusy(false);const message=e instanceof Error?e.message:"Could not preview that goal.";if(direct){setError(message);}else{void askAgent(message);}});
-    };
-    if (/^(show|list)\b/i.test(text.trim())) {previewGoal(true);return;}
-    if (/^(hand|delegate)\b/i.test(text.trim())) {previewGoal();return;}
-    const match = /^(prepare|recheck|stop) (.+)$/i.exec(text.trim());
-    if (!match) {askAgent("Try ‘show blockers’, ‘prepare my clients due Friday’, ‘hand over my clients due Friday’, ‘rehearse Client · YYYY-MM’ or ‘why is Client · YYYY-MM waiting?’.");return;}
-    const action = match[1].toLowerCase() as "prepare"|"stop"|"recheck";
-    const query = match[2].trim().toLowerCase();
-    const eligible = closesFor(action);
-    const matches = eligible.filter(c=>c.entity === query || c.label.toLowerCase() === query);
-    if (matches.length > 1) {setError("Several closes match. Include the close month shown below.");return;}
-    if (matches.length !== 1) {previewGoal();return;}
-    setMode(action);setSelected([matches[0].id]);setPreview(undefined);setError("");
-    void inspect([matches[0].id],action);
-  }
-  async function submit() {
-    if(!preview?.length || (mode === "stop" && !reason.trim())) return;
-    setBusy(true);setError("");
-    const results:string[]=[];
-    for(const close of preview) {
-      if(close.count===0) { results.push(`${close.label}: no ${mode === "prepare" ? "source jobs to coordinate" : mode === "recheck" ? "ready unresolved jobs to recheck" : "unresolved jobs to stop"}.`); continue; }
-      try {
-        if(mode === "prepare") await workspaceRequest(`/${close.id}/prepare-close`,{inventory_digest:close.digest,confirmed:true});
-        else if(mode === "recheck") await workspaceRequest(`/${close.id}/prepare-close/recheck`,{digest:close.digest,confirmed:true});
-        else await workspaceRequest(`/${close.id}/prepare-close/cancel`,{digest:close.digest,reason:reason.trim(),confirmed:true});
-        results.push(`${close.label}: ${mode === "prepare" ? "coordinated" : mode === "recheck" ? "rechecking" : "stopped"} ${close.count} source job${close.count===1?"":"s"}.`);
-      } catch(e) { results.push(`${close.label}: ${e instanceof Error?e.message:"Command failed"}. Inspect this close before another attempt.`); }
-    }
-    setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
-  }
-  return <AgentComposer
-    title="Ask the agent"
-    description="Find, explain or prepare work across your clients. Actions always need a preview and confirmation."
-    value={command}
-    onChange={setCommand}
-    onSubmit={() => interpret()}
-    busy={busy}
-    placeholder="Ask in your own words, such as “prepare my clients due Friday”"
-    submitLabel="Find and preview"
-    suggestions={suggestions}
-    onSuggestion={(text) => { setCommand(text); interpret(text); }}
-  >
-    <details><summary>What you can ask</summary>
-    <p>Ask for a goal such as “prepare my clients due Friday”, “recheck failed work” or “stop work waiting on the client”: the server lists exactly which closes it selects before anything runs. Each close is checked again when it runs and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
-    <p>Ask in your own words, or try “show decisions”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, “prepare my clients due Friday” or “stop all visible”.</p>
-    </details>
-    {answer && <p role="status" className="pre-line">{answer}</p>}
-    {answerClose && <Link to={`/dashboard/closes/${answerClose}`}>Open close rehearsal</Link>}
-    <details><summary>Choose closes for a portfolio action</summary>
-    <label>Command<select value={mode} onChange={e=>{setMode(e.target.value as "prepare"|"stop"|"recheck");setSelected([]);setPreview(undefined);setOutcomes([]);}}><option value="prepare">Prepare selected closes</option><option value="recheck">Recheck failed or pending proposals</option><option value="stop">Stop unresolved work</option></select></label>
-    {closes.map(close=><label key={close.id}><input type="checkbox" checked={selected.includes(close.id)} disabled={busy || (!selected.includes(close.id) && selected.length>=10)} onChange={e=>{setPreview(undefined);setOutcomes([]);setSelected(current=>e.target.checked?[...current,close.id]:current.filter(id=>id!==close.id));}} /> {close.label}</label>)}
-    <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect(selected,mode)}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
-    </details>
-    {preview && <div><h3>Exact {mode} preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} {mode === "prepare" ? "source" : "unresolved"} job{close.count===1?"":"s"}</li>)}</ul>{mode === "stop" && <label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label>}<button type="button" disabled={busy || (mode === "stop" && !reason.trim()) || preview.every(close=>close.count===0)} onClick={()=>void submit()}>{mode === "prepare" ? "Coordinate selected closes" : mode === "recheck" ? "Recheck listed proposals" : "Stop listed work"}</button></div>}
-    {goals.map(goal=><PortfolioGoal key={goal.id || goal.goal} goal={goal} onChange={onChange} />)}
-    {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
-    {error && <p role="alert">{error}</p>}
-  </AgentComposer>;
 }
 
 type Hint = {

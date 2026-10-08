@@ -14,8 +14,7 @@ type NavItem = { to: string; label: string; icon: IconName; end?: boolean };
 // The firm's pages. Settings holds the person's and the firm's settings; Measure opens from Settings and the
 // preparation forms from a close, so neither needs a place in the bar. Only Krith's own firm has the worked example (see examples.go), and sees it here.
 const firmNav: NavItem[] = [
-  { to: "/dashboard", label: "Work", icon: "work", end: true },
-  { to: "/dashboard/attention", label: "Attention", icon: "decision" },
+  { to: "/dashboard", label: "Home", icon: "work", end: true },
   { to: "/dashboard/closes", label: "Clients", icon: "clients" },
   { to: "/dashboard/settings", label: "Settings", icon: "settings" },
 ];
@@ -118,7 +117,7 @@ export default function WorkspaceLayout() {
               <NavLink className="nav-item" end={item.end} to={item.to} key={item.to}>
                 <Icon name={item.icon} />
                 {item.label}
-                {item.to === "/dashboard/attention" && signedIn && <AttentionBadge />}
+                {item.end && !executive && signedIn && <AttentionBadge />}
               </NavLink>
             ))}
           </div>
@@ -141,7 +140,7 @@ export default function WorkspaceLayout() {
             </form>
           )}
           {known && !executive && signedIn && (
-            <button type="button" className="button primary" aria-label="Open the agent" onClick={openAssistant}>
+            <button type="button" className="button primary ask-agent" aria-label="Open the agent" onClick={openAssistant}>
               <Icon name="agent" /> <span>Agent</span>
             </button>
           )}
