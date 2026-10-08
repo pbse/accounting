@@ -3835,3 +3835,16 @@ Branch `claude/user-settings`. A member's own settings page at `/dashboard/setti
 - `/readyz` answers 503 with `member_settings` renamed away and 200 with it back.
 
 Not verified: a hosted member's name read and saved through WorkOS, and the Drive connection returning to the settings page; both take the same calls as the people roster and a close's evidence pane.
+
+## Gemini is turned on in one step (2026-10-07)
+
+Request: turn Gemini on with a single Cloudflare step, not a separate GitHub variable.
+
+- **Change.** `GEMINI_PAID_SERVICE` is gone from the deploy workflows, `scripts/deploy-service.mjs`, the queue worker and the server. The credential script now installs `GEMINI_API_KEY` only with `--paid-service`: `node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production --paid-service < key-file`. That flag is the operator's confirmation that the key's Google project has billing enabled; without it the script refuses and says why. The worker treats an installed key as that confirmation. `GEMINI_OCR_MODEL` stays optional.
+- **Tested.**
+  - `scripts/cloudflare-credentials.test.mjs`: the Gemini key is refused without `--paid-service`, or with any other or extra argument. Another credential with the flag is refused. With the flag, the key goes to the queue worker alone.
+  - `TestGeminiIsConfiguredByItsKey` (llm): no key, no Gemini; an installed key turns it on with the default model; a malformed model is still held.
+  - Script and frontend tests: 47/47. The llm, transport and documents packages pass on a fresh database, except the two Poppler tests.
+
+Not verified: live Gemini.
+

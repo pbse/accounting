@@ -62,8 +62,16 @@ export function install(app, values, production) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
  try {
-  const [name, environment] = process.argv.slice(2);
-  if (!['production','staging'].includes(environment) || process.argv.length !== 4) throw new Error('Usage: node scripts/cloudflare-credentials.mjs NAME production|staging < credential-file');
+  const [name, environment, confirmation] = process.argv.slice(2);
+  // A Gemini key is installed only with the operator's confirmation that its Google project has billing enabled (the
+  // paid service): Google may use free-tier content to improve its products, and a key's billing cannot be checked
+  // through the API, so an installed key is the worker's confirmation.
+  const gemini = name === 'GEMINI_API_KEY';
+  if (!['production','staging'].includes(environment) || process.argv.length !== (gemini ? 5 : 4) || (gemini && confirmation !== '--paid-service')) {
+   throw new Error(gemini
+    ? 'Usage: node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production|staging --paid-service < key-file. Add --paid-service only once the key\'s Google project has billing enabled: on the free tier Google may use the pages it reads to improve its products.'
+    : 'Usage: node scripts/cloudflare-credentials.mjs NAME production|staging < credential-file');
+  }
   if (process.stdin.isTTY) throw new Error('Redirect a credential file or pipe into stdin; interactive input would echo the credential');
   const value = validateCredential(name, readFileSync(0,'utf8'));
   const apps = Object.entries(credentials).filter(([,names]) => names.includes(name)).map(([app]) => app);

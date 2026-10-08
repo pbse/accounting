@@ -66,8 +66,7 @@ export const configuration = {
   "PUBLIC_APP_URL",
   "TEXT_SCANNER_URL",
   "PLATFORM_EMAIL_FROM",
-  "GEMINI_OCR_MODEL",
-  "GEMINI_PAID_SERVICE"
+  "GEMINI_OCR_MODEL"
  ],
  "scanner": []
 };
