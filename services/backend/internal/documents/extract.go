@@ -194,6 +194,25 @@ func Extract(ctx context.Context, original []byte, reading Reading) (string, err
 	return output.String(), nil
 }
 
+// Run extracts queued PDFs, one at a time, in the worker's loop of its own: a page reading can take Gemini up to 30
+// seconds, and a document up to its 150, which must not hold up intake or preparation.
+func Run(ctx context.Context, db *sql.DB) {
+	for ctx.Err() == nil {
+		extracted, err := ProcessOne(ctx, db)
+		if err != nil && ctx.Err() == nil {
+			log.Print("Document worker could not persist extraction; will retry")
+		}
+		if extracted && err == nil {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 // A fenced three-minute lease survives crashes without holding a transaction during OCR.
 func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	claim := rand.Text()

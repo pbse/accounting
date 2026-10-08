@@ -42,7 +42,14 @@ func GeminiFromEnv() *Gemini {
 	if key == "" || !geminiModelName.MatchString(model) {
 		return nil
 	}
-	return &Gemini{key: key, model: model, endpoint: geminiEndpoint, client: &http.Client{Timeout: geminiTimeout}}
+	return newGemini(key, model, geminiEndpoint, nil)
+}
+
+// newGemini is a reader whose client never follows a redirect: one would carry the key and the page to wherever it
+// pointed. A redirect is answered as the failed reading it is.
+func newGemini(key, model, endpoint string, transport http.RoundTripper) *Gemini {
+	return &Gemini{key: key, model: model, endpoint: endpoint, client: &http.Client{Timeout: geminiTimeout, Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // OCRSetting is how this process reads PDF pages, as the worker reports it for Firm settings and the security view.

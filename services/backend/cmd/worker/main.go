@@ -46,6 +46,7 @@ func main() {
 	ctx = llm.WithClient(ctx, models)
 	loops := map[string]func(context.Context, *sql.DB){
 		"preparation":     preparation.Run,
+		"documents":       documents.Run,
 		"delivery":        delivery.Run,
 		"platform_emails": delivery.RunPlatformEmails,
 		"forwarded":       forwarded.Run,

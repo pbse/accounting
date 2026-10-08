@@ -23,7 +23,7 @@ func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f
 func fakeGemini(t *testing.T, status int, reply map[string]any) (*Gemini, *[]map[string]any) {
 	t.Helper()
 	var seen []map[string]any
-	g := &Gemini{key: "test-key-not-real", model: "gemini-3.8-flash", endpoint: "https://gemini.test/v1beta/models/", client: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	g := newGemini("test-key-not-real", "gemini-3.8-flash", "https://gemini.test/v1beta/models/", roundTrip(func(r *http.Request) (*http.Response, error) {
 		if r.URL.String() != "https://gemini.test/v1beta/models/gemini-3.8-flash:generateContent" || r.Header.Get("x-goog-api-key") != "test-key-not-real" || r.Method != "POST" {
 			t.Fatalf("unexpected Gemini request %s %s", r.Method, r.URL)
 		}
@@ -33,8 +33,12 @@ func fakeGemini(t *testing.T, status int, reply map[string]any) (*Gemini, *[]map
 		}
 		seen = append(seen, body)
 		raw, _ := json.Marshal(reply)
-		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(raw)), Header: make(http.Header)}, nil
-	})}}
+		header := make(http.Header)
+		if status/100 == 3 {
+			header.Set("Location", "https://elsewhere.test/collect")
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(raw)), Header: header}, nil
+	}))
 	return g, &seen
 }
 
@@ -105,6 +109,8 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 		"cut short":    {200, map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "SCANNED INV"}}}, "finishReason": "MAX_TOKENS"}}}},
 		"blocked":      {200, map[string]any{"promptFeedback": map[string]any{"blockReason": "SAFETY"}}},
 		"empty":        {200, answer("  ")},
+		// Never followed: the stub fails on any other address, so the key and the page stay put.
+		"redirected": {307, answer("SCANNED INVOICE 6,000.00")},
 	} {
 		g, _ = fakeGemini(t, failing.status, failing.reply)
 		reading = Reading{Gemini: g}
