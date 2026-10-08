@@ -97,7 +97,7 @@ These are pointers into the existing implementation, not evidence that a package
 | [Sign-in](docs/sign-in.md) | Google and Microsoft sign-in, company addresses only, firms created and joined by company domain, and roles. |
 | [Auth and sandbox staging](docs/auth-sandbox-staging.md) | Hosted sign-in/session modes, sandbox authority and verification. |
 | [Cloudflare upload scanning](docs/cloudflare-upload-scanning.md) | Required PDF scanning, TXT/CSV scanner, quarantine/release and deployment. |
-| [Page speed](docs/performance.md) | The 400 ms page budget, what made pages slow, container size and placement, connection pooling, and reading `Server-Timing`. |
+| [Page speed](docs/performance.md) | The 400 ms page budget, what made pages slow, container size and placement, connection pooling, prefetching in the browser, and reading `Server-Timing`. |
 | [Deployment](docs/deployment.md) | Environments, configuration/secrets, migrations, deployment workflows, costs and activation gaps. |
 | [Operations](docs/operations.md) | Security center, monitoring, retention, recovery, incidents and restore boundaries. |
 | [Migration README](infra/postgres/migrations/README.md) | Database migration conventions and operating instructions. Local checks use local PostgreSQL; never create a Neon branch. |

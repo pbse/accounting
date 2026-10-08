@@ -41,6 +41,21 @@ Measured in production from the US east coast: attention 1.0 s, closes 1.4 s, ro
 - **Fewer round trips.** The firm check is one query. A read-only rollback keeps the connection's firm. Home reads all
   export labels in one query. The close brief runs its reads in parallel.
 
+## In the browser
+
+A page used to load its pieces one after another: the main script, the layout's code, the session check, the page's
+code, then its data. Now:
+
+- The session is asked for as soon as the script runs.
+- At launch the app starts the current page's code and first reads together. A workspace link does the same when the
+  pointer rests on it or it takes focus (`apps/frontend/src/features/dashboard/prefetch.ts`).
+- A read asked for again while still under way shares it. A prefetched read is kept for the page's first ask within ten
+  seconds. Any other finished read is forgotten at once, so a refresh always asks the server. A write or a new token
+  forgets every read.
+- A close's brief is never read ahead, because it is stamped with the time it arrives.
+
+Prefetching runs only with the cookie session production uses (`VITE_AUTH_SESSION=server`).
+
 ## How to check a page
 
 Every API response carries a `Server-Timing` header, which the browser's network panel shows under Timing:

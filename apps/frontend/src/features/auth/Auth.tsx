@@ -43,15 +43,23 @@ async function endServerSession() {
 }
 const signedOut: Session = { user: null, isLoading: false, signIn: startServerSignIn, signOut: endServerSession };
 const ServerSessionContext = createContext<Session>({ ...signedOut, isLoading: true });
+// Only a 401 means signed out; any other failure is shown as unavailable, not as a prompt to sign in.
+const readSession = () =>
+  fetch(`${apiBaseUrl}/v1/auth/session`)
+    .then(async (response) => (response.ok ? { user: (await response.json()).user } : response.status === 401 ? { user: null } : { user: null, unavailable: true }))
+    .catch(() => ({ user: null, unavailable: true }));
+// The session is asked for as soon as this script runs, not after the app first renders: a workspace page waits on it.
+let firstSession = serverSession && window.location.pathname !== "/request" ? readSession() : undefined;
 function ServerSession({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session>({ ...signedOut, isLoading: true });
   useEffect(() => {
     let live = true;
-    // Only a 401 means signed out; any other failure is shown as unavailable, not as a prompt to sign in.
-    fetch(`${apiBaseUrl}/v1/auth/session`)
-      .then(async (response) => (response.ok ? { user: (await response.json()).user } : response.status === 401 ? { user: null } : { user: null, unavailable: true }))
-      .catch(() => ({ user: null, unavailable: true }))
-      .then((state) => live && setSession({ ...signedOut, ...state }));
+    // Kept until it answers, so React's development double-mount reuses it too.
+    const asked = (firstSession ??= readSession());
+    asked.finally(() => {
+      if (firstSession === asked) firstSession = undefined;
+    });
+    asked.then((state) => live && setSession({ ...signedOut, ...state }));
     return () => {
       live = false;
     };
