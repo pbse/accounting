@@ -52,7 +52,8 @@ export function AccountMenu() {
   const label = session?.user?.email ?? (unlocked ? "Local development" : "Locked");
   return (
     <details className="topbar-account">
-      <summary aria-label="Account">
+      <summary>
+        <span className="visually-hidden">Account: </span>
         <Avatar label={label} />
         <span className="topbar-account-name">{session?.user ? session.user.email.split("@")[0] : label}</span>
       </summary>

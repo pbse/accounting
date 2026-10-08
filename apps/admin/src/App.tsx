@@ -83,7 +83,8 @@ function Layout() {
         </nav>
         <div className="topbar-tools">
           <details className="topbar-account">
-            <summary aria-label="Account">
+            <summary>
+              <span className="visually-hidden">Account: </span>
               <Avatar label={me.data?.subject ?? "?"} />
               <span className="topbar-account-name">{me.data?.subject ?? "Account"}</span>
               <GrantCount />
