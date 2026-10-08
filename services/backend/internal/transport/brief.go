@@ -183,11 +183,11 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 
 		switch {
 		case !boardRead:
-			add("balance sheet", "unknown", "The balance sheet tie-out could not be read.", "overview")
+			add("balance sheet", "unknown", "The balance sheet tie-out could not be read.", "books")
 		case board.Snapshot == nil:
-			add("balance sheet", "waiting", "The tie-out waits on a month-end snapshot.", "overview")
+			add("balance sheet", "waiting", "The tie-out waits on a month-end snapshot.", "books")
 		case board.Error != "":
-			add("balance sheet", "unknown", "The Trial Balance could not be read: "+board.Error+".", "overview")
+			add("balance sheet", "unknown", "The Trial Balance could not be read: "+board.Error+".", "books")
 		default:
 			by := map[string][]string{}
 			provisional := 0
@@ -229,7 +229,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 			if board.Snapshot.Stale && state == "done" {
 				state = "waiting"
 			}
-			add("balance sheet", state, strings.Join(parts, " "), "overview")
+			add("balance sheet", state, strings.Join(parts, " "), "books")
 			if n := len(by["differs"]); n > 0 {
 				needs = append(needs, "explain "+plural(n, "balance difference", "balance differences"))
 			}
@@ -266,7 +266,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 		}
 		switch {
 		case !read("/quickbooks/exceptions", &scan):
-			add("exceptions", "unknown", "The exception scan could not be read.", "overview")
+			add("exceptions", "unknown", "The exception scan could not be read.", "books")
 		case scan.Capture == nil && scan.Balances.Snapshot == nil:
 			add("exceptions", "waiting", "No transaction capture or snapshot to scan yet. Captures run daily once QuickBooks is connected.", "evidence")
 		default:
@@ -311,7 +311,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 					unchecked = append(unchecked, "schedule check")
 				}
 			}
-			add("exceptions", state, text, "overview")
+			add("exceptions", state, text, "books")
 		}
 
 		var status struct {

@@ -163,11 +163,6 @@ export function Coordinator({ closeId }: { closeId: string }) {
   return (
     <section className="panel" aria-labelledby="prepare-close-title">
       <h2 id="prepare-close-title">Prepare this close</h2>
-      <p>
-        Coordinate uploaded evidence through interpretation, questions,
-        confirmed facts and prepared drafts. Review and sign-off remain
-        separate.
-      </p>
       {error && <p role="alert">{error}</p>}
       {!status && !error && <p role="status">Loading preparation scope…</p>}
       {status && (
@@ -254,7 +249,6 @@ export function Coordinator({ closeId }: { closeId: string }) {
                     ? "Ledger coverage has changed and needs recapture."
                     : `${status.coverage.items.length} ledger account coverage proposals need review.`}
               </p>
-              <p>These proposals cover the uploaded sources below. Check the client’s full account and document inventory before defining the final close scope.</p>
               <p role="status">
                 Run #{run.id} ·{" "}
                 {changed
