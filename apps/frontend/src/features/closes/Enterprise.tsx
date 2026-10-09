@@ -58,8 +58,9 @@ export function FirmPeople() {
     setBusy(true);
     setError("");
     try {
-      const current = page?.people.find((person) => person.subject === subject)?.role ?? "";
-      const result = await workspaceRequest("/members/role", { subject, role: data.get("role"), current, reason: data.get("reason"), confirmed: data.get("confirmed") === "on" });
+      const person = page?.people.find((p) => p.subject === subject);
+      // The address shown is sent too: the server checks the person still has it before the role changes.
+      const result = await workspaceRequest("/members/role", { subject, role: data.get("role"), current: person?.role ?? "", email: person?.email ?? "", reason: data.get("reason"), confirmed: data.get("confirmed") === "on" });
       setMessage(result.message);
       setSubject("");
       setOpen(false);
