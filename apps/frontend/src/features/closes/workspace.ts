@@ -65,7 +65,18 @@ export async function workspaceRequest(
     return await send(path, body, download, onEvent);
   } finally {
     reads.clear();
+    // A change made anywhere (a month opened, a client saved, the agent acting) may change what any page shows, so
+    // every cached read is marked stale: what is on screen reads again, and the rest on its next visit.
+    // The 30-second effort heartbeat (Effort.tsx) records time and changes nothing a page shows, so it does not.
+    if (body !== undefined && !heartbeat.test(path)) writeListeners.forEach((listener) => listener());
   }
+}
+
+const heartbeat = /^\/[^/]+\/effort$/;
+const writeListeners = new Set<() => void>();
+// onWorkspaceWrite calls back after every change made through workspaceRequest, succeeded or not.
+export function onWorkspaceWrite(listener: () => void) {
+  writeListeners.add(listener);
 }
 
 async function send(

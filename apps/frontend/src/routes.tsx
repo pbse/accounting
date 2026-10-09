@@ -61,6 +61,14 @@ async function homeLoader({ context }: LoaderFunctionArgs) {
   return null;
 }
 
+// Clients reads the recent closes and the roster, and a search's matches.
+async function clientsLoader({ context, request }: LoaderFunctionArgs) {
+  if (!prefetching) return null;
+  const query = new URL(request.url).searchParams.get("q") ?? "";
+  await prefetch(context, "", "/roster", ...(query ? [`?q=${encodeURIComponent(query)}`] : []));
+  return null;
+}
+
 // Settings reads what its open section shows. Sections not listed read as they render.
 const settingsReads: Record<string, string[]> = {
   people: ["/members/people", "/members/roles", "/members/invitations", "/security/clients", "/access", "/members"],
@@ -96,7 +104,7 @@ export const routes: RouteObject[] = createRoutesFromElements(
       <Route index loader={homeLoader} lazy={page(() => import("./features/dashboard/Dashboard"), { view: "work" as const })} />
       <Route path="close" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "close" as const })} />
       <Route path="review" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "review" as const })} />
-      <Route path="closes" lazy={page(() => import("./features/closes/ClosesList"))} />
+      <Route path="closes" loader={clientsLoader} lazy={page(() => import("./features/closes/ClosesList"))} />
       <Route path="closes/:id" lazy={page(() => import("./features/closes/ClientClose"))} />
       <Route path="closes/:id/workpapers/:paperId" lazy={page(() => import("./features/closes/WorkpaperView"))} />
       <Route path="firm" element={<Navigate to="/dashboard/settings?tab=firm" replace />} />

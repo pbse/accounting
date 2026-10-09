@@ -10,8 +10,9 @@ The app follows React Router's data-router pattern with TanStack Query as its da
 1. **Routes declare their data.** `apps/frontend/src/routes.tsx` defines every route. A page's code loads with `lazy`,
    in parallel with its `loader`. A loader prefetches the queries its page reads.
 2. **Every read is a query keyed by its API path.** `apps/frontend/src/data/queries.ts` defines the query client, the
-   key (`["workspace", path]`) and `prefetch`. Components read with `useQuery(workspaceQuery(path))`. A change made
-   through the app invalidates the queries it changed. An explicit Refresh calls `refetch`.
+   key (`["workspace", path]`) and `prefetch`. Components read with `useQuery(workspaceQuery(path))`. Every change
+   made through `workspaceRequest` marks all workspace queries stale (`onWorkspaceWrite` in `main.tsx`), so whatever
+   is on screen reads again and the rest on its next visit. An explicit Refresh calls `refetch`.
 3. **The API stays one endpoint per resource.** Pages compose resources; the server never adds a page-shaped endpoint.
    A resource returns only what its readers need. The People section, for example, reads `/security/clients`, the
    assignable clients alone, not the whole security read.
@@ -69,7 +70,8 @@ and a read the cache already holds is not repeated.
 | Settings: People (people and roles, invitations, client assignments, membership) | Yes |
 | Settings: Firm, Clients, Policies, Security | Layout only; the section reads in the browser |
 | Home (counts, review queue, goals, get started, dependencies, new in the books, closes handed to the agent) | Yes; other decision views and filters read when chosen |
-| Clients, a close and its tabs, Preparation, Measure, Executive | Layout only; the page reads in the browser |
+| Clients (the roster, recent closes and a search's matches) | Yes |
+| A close and its tabs, Preparation, Measure, Executive | Layout only; the page reads in the browser |
 
 A page moves to "Yes" when its loader prefetches its reads and its components read them with `useQuery`.
 
