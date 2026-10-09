@@ -78,7 +78,8 @@ and a read the cache already holds is not repeated.
 | A workpaper (the draft, its review, changes, comments and standing approval) | Yes; its documents load in the browser, as files |
 | A close's Evidence tab (documents, preparation instructions and jobs, QuickBooks, Xero, Stripe) | Yes; forwarding, Google Drive and historical exports read in the browser |
 | A close's Requests, Reports (management pack, publications, budget), Sign-off (takeover setup, opening baseline, readiness, effort) and Settings (client memory, replay) tabs | Yes; Settings' production access reads in the browser |
-| A close's Cash plan tab, Executive reports, cash plan and decisions | Layout and the close's header; the rest reads in the browser |
+| A close's Cash plan tab (the plan, obligations and scenarios) | Yes; reviews read in the browser |
+| Executive reports, cash plan and decisions | Layout; the rest reads in the browser |
 
 Every workspace route renders on the server without failing; what a page does not prefetch renders as loading and
 reads in the browser, as before.

@@ -5,6 +5,7 @@ import { Login } from "./features/auth/Login";
 import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
+import { cashPlanQuery } from "./data/cashPlan";
 import { closeTab, type CloseTab } from "./data/closeTabs";
 import { appData, effortPath, prefetch, prefetchLater, workPath, workspaceKey, workViews } from "./data/queries";
 
@@ -86,7 +87,12 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
     signoff: [`/${id}/takeover-setup`, `/${id}/opening-baseline`, `/${id}/readiness`, `/${id}/effort`],
     settings: [`/${id}/memory`, `/${id}/replay`],
   };
-  await prefetch(context, `/${encodeURIComponent(id)}`, ...(reads[tab] ?? []));
+  // The cash plan's three reads are one view (data/cashPlan.ts).
+  const { queryClient, read } = context.get(appData);
+  await Promise.all([
+    prefetch(context, `/${encodeURIComponent(id)}`, ...(reads[tab] ?? [])),
+    tab === "cash" ? queryClient.prefetchQuery(cashPlanQuery(id, "", false, read)) : null,
+  ]);
   return null;
 }
 
