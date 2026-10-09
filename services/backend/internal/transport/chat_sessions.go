@@ -21,7 +21,12 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 		Messages int       `json:"messages"`
 	}
 	mux.HandleFunc("GET /v1/closes/chat/sessions", func(w http.ResponseWriter, r *http.Request) {
-		// A chat left without turns (pruned once a close was lost, expired) is not listed: it is removed first.
+		// Firm-wide turns that touched a close the member can no longer open are pruned first, and a chat left without
+		// turns (pruned, expired) is removed, so nothing listed fails when opened.
+		if err := pruneConversation(r.Context(), db, organization(r), subject(r), "", firmAccess(r), executive(r)); err != nil {
+			problem(w, 503, "Your chats are unavailable.")
+			return
+		}
 		if _, err := db.ExecContext(r.Context(), `DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, organization(r), subject(r)); err != nil {
 			problem(w, 503, "Your chats are unavailable.")
 			return

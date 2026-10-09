@@ -154,9 +154,14 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     const asked = ++generation.current;
     setPicked(!!id);
     setRenaming(null);
-    // Nothing of the chat shown before stays while the selected one loads, and nothing is sent until it has.
+    // Nothing of the chat shown before stays while the selected one loads, not even an answer still arriving (its
+    // request is ignored once it ends), and nothing is sent until it has.
     setSession(null);
     setMessages([]);
+    setBusy(false);
+    setAsking("");
+    setPending("");
+    setSteps([]);
     setLoaded(false);
     setError("");
     setLive([]);
@@ -183,6 +188,10 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     ++generation.current;
     setMessages([]);
     setSession(null);
+    setBusy(false);
+    setAsking("");
+    setPending("");
+    setSteps([]);
     setPicked(false);
     setRenaming(null);
     setLive([]);
