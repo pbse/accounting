@@ -85,16 +85,20 @@ interface Env {
   WORKER: DurableObjectNamespace<PreparationWorker>;
 }
 
+// The worker's Durable Object, which starts its container, lives where it was first made and never moves; this one is
+// made in eastern North America, with the container and the database. The earlier "preparation-worker" was in Paris.
+const preparationWorker = (env: Env) => env.WORKER.getByName("preparation-worker-enam", { locationHint: "enam" });
+
 export default {
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
     // Wake the existing worker; Postgres owns queued work and replay protection.
-    const response = await env.WORKER.getByName("preparation-worker").fetch(
+    const response = await preparationWorker(env).fetch(
       "http://worker/healthz",
     );
     if (!response.ok) throw new Error("Preparation worker is unavailable");
   },
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    const worker = env.WORKER.getByName("reference-worker");
+    const worker = preparationWorker(env);
     for (const message of batch.messages) {
       try {
         await deliver(message.body, (request) => worker.fetch(request));
