@@ -59,18 +59,9 @@ machine's rotated sign-in; its container is constrained to `ENAM`.
 
 ## In the browser
 
-A page used to load its pieces one after another: the main script, the layout's code, the session check, the page's
-code, then its data. Now:
-
-- The session is asked for as soon as the script runs.
-- At launch the app starts the current page's code and first reads together. A workspace link does the same when the
-  pointer rests on it or it takes focus (`apps/frontend/src/features/dashboard/prefetch.ts`).
-- A read asked for again while still under way shares it. A prefetched read is kept for the page's first ask within ten
-  seconds. Any other finished read is forgotten at once, so a refresh always asks the server. A write or a new token
-  forgets every read.
-- A close's brief is never read ahead, because it is stamped with the time it arrives.
-
-Prefetching runs only with the cookie session production uses (`VITE_AUTH_SESSION=server`).
+Workspace pages are now rendered on the server with their data; [server rendering](server-rendering.md) describes how.
+The browser hydrates the page instead of fetching its data. Later navigations run each route's loader, which reads
+the page's data before it renders, and a read the cache already holds is not repeated.
 
 ## Measured in production (2026-10-08, signed in, from the US east coast)
 
@@ -87,7 +78,7 @@ The reload was slow for three reasons, now fixed:
   files. `apps/frontend/public/_headers` now marks `/assets/*` immutable for a year; their names carry a content hash.
 - **Pages suspended.** `React.lazy` suspends a page on its first render even when its code is already loaded, and
   React waits up to 300 ms before revealing suspended content. A launch suspended twice, for the layout and the page.
-  `apps/frontend/src/pages.tsx` now draws a page at once when its code is already loaded.
+  Routes now load their code with React Router's `lazy`, in parallel with their loaders.
 - **The layout's checks waited.** The layout shows nothing until it knows whether the person is an executive, then asks
   whether the firm has the worked example. Both are now prefetched at launch.
 

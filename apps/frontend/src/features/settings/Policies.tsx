@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { SettingCard, SettingGrid } from "@close/ui/components/SettingCard";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { workspaceKey, workspaceQuery } from "../../data/queries";
 import { workspaceRequest } from "../closes/workspace";
 
 type AgentChat = "off" | "closes" | "firm";
@@ -30,19 +32,13 @@ export type Policy = {
 
 // One read of the firm's policy, shared by every card; a change reads it again.
 export function usePolicy() {
-  const [policy, setPolicy] = useState<Policy>();
-  const [error, setError] = useState("");
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/organization/policy")
-      .then((data) => live && (setPolicy(data), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Firm policy is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [version]);
-  return { policy, error, refresh: () => setVersion((v) => v + 1) };
+  const queryClient = useQueryClient();
+  const read = useQuery(workspaceQuery<Policy>("/organization/policy"));
+  return {
+    policy: read.data,
+    error: read.error ? read.error.message || "Firm policy is unavailable." : "",
+    refresh: () => void queryClient.invalidateQueries({ queryKey: workspaceKey("/organization/policy") }),
+  };
 }
 
 type Change = { body: Record<string, unknown>; reason: string };

@@ -1,0 +1,44 @@
+import { QueryClient, queryOptions, type QueryKey } from "@tanstack/react-query";
+import { createContext, type RouterContextProvider } from "react-router";
+import { workspaceRequest } from "../features/closes/workspace";
+
+// The workspace's data layer (docs/server-rendering.md). Every read of the API is a query keyed by its path, kept in
+// one TanStack Query cache. A route's loader prefetches the queries its page needs, so the page renders with its
+// data; components read the same queries with useQuery. On the server the edge renders the page from that cache and
+// sends the cache with it, and the browser starts from it.
+
+// read is how a query reaches the API: in the browser, workspaceRequest (the cookie session or the local token); on
+// the server, the edge's binding to the API with the signed-in person's cookie. It resolves with the parsed answer or
+// rejects with a RequestError, as workspaceRequest does.
+export type Read = (path: string) => Promise<unknown>;
+
+export type AppData = { queryClient: QueryClient; read: Read };
+
+// Set per request on the server and once in the browser; loaders take the query client and read from it.
+export const appData = createContext<AppData>();
+
+export const browserRead: Read = (path) => workspaceRequest(path);
+
+export function newQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      // A page's data, once read, is shown without asking again for half a minute; a change made through the app
+      // invalidates what it changed. Failures are not retried behind the person's back.
+      queries: { staleTime: 30_000, retry: false, refetchOnWindowFocus: false },
+    },
+  });
+}
+
+export const workspaceKey = (path: string): QueryKey => ["workspace", path];
+
+// workspaceQuery is the closes API's GET path (path is relative to /v1/closes, as workspaceRequest takes it).
+export function workspaceQuery<T>(path: string, read: Read = browserRead) {
+  return queryOptions({ queryKey: workspaceKey(path), queryFn: () => read(path) as Promise<T> });
+}
+
+// prefetch fills the cache with a page's reads before it renders. A read that fails is left for the page, which
+// shows its own error and its own way to try again; a loader never fails a whole page for one section.
+export async function prefetch(context: Readonly<RouterContextProvider>, ...paths: string[]) {
+  const { queryClient, read } = context.get(appData);
+  await Promise.all(paths.map((path) => queryClient.prefetchQuery(workspaceQuery(path, read))));
+}

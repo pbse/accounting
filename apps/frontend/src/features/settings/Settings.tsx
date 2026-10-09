@@ -1,11 +1,12 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useState } from "react";
 import { useSearchParams } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { VerticalTabs, type VerticalTab } from "@close/ui/components/VerticalTabs";
 import { isEnrollmentError } from "../closes/ClosesList";
 import { FirmEnrollment } from "../closes/Enterprise";
 import { ClientRoster } from "../closes/Roster";
-import { workspaceRequest } from "../closes/workspace";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { workspaceKey, workspaceQuery } from "../../data/queries";
 import { FirmTab } from "./FirmTab";
 import { People } from "./People";
 import { Policies, usePolicy } from "./Policies";
@@ -48,25 +49,16 @@ export default function Settings() {
   // A section the person cannot open, or none, opens the profile. A firm section asked for before the policy that gates
   // it has been read stays selected, so a failed read shows there, with the way to try again, not a different section.
   const tab = items.find((t) => t.key === asked)?.key ?? (asked && !policy && firm(true, true).some((t) => t.key === asked) ? asked : "profile");
-  const [me, setMe] = useState<Me>();
-  const [error, setError] = useState("");
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/me")
-      .then((data) => live && (setMe(data), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Your settings are unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [version]);
-  const refresh = () => setVersion((v) => v + 1);
+  const queryClient = useQueryClient();
+  const meRead = useQuery(workspaceQuery<Me>("/me"));
+  const me = meRead.data;
+  const error = meRead.error ? meRead.error.message || "Your settings are unavailable." : "";
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: workspaceKey("/me") });
   // Enrolling the firm makes every read that refused with the membership error succeed, so each is made again, and the
   // sections that read on their own are mounted afresh.
   const [generation, setGeneration] = useState(0);
   const enrolled = () => {
-    refreshPolicy();
-    refresh();
+    void queryClient.invalidateQueries({ queryKey: ["workspace"] });
     setGeneration((g) => g + 1);
   };
   const firmSection = yours.every((t) => t.key !== tab);

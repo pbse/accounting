@@ -1,25 +1,15 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { workspaceQuery } from "../../data/queries";
 import { ClientAccess } from "../closes/ClientAccess";
 import { FirmPeople, Invitations, MemberDecision } from "../closes/Enterprise";
-import { workspaceRequest } from "../closes/workspace";
 
 // The firm's people: who they are and their roles, who is invited, which clients each is assigned, and the enrolment
 // decisions behind their access.
 export function People() {
-  // An assignment names a client with a saved close, as the access route requires; the security read lists exactly those.
-  const [clients, setClients] = useState<string[]>();
-  const [clientsError, setClientsError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let live = true;
-    setClientsError("");
-    workspaceRequest("/security")
-      .then((data: { clients: string[] }) => live && setClients(data.clients))
-      .catch((e) => live && setClientsError(e instanceof Error ? e.message : "The firm's clients could not be read."));
-    return () => {
-      live = false;
-    };
-  }, [attempt]);
+  // An assignment names a client with a saved close, as the access route requires; /security/clients lists exactly those.
+  const read = useQuery(workspaceQuery<{ clients: string[] }>("/security/clients"));
+  const clients = read.data?.clients;
+  const clientsError = read.error ? read.error.message || "The firm's clients could not be read." : "";
   return (
     <>
       <FirmPeople />
@@ -30,7 +20,7 @@ export function People() {
         {clientsError ? (
           <p role="alert">
             {clientsError}{" "}
-            <button type="button" onClick={() => setAttempt((n) => n + 1)}>
+            <button type="button" onClick={() => void read.refetch()}>
               Try again
             </button>
           </p>

@@ -80,6 +80,7 @@ jobs:
           npm test
           npm exec -w @close/frontend -- vite build
           npm run prerender -w @close/frontend
+          npm run build:ssr -w @close/frontend
           npm exec -w @close/admin -- vite build
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc

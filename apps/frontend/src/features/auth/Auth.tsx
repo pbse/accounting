@@ -1,6 +1,7 @@
 import { AuthKitProvider, useAuth } from "@workos-inc/authkit-react";
-import { createContext, useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useState, type ReactNode } from "react";
 import { apiBaseUrl } from "../../lib/api";
+import { useQuery } from "@tanstack/react-query";
 
 export const authKitClientId = import.meta.env.VITE_WORKOS_CLIENT_ID as
   string | undefined;
@@ -43,27 +44,29 @@ async function endServerSession() {
 }
 const signedOut: Session = { user: null, isLoading: false, signIn: startServerSignIn, signOut: endServerSession };
 const ServerSessionContext = createContext<Session>({ ...signedOut, isLoading: true });
+// Who is signed in, as the server session says: a query, so a page rendered on the server arrives with it.
+export type SessionState = { user: { email: string } | null; unavailable?: boolean };
+export const sessionKey = ["session"] as const;
 // Only a 401 means signed out; any other failure is shown as unavailable, not as a prompt to sign in.
-const readSession = () =>
+export const readSession = (): Promise<SessionState> =>
   fetch(`${apiBaseUrl}/v1/auth/session`)
     .then(async (response) => (response.ok ? { user: (await response.json()).user } : response.status === 401 ? { user: null } : { user: null, unavailable: true }))
     .catch(() => ({ user: null, unavailable: true }));
-// The session is asked for as soon as this script runs, not after the app first renders: a workspace page waits on it.
-let firstSession = serverSession && window.location.pathname !== "/request" ? readSession() : undefined;
+// In the browser the session is asked for as soon as this script runs, not after the app first renders, unless the
+// page came rendered from the server with it.
+let firstSession =
+  typeof window !== "undefined" && serverSession && window.location.pathname !== "/request" && !document.getElementById("krith-query") ? readSession() : undefined;
 function ServerSession({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session>({ ...signedOut, isLoading: true });
-  useEffect(() => {
-    let live = true;
-    // Kept until it answers, so React's development double-mount reuses it too.
-    const asked = (firstSession ??= readSession());
-    asked.finally(() => {
-      if (firstSession === asked) firstSession = undefined;
-    });
-    asked.then((state) => live && setSession({ ...signedOut, ...state }));
-    return () => {
-      live = false;
-    };
-  }, []);
+  const read = useQuery({
+    queryKey: sessionKey,
+    queryFn: () => {
+      const asked = firstSession ?? readSession();
+      firstSession = undefined;
+      return asked;
+    },
+    staleTime: Infinity,
+  });
+  const session: Session = read.data ? { ...signedOut, ...read.data } : { ...signedOut, isLoading: true };
   return <ServerSessionContext.Provider value={session}>{children}</ServerSessionContext.Provider>;
 }
 

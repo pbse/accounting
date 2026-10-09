@@ -50,6 +50,14 @@ export function Profile({ me, onSaved }: { me: Me; onSaved: () => void }) {
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
   const [zone, setZone] = useState(me.time_zone);
+  // The device's zone and the list of zones are the browser's own, so they are read once the page has hydrated: the
+  // server would name its own.
+  const [device, setDevice] = useState("");
+  const [zoneList, setZoneList] = useState<string[]>([]);
+  useEffect(() => {
+    setDevice(deviceZone());
+    setZoneList(zones());
+  }, []);
   useEffect(() => {
     setFirst(profile?.first_name ?? "");
     setLast(profile?.last_name ?? "");
@@ -89,12 +97,12 @@ export function Profile({ me, onSaved }: { me: Me; onSaved: () => void }) {
           </label>
           <label>
             Time zone
-            <input list="settings-time-zones" value={zone} maxLength={64} placeholder={deviceZone() || "Region/City"} autoComplete="off" onChange={(e) => setZone(e.target.value)} />
+            <input list="settings-time-zones" value={zone} maxLength={64} placeholder={device || "Region/City"} autoComplete="off" onChange={(e) => setZone(e.target.value)} />
             <small>By region and city, such as America/New_York. Kept for this firm; the workspace still shows times in this device's zone.</small>
           </label>
         </div>
         <datalist id="settings-time-zones">
-          {zones().map((z) => (
+          {zoneList.map((z) => (
             <option key={z} value={z} />
           ))}
         </datalist>
@@ -109,8 +117,8 @@ export function Profile({ me, onSaved }: { me: Me; onSaved: () => void }) {
           <button className="primary" disabled={busy}>
             Save
           </button>
-          {deviceZone() && deviceZone() !== zone && (
-            <button type="button" disabled={busy} onClick={() => setZone(deviceZone())}>
+          {device && device !== zone && (
+            <button type="button" disabled={busy} onClick={() => setZone(device)}>
               Use this device's time zone
             </button>
           )}

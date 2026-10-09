@@ -1,4 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { workspaceQuery } from "../../data/queries";
+import { useDates } from "../../data/time";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { workspaceRequest } from "./workspace";
 
@@ -12,28 +15,18 @@ type Grant = {
   created_at: string;
 };
 export function ClientAccess({ entities }: { entities: string[] }) {
-  const [history, setHistory] = useState<Grant[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const dates = useDates();
+  const read = useQuery(workspaceQuery<Grant[]>("/access"));
+  const history = read.data ?? [];
+  const loaded = read.data !== undefined;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [user, setUser] = useState("");
   const [entity, setEntity] = useState(entities[0] ?? "");
   const [message, setMessage] = useState("");
   const [open, setOpen] = useState(false);
-  async function load() {
-    setBusy(true);
-    setError("");
-    try {
-      setHistory(await workspaceRequest("/access"));
-      setLoaded(true);
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Access administration unavailable.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+  // Refresh asks the server again, whatever the cache holds.
+  const load = () => read.refetch();
   const current = history.find(
     (g) =>
       g.subject === user.trim() &&
@@ -70,14 +63,11 @@ export function ClientAccess({ entities }: { entities: string[] }) {
       setBusy(false);
     }
   }
-  useEffect(() => {
-    void load();
-  }, []);
   if (!loaded)
-    return error ? (
+    return read.error ? (
       <p role="alert">
-        {error}{" "}
-        <button type="button" disabled={busy} onClick={() => void load()}>
+        {read.error.message || "Access administration unavailable."}{" "}
+        <button type="button" disabled={read.isFetching} onClick={() => void load()}>
           Try again
         </button>
       </p>
@@ -90,12 +80,13 @@ export function ClientAccess({ entities }: { entities: string[] }) {
         <button type="button" className="primary" onClick={() => (setError(""), setOpen(true))}>
           Record an assignment
         </button>
-        <button type="button" disabled={busy} onClick={() => void load()}>
+        <button type="button" disabled={busy || read.isFetching} onClick={() => void load()}>
           Refresh
         </button>
       </p>
       {message && <p role="status">{message}</p>}
       {error && !open && <p role="alert">{error}</p>}
+      {read.error && <p role="alert">{read.error.message || "Access administration unavailable."} The history below is from the last read.</p>}
       {history.length > 0 && (
         <details>
           <summary>Grant and revocation history ({history.length})</summary>
@@ -104,7 +95,7 @@ export function ClientAccess({ entities }: { entities: string[] }) {
               <li key={g.id}>
                 {g.granted ? "Granted" : "Revoked"} · {g.subject} · {g.client_entity}
                 <p>
-                  {g.reason} · {g.actor} · {new Date(g.created_at).toLocaleString()}
+                  {g.reason} · {g.actor} · {dates.dateTime(g.created_at)}
                 </p>
               </li>
             ))}
