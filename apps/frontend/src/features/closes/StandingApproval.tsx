@@ -1,5 +1,7 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 
 type Grant = { id: string; workpaper_id: string; granted_by: string; reason: string; created_at: string; in_force: boolean };
@@ -12,22 +14,15 @@ const covers = {
 
 export function StandingApproval({ closeId, paperId, kind, approved }: { closeId: string; paperId: string; kind: keyof typeof covers; approved: boolean }) {
   const dates = useDates();
-  const [grant, setGrant] = useState<Grant | null>();
+  const path = `/${closeId}/workpapers/${paperId}/standing-approval`;
+  const read = useQuery(workspaceQuery<{ grant: Grant | null }>(path));
+  const grant = read.data?.grant;
   const [reason, setReason] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const path = `/${closeId}/workpapers/${paperId}/standing-approval`;
-  async function load() {
-    try {
-      setGrant((await workspaceRequest(path)).grant);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Standing approval is unavailable.");
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, [path]);
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Standing approval is unavailable." : "");
+  const load = async () => void (await read.refetch());
   async function act(action: "grant" | "revoke") {
     setBusy(true);
     setError("");

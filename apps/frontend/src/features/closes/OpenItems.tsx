@@ -1,5 +1,7 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
 import { Collections } from "./Collections";
 
@@ -30,21 +32,13 @@ const tone: Record<string, string> = { promised: "status ok", handed_to_bill_pay
 
 export function OpenItems({ closeId }: { closeId: string }) {
   const dates = useDates();
-  const [items, setItems] = useState<Items>();
-  const [error, setError] = useState("");
+  const read = useQuery(workspaceQuery<Items>(`/${closeId}/open-items`));
+  const items = read.data;
+  const error = read.error ? read.error.message || "Open items are unavailable." : "";
   const [busy, setBusy] = useState("");
   const [failed, setFailed] = useState<{ item: string; message: string }>();
   const [saved, setSaved] = useState("");
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/open-items`)
-      .then((data) => live && (setItems(data), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Open items are unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [closeId, version]);
+
   async function decide(event: FormEvent<HTMLFormElement>, item: Item, capture: string) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -64,7 +58,7 @@ export function OpenItems({ closeId }: { closeId: string }) {
         previous_id: item.action?.id ?? "",
       });
       setSaved(`Saved the follow-up for ${item.label}.`);
-      setVersion((n) => n + 1);
+      void read.refetch();
     } catch (e) {
       setFailed({ item: item.kind + item.id, message: e instanceof Error ? e.message : "The decision could not be saved." });
     } finally {
@@ -155,14 +149,14 @@ export function OpenItems({ closeId }: { closeId: string }) {
             Open in the capture of {dates.dateTime(items.captured_at)}. A document is settled only when a later capture that read every open item no longer
             lists it. Promised dates and bill-pay handoffs are what the cash plan will use. A customer is contacted only by a collection email a person approves, under
             the client's authority; nothing here pays a bill or writes anything off: a write-off is a correction prepared in the close.{" "}
-            <button type="button" onClick={() => setVersion((n) => n + 1)}>
+            <button type="button" onClick={() => void read.refetch()}>
               Refresh
             </button>
           </p>
           {saved && <p role="status">{saved}</p>}
           {!items.complete && <p role="status">Incomplete: some open items could not be read in this capture.</p>}
           {table("Receivables", items.receivables, items.capture_id, items.company)}
-          <Collections closeId={closeId} refresh={version} invoices={items.receivables.filter((i) => i.kind === "Invoice" && i.balance)} />
+          <Collections closeId={closeId} refresh={read.dataUpdatedAt} invoices={items.receivables.filter((i) => i.kind === "Invoice" && i.balance)} />
           {table("Payables", items.payables, items.capture_id, items.company)}
           {items.receivables.length + items.payables.length === 0 && <p className="empty">No open invoices or bills in the latest capture.</p>}
           {items.settled.length > 0 && (

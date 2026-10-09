@@ -1,7 +1,7 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { workspaceRequest } from "./workspace";
 import { RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
@@ -43,17 +43,9 @@ const side = (amount: string) => (/^-?0(\.0+)?$/.test(amount) ? "0.00" : amount.
 
 export function TieOut({ closeId }: { closeId: string }) {
   const dates = useDates();
-  const [board, setBoard] = useState<Board>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/tie-out`)
-      .then((data) => live && setBoard(data))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "The tie-out is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [closeId]);
+  const read = useQuery(workspaceQuery<Board>(`/${closeId}/tie-out`));
+  const board = read.data;
+  const error = read.error ? read.error.message || "The tie-out is unavailable." : "";
   if (!board) return error ? <p role="alert">{error}</p> : null;
   const count = (status: Status) => board.rows.filter((row) => row.status === status).length;
   const summary = [

@@ -1,3 +1,5 @@
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
@@ -10,15 +12,17 @@ export type PickedLine = { sourceId: string; name: string; line: number };
 export function Comments({ closeId, paperId, fields, picked, canComment }: { closeId: string; paperId: string; fields: string[]; picked?: PickedLine; canComment: boolean }) {
   const dates = useDates();
   const path = `/${closeId}/workpapers/${paperId}/comments`;
-  const [comments, setComments] = useState<Comment[]>([]);
+  const queryClient = useQueryClient();
+  const read = useQuery(workspaceQuery<{ comments: Comment[] }>(path));
+  const comments = read.data?.comments ?? [];
+  // A comment saved here returns the thread, which replaces the read one.
+  const setComments = (next: Comment[]) => queryClient.setQueryData(workspaceKey(path), { ...(read.data ?? {}), comments: next });
   const [anchor, setAnchor] = useState("general");
   const [body, setBody] = useState("");
   const [resolutions, setResolutions] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    workspaceRequest(path).then((d) => setComments(d.comments)).catch((e) => setError(e instanceof Error ? e.message : "Comments are unavailable."));
-  }, [path]);
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Comments are unavailable." : "");
   useEffect(() => {
     if (picked) setAnchor(`source:${picked.sourceId}:line:${picked.line}`);
   }, [picked]);
