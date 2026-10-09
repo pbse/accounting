@@ -89,8 +89,8 @@ export function useSessionsVersion() {
   return useSyncExternalStore(subscribe, () => sessionsVersion, () => 0);
 }
 
-export async function loadSessions(limit = 50, offset = 0): Promise<{ sessions: ChatSession[]; hasMore: boolean }> {
-  const data = await workspaceRequest(`/chat/sessions?limit=${limit}&offset=${offset}`);
+export async function loadSessions(limit = 50, offset = 0, q = ""): Promise<{ sessions: ChatSession[]; hasMore: boolean }> {
+  const data = await workspaceRequest(`/chat/sessions?limit=${limit}&offset=${offset}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
   return { sessions: (data.sessions ?? []) as ChatSession[], hasMore: !!data.has_more };
 }
 

@@ -193,4 +193,12 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	if len(page.Sessions) != 12 || page.HasMore {
 		t.Fatalf("the last page holds the rest: %d %v", len(page.Sessions), page.HasMore)
 	}
+	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=older+chat+5", nil, 200), &page))
+	if len(page.Sessions) != 11 || page.HasMore {
+		t.Fatalf("a filter searches every page by title: %d", len(page.Sessions))
+	}
+	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=alpha", nil, 200), &page))
+	if len(page.Sessions) != 1 {
+		t.Fatalf("a filter searches by the close's name: %d", len(page.Sessions))
+	}
 }

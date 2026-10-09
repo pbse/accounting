@@ -234,6 +234,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     setError("");
     setSteps([]);
     setLastBody(body);
+    setView("chat");
     setAsking("text" in body ? body.text : body.command ? `/${body.command}${body.argument ? ` ${body.argument}` : ""}` : "");
     const onEvent = (event: AgentEvent) => {
       if (asked !== generation.current) return;
@@ -247,7 +248,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     };
     try {
       // The member's own date resolves day names such as "by Friday"; the agent's steps and text arrive as events.
-      const data = await workspaceRequest(path, { ...body, session_id: session ? (picked ? session.id : "") : "new", today: localDate() }, false, onEvent);
+      const data = await workspaceRequest(path, { ...body, session_id: body.action === "clear" ? (session?.id ?? "") : session ? (picked ? session.id : "") : "new", today: localDate() }, false, onEvent);
       if (asked !== generation.current) return;
       setMessages(data.messages);
       if (data.session) setSession({ id: data.session.id, title: data.session.title });
@@ -653,25 +654,32 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
   const [sessions, setSessions] = useState<ChatSession[]>();
   const [more, setMore] = useState(false);
   const [filter, setFilter] = useState("");
+  // The filter asks the server, so a chat on any page is found; it waits a moment for the typing to settle.
   useEffect(() => {
     let live = true;
-    loadSessions()
-      .then((page) => live && (setSessions(page.sessions), setMore(page.hasMore)))
-      .catch(() => live && setSessions([]));
+    const timer = setTimeout(
+      () => {
+        loadSessions(50, 0, filter)
+          .then((page) => live && (setSessions(page.sessions), setMore(page.hasMore)))
+          .catch(() => live && setSessions([]));
+      },
+      filter ? 250 : 0,
+    );
     return () => {
       live = false;
+      clearTimeout(timer);
     };
-  }, [version]);
-  // Older chats come a page at a time, appended below.
+  }, [version, filter]);
+  // Older chats come a page at a time, appended below, under the same filter.
   function showMore() {
-    loadSessions(50, sessions?.length ?? 0)
+    loadSessions(50, sessions?.length ?? 0, filter)
       .then((page) => {
         setSessions((current) => [...(current ?? []), ...page.sessions]);
         setMore(page.hasMore);
       })
       .catch(() => setMore(false));
   }
-  const shown = (sessions ?? []).filter((s) => !filter || `${s.title} ${s.close}`.toLowerCase().includes(filter.toLowerCase()));
+  const shown = sessions ?? [];
   const day = (iso: string) => {
     const at = new Date(iso);
     const today = new Date();
@@ -710,7 +718,7 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
           </ul>
         </div>
       ))}
-      {more && !filter && (
+      {more && (
         <button type="button" className="assistant-more" onClick={showMore}>
           Show older chats
         </button>

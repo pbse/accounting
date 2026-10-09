@@ -29,10 +29,16 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 		if n, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && n > 0 {
 			offset = n
 		}
+		// A filter matches the title or the close's name, whatever page the chat is on.
+		q := strings.Join(strings.Fields(r.URL.Query().Get("q")), " ")
+		if len(q) > 100 {
+			q = q[:100]
+		}
 		rows, err := db.QueryContext(r.Context(), `SELECT s.id::text,s.title,COALESCE(s.close_id::text,''),COALESCE(c.entity||' · '||c.period,''),s.last_at,(SELECT count(*) FROM chat_messages m WHERE m.session_id=s.id)
  FROM chat_sessions s LEFT JOIN client_closes c ON c.id=s.close_id
  WHERE s.organization_id=$1 AND s.author=$2 AND s.executive=$3 AND (s.close_id IS NULL OR $4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
- ORDER BY s.last_at DESC,s.id DESC LIMIT $5 OFFSET $6`, organization(r), subject(r), executive(r), firmAccess(r), limit+1, offset)
+ AND ($7='' OR s.title ILIKE '%'||$7||'%' OR COALESCE(c.entity,'') ILIKE '%'||$7||'%')
+ ORDER BY s.last_at DESC,s.id DESC LIMIT $5 OFFSET $6`, organization(r), subject(r), executive(r), firmAccess(r), limit+1, offset, q)
 		if err != nil {
 			problem(w, 503, "Your chats are unavailable.")
 			return
