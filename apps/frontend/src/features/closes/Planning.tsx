@@ -1,20 +1,17 @@
 import { useState } from "react";
 import { workspaceRequest } from "./workspace";
+import { daysBetween, useDates, useToday } from "../../data/time";
 
 export type Plan = { due_on?: string; priority?: string; owned_by_me?: boolean; assigned?: boolean; can_assign?: boolean; can_take_over?: boolean; handed?: { by: string; note: string; at: string } };
 type Person = { subject: string; name: string };
 
-function days(due: string) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return Math.round((new Date(`${due}T00:00:00`).getTime() - today.getTime()) / 86_400_000);
-}
-
 export function PlanChips({ plan }: { plan: Plan }) {
+  const today = useToday();
+  const dates = useDates();
   const chips = [];
   if (plan.due_on) {
-    const left = days(plan.due_on);
-    const date = new Date(`${plan.due_on}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    const left = daysBetween(today, plan.due_on);
+    const date = dates.calendarDate(plan.due_on);
     const [tone, label] = left < 0 ? ["status danger", `Overdue · ${date}`] : left <= 7 ? ["status warn", `Due ${left === 0 ? "today" : `in ${left}d`} · ${date}`] : ["status", `Due ${date}`];
     chips.push(
       <span key="due" className={tone}>

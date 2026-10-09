@@ -1,11 +1,11 @@
 import type { ComponentType, ReactNode } from "react";
-import { createRoutesFromElements, Navigate, Route, useSearchParams, type LoaderFunctionArgs, type RouteObject } from "react-router";
+import { createRoutesFromElements, Navigate, redirect, Route, useSearchParams, type LoaderFunctionArgs, type RouteObject } from "react-router";
 import { serverSession } from "./features/auth/Auth";
 import { Login } from "./features/auth/Login";
 import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
-import { prefetch } from "./data/queries";
+import { appData, prefetch, workspaceKey } from "./data/queries";
 
 // The app's routes, as React Router data routes: the browser runs them (main.tsx) and so does the edge, which renders a
 // workspace page on the server with its data (entry-server.tsx, docs/server-rendering.md). A page's code loads with
@@ -44,8 +44,20 @@ const prefetching = serverSession;
 // Every workspace page shows the layout: whether the person is an executive (the layout shows nothing before it
 // knows), whether the firm has the worked example, the unread count, and the person's settings (their time zone sets
 // how dates read).
-async function workspaceLoader({ context }: LoaderFunctionArgs) {
-  if (prefetching) await prefetch(context, "/executive", "/examples", "/attention", "/me");
+// An executive is sent to their own pages from the server, before anything of the firm's workspace renders. A page's
+// own reads run alongside this one rather than after it, so a firm member's page waits on no extra round trip; an
+// executive's refused reads cost them nothing either, since they run in parallel.
+async function workspaceLoader({ context, request }: LoaderFunctionArgs) {
+  if (!prefetching) return null;
+  await prefetch(context, "/executive", "/examples", "/attention", "/me");
+  const executive = context.get(appData).queryClient.getQueryData<{ executive?: boolean }>(workspaceKey("/executive"))?.executive;
+  if (executive && !new URL(request.url).pathname.startsWith("/dashboard/executive")) throw redirect("/dashboard/executive");
+  return null;
+}
+
+// Home reads its counts and every section under them; the filters start empty.
+async function homeLoader({ context }: LoaderFunctionArgs) {
+  if (prefetching) await prefetch(context, "/home", "/review-queue?client=", "/portfolio", "/setup", "/dependencies?client=", "/daily?client=", "/goals?client=");
   return null;
 }
 
@@ -81,7 +93,7 @@ export const routes: RouteObject[] = createRoutesFromElements(
     <Route path="request" lazy={page(() => import("./features/closes/ClientRequest"), {}, bare)} />
     {marketingRoutes(<Route path="login" element={<Login />} />)}
     <Route path="dashboard" id="workspace" loader={workspaceLoader} lazy={page(() => import("./features/dashboard/Layout"), {}, bare)}>
-      <Route index lazy={page(() => import("./features/dashboard/Dashboard"), { view: "work" as const })} />
+      <Route index loader={homeLoader} lazy={page(() => import("./features/dashboard/Dashboard"), { view: "work" as const })} />
       <Route path="close" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "close" as const })} />
       <Route path="review" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "review" as const })} />
       <Route path="closes" lazy={page(() => import("./features/closes/ClosesList"))} />

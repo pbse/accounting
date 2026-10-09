@@ -12,6 +12,9 @@ import { DelegatedCloses } from "../closes/Goal";
 import { NotOpened, type Obligation, type Unopened } from "../closes/Morning";
 import { Setup } from "../closes/Setup";
 import { workspaceRequest } from "../closes/workspace";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { workspaceQuery } from "../../data/queries";
+import { useDates } from "../../data/time";
 import { BulkReview, type QueueItem } from "../review/BulkReview";
 import { DailyBooks } from "./DailyBooks";
 import { Dependencies } from "./Dependencies";
@@ -52,39 +55,24 @@ const scrollTo = (id: string) => {
 // Home: the four outcomes across the reader's clients, a line on how far the books are read, and one list of the
 // decisions waiting, grouped by client with the most pressing first. Everything else on it shows only when it has rows.
 export default function Home() {
-  const [counts, setCounts] = useState<HomeCounts>();
-  const [error, setError] = useState("");
-  const [queue, setQueue] = useState<{ items: QueueItem[]; count: number }>();
-  const [queueError, setQueueError] = useState("");
+  const queryClient = useQueryClient();
+  const dates = useDates();
+  // The counts and the review queue are read with the page (its loader), then every 30 seconds and after an action.
+  // A read that fails keeps its last result on screen beside its own error.
+  const homeRead = useQuery({ ...workspaceQuery<HomeCounts>("/home"), refetchInterval: 30_000 });
+  const counts = homeRead.data;
+  const error = homeRead.error ? homeRead.error.message || "Home is unavailable." : "";
   // The review queue and the dependency lists are capped reads; a client or month filter reaches the rest.
   const [queueClient, setQueueClient] = useState("");
-  const [queueLoading, setQueueLoading] = useState(false);
+  const queueRead = useQuery({ ...workspaceQuery<{ items: QueueItem[]; count: number }>(`/review-queue?client=${encodeURIComponent(queueClient)}`), refetchInterval: 30_000 });
+  const queue = queueRead.data;
+  const queueError = queueRead.error ? queueRead.error.message || "The review queue is unavailable." : "";
+  const queueLoading = queueRead.isPending;
   // Once a batch was approved here, the section stays so its outcomes can be read after the queue empties.
   const [reviewed, setReviewed] = useState(false);
-  const [refresh, setRefresh] = useState(0);
-  // Every read of the counts (on load, every 30 seconds and after an action) reads the decision list again too. A read
-  // that fails keeps its last result on screen beside its own error.
-  const [tick, setTick] = useState(0);
+  // Each read of the counts, answered or failed, reads the sections that follow them again too.
+  const tick = Math.max(homeRead.dataUpdatedAt, homeRead.errorUpdatedAt);
   const [view, setView] = useState<View>("all");
-  useEffect(() => {
-    let live = true;
-    const load = () =>
-      Promise.all([
-        workspaceRequest("/home")
-          .then((data: HomeCounts) => live && (setCounts(data), setError("")))
-          .catch((e) => live && setError(e instanceof Error ? e.message : "Home is unavailable.")),
-        workspaceRequest(`/review-queue?client=${encodeURIComponent(queueClient)}`)
-          .then((data) => live && (setQueue(data), setQueueError("")))
-          .catch((e) => live && setQueueError(e instanceof Error ? e.message : "The review queue is unavailable."))
-          .finally(() => live && setQueueLoading(false)),
-      ]).finally(() => live && setTick((t) => t + 1));
-    void load();
-    const timer = setInterval(load, 30_000);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [refresh, queueClient]);
   // A link to a section (#review-queue, #decisions) scrolls there once the section has rendered from its read.
   const scrolledTo = useRef("");
   useEffect(() => {
@@ -96,7 +84,8 @@ export default function Home() {
       target.scrollIntoView({ block: "start" });
     }
   }, [counts, queue]);
-  const bump = () => setRefresh((v) => v + 1);
+  // After an action every section on the page reads again.
+  const bump = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   const today = (counts?.as_of ?? new Date().toISOString()).slice(0, 10);
   const dueUnopened = counts?.not_opened.filter((m) => m.due_on && m.due_on <= new Date(Date.parse(today) + 7 * 86400000).toISOString().slice(0, 10)) ?? [];
   // The deadline card counts the dated closes overdue or close, the months owed by then and not opened, and the
@@ -190,7 +179,7 @@ export default function Home() {
             </button>
           )}
           <span className="chip">{n(counts.prepared.running, "document")} in preparation</span>
-          <span className="chip neutral">Updated {new Date(counts.as_of).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
+          <span className="chip neutral">Updated {dates.time(counts.as_of)}</span>
         </p>
       )}
       <Goals onChange={bump} />
@@ -226,7 +215,7 @@ export default function Home() {
                 <RowList label="Due closes">
                   {[...counts!.due, ...undated].map((item) => (
                     <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
-                      <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today) : "No due date"} />
+                      <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
                       {!item.due_on ? <span className="status">No date</span> : item.due_on < today ? <span className="status danger">Overdue</span> : <span className="status warn">Due soon</span>}
                       <small>{{ open: "Not signed off", reopen_required: "Changed since sign-off", unknown: "Sign-off could not be rechecked", signed_off: "Signed off" }[item.state]}</small>
                       <Icon name="arrow" />
@@ -246,7 +235,7 @@ export default function Home() {
               <RowList label="Books to capture">
                 {counts.uncaptured.map((item) => (
                   <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}?tab=evidence`}>
-                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today) : "No due date"} />
+                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
                     <span className="status warn">No month-end books</span>
                     <span />
                     <Icon name="arrow" />
@@ -255,8 +244,8 @@ export default function Home() {
               </RowList>
             </>
           )}
-          <Dependencies refresh={tick} />
-          <DailyBooks refresh={tick} canReview={counts?.can_review ?? false} onReviewed={bump} />
+          <Dependencies />
+          <DailyBooks canReview={counts?.can_review ?? false} onReviewed={bump} />
           {counts && (counts.owed.length > 0 || counts.not_opened.length > 0) && (
             <details className="owed" id="owed">
               <summary>
@@ -265,7 +254,7 @@ export default function Home() {
               <RowList label="Closes owed">
                 {counts.owed.map((item) => (
                   <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
-                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today) : "No due date"} />
+                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
                     <span className={item.state === "signed_off" ? "status ok" : item.state === "open" ? "status warn" : "status danger"}>
                       {{ signed_off: "Signed off", open: "Not signed off", reopen_required: "Changed since sign-off", unknown: "Sign-off could not be rechecked" }[item.state]}
                     </span>
@@ -275,7 +264,7 @@ export default function Home() {
                 ))}
                 {counts.not_opened.map((m) => (
                   <div className="row" key={`${m.entity}:${m.period}`}>
-                    <EntityCell name={m.entity} title={`${m.entity} · ${m.period}`} detail={m.due_on ? dueWords(m.due_on, today) : "No due date"} />
+                    <EntityCell name={m.entity} title={`${m.entity} · ${m.period}`} detail={m.due_on ? dueWords(m.due_on, today, dates.calendarDay) : "No due date"} />
                     <span className="status danger">Not opened</span>
                     <span />
                     <span />
@@ -294,9 +283,7 @@ export default function Home() {
                 value={queueClient}
                 onChange={(next) => {
                   if (next === queueClient) return;
-                  // The rows of the previous filter leave before the new read answers.
-                  setQueue(undefined);
-                  setQueueLoading(true);
+                  // The rows of the previous filter leave before the new read answers: each filter is its own read.
                   setQueueClient(next);
                 }}
                 shown={queue?.items.length ?? 0}
@@ -318,15 +305,15 @@ export default function Home() {
           )}
         </>
       )}
-      {!empty && <DelegatedCloses refresh={tick} client="" />}
+      {!empty && <DelegatedCloses client="" />}
       {!empty && counts && <NotOpened months={counts.not_opened} />}
     </section>
   );
 }
 
-const dueWords = (dueOn: string, today: string) => {
+const dueWords = (dueOn: string, today: string, day: (value: string) => string) => {
   if (!dueOn) return "";
-  const date = new Date(`${dueOn}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+  const date = day(dueOn);
   return dueOn < today ? `Overdue since ${date}` : `Due ${date}`;
 };
 
@@ -355,6 +342,7 @@ type Reopened = HomeCounts["owed"][number];
 // The default list (every decision, page one) comes with the counts, read in their snapshot; another view or page is
 // read on its own, and any action re-reads the counts, which bring the list again.
 function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view, onView, onChange }: { today: string; tick: number; snapshot?: AttentionInbox; reopened: Reopened[]; canReview: boolean; teamTotal: number; view: View; onView: (view: View) => void; onChange: () => void }) {
+  const dates = useDates();
   const [page, setPage] = useState(0);
   const [read, setRead] = useState<AttentionInbox>();
   const [error, setError] = useState("");
@@ -417,7 +405,7 @@ function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view
         <RowList label="Signed off, then changed">
           {reopenedShown.map((item) => (
             <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}?tab=signoff`}>
-              <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today) : "No due date"} />
+              <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
               <span className="status danger">{item.state === "unknown" ? "Sign-off could not be rechecked" : "Changed since sign-off"}</span>
               <small>Reopen and review, or sign off again</small>
               <Icon name="arrow" />
@@ -439,7 +427,7 @@ function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view
                   </Link>
                 </h3>
                 <small>
-                  {[dueWords(g.due_on, today), g.priority !== "normal" ? `${g.priority} priority` : "", g.owner === "mine" ? "Yours" : g.owner === "other" ? "With a teammate" : "Unassigned"].filter(Boolean).join(" · ")}
+                  {[dueWords(g.due_on, today, dates.calendarDay), g.priority !== "normal" ? `${g.priority} priority` : "", g.owner === "mine" ? "Yours" : g.owner === "other" ? "With a teammate" : "Unassigned"].filter(Boolean).join(" · ")}
                 </small>
               </span>
               {index === 0 && view !== "snoozed" && <span className="pill">Do first</span>}
@@ -454,8 +442,8 @@ function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view
                 <li key={e.key}>
                   <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : e.account_id || e.kind === "unanswered" ? "#coverage-work" : ""}`}>{e.text}</Link>
                   <small>
-                    {!e.read && <span className="pill info">New</span>} {new Date(e.at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
-                    {e.snoozed_until && ` · snoozed until ${new Date(e.snoozed_until).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`}
+                    {!e.read && <span className="pill info">New</span>} {dates.dayMonth(e.at)}
+                    {e.snoozed_until && ` · snoozed until ${dates.dayMonth(e.snoozed_until)}`}
                   </small>
                   <button disabled={busy} onClick={() => mark(e.read ? "unread" : "read", [e.key])}>
                     {e.read ? "Mark new" : "Mark seen"}
@@ -521,8 +509,8 @@ function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view
                   <li key={e.key}>
                     <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : ""}`}>{e.text}</Link>
                     <small>
-                      {new Date(e.at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
-                      {e.snoozed_until && ` · snoozed until ${new Date(e.snoozed_until).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`}
+                      {dates.dayMonth(e.at)}
+                      {e.snoozed_until && ` · snoozed until ${dates.dayMonth(e.snoozed_until)}`}
                     </small>
                     {/* A snooze set before the item became a teammate's can still be lifted here. */}
                     {view === "snoozed" && (

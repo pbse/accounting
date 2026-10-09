@@ -1,3 +1,6 @@
+import { useDates } from "../../data/time";
+import { useQuery } from "@tanstack/react-query";
+import { workspaceQuery } from "../../data/queries";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
@@ -29,23 +32,21 @@ export function Goals({ onChange }: { onChange: () => void }) {
   const text = params.get("goal")?.trim() ?? "";
   const scopeView = params.get("goal_view") || "active";
   const scopeClient = params.get("goal_client") ?? "";
-  const [goals, setGoals] = useState<Goal[]>([]);
+  // The saved goals still running are the page's query. A goal previewed from a link shows until the saved list has
+  // it; a goal run here keeps its last state on the page, finished or not, so its results can be read after the saved
+  // list (which holds only running goals) drops it. Each goal shows once, in its newest known state.
+  const saved = useQuery(workspaceQuery<{ operations: Goal[] }>("/portfolio")).data?.operations ?? [];
+  const [previewed, setPreviewed] = useState<Goal[]>([]);
+  const [ran, setRan] = useState<Goal[]>([]);
   const [error, setError] = useState("");
-  useEffect(() => {
-    let live = true;
-    // The saved list replaces its own entries only: a goal previewed while it was read (one with an id the list does not
-    // have yet) stays, and a listing, which is never saved, stays too.
-    workspaceRequest("/portfolio")
-      .then((data: { operations: Goal[] }) => {
-        if (!live) return;
-        const listed = new Set(data.operations.map((g) => g.id));
-        setGoals((current) => [...current.filter((g) => !listed.has(g.id)), ...data.operations]);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, []);
+  const latest = new Map(ran.map((g) => [g.id, g]));
+  const savedIds = new Set(saved.map((g) => g.id));
+  const goals = [
+    ...ran.filter((g) => !savedIds.has(g.id)),
+    ...previewed.filter((g) => !g.id || (!savedIds.has(g.id) && !latest.has(g.id))),
+    ...saved.map((g) => latest.get(g.id) ?? g),
+  ];
+  const record = (goal: Goal) => setRan((current) => [goal, ...current.filter((g) => g.id !== goal.id)]);
   useEffect(() => {
     if (!text) return;
     let live = true;
@@ -55,7 +56,7 @@ export function Goals({ onChange }: { onChange: () => void }) {
     preview(text, scopeView, scopeClient)
       .then((goal: Goal) => {
         if (!live) return;
-        setGoals((current) => [goal, ...current.filter((g) => g.id !== goal.id)]);
+        setPreviewed((current) => [goal, ...current.filter((g) => g.id !== goal.id)]);
         const next = new URLSearchParams(params);
         next.delete("goal");
         next.delete("goal_view");
@@ -75,15 +76,16 @@ export function Goals({ onChange }: { onChange: () => void }) {
       </SectionHeader>
       {error && <p role="alert">{error}</p>}
       {goals.map((goal) => (
-        <PortfolioGoal key={goal.id || goal.goal} goal={goal} onChange={onChange} />
+        <PortfolioGoal key={goal.id || goal.goal} goal={goal} onRan={record} onChange={onChange} />
       ))}
     </>
   );
 }
 
 // A goal's exact server-selected closes. Each run acts on at most ten, each checked again against its preview.
-function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void }) {
+function PortfolioGoal({ goal, onRan, onChange }: { goal: Goal; onRan: (goal: Goal) => void; onChange: () => void }) {
   const [current, setCurrent] = useState(goal);
+  const dates = useDates();
   // A listing asked again comes back as a new goal with the same key.
   useEffect(() => setCurrent(goal), [goal]);
   const [reason, setReason] = useState("");
@@ -97,7 +99,7 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
   // A hand-over shows each close's deadline for the agent: its own due date when the close page would accept it.
   const pendingText = (i: Goal["items"][number]) =>
     handing
-      ? `${i.count} ${noun}${i.count === 1 ? "" : "s"}; hand over ${i.due_on ? `with the deadline ${new Date(`${i.due_on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}` : "with no deadline"}`
+      ? `${i.count} ${noun}${i.count === 1 ? "" : "s"}; hand over ${i.due_on ? `with the deadline ${dates.calendarDay(i.due_on)}` : "with no deadline"}`
       : `${i.count} ${noun}${i.count === 1 ? "" : "s"} to ${current.action}`;
   async function run() {
     setBusy(true);
@@ -107,6 +109,7 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
       while (left > 0) {
         const next: Goal = await workspaceRequest("/portfolio/run", { id: current.id, confirmed: true, reason: reason.trim() });
         setCurrent(next);
+        onRan(next);
         const now = next.items.filter((i) => i.state === "pending").length;
         if (now >= left) break;
         left = now;

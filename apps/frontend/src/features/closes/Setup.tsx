@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { workspaceQuery } from "../../data/queries";
 import { Link } from "react-router";
 import { isEnrollmentError } from "./ClosesList";
 import { FirmEnrollment } from "./Enterprise";
-import { workspaceRequest } from "./workspace";
 
 type Setup = {
   steps: { key: string; title: string; done: boolean; detail: string; href: string }[];
@@ -12,19 +12,10 @@ type Setup = {
 };
 
 export function Setup({ onEnrolled }: { onEnrolled: () => void }) {
-  const [setup, setSetup] = useState<Setup>();
-  const [error, setError] = useState("");
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/setup")
-      .then((next: Setup) => live && (setSetup(next), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Setup is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [version]);
-  if (error) return isEnrollmentError(error) ? <FirmEnrollment onEnrolled={() => (setVersion((v) => v + 1), onEnrolled())} /> : <p role="alert">Get started is unavailable: {error}</p>;
+  const read = useQuery(workspaceQuery<Setup>("/setup"));
+  const setup = read.data;
+  const error = read.error ? read.error.message || "Setup is unavailable." : "";
+  if (error) return isEnrollmentError(error) ? <FirmEnrollment onEnrolled={() => (void read.refetch(), onEnrolled())} /> : <p role="alert">Get started is unavailable: {error}</p>;
   if (!setup) return null;
   const left = setup.steps.filter((s) => !s.done).length;
   return (

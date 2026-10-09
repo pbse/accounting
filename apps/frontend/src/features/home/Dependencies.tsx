@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useDates } from "../../data/time";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { workspaceQuery } from "../../data/queries";
 import { Link } from "react-router";
 import { Icon } from "@close/ui/components/Icon";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { kindLabels } from "../closes/Work";
-import { workspaceRequest } from "../closes/workspace";
 import { ClientFilter } from "./Home";
 
 type Dependency = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; upstream_workpaper_id: string };
@@ -14,32 +16,15 @@ type Read = { items: Dependency[]; has_more: boolean; predicted?: Predicted[]; p
 
 // Approved or current drafts whose support moved after the fact: a changed source or inherited schedule, an account
 // that no longer ties in a later Trial Balance, or a transaction updated after approval. Shown only while there is one.
-export function Dependencies({ refresh }: { refresh: number }) {
-  const [read, setRead] = useState<Read>();
-  const [error, setError] = useState("");
+export function Dependencies() {
   // The read checks the ten open closes with the newest Trial Balances and the 100 newest affected drafts; a client
-  // or month filter reaches the others.
+  // or month filter reaches the others. Each filter is its own read, every 30 seconds, so a new filter shows none of
+  // the previous one's rows, and a later read of the same filter keeps the last answer beside any error.
   const [client, setClient] = useState("");
-  // A new filter clears the previous filter's rows; a refresh of the same filter keeps the last read beside any error.
-  const shownFor = useRef(client);
-  useEffect(() => {
-    let live = true;
-    if (shownFor.current !== client) {
-      shownFor.current = client;
-      setRead(undefined);
-    }
-    workspaceRequest(`/dependencies?client=${encodeURIComponent(client)}`)
-      .then((data: Read) => {
-        if (live) {
-          setRead(data);
-          setError("");
-        }
-      })
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Dependency review is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [refresh, client]);
+  const dates = useDates();
+  const query = useQuery({ ...workspaceQuery<Read>(`/dependencies?client=${encodeURIComponent(client)}`), refetchInterval: 30_000 });
+  const read = query.data;
+  const error = query.error ? query.error.message || "Dependency review is unavailable." : "";
   const untied = read?.no_longer_ties ?? [];
   const predicted = (read?.predicted ?? []).filter((item) => !untied.some((u) => u.workpaper_id === item.workpaper_id));
   const changed = read?.items ?? [];
@@ -75,7 +60,7 @@ export function Dependencies({ refresh }: { refresh: number }) {
               <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={draft(item)} />
               <span className="status danger">No longer ties</span>
               <small>
-                {item.account} is {item.balance} in the Trial Balance captured {new Date(item.captured_at).toLocaleDateString()} but {item.expected} in its support, a difference of {item.difference}. Sign-off waits until it ties.
+                {item.account} is {item.balance} in the Trial Balance captured {dates.date(item.captured_at)} but {item.expected} in its support, a difference of {item.difference}. Sign-off waits until it ties.
               </small>
               <Icon name="arrow" />
             </Link>
@@ -90,7 +75,7 @@ export function Dependencies({ refresh }: { refresh: number }) {
               <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={draft(item)} />
               <span className="status warn">May be affected</span>
               <small>
-                {item.transaction} on {item.account} updated {new Date(item.updated_at).toLocaleDateString()}, after approval on {new Date(item.approved_at).toLocaleDateString()}
+                {item.transaction} on {item.account} updated {dates.date(item.updated_at)}, after approval on {dates.date(item.approved_at)}
                 {item.count > 1 ? ` (${item.count} such transactions)` : ""}. The approval stands until you review again.
               </small>
               <Icon name="arrow" />

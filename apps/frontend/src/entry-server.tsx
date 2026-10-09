@@ -3,6 +3,7 @@ import { renderToReadableStream } from "react-dom/server";
 import { createStaticHandler, createStaticRouter, RouterContextProvider, StaticRouterProvider } from "react-router";
 import { AppProviders } from "./app";
 import { appData, newQueryClient, type Read } from "./data/queries";
+import { clockKey } from "./data/time";
 import { sessionKey, type SessionState } from "./features/auth/Auth";
 import { routes } from "./routes";
 
@@ -35,6 +36,8 @@ export async function render(request: Request, api: ServerApi, nonce?: string): 
   if (!session.user) return { kind: "signed-out" };
   if (result instanceof Response) return { kind: "response", response: result };
   queryClient.setQueryData(sessionKey, session);
+  // The render's clock, sent with the page so the browser's first render reads the same instant.
+  queryClient.setQueryData(clockKey, Date.now());
   // A read that failed is not rendered as failed: the browser asks again and shows that section's own error, so the
   // server leaves it pending, as the browser's first render will.
   queryClient.removeQueries({ predicate: (query) => query.state.status !== "success" });

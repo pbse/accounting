@@ -68,7 +68,8 @@ and a read the cache already holds is not repeated.
 | Settings: Profile, Notifications | Yes |
 | Settings: People (people and roles, invitations, client assignments, membership) | Yes |
 | Settings: Firm, Clients, Policies, Security | Layout only; the section reads in the browser |
-| Home, Clients, a close and its tabs, Preparation, Measure, Executive | Layout only; the page reads in the browser |
+| Home (counts, review queue, goals, get started, dependencies, new in the books, closes handed to the agent) | Yes; other decision views and filters read when chosen |
+| Clients, a close and its tabs, Preparation, Measure, Executive | Layout only; the page reads in the browser |
 
 A page moves to "Yes" when its loader prefetches its reads and its components read them with `useQuery`.
 
