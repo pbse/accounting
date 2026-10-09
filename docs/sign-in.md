@@ -157,7 +157,11 @@ In WorkOS (production environment):
 - **Authentication → OAuth providers → Google:** enter the client ID and secret ("Your app's credentials") and enable it. Done 2026-10-06.
 - **Turn off password and passkey sign-in, and keep every other social provider (Microsoft among them) off**, so AuthKit's own page (still used for any unknown provider name) offers only Google. Check the AuthKit page afterwards. Done in production 2026-10-06: Google is the only method on (password, passkeys and Magic Auth off; Microsoft OAuth was never enabled).
 - **Roles:** `firm-admin` and `member` exist. Keep `member` without permissions.
-- **Emails:** turn off WorkOS's invitation email (Authentication → Emails, or `isInvitationEmailEnabled: false`); Krith sends its own ([invitations](#invitations)). Otherwise invitees get two.
+- **Emails:** Krith sends invitations itself ([invitations](#invitations)), so WorkOS's invitation email goes off, but only once Krith's is proven:
+  1. Set Krith's sender, `PLATFORM_EMAIL_FROM` and the queue's `PLATFORM_EMAIL_KEY` ([welcome emails](#welcome-emails)). A deploy refuses a sender without its key.
+  2. Send one invitation and see Krith's email arrive (Resend's log shows it). Until the next step, invitees get WorkOS's email too.
+  3. Turn off WorkOS's invitation email (Authentication → Emails, or `isInvitationEmailEnabled: false`).
+  Without Krith's sender, keep WorkOS's email on: Krith's invitation emails wait and then expire unsent.
 - **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, the default redirect URI `https://getkrith.com/login` (where WorkOS sends a sign-in it started itself), and the sign-out URI `https://getkrith.com/`.
 
 In GitHub (production environment variables): set `AUTH_SESSION=server`, then run Deploy production. The API needs `WORKOS_API_KEY` and `SECRETS_KEY`, which production already has.

@@ -38,7 +38,7 @@ var workosUserID = regexp.MustCompile(`^user_[A-Za-z0-9]{1,100}$`)
 var (
 	errInvitationNotPending = errors.New("only a pending invitation that has not expired can be resent")
 	// errResendUnconfirmed is a resend WorkOS may have sent: its answer and its copy of the invitation were both lost.
-	errResendUnconfirmed = errors.New("WorkOS did not confirm whether it renewed the invitation, so its email was not sent; the app keeps it open for seven days")
+	errResendUnconfirmed = errors.New("WorkOS did not confirm whether it renewed the invitation, so no new email was sent; the app keeps it open for seven days")
 )
 
 type workosUser struct {
@@ -357,6 +357,19 @@ func endWorkOSSessions(ctx context.Context, user string) (ended int, err error) 
 // adminResendInvitation renews a pending invitation in WorkOS, keeps the new expiry, and queues Krith's email for it
 // again (docs/sign-in.md#invitations). The attempt is recorded as started, and committed, before WorkOS is asked, so the
 // audit shows it even if its outcome cannot be.
+// resendAdvice is what to do after a resend that queued no email: an earlier email still waiting to go is left to go,
+// and another resend would send a second.
+func resendAdvice(ctx context.Context, db *sql.DB, invitation string) string {
+	var waiting bool
+	if err := db.QueryRowContext(platformContext(ctx), `SELECT EXISTS(SELECT 1 FROM platform_emails WHERE invitation::text=$1 AND state IN ('queued','sending'))`, invitation).Scan(&waiting); err != nil {
+		return "Check this view for its earlier email before resending."
+	}
+	if waiting {
+		return "Its earlier email is still on its way; this view shows when it has gone."
+	}
+	return "Resend it again."
+}
+
 func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	firm, invitation := r.PathValue("id"), r.PathValue("invitation")
 	if os.Getenv("WORKOS_API_KEY") == "" {
@@ -435,7 +448,7 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		})
 	if err != nil && sent {
 		log.Printf("Invitation %s was renewed but the app could not record it: %v", invitation, err)
-		problem(w, 503, "WorkOS renewed the invitation, but the app could not record it, so its email was not sent. Resend it again.")
+		problem(w, 503, "WorkOS renewed the invitation, but the app could not record it, so no new email was sent. "+resendAdvice(ctx, db, invitation))
 		return
 	}
 	if errors.Is(err, errResendUnconfirmed) {
@@ -444,7 +457,7 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		if _, hold := db.ExecContext(context.WithValue(ctx, systemKey{}, true), `UPDATE member_invitations SET expires_at=GREATEST(expires_at,now()+interval '7 days') WHERE id::text=$1 AND organization_id=$2 AND state='pending'`, invitation, firm); hold != nil {
 			log.Printf("Invitation %s could not be kept open after an unconfirmed resend: %v", invitation, hold)
 		}
-		problem(w, 502, "WorkOS did not confirm renewing the invitation, so its email was not sent. Resend it again.")
+		problem(w, 502, "WorkOS did not confirm renewing the invitation, so no new email was sent. "+resendAdvice(ctx, db, invitation))
 		return
 	}
 	if err != nil {

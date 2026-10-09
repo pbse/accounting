@@ -3961,4 +3961,5 @@ Not verified:
 
 Rollout (2026-10-09):
 - WorkOS's display name is now "Krith", not the team name "Nivi", on the screens and emails WorkOS still shows.
-- WorkOS's invitation email is turned off in production (`isInvitationEmailEnabled: false`) as this merges, before its deploy. Invitees then get only Krith's email. One sent in the minutes the deploy takes has no email until it is sent again.
+- Krith's sender is set in production (since 2026-10-07) and mail.getkrith.com is verified in Resend, but Resend's log had no email yet, so the sender is unproven.
+- WorkOS's invitation email therefore stays on through this deploy. One test invitation afterwards should bring both emails; once Krith's is in Resend's log, WorkOS's is turned off (`isInvitationEmailEnabled: false`), as [sign-in](sign-in.md#setup-once-per-environment) sets out.

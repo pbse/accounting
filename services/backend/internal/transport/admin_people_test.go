@@ -230,8 +230,14 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	// When neither the answer nor WorkOS's copy can be read, the outcome is reported as unknown, and no email is sent.
 	resendLost, loseCopyOnResend = true, true
 	must(`UPDATE member_invitations SET expires_at=now()+interval '1 hour' WHERE id::text=$1`, invitation)
-	if unknown := adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 502)["message"].(string); !strings.Contains(unknown, "did not confirm renewing") || emailed() != "cancelled,queued" {
-		t.Fatalf("an unknown outcome sends no email: %s", unknown)
+	if unknown := adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 502)["message"].(string); !strings.Contains(unknown, "did not confirm renewing") || !strings.Contains(unknown, "earlier email is still on its way") || emailed() != "cancelled,queued" {
+		t.Fatalf("an unknown outcome sends no email, and says the earlier one still waiting will go: %s", unknown)
+	}
+	// With no earlier email waiting, it says to resend. (WorkOS's copy reads again before the next attempt.)
+	copyLost = false
+	must(`UPDATE platform_emails SET state='sent',link=NULL,finished_at=now() WHERE invitation=$1::bigint AND state='queued'`, invitation)
+	if unknown := adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 502)["message"].(string); !strings.Contains(unknown, "Resend it again") {
+		t.Fatalf("with no email waiting, an unknown outcome says to resend: %s", unknown)
 	}
 	resendLost, loseCopyOnResend, copyLost = false, false, false
 	// The old date cannot expire an invitation WorkOS may have renewed; the audit says the outcome is unknown.
@@ -244,7 +250,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	}
 	must(`UPDATE member_invitations SET state='revoked' WHERE id::text=$1`, invitation)
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 409)
-	if resent != 3 {
+	if resent != 4 {
 		t.Fatal("a revoked invitation must not reach WorkOS")
 	}
 
