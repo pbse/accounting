@@ -3906,3 +3906,12 @@ PR 4 of the [agentic chat plan](agent-chat.md): the two settings nothing read si
 - Frontend `npm run check`: passes; the panel renders the `open_close` card from `ProposalCard` with the client and month, the checkbox, and the opened close's link on its outcome.
 
 Not verified: a replay of the golden set against a live provider (no chat model is configured on this machine: the local `OPENAI_*` settings are empty and there is no context-machine route), so the pass rates are not yet recorded; the runner refuses to start without one. The `open_close` card in a browser needs a model to propose it, so the layout check keeps the `/prepare` card as its card state.
+
+## 2026-10-08: the agent for executives (PR 5)
+
+PR 5 of the [agentic chat plan](agent-chat.md): an executive gets the panel over their own pages. The agent offers exactly their reads (`executive_overview`, `list_publications`, `read_publication`, `cash_plan`, `budget_comparison`), firm-wide, with no card; citations link to the executive's pages; commands answer `422`; a close conversation is refused by the organization boundary; at `off` the executive gets one fixed line and no model call. The three decisions the plan waited on are recorded in the design doc (default `off`, one wide profile per firm, the executive this round).
+
+- `go test ./internal/transport -run 'TestAgentChat|TestAgentSupport|TestAgentEval'`: pass. `TestAgentChatAnswersAnExecutive` covers the tool set, the refused firm tools and card, the executive link, the lineage, the command, the close conversation and the fixed line at `off`.
+- Frontend `npm run check`: passes; the top bar shows Agent for an executive, the panel takes `executive` and shows the executive's chips, scope chip and placeholder, with no command list or palette.
+
+Not verified: the panel over the executive pages in a browser (the layout check has no executive fixture).

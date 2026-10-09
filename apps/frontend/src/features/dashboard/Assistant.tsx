@@ -34,16 +34,18 @@ export function useSignedIn() {
   return authKitClientId ? !!useSession().user : useUnlocked();
 }
 
-export function Assistant() {
+// An executive gets the panel over their own pages: the agent reads their published reports, cash plan and budget, and
+// proposes nothing; the command palette, whose commands read the firm's work, is not theirs.
+export function Assistant({ executive = false }: { executive?: boolean }) {
   return useSignedIn() ? (
     <>
-      <Panel />
-      <CommandPalette />
+      <Panel executive={executive} />
+      {!executive && <CommandPalette />}
     </>
   ) : null;
 }
 
-function Panel() {
+function Panel({ executive }: { executive: boolean }) {
   const location = useLocation();
   const match = /^\/dashboard\/closes\/(\d+)(?:\/workpapers\/(\d+))?/.exec(location.pathname);
   const closeId = match?.[1] ?? "";
@@ -91,10 +93,10 @@ function Panel() {
   }
   if (!open) return null;
   // A new close or draft mounts a fresh conversation, so nothing from the previous context can show.
-  return <Conversation key={`${closeId}/${paperId}`} closeId={closeId} paperId={paperId} focus={openRequests} onClose={() => toggle(false)} />;
+  return <Conversation key={`${closeId}/${paperId}`} closeId={closeId} paperId={paperId} executive={executive} focus={openRequests} onClose={() => toggle(false)} />;
 }
 
-function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; paperId: string; focus: number; onClose: () => void }) {
+function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId: string; paperId: string; executive: boolean; focus: number; onClose: () => void }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [live, setLive] = useState<string[]>([]);
   const [liveLinks, setLiveLinks] = useState<{ label: string; href: string }[]>([]);
@@ -228,7 +230,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
   // Only the newest card follows the close's work; older ones keep what they started.
   const newestCard = messages.map((m) => !!m.action).lastIndexOf(true);
   // Typing "/" lists the commands, the same list the palette shows; arrows choose, Tab or Enter completes.
-  const slash = text.startsWith("/") && !text.includes(" ") ? commands.filter((c) => c.name.startsWith(text.slice(1).toLowerCase()) && (!c.close || closeId || true)) : [];
+  const slash = !executive && text.startsWith("/") && !text.includes(" ") ? commands.filter((c) => c.name.startsWith(text.slice(1).toLowerCase()) && (!c.close || closeId || true)) : [];
   const chosen = slash[Math.min(selected, Math.max(slash.length - 1, 0))];
   // Tab completes the command in the box; Enter on a chosen command sends it when it takes no argument.
   function complete(c: (typeof commands)[number], run: boolean) {
@@ -312,10 +314,15 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
         </span>
       </header>
       <p className="assistant-context" aria-label="Conversation context">
-        {closeId ? <span className="pill">{label || `Close #${closeId}`}</span> : <span className="pill">Firm-wide</span>}
+        {closeId ? <span className="pill">{label || `Close #${closeId}`}</span> : <span className="pill">{executive ? "Your business" : "Firm-wide"}</span>}
         {paperId && <span className="pill">Draft #{paperId}</span>}
       </p>
-      {about && (
+      {about && executive && (
+        <p className="assistant-about">
+          Answers come from your clients’ published reports, cash plan and budget, read with your access and listed under each answer. Every question goes to the configured model provider with the reads the agent chooses and the last turns of this conversation. The agent proposes nothing for an executive and changes nothing.
+        </p>
+      )}
+      {about && !executive && (
         <p className="assistant-about">
           Answers come from saved work you can access, read with your permissions and listed under each answer. With Agent chat on for client closes, every question you type in a client close goes to the configured model provider with the reads of this close the agent chooses and the last turns of this conversation; commands typed with / never go to a model, except /ask. With it on firm-wide, a question asked outside a close goes the same way with the reads the agent chooses across the closes you can open, and an answer built on a read that cannot be tied to particular closes is shown once and not kept. An action the agent proposes runs only after you confirm its card, through the same checks as the page; the agent never approves, sends or posts anything.
         </p>
@@ -323,7 +330,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
       <ol ref={list} className="assistant-messages" aria-live="polite">
         {empty && !pageComposer && (
           <li className="assistant-hint">
-            <Suggestions label="Starter questions" items={closeId ? starters.close : starters.firm} disabled={busy || !loaded} onPick={(label) => void send({ ...(starterCommands[label] ?? { text: label }), workpaper_id: paperId })} />
+            <Suggestions label="Starter questions" items={executive ? starters.executive : closeId ? starters.close : starters.firm} disabled={busy || !loaded} onPick={(label) => void send({ ...((!executive && starterCommands[label]) || { text: label }), workpaper_id: paperId })} />
           </li>
         )}
         {messages.map((m, i) => {
@@ -432,7 +439,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
             value={text}
             maxLength={1000}
             rows={1}
-            placeholder={closeId ? "Ask about this close, or / for commands" : "Ask about your work, or / for commands"}
+            placeholder={executive ? "Ask about your reports, cash plan or budget" : closeId ? "Ask about this close, or / for commands" : "Ask about your work, or / for commands"}
             onChange={(e) => {
               setText(e.target.value);
               setSelected(0);

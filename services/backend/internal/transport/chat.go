@@ -105,6 +105,11 @@ func commandText(command, argument string, closeScoped bool) string {
 	return ""
 }
 
+// executiveHelp answers an executive's command; executiveOff answers an executive's question while the firm's agent
+// is off.
+const executiveHelp = "I answer questions about your published reports, cash plan and budget; there are no commands here."
+const executiveOff = "The agent is not turned on for your firm yet. Your published reports, cash plan and budget are on the pages beside this one."
+
 // chatHelp names the commands the server answers without a model.
 func chatHelp(closeScoped bool) string {
 	if !closeScoped {
@@ -850,6 +855,13 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		command := strings.ToLower(strings.TrimSpace(in.Command))
+		// An executive reads their published reports, cash plan and budget through the agent alone: no command's
+		// fixed read is theirs to run.
+		exec := executive(r)
+		if command != "" && exec {
+			problem(w, 422, executiveHelp)
+			return
+		}
 		if command != "" {
 			in.Text = commandText(command, in.Argument, closeID != "")
 			if in.Text == "" {
@@ -861,7 +873,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				command = ""
 			}
 		}
-		agent := command == "" && (level == "firm" || level == "closes" && closeID != "")
+		agent := command == "" && (exec && level != "off" || level == "firm" || level == "closes" && closeID != "")
+		// An executive at off gets one fixed line and no model, never the keyword reads of the firm's work.
+		fixed := exec && !agent
 		if in.Action == "clear" {
 			if _, err := db.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scope, org, author, closeID); err != nil {
 				problem(w, 503, "Conversation could not be cleared.")
@@ -898,7 +912,10 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		var result agentResult
 		// With the agent on, the model chooses the reads for free text; otherwise the fixed reads and cards answer as
 		// they always have, from the words of a command or of the message, without a model.
-		if agent {
+		if fixed {
+			reply = chatReply{body: executiveOff, citations: []chatCitation{{"Business overview", "/dashboard/executive"}}}
+		}
+		if agent || fixed {
 		} else if closeID == "" {
 			var err error
 			if targets, extra, err = delegateTargets(r, db, in.Text, today); err != nil {
@@ -910,7 +927,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if closeID != "" && delegate {
 			extra = unknown
 		}
-		if goal, err := parsePortfolioGoal(in.Text, today); agent {
+		if goal, err := parsePortfolioGoal(in.Text, today); agent || fixed {
 		} else if closeID == "" && err == nil {
 			work := chatCitation{"Open this goal on Home", "/dashboard?goal=" + url.QueryEscape(in.Text)}
 			reply = chatReply{body: "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts.", citations: []chatCitation{work}}
