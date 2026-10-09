@@ -820,7 +820,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			return "", false, nil
 		}
 		var found bool
-		err := db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE `+scopeOf(r)+` AND id=$4::bigint)`, organization(r), subject(r), r.PathValue("id"), named).Scan(&found)
+		err := db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE `+scopeOf(r)+` AND id=$4::bigint AND (close_id IS NOT NULL OR last_at>=now()-interval '30 days'))`, organization(r), subject(r), r.PathValue("id"), named).Scan(&found)
 		return named, found, err
 	}
 	currentSession := func(r *http.Request) (string, error) {
@@ -1380,9 +1380,14 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if err == nil {
 			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` AND id<(SELECT min(id) FROM (SELECT id FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` ORDER BY id DESC LIMIT 200) kept)`, org, author, closeID, sessionID)
 		}
-		// Firm-wide turns older than 30 days go whichever chat holds them, as they always did.
+		// Firm-wide turns older than 30 days go whichever chat holds them, as they always did; a chat whose first
+		// question went is retitled once this is committed.
+		expired := int64(0)
 		if err == nil && closeID == "" {
-			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+` AND created_at<now()-interval '30 days'`, org, author, closeID)
+			var gone sql.Result
+			if gone, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+` AND created_at<now()-interval '30 days'`, org, author, closeID); err == nil {
+				expired, _ = gone.RowsAffected()
+			}
 		}
 		if err == nil {
 			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_sessions WHERE `+scopeOf(r)+` AND close_id IS NULL AND last_at<now()-interval '30 days'`, org, author, closeID)
@@ -1390,6 +1395,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The message could not be saved.")
 			return
+		}
+		if expired > 0 {
+			retitleSessions(r.Context(), db, org, author)
 		}
 		if answerText != nil && !answerEmit("text", answerText) {
 			problem(w, 403, "Your access changed. The answer was saved; open the conversation to see it.")
@@ -1678,6 +1686,10 @@ func expireChat(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `DELETE FROM chat_messages WHERE close_id IS NULL AND created_at<now()-interval '30 days'`)
 	if err == nil {
 		_, err = db.ExecContext(ctx, `DELETE FROM chat_sessions WHERE close_id IS NULL AND last_at<now()-interval '30 days'`)
+	}
+	// A chat whose first question expired is retitled by its first remaining one, unless the member named it.
+	if err == nil {
+		_, err = db.ExecContext(ctx, `UPDATE chat_sessions s SET title=t.fresh FROM (SELECT s2.id,COALESCE(NULLIF(left(regexp_replace((SELECT m.body FROM chat_messages m WHERE m.session_id=s2.id AND m.role='user' ORDER BY m.id LIMIT 1),'\s+',' ','g'),80),''),'Conversation') AS fresh FROM chat_sessions s2 WHERE NOT s2.renamed AND s2.close_id IS NULL AND s2.created_at<now()-interval '30 days') t WHERE t.id=s.id AND s.title<>t.fresh`)
 	}
 	return err
 }

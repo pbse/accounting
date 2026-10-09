@@ -29,6 +29,8 @@ func pruneConversation(ctx context.Context, db *sql.DB, org, author, closeID str
 	// it. A read that pruned nothing costs nothing more.
 	if n, _ := result.RowsAffected(); n > 0 {
 		db.ExecContext(ctx, `DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, org, author)
+		// A chat's activity is that of its remaining turns: a pruned last turn does not keep it current.
+		db.ExecContext(ctx, `UPDATE chat_sessions s SET last_at=latest.at FROM (SELECT session_id,max(created_at) AS at FROM chat_messages GROUP BY session_id) latest WHERE latest.session_id=s.id AND s.organization_id=$1 AND s.author=$2 AND s.last_at>latest.at`, org, author)
 		retitleSessions(ctx, db, org, author)
 	}
 	return nil

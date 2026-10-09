@@ -234,6 +234,21 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id,created_at) VALUES($1,'user_a','user','Long ago',$2::bigint,now()-interval '31 days')`, org, expired)
 	must(err)
 	call("user_a", "GET", "/v1/closes/chat?session="+expired, nil, 404)
+	call("user_a", "POST", "/v1/closes/chat", map[string]any{"text": "Revive it", "session_id": expired, "picked": true}, 404)
+	// A chat whose first question expired is retitled by its first remaining one.
+	var aged string
+	must(db.QueryRow(`INSERT INTO chat_sessions(organization_id,author,title,created_at,last_at) VALUES($1,'user_a','Oldest question',now()-interval '40 days',now()-interval '1 hour') RETURNING id::text`, org).Scan(&aged))
+	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id,created_at) VALUES($1,'user_a','user','Oldest question',$2::bigint,now()-interval '40 days'),($1,'user_a','user','Newer question',$2::bigint,now()-interval '1 hour')`, org, aged)
+	must(err)
+	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=newer+question", nil, 200), &page))
+	if len(page.Sessions) != 1 || page.Sessions[0].ID != aged {
+		t.Fatalf("the aged chat is listed, retitled: %+v", page.Sessions)
+	}
+	var agedTitle string
+	must(db.QueryRow(`SELECT title FROM chat_sessions WHERE id=$1::bigint`, aged).Scan(&agedTitle))
+	if agedTitle != "Newer question" {
+		t.Fatalf("the title follows the first remaining question after expiry: %q", agedTitle)
+	}
 	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=long+ago", nil, 200), &page))
 	if len(page.Sessions) != 0 {
 		t.Fatalf("an expired firm-wide chat is not listed: %d", len(page.Sessions))
