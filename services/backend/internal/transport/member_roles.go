@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // The firm's people and their roles (docs/sign-in.md). People who join by their company address arrive with the member
@@ -61,33 +62,46 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 		if after != "" {
 			query.Set("after", after)
 		}
-		if err := workos(r.Context(), "GET", "/user_management/organization_memberships?"+query.Encode(), nil, &page); err != nil {
+		// The memberships, the firm's roles and its access decisions are three independent reads; they run together.
+		var (
+			listed, rolesRead, accessRead error
+			roles                         []map[string]any
+			access                        = map[string]bool{}
+			reads                         sync.WaitGroup
+		)
+		reads.Go(func() {
+			listed = workos(r.Context(), "GET", "/user_management/organization_memberships?"+query.Encode(), nil, &page)
+		})
+		reads.Go(func() { roles, _, rolesRead = firmRoles(r.Context(), r) })
+		reads.Go(func() {
+			rows, err := db.QueryContext(r.Context(), `SELECT subject,granted FROM current_organization_members WHERE organization_id=$1`, org)
+			if err != nil {
+				accessRead = err
+				return
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var sub string
+				var granted bool
+				if rows.Scan(&sub, &granted) == nil {
+					access[sub] = granted
+				}
+			}
+			accessRead = rows.Err()
+		})
+		reads.Wait()
+		switch {
+		case listed != nil:
 			problem(w, 502, "WorkOS could not list the firm's people. Try again.")
+			return
+		case rolesRead != nil:
+			problem(w, 502, "WorkOS roles are unavailable.")
+			return
+		case accessRead != nil:
+			problem(w, 503, "Member access unavailable.")
 			return
 		}
 		memberships := page.Data
-		roles, _, err := firmRoles(r.Context(), r)
-		if err != nil {
-			problem(w, 502, "WorkOS roles are unavailable.")
-			return
-		}
-		access := map[string]bool{}
-		rows, err := db.QueryContext(r.Context(), `SELECT subject,granted FROM current_organization_members WHERE organization_id=$1`, org)
-		if err != nil {
-			problem(w, 503, "Member access unavailable.")
-			return
-		}
-		for rows.Next() {
-			var sub string
-			var granted bool
-			if rows.Scan(&sub, &granted) == nil {
-				access[sub] = granted
-			}
-		}
-		if rows.Close(); rows.Err() != nil {
-			problem(w, 503, "Member access unavailable.")
-			return
-		}
 		// Each person's name and address, looked up a few at a time.
 		people := make([]firmPerson, len(memberships))
 		failed := make([]error, len(memberships))
@@ -99,12 +113,8 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 				defer wg.Done()
 				slots <- struct{}{}
 				defer func() { <-slots }()
-				var user struct {
-					Email     string `json:"email"`
-					FirstName string `json:"first_name"`
-					LastName  string `json:"last_name"`
-				}
-				failed[i] = workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(m.UserID), nil, &user)
+				var user workosUser
+				user, failed[i] = workosUserShown(r.Context(), m.UserID)
 				state := "none"
 				if granted, decided := access[m.UserID]; decided {
 					state = map[bool]string{true: "granted", false: "revoked"}[granted]
@@ -117,12 +127,12 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 502, "WorkOS could not list the firm's people. Try again.")
 			return
 		}
-		if err = settleRoleChanges(r.Context(), db, org); err != nil {
+		if err := settleRoleChanges(r.Context(), db, org); err != nil {
 			problem(w, 503, "Role history unavailable.")
 			return
 		}
 		var changes []byte
-		if err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(c ORDER BY c.id DESC),'[]'::jsonb) FROM (SELECT id,subject,from_role,to_role,reason,actor,state,created_at FROM member_role_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 50) c`, org).Scan(&changes); err != nil {
+		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(c ORDER BY c.id DESC),'[]'::jsonb) FROM (SELECT id,subject,from_role,to_role,reason,actor,state,created_at FROM member_role_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 50) c`, org).Scan(&changes); err != nil {
 			problem(w, 503, "Role history unavailable.")
 			return
 		}
@@ -141,7 +151,10 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			Subject string `json:"subject"`
 			Role    string `json:"role"`
 			// Current is the role the administrator saw, required; a different one now means someone changed it meanwhile.
-			Current   string `json:"current"`
+			Current string `json:"current"`
+			// Email is the address the administrator saw for the person, when the list showed one; the people list's
+			// names come from a copy up to ten minutes old, so the person is read again and must still have it.
+			Email     string `json:"email"`
 			Reason    string `json:"reason"`
 			Confirmed bool   `json:"confirmed"`
 		}
@@ -156,6 +169,20 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 		if in.Subject == subject(r) {
 			problem(w, 422, "You cannot change your own role. Ask another administrator.")
 			return
+		}
+		if in.Email != "" {
+			asked := time.Now()
+			var now workosUser
+			if err := workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(in.Subject), nil, &now); err != nil {
+				problem(w, 502, "WorkOS could not confirm who that is. No role was changed.")
+				return
+			}
+			// The list shows them as they are now from here on.
+			rememberShownUser(in.Subject, now, asked)
+			if !strings.EqualFold(strings.TrimSpace(now.Email), strings.TrimSpace(in.Email)) {
+				problem(w, 409, "That person's address changed since the list was read. Reload the list and check who you are choosing. No role was changed.")
+				return
+			}
 		}
 		_, allowed, err := firmRoles(r.Context(), r)
 		if err != nil {
@@ -304,4 +331,47 @@ func activeMembership(ctx context.Context, org, user string) (firmMembership, er
 		return firmMembership{}, err
 	}
 	return held[0], nil
+}
+
+// shownUsers keeps the people list's names and addresses from WorkOS for ten minutes: a person's name and address
+// change rarely, each lookup is a WorkOS call, and the list only shows them. Nothing that decides reads this copy.
+var shownUsers = struct {
+	sync.Mutex
+	users map[string]workosUser
+	at    map[string]time.Time
+}{users: map[string]workosUser{}, at: map[string]time.Time{}}
+
+func workosUserShown(ctx context.Context, id string) (workosUser, error) {
+	shownUsers.Lock()
+	// Expired copies leave on every lookup, so nobody's name or address outlives its ten minutes here.
+	for other, at := range shownUsers.at {
+		if time.Since(at) >= 10*time.Minute {
+			delete(shownUsers.users, other)
+			delete(shownUsers.at, other)
+		}
+	}
+	user, ok := shownUsers.users[id]
+	fresh := ok && time.Since(shownUsers.at[id]) < 10*time.Minute
+	shownUsers.Unlock()
+	if fresh {
+		return user, nil
+	}
+	started := time.Now()
+	var read workosUser
+	if err := workos(ctx, "GET", "/user_management/users/"+url.PathEscape(id), nil, &read); err != nil {
+		return workosUser{}, err
+	}
+	rememberShownUser(id, read, started)
+	return read, nil
+}
+
+// rememberShownUser keeps what WorkOS answered for id, read from asked onwards, unless something newer is kept: a
+// slow read that began before a fresher one must not put back the older answer.
+func rememberShownUser(id string, user workosUser, asked time.Time) {
+	shownUsers.Lock()
+	defer shownUsers.Unlock()
+	if kept, ok := shownUsers.at[id]; ok && kept.After(asked) {
+		return
+	}
+	shownUsers.users[id], shownUsers.at[id] = user, asked
 }
