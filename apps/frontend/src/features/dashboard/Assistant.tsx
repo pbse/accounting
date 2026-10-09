@@ -692,14 +692,18 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
   const [sessions, setSessions] = useState<ChatSession[]>();
   const [more, setMore] = useState(false);
   const [filter, setFilter] = useState("");
+  // A list that could not be read says so; it is never shown as "no chats".
+  const [failed, setFailed] = useState("");
+  const [attempt, setAttempt] = useState(0);
   // The filter asks the server, so a chat on any page is found; it waits a moment for the typing to settle.
   useEffect(() => {
     let live = true;
     const timer = setTimeout(
       () => {
+        setFailed("");
         loadSessions(50, 0, filter)
           .then((page) => live && (setSessions(page.sessions), setMore(page.hasMore)))
-          .catch(() => live && setSessions([]));
+          .catch((e) => live && (setSessions(undefined), setFailed(e instanceof Error ? e.message : "Your chats could not be read.")));
       },
       filter ? 250 : 0,
     );
@@ -707,7 +711,7 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
       live = false;
       clearTimeout(timer);
     };
-  }, [version, filter]);
+  }, [version, filter, attempt]);
   // Older chats come a page at a time, appended below, under the same filter; a page that arrives after the filter
   // or the list changed is dropped.
   const listing = useRef(0);
@@ -751,7 +755,15 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
           <Icon name="plus" size={14} /> New chat
         </button>
       </div>
-      {sessions === undefined && <p role="status">Loading your chats…</p>}
+      {failed && (
+        <p role="alert">
+          {failed}{" "}
+          <button type="button" onClick={() => setAttempt((n) => n + 1)}>
+            Try again
+          </button>
+        </p>
+      )}
+      {sessions === undefined && !failed && <p role="status">Loading your chats…</p>}
       {sessions && shown.length === 0 && <p className="assistant-note">{filter ? "No chat matches." : "No chats yet. Ask anything to start one."}</p>}
       {groups.map((g) => (
         <div key={g.label}>

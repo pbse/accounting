@@ -6,13 +6,15 @@ import { loadSessions, openSession, useSessionsVersion, type ChatSession } from 
 export function RailChats({ closeId, navigate }: { closeId: string; navigate: (to: string) => void }) {
   const version = useSessionsVersion();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
     let live = true;
+    setFailed(false);
     loadSessions(5)
       .then((page) => live && setSessions(page.sessions))
-      .catch(() => live && setSessions([]));
+      .catch(() => live && (setSessions([]), setFailed(true)));
     return () => {
       live = false;
     };
@@ -38,7 +40,7 @@ export function RailChats({ closeId, navigate }: { closeId: string; navigate: (t
             <span className="rail-chat-scope">{s.close || "Firm-wide"}</span>
           </button>
         ))}
-        {sessions.length === 0 && <p className="rail-chat-empty">No chats yet.</p>}
+        {sessions.length === 0 && <p className="rail-chat-empty">{failed ? "Your chats could not be read." : "No chats yet."}</p>}
         <button type="button" role="menuitem" className="rail-chat all" onClick={() => go("all", closeId)}>
           All chats
         </button>

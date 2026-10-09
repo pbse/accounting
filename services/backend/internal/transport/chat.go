@@ -1299,7 +1299,14 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace,scope,rounds,tool_calls) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,NULLIF($6,'')::jsonb,$7,$8,$9)`, org, author, closeID, attempted, latency, trace, answerScope, result.rounds, result.calls)
 		}
 		// A question whose answer was not kept, or was shown once, leaves the conversation when it next advances.
-		if _, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+` AND session_id=NULLIF($4,'')::bigint AND NOT replayable AND outcome IS NULL`, org, author, closeID, sessionID); err != nil {
+		// Every removal of turns is counted: a chat whose first question went is retitled once this is committed.
+		expired := int64(0)
+		var dropped sql.Result
+		if dropped, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+` AND session_id=NULLIF($4,'')::bigint AND NOT replayable AND outcome IS NULL`, org, author, closeID, sessionID); err == nil {
+			n, _ := dropped.RowsAffected()
+			expired += n
+		}
+		if err != nil {
 			problem(w, 503, "The message could not be saved.")
 			return
 		}
@@ -1378,11 +1385,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			_, err = tx.ExecContext(r.Context(), `UPDATE chat_sessions SET last_at=now() WHERE id=$1::bigint`, sessionID)
 		}
 		if err == nil {
-			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` AND id<(SELECT min(id) FROM (SELECT id FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` ORDER BY id DESC LIMIT 200) kept)`, org, author, closeID, sessionID)
+			if dropped, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` AND id<(SELECT min(id) FROM (SELECT id FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` ORDER BY id DESC LIMIT 200) kept)`, org, author, closeID, sessionID); err == nil {
+				n, _ := dropped.RowsAffected()
+				expired += n
+			}
 		}
-		// Firm-wide turns older than 30 days go whichever chat holds them, as they always did; a chat whose first
-		// question went is retitled once this is committed.
-		expired := int64(0)
+		// Firm-wide turns older than 30 days go whichever chat holds them, as they always did.
 		if err == nil && closeID == "" {
 			var gone sql.Result
 			if gone, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+` AND created_at<now()-interval '30 days'`, org, author, closeID); err == nil {
