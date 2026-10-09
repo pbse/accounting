@@ -1,3 +1,5 @@
+import { cashPlanQuery } from "../../data/cashPlan";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
 import { AskAgent } from "../dashboard/AskAgent";
@@ -54,43 +56,25 @@ const negative = (value: string) => value.startsWith("-");
 // readOnly is an executive's view: the plan alone, without schedules to edit or the agent.
 export function CashPlan({ closeId, readOnly = false }: { closeId: string; readOnly?: boolean }) {
   const dates = useDates();
-  const [plan, setPlan] = useState<Plan>();
-  const [obligations, setObligations] = useState<Obligation[]>([]);
-  const [error, setError] = useState("");
+  const [scenario, setScenario] = useState("");
+  // The plan (as it stands, or under a chosen scenario), the open obligations (not an executive's) and the scenarios,
+  // read with the page.
+  const view = useQuery(cashPlanQuery<Plan, Obligation, Scenario>(closeId, scenario, readOnly));
+  const plan = view.data?.plan;
+  const obligations = view.data?.obligations ?? [];
+  const scenarios = view.data?.scenarios ?? [];
+  const [notice, setNotice] = useState("");
+  // A scenario that cannot be shown (removed, or made for other books) never leaves its figures in place.
+  useEffect(() => {
+    if (!scenario || !view.error) return;
+    setScenario("");
+    setNotice(`That scenario cannot be shown: ${view.error.message || "it is unavailable"}`);
+  }, [scenario, view.error]);
+  const readFailed = scenario ? null : view.error;
+  const [actionError, setError] = useState("");
+  const error = actionError || (readFailed ? readFailed.message || "The cash plan is unavailable." : "");
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState(0);
-  const [scenario, setScenario] = useState("");
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [notice, setNotice] = useState("");
-  useEffect(() => {
-    let live = true;
-    Promise.all([
-      workspaceRequest(`/${closeId}/cash-plan${scenario ? `?scenario=${encodeURIComponent(scenario)}` : ""}`),
-      readOnly ? { obligations: [] } : workspaceRequest(`/${closeId}/cash-obligations`),
-      workspaceRequest(`/${closeId}/cash-scenarios`),
-    ])
-      .then(([data, list, what]) => {
-        if (live) {
-          setPlan(data);
-          setObligations(list.obligations);
-          setScenarios(what.scenarios);
-          setError("");
-        }
-      })
-      .catch((e) => {
-        if (!live) return;
-        // A scenario that cannot be shown (removed, or made for other books) never leaves its figures in place.
-        if (scenario) {
-          setPlan(undefined);
-          setScenario("");
-          setNotice(`That scenario cannot be shown: ${e instanceof Error ? e.message : "it is unavailable"}`);
-        } else setError(e instanceof Error ? e.message : "The cash plan is unavailable.");
-      });
-    return () => {
-      live = false;
-    };
-  }, [closeId, version, readOnly, scenario]);
   async function act(body: Record<string, unknown>, done: string) {
     setBusy(true);
     setError("");
@@ -98,7 +82,6 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
     try {
       await workspaceRequest(`/${closeId}/cash-obligations`, body);
       setSaved(done);
-      setVersion((n) => n + 1);
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "The obligation could not be saved.");
@@ -142,10 +125,18 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
         plan={plan}
         scenarios={scenarios}
         selected={scenario}
-        onSelect={(id) => {
+        onSelect={async (id) => {
+          // Choosing a scenario reads its plan (a new query). A scenario just saved is chosen only once the list has
+          // it, so the figures and the selector always describe the same view.
           setNotice("");
+          if (id && !scenarios.some((s) => s.id === id)) {
+            const listed = await view.refetch();
+            if (!listed.data?.scenarios.some((s) => s.id === id)) {
+              setNotice("The scenario was saved, but the list of scenarios could not be read. Reload to choose it.");
+              return;
+            }
+          }
           setScenario(id);
-          setVersion((n) => n + 1);
         }}
       />
       <Reviews closeId={closeId} plan={plan} scenario={scenario} readOnly={readOnly} />
