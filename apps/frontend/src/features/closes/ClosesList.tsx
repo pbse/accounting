@@ -1,4 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { workspaceQuery } from "../../data/queries";
+import { monthShort, useToday } from "../../data/time";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { authKitClientId } from "../auth/Auth";
 import { Icon } from "@close/ui/components/Icon";
@@ -18,8 +21,7 @@ type Roster = { clients: RosterClient[]; can_manage: boolean };
 type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean };
 type ClientRow = { entity: string; active?: boolean; since?: string; closes: ListedClose[]; owed: string[] };
 
-const thisMonth = () => new Date().toISOString().slice(0, 7);
-const monthName = (period: string) => new Date(`${period}-01T00:00:00`).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+const monthName = monthShort;
 
 // Clients: every client the reader can work on, with the months it owes that nobody opened (one tap opens one) and
 // its open closes. A firm administrator adds a client by name; nothing else is asked.
@@ -27,40 +29,36 @@ export default function ClosesList() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const query = params.get("q") ?? "";
-  const [closes, setCloses] = useState<ListedClose[]>([]);
+  const queryClient = useQueryClient();
+  // This month, in the person's own time zone, by the render's clock.
+  const thisMonth = useToday().slice(0, 7);
+  // The recent closes, and with a search also those matching it (older ones among them), for clients the roster
+  // does not list. The roster lists every client a firm administrator can see, and for a member the clients assigned
+  // to them, each with the months it owes that nobody opened. All are read with the page.
+  const recent = useQuery(workspaceQuery<{ closes?: ListedClose[]; has_more?: boolean }>(""));
+  const searched = useQuery({ ...workspaceQuery<{ closes?: ListedClose[]; has_more?: boolean }>(`?q=${encodeURIComponent(query)}`), enabled: !!query });
+  const rosterRead = useQuery(workspaceQuery<Roster>("/roster"));
+  const roster = rosterRead.data;
+  const matched = query ? (searched.data?.closes ?? []) : [];
+  const seen = new Set<string>();
+  const closes = [...(recent.data?.closes ?? []), ...matched].filter((c) => !seen.has(c.id) && seen.add(c.id));
   // The closes the server matched to the search (a confirmed alias among the ways it matches), kept whatever the
   // local names say.
-  const [found, setFound] = useState<Set<string>>(new Set());
-  const [more, setMore] = useState(false);
-  const [roster, setRoster] = useState<Roster>();
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState("");
-  const [refresh, setRefresh] = useState(0);
-  const [adding, setAdding] = useState(false);
-  useEffect(() => {
-    let live = true;
-    setLoading(true);
+  const found = new Set(matched.map((c) => c.id));
+  const more = !!(query ? searched.data?.has_more : recent.data?.has_more);
+  const loading = recent.isPending || rosterRead.isPending || (!!query && searched.isPending);
+  const readError = recent.error ?? rosterRead.error ?? (query ? searched.error : null);
+  const [actionError, setError] = useState("");
+  // A failed action belongs to the search it was made in; a new search starts without it.
+  const [errorFor, setErrorFor] = useState(query);
+  if (errorFor !== query) {
+    setErrorFor(query);
     setError("");
-    // The recent closes, and with a search also those matching it (older ones among them), for clients the roster
-    // does not list.
-    const closes = Promise.all([workspaceRequest(""), query ? workspaceRequest(`?q=${encodeURIComponent(query)}`) : Promise.resolve({ closes: [], has_more: false })]).then(([recent, found]) => {
-      if (!live) return;
-      const seen = new Set<string>();
-      setCloses([...(recent.closes ?? []), ...(found.closes ?? [])].filter((c: ListedClose) => !seen.has(c.id) && seen.add(c.id)));
-      setFound(new Set((found.closes ?? []).map((c: ListedClose) => c.id)));
-      setMore(query ? found.has_more : recent.has_more);
-    });
-    // The roster lists every client a firm administrator can see, and for a member the clients assigned to them, each
-    // with the months it owes that nobody opened.
-    const roster = workspaceRequest("/roster").then((data: Roster) => live && setRoster(data));
-    Promise.all([closes, roster])
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Could not open your clients."))
-      .finally(() => live && setLoading(false));
-    return () => {
-      live = false;
-    };
-  }, [query, refresh]);
+  }
+  const error = actionError || (readError ? readError.message || "Could not open your clients." : "");
+  const [busy, setBusy] = useState("");
+  const [adding, setAdding] = useState(false);
+  const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   // One row per client: the roster names each by its own name, a close by the name it was opened with (its `client`
   // is the own name a confirmed alias resolves to), and an owed month by the own name.
   const rows = new Map<string, ClientRow>();
@@ -107,9 +105,9 @@ export default function ClosesList() {
     setBusy("add");
     setError("");
     try {
-      await workspaceRequest("/roster", { entity, active: true, since: String(data.get("since") || thisMonth()), due_days: null, owner: null, reason: "", rev: "" });
+      await workspaceRequest("/roster", { entity, active: true, since: String(data.get("since") || thisMonth), due_days: null, owner: null, reason: "", rev: "" });
       setAdding(false);
-      setRefresh((n) => n + 1);
+      reread();
     } catch (e) {
       // The form stays, with what was typed, so the person corrects it rather than starting over.
       setAdding(true);
@@ -148,7 +146,7 @@ export default function ClosesList() {
         Each client's months: owed, open or signed off.
       </PageHeader>
       {error && <p role="alert">{error}</p>}
-      {isEnrollmentError(error) && <FirmEnrollment onEnrolled={() => setRefresh((n) => n + 1)} />}
+      {isEnrollmentError(error) && <FirmEnrollment onEnrolled={reread} />}
       {roster?.can_manage && (adding || empty) && (
         <form className="add-client" onSubmit={add} aria-label="Add a client">
           <label>
@@ -157,7 +155,7 @@ export default function ClosesList() {
           </label>
           <label>
             First month to close
-            <input name="since" type="month" defaultValue={thisMonth()} />
+            <input name="since" type="month" defaultValue={thisMonth} />
           </label>
           <button className="primary" disabled={busy === "add"}>
             {busy === "add" ? "Adding…" : "Add client"}

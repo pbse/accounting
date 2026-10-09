@@ -34,6 +34,9 @@ export function useDates() {
 // A calendar month (YYYY-MM), such as a close's period, named the same everywhere: "September 2026".
 const monthFormat = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 export const monthName = (period: string) => monthFormat.format(new Date(`${period.slice(0, 7)}-01T00:00:00Z`));
+const monthShortFormat = new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+// The same, short: "Sep 2026".
+export const monthShort = (period: string) => monthShortFormat.format(new Date(`${period.slice(0, 7)}-01T00:00:00Z`));
 
 // A UTC instant's day and short month, as a close's plan states it: "8 Oct" style, in one locale.
 const utcDayMonth = new Intl.DateTimeFormat("en-US", { day: "numeric", month: "short", timeZone: "UTC" });

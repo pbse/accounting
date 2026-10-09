@@ -5,7 +5,7 @@ import { createBrowserRouter, matchRoutes, RouterContextProvider, RouterProvider
 import { AppProviders, queryStateId } from "./app";
 import { appData, browserRead, newQueryClient } from "./data/queries";
 import { routes } from "./routes";
-import { onTokenChange } from "./features/closes/workspace";
+import { onTokenChange, onWorkspaceWrite } from "./features/closes/workspace";
 import "./styles.css";
 import "@close/ui/theme/tokens.css";
 import "@close/ui/theme/shell.css";
@@ -20,6 +20,8 @@ declare global {
 const queryClient = newQueryClient();
 // A different local development token may see different data: nothing read with the last one is kept.
 onTokenChange(() => queryClient.clear());
+// Any change made through the app marks every workspace read stale (data/queries.ts).
+onWorkspaceWrite(() => void queryClient.invalidateQueries({ queryKey: ["workspace"] }));
 // A page the edge rendered (docs/server-rendering.md) carries its query cache and its loaders' results; the browser
 // starts from both instead of asking again.
 const state = document.getElementById(queryStateId)?.textContent;
