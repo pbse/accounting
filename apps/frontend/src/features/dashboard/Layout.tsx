@@ -3,6 +3,7 @@ import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from "react
 import { AccountMenu } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
 import { openAssistant } from "./assistantStore";
+import { RailChats } from "./RailChats";
 import { AttentionBadge } from "../closes/Attention";
 import { useQuery } from "@tanstack/react-query";
 import { workspaceQuery } from "../../data/queries";
@@ -139,8 +140,9 @@ export default function WorkspaceLayout() {
                 </NavLink>
               ))}
             </div>
-            {!executive && signedIn && (
+            {signedIn && (
               <div className="rail-group end">
+                <RailChats closeId={executive ? "" : (/^\/dashboard\/closes\/(\d+)/.exec(location.pathname)?.[1] ?? "")} navigate={navigate} />
                 <button type="button" className="rail-item" title="Agent" aria-label="Open the agent" onClick={openAssistant}>
                   <Icon name="agent" size={18} />
                 </button>

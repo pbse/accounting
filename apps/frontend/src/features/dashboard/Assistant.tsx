@@ -6,7 +6,7 @@ import { useUnlocked, workspaceRequest, type AgentEvent } from "../closes/worksp
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
 import { RequestCard } from "./RequestCard";
 import { ProposalCard } from "./ProposalCard";
-import { askAssistant, nextReview, starterCommands, starters, takePending, useOpenRequests, usePending } from "./assistantStore";
+import { askAssistant, bumpSessions, loadSessions, nextReview, openSession, starterCommands, starters, takePending, useOpenRequests, usePending, useSessionRequest, useSessionsVersion, type ChatSession } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand, type Ask } from "./commands";
 import { AgentMark } from "@close/ui/components/AgentMark";
@@ -118,6 +118,10 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
   const [stepTick, setStepTick] = useState(0);
   const [menu, setMenu] = useState(false);
   const [about, setAbout] = useState(false);
+  // The chat shown: null is a fresh chat, saved on its first question. The list view shows every chat to switch to.
+  const [session, setSession] = useState<{ id: string; title: string } | null>(null);
+  const [view, setView] = useState<"chat" | "chats">("chat");
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
   const generation = useRef(0);
   const list = useRef<HTMLOListElement>(null);
@@ -142,13 +146,56 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     const what = takePending(closeId);
     if (what) void send({ ...what, workpaper_id: paperId });
   }, [waiting, busy, loaded]);
+  // load shows one chat: the id given, or the scope's current one (a chat less than 12 hours quiet), else a fresh one.
+  function load(id?: string) {
+    const asked = ++generation.current;
+    setLoaded(false);
+    setError("");
+    setLive([]);
+    setLiveLinks([]);
+    setView("chat");
+    workspaceRequest(id ? `${path}?session=${encodeURIComponent(id)}` : path)
+      .then((data) => {
+        if (asked !== generation.current) return;
+        setMessages(data.messages);
+        setSession(data.session ? { id: data.session.id, title: data.session.title } : null);
+      })
+      .catch((e) => asked === generation.current && setError(e instanceof Error ? e.message : "Conversation unavailable."))
+      .finally(() => asked === generation.current && setLoaded(true));
+  }
+  // startNew leaves the current chat where it is and opens a fresh one; nothing is saved until its first question.
+  function startNew() {
+    ++generation.current;
+    setMessages([]);
+    setSession(null);
+    setLive([]);
+    setLiveLinks([]);
+    setError("");
+    setView("chat");
+    setLoaded(true);
+    input.current?.focus();
+  }
+  // A chat asked for from outside (the rail, a link) is taken by the panel of its scope.
+  const request = useSessionRequest();
+  const handledSession = useRef(0);
+  useEffect(() => {
+    if (!request || request.n === handledSession.current || request.closeId !== closeId) return;
+    handledSession.current = request.n;
+    if (request.session === "new") startNew();
+    else if (request.session === "all") setView("chats");
+    else load(request.session);
+  }, [request, closeId]);
   useEffect(() => {
     input.current?.focus();
-    const asked = ++generation.current;
-    workspaceRequest(path)
-      .then((data) => asked === generation.current && setMessages(data.messages))
-      .catch((e) => asked === generation.current && setError(e instanceof Error ? e.message : "Conversation unavailable."))
-      .finally(() => setLoaded(true));
+    const current = request && request.n !== handledSession.current && request.closeId === closeId ? request : null;
+    if (current) {
+      handledSession.current = current.n;
+      if (current.session === "new") startNew();
+      else if (current.session === "all") {
+        load();
+        setView("chats");
+      } else load(current.session);
+    } else load();
     if (closeId)
       workspaceRequest(`/${closeId}`)
         .then((data) => setLabel(`${data.close.entity} · ${data.close.period}`))
@@ -197,9 +244,12 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     };
     try {
       // The member's own date resolves day names such as "by Friday"; the agent's steps and text arrive as events.
-      const data = await workspaceRequest(path, { ...body, today: localDate() }, false, onEvent);
+      const data = await workspaceRequest(path, { ...body, session_id: session?.id ?? "new", today: localDate() }, false, onEvent);
       if (asked !== generation.current) return;
       setMessages(data.messages);
+      if (data.session) setSession({ id: data.session.id, title: data.session.title });
+      else setSession(null);
+      bumpSessions();
       setLive(data.live ?? []);
       setLiveLinks(data.live_citations ?? []);
       setText("");
@@ -208,7 +258,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
         setError(e instanceof Error ? e.message : "The agent is unavailable.");
         // Nothing from a failed attempt is saved; the member's text stays in the box to send again.
         if ("text" in body) setText(body.text);
-        workspaceRequest(path).then((data) => asked === generation.current && setMessages(data.messages), () => undefined);
+        workspaceRequest(session ? `${path}?session=${encodeURIComponent(session.id)}` : path).then((data) => asked === generation.current && setMessages(data.messages), () => undefined);
       }
     } finally {
       if (asked === generation.current) {
@@ -296,6 +346,12 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
           <AgentMark size="sm">Agent</AgentMark>
         </strong>
         <span className="assistant-tools">
+          <button type="button" aria-label="New chat" title="New chat" disabled={busy} onClick={startNew}>
+            <Icon name="plus" size={14} />
+          </button>
+          <button type="button" aria-label="Your chats" title="Your chats" aria-pressed={view === "chats"} onClick={() => setView((v) => (v === "chats" ? "chat" : "chats"))}>
+            <Icon name="history" size={14} />
+          </button>
           <button type="button" aria-label="What the agent sends" aria-pressed={about} onClick={() => setAbout((v) => !v)}>
             i
           </button>
@@ -306,8 +362,13 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
             {menu && (
               <ul role="menu">
                 <li role="none">
-                  <button type="button" role="menuitem" disabled={busy || messages.length === 0} onClick={() => { setMenu(false); void send({ action: "clear" }); }}>
-                    Clear this conversation
+                  <button type="button" role="menuitem" disabled={busy || !session} onClick={() => { setMenu(false); setRenaming(session?.title ?? ""); }}>
+                    Rename this chat
+                  </button>
+                </li>
+                <li role="none">
+                  <button type="button" role="menuitem" disabled={busy || !session} onClick={() => { setMenu(false); void send({ action: "clear" }); }}>
+                    Delete this chat
                   </button>
                 </li>
               </ul>
@@ -321,7 +382,30 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
       <p className="assistant-context" aria-label="Conversation context">
         {closeId ? <span className="pill">{label || `Close #${closeId}`}</span> : <span className="pill">{executive ? "Your business" : "Firm-wide"}</span>}
         {paperId && <span className="pill">Draft #{paperId}</span>}
+        {renaming !== null && session ? (
+          <form
+            className="assistant-rename"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const title = renaming.trim();
+              if (!title) return;
+              workspaceRequest(`/chat/sessions/${session.id}`, { action: "rename", title })
+                .then(() => {
+                  setSession({ ...session, title });
+                  setRenaming(null);
+                  bumpSessions();
+                })
+                .catch((err) => setError(err instanceof Error ? err.message : "The chat could not be renamed."));
+            }}
+          >
+            <input aria-label="Chat name" value={renaming} maxLength={80} autoFocus onChange={(e) => setRenaming(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setRenaming(null)} />
+            <button type="submit" className="primary">Save</button>
+          </form>
+        ) : (
+          session && <span className="assistant-title" title={session.title}>{session.title}</span>
+        )}
       </p>
+      {view === "chats" && <Chats closeId={closeId} current={session?.id ?? ""} onOpen={(id, target) => { if (target === closeId) load(id); else openSession(id, target); }} onNew={startNew} />}
       {about && executive && (
         <p className="assistant-about">
           Answers come from your clients’ published reports, cash plan and budget, read with your access and listed under each answer. With the firm’s Agent chat on firm-wide, every question goes to the configured model provider with the reads the agent chooses and the last turns of this conversation; below that level a question gets one fixed line and is not sent anywhere. The agent proposes nothing for an executive and changes nothing.
@@ -332,7 +416,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
           Answers come from saved work you can access, read with your permissions and listed under each answer. With Agent chat on for client closes, every question you type in a client close goes to the configured model provider with the reads of this close the agent chooses and the last turns of this conversation; commands typed with / never go to a model, except /ask. With it on firm-wide, a question asked outside a close goes the same way with the reads the agent chooses across the closes you can open, and an answer built on a read that cannot be tied to particular closes is shown once and not kept. An action the agent proposes runs only after you confirm its card, through the same checks as the page; the agent never approves, sends or posts anything.
         </p>
       )}
-      <ol ref={list} className="assistant-messages" aria-live="polite">
+      <ol ref={list} className="assistant-messages" aria-live="polite" hidden={view === "chats"}>
         {empty && !pageComposer && (
           <li className="assistant-hint">
             <Suggestions label="Starter questions" items={executive ? starters.executive : closeId ? starters.close : starters.firm} disabled={busy || !loaded} onPick={(label) => void send({ ...((!executive && starterCommands[label]) || { text: label }), workpaper_id: paperId })} />
@@ -543,5 +627,62 @@ function StepList({ steps, done }: { steps: Step[]; done: boolean }) {
       </summary>
       <ol className="assistant-steps">{items}</ol>
     </details>
+  );
+}
+
+// Chats lists every chat of the member, newest first, grouped by day, each with its scope; one opens in its own scope.
+function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: string; onOpen: (id: string, closeId: string) => void; onNew: () => void }) {
+  const version = useSessionsVersion();
+  const [sessions, setSessions] = useState<ChatSession[]>();
+  const [filter, setFilter] = useState("");
+  useEffect(() => {
+    let live = true;
+    loadSessions()
+      .then((list) => live && setSessions(list))
+      .catch(() => live && setSessions([]));
+    return () => {
+      live = false;
+    };
+  }, [version]);
+  const shown = (sessions ?? []).filter((s) => !filter || `${s.title} ${s.close}`.toLowerCase().includes(filter.toLowerCase()));
+  const day = (iso: string) => {
+    const at = new Date(iso);
+    const today = new Date();
+    const diff = Math.round((new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() - new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime()) / 86400000);
+    return diff <= 0 ? "Today" : diff === 1 ? "Yesterday" : diff < 7 ? "This week" : "Earlier";
+  };
+  const groups: { label: string; items: ChatSession[] }[] = [];
+  for (const s of shown) {
+    const label = day(s.last_at);
+    const group = groups.find((g) => g.label === label);
+    if (group) group.items.push(s);
+    else groups.push({ label, items: [s] });
+  }
+  return (
+    <section className="assistant-chats" aria-label="Your chats">
+      <div className="assistant-chats-head">
+        <input type="search" aria-label="Find a chat" placeholder="Find a chat" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <button type="button" className="primary" onClick={onNew}>
+          <Icon name="plus" size={14} /> New chat
+        </button>
+      </div>
+      {sessions === undefined && <p role="status">Loading your chats…</p>}
+      {sessions && shown.length === 0 && <p className="assistant-note">{filter ? "No chat matches." : "No chats yet. Ask anything to start one."}</p>}
+      {groups.map((g) => (
+        <div key={g.label}>
+          <h3>{g.label}</h3>
+          <ul>
+            {g.items.map((s) => (
+              <li key={s.id}>
+                <button type="button" className={s.id === current ? "current" : ""} aria-current={s.id === current ? "true" : undefined} onClick={() => onOpen(s.id, s.close_id)}>
+                  <span className="assistant-chat-title">{s.title}</span>
+                  <span className="assistant-chat-scope">{s.close || "Firm-wide"}{s.close_id && s.close_id !== closeId ? " · opens its close" : ""}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
   );
 }

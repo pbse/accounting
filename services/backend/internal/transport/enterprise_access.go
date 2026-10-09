@@ -156,7 +156,7 @@ func decideMemberAccess(ctx context.Context, tx *sql.Tx, org, member string, gra
 	if err != nil || granted {
 		return id, err
 	}
-	for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1 AND author=$2`, `DELETE FROM assistant_answers WHERE organization_id=$1 AND author=$2`,
+	for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1 AND author=$2`, `DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2`, `DELETE FROM assistant_answers WHERE organization_id=$1 AND author=$2`,
 		`DELETE FROM portfolio_operations WHERE organization_id=$1 AND author=$2`, `DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2`,
 		`DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2`, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2`} {
 		if _, err = tx.ExecContext(ctx, q, org, member); err != nil {

@@ -1,0 +1,94 @@
+package transport
+
+import (
+	"database/sql"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// A member's chats with the agent, listed newest first, with the scope each one is in; a chat is renamed or deleted
+// here. The list holds every scope (firm-wide and each close) of the member's current role, and leaves out a close's
+// chat once the close cannot be opened.
+func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Request) string) {
+	type session struct {
+		ID       string    `json:"id"`
+		Title    string    `json:"title"`
+		CloseID  string    `json:"close_id"`
+		Close    string    `json:"close"`
+		LastAt   time.Time `json:"last_at"`
+		Messages int       `json:"messages"`
+	}
+	mux.HandleFunc("GET /v1/closes/chat/sessions", func(w http.ResponseWriter, r *http.Request) {
+		limit := 50
+		if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n < limit {
+			limit = n
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT s.id::text,s.title,COALESCE(s.close_id::text,''),COALESCE(c.entity||' · '||c.period,''),s.last_at,(SELECT count(*) FROM chat_messages m WHERE m.session_id=s.id)
+ FROM chat_sessions s LEFT JOIN client_closes c ON c.id=s.close_id
+ WHERE s.organization_id=$1 AND s.author=$2 AND s.executive=$3 AND (s.close_id IS NULL OR $4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
+ ORDER BY s.last_at DESC,s.id DESC LIMIT $5`, organization(r), subject(r), executive(r), firmAccess(r), limit)
+		if err != nil {
+			problem(w, 503, "Your chats are unavailable.")
+			return
+		}
+		defer rows.Close()
+		sessions := []session{}
+		for rows.Next() {
+			var s session
+			if err = rows.Scan(&s.ID, &s.Title, &s.CloseID, &s.Close, &s.LastAt, &s.Messages); err != nil {
+				problem(w, 503, "Your chats are unavailable.")
+				return
+			}
+			sessions = append(sessions, s)
+		}
+		if rows.Err() != nil {
+			problem(w, 503, "Your chats are unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"sessions": sessions})
+	})
+	mux.HandleFunc("POST /v1/closes/chat/sessions/{session}", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Action string `json:"action"`
+			Title  string `json:"title"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		id := r.PathValue("session")
+		if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+			problem(w, 404, "That chat is no longer yours, or no longer exists.")
+			return
+		}
+		// The member's own chat in their current role, whatever scope it is in.
+		own := `organization_id=$1 AND author=$2 AND executive=$3 AND id=$4::bigint`
+		var result sql.Result
+		var err error
+		switch in.Action {
+		case "rename":
+			title := strings.Join(strings.Fields(in.Title), " ")
+			if len(title) < 1 || len(title) > 80 {
+				problem(w, 422, "Name the chat in 1–80 characters.")
+				return
+			}
+			result, err = db.ExecContext(r.Context(), `UPDATE chat_sessions SET title=$5 WHERE `+own, organization(r), subject(r), executive(r), id, title)
+		case "delete":
+			result, err = db.ExecContext(r.Context(), `DELETE FROM chat_sessions WHERE `+own, organization(r), subject(r), executive(r), id)
+		default:
+			problem(w, 422, "Say whether to rename or delete the chat.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The chat could not be changed.")
+			return
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			problem(w, 404, "That chat is no longer yours, or no longer exists.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"ok": true})
+	})
+	_ = scopeOf
+}

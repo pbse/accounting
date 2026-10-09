@@ -57,8 +57,46 @@ export function useOpenRequests() {
   return useSyncExternalStore(subscribe, () => openRequests, () => 0);
 }
 
+// A chat (session) with the agent, as the server lists it.
+export type ChatSession = { id: string; title: string; close_id: string; close: string; last_at: string; messages?: number };
+
+// Opening a chat from outside the panel (the rail's recent chats, the panel's own list): "new" starts a fresh chat in
+// the scope of closeId ("" firm-wide), "all" shows the list, and an id opens that chat. The panel of that scope takes
+// it; the layout first moves to the close's page when the chat is a close's.
+let requested: { session: string; closeId: string; n: number } | null = null;
+let requests = 0;
+
+export function openSession(session: string, closeId: string) {
+  requests += 1;
+  requested = { session, closeId, n: requests };
+  openRequests += 1;
+  listeners.forEach((l) => l());
+}
+
+export function useSessionRequest() {
+  return useSyncExternalStore(subscribe, () => requested, () => null);
+}
+
+// Every list of chats (the rail's, the panel's) reloads when a chat is made, renamed or deleted.
+let sessionsVersion = 0;
+
+export function bumpSessions() {
+  sessionsVersion += 1;
+  listeners.forEach((l) => l());
+}
+
+export function useSessionsVersion() {
+  return useSyncExternalStore(subscribe, () => sessionsVersion, () => 0);
+}
+
+export async function loadSessions(limit = 50): Promise<ChatSession[]> {
+  const data = await workspaceRequest(`/chat/sessions?limit=${limit}`);
+  return (data.sessions ?? []) as ChatSession[];
+}
+
 // nextReview is the first draft in the review queue, the target of /review.
 export async function nextReview(): Promise<{ close_id: string; workpaper_id: string } | undefined> {
   const queue = await workspaceRequest("/review-queue");
   return (queue.items as { close_id: string; workpaper_id: string }[])[0];
 }
+
