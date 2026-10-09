@@ -26,6 +26,7 @@ export function PlanChips({ plan }: { plan: Plan }) {
 }
 
 export function PlanningControls({ closeId, plan, onSaved }: { closeId: string; plan: Plan; onSaved: () => void }) {
+  const dates = useDates();
   const [dueOn, setDueOn] = useState(plan.due_on ?? "");
   const [priority, setPriority] = useState(plan.priority ?? "normal");
   const [busy, setBusy] = useState(false);
@@ -79,7 +80,7 @@ export function PlanningControls({ closeId, plan, onSaved }: { closeId: string; 
       )}
       {plan.handed && (
         <p className="assistant-note">
-          Handed to you by {plan.handed.by} on {new Date(plan.handed.at).toLocaleDateString()}
+          Handed to you by {plan.handed.by} on {dates.date(plan.handed.at)}
           {plan.handed.note && <> · “{plan.handed.note}”</>}
         </p>
       )}

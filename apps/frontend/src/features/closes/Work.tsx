@@ -1,3 +1,6 @@
+import { useDates } from "../../data/time";
+import { workPath, workspaceQuery } from "../../data/queries";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { PrepaidMethodFields, readCredits } from "../prepaids/MethodFields";
 import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
@@ -130,11 +133,7 @@ const formFor: Record<string, [string, string]> = {
 // The preparation inbox: on a close's Overview, that close's documents; on its own page (/dashboard/work, which the
 // Home card "Prepared by the agent" opens), every document across the reader's clients, filtered by client or month.
 export function Work({ closeId, onPrepared }: { closeId?: string; onPrepared?: () => void }) {
-  const [items, setItems] = useState<WorkItem[]>([]);
-  const [counts, setCounts] = useState<Record<string, number>>({});
-  const [error, setError] = useState("");
-  const [loaded, setLoaded] = useState(false);
-  const [more, setMore] = useState(false);
+  const dates = useDates();
   const [refresh, setRefresh] = useState(0);
   // A link to one document of this close shows only that document, open; a link to the Preparation page may name
   // its view (Home's card opens every job, prepared ones included).
@@ -150,9 +149,31 @@ export function Work({ closeId, onPrepared }: { closeId?: string; onPrepared?: (
     }
   }, [linkedView]);
   const [client, setClient] = useState("");
-  const [asOf, setAsOf] = useState<Date>();
   const job = closeId ? (params.get("job") ?? "") : "";
   const opened = useRef("");
+  const failures = useRef({ count: 0, seen: 0 });
+  // Each view, client, page and linked job is its own read: with the page (its loader), then every three seconds, and
+  // after a failure less often, up to every 30 seconds. A new view keeps the last rows on screen until it answers.
+  const read = useQuery({
+    ...workspaceQuery<{ items: WorkItem[]; counts?: Record<string, number>; has_more?: boolean }>(workPath(closeId, filter, client, offset, job)),
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) => {
+      // Consecutive failed reads, counted here: the query's own count starts again with every read.
+      // Only a read that answered ends the run of failures; a read under way after a failure does not.
+      const counted = failures.current;
+      if (query.state.errorUpdatedAt > counted.seen) {
+        counted.seen = query.state.errorUpdatedAt;
+        counted.count += 1;
+      }
+      if (query.state.dataUpdatedAt > query.state.errorUpdatedAt) counted.count = 0;
+      return counted.count ? Math.min(30_000, 3000 * 2 ** counted.count) : 3000;
+    },
+  });
+  const items = read.data?.items ?? [];
+  const counts = read.data?.counts ?? {};
+  const more = !!read.data?.has_more;
+  const loaded = read.data !== undefined;
+  const error = read.error ? read.error.message || "Work is unavailable." : "";
   useEffect(() => {
     if (!job) {
       opened.current = "";
@@ -165,36 +186,8 @@ export function Work({ closeId, onPrepared }: { closeId?: string; onPrepared?: (
       target.scrollIntoView({ block: "start" });
     }
   }, [job, items]);
-  useEffect(() => {
-    let live = true;
-    let timer: ReturnType<typeof setTimeout>;
-    let failures = 0;
-    async function load() {
-      try {
-        const data = await workspaceRequest(`${closeId ? `/${closeId}/work` : "/work"}?view=${filter}&client=${encodeURIComponent(client)}&offset=${offset}${job ? `&jobs=${encodeURIComponent(job)}` : ""}`);
-        if (!live) return;
-        setItems(data.items);
-        setCounts(data.counts ?? {});
-        setMore(data.has_more);
-        setError("");
-        setLoaded(true);
-        setAsOf(new Date());
-        failures = 0;
-        timer = setTimeout(load, 3000);
-      } catch (e) {
-        if (!live) return;
-        setError(e instanceof Error ? e.message : "Work is unavailable.");
-        failures++;
-        timer = setTimeout(load, Math.min(30_000, 3000 * 2 ** failures));
-      }
-    }
-    void load();
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [closeId, refresh, filter, client, offset, job]);
-  const updated = asOf && !error && <small>Updated {asOf.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</small>;
+  // While a new view loads the previous rows stay, without an update time of their own.
+  const updated = loaded && !error && !read.isPlaceholderData && <small>Updated {dates.time(read.dataUpdatedAt)}</small>;
   return (
     <section id={closeId ? "close-work" : undefined} className={closeId ? undefined : "bare"} aria-label={closeId ? "Work from this close's evidence" : "Preparation across your clients"}>
       {closeId ? (
@@ -256,7 +249,7 @@ export function Work({ closeId, onPrepared }: { closeId?: string; onPrepared?: (
                   <span className="chip">Open</span>
                 </summary>
                 <div className="work-body">
-                  <WorkDetails refresh={refresh} key={`${item.id}:${item.revision}`} item={item} onPrepared={onPrepared} onChange={() => setRefresh((n) => n + 1)} />
+                  <WorkDetails refresh={refresh} key={`${item.id}:${item.revision}`} item={item} onPrepared={onPrepared} onChange={() => (setRefresh((n) => n + 1), void read.refetch())} />
                 </div>
               </details>
             ))}
@@ -494,6 +487,7 @@ function WorkDetails({
   onPrepared?: () => void;
   refresh?: number;
 }) {
+  const dates = useDates();
   const [busy, setBusy] = useState(false);
   const [replyLink, setReplyLink] = useState("");
   const [passcode, setPasscode] = useState("");
@@ -602,7 +596,7 @@ function WorkDetails({
       {item.state === "interpreting" && (
         <p role="status">
           The agent is inspecting permitted evidence and proposing supported
-          work. Started {new Date(item.agent_started_at).toLocaleString()}. No
+          work. Started {dates.dateTime(item.agent_started_at)}. No
           calculation or posting is authorized.
         </p>
       )}
@@ -951,7 +945,7 @@ function WorkDetails({
                     ? latest.partial
                       ? `Partial reply: ${latest.answers?.filter((a) => a.state === "answered").length ?? 0} answered, ${latest.answers?.filter((a) => a.state === "awaiting_document").length ?? 0} awaiting a document. The client can add to it until the link expires; work waits for you or for a complete reply.`
                       : "Reply received. The client can still add documents or correct it until the link expires."
-                    : `Last link expires ${new Date(latest.link.expires_at).toLocaleString()}.`}
+                    : `Last link expires ${dates.dateTime(latest.link.expires_at)}.`}
               </p>
             )}
             {latest.partial && item.state === "waiting_client" && (

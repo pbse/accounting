@@ -1,3 +1,6 @@
+import { useDates } from "../../data/time";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 import { Coverage } from "./Coverage";
@@ -35,40 +38,18 @@ export function Coordinator({ closeId }: { closeId: string }) {
     const target = document.getElementById(`work-${jobID}`);
     if (target instanceof HTMLDetailsElement) target.open = true;
   }
-  const [status, setStatus] = useState<Status>();
-  const [error, setError] = useState("");
+  const dates = useDates();
+  // Read with the page, then every five seconds; a change made here marks it stale, so it reads again at once.
+  const read = useQuery({ ...workspaceQuery<Status>(`/${closeId}/prepare-close`), refetchInterval: 5000 });
+  const status = read.data;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Close preparation unavailable." : "");
+  // A failed action's message stays until the next answer shows where preparation stands.
+  useEffect(() => setError(""), [read.dataUpdatedAt]);
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [stopConfirmed, setStopConfirmed] = useState(false);
   const [stopReason, setStopReason] = useState("");
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        const next: Status = await workspaceRequest(
-          `/${closeId}/prepare-close`,
-        );
-        if (live) {
-          setStatus(next);
-          setError("");
-        }
-      } catch (e) {
-        if (live)
-          setError(
-            e instanceof Error ? e.message : "Close preparation unavailable.",
-          );
-      } finally {
-        if (live) timer = setTimeout(() => void poll(), 5000);
-      }
-    }
-    void poll();
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [closeId, version]);
   useEffect(() => setConfirmed(false), [status?.inventory_digest]);
   useEffect(() => setStopConfirmed(false), [status?.stop.digest]);
   useEffect(() => setStopReason(""), [closeId]);
@@ -82,7 +63,8 @@ export function Coordinator({ closeId }: { closeId: string }) {
         confirmed,
       });
       setConfirmed(false);
-      setVersion((v) => v + 1);
+      // The action's result shows at once, not at the next poll.
+      await read.refetch();
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Preparation could not be confirmed.",
@@ -103,7 +85,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
       });
       setStopReason("");
       setStopConfirmed(false);
-      setVersion((v) => v + 1);
+      await read.refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not stop work.");
     } finally {
@@ -217,7 +199,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
                   </label>
                   <button
                     type="button"
-                    disabled={busy || !confirmed || !!error}
+                    disabled={busy || !confirmed || !!read.error}
                     onClick={() => void start()}
                   >
                     {busy ? "Recording scope…" : "Prepare this close"}
@@ -261,7 +243,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
               </p>
               <p>
                 Started by {run.actor} ·{" "}
-                {new Date(run.created_at).toLocaleString()}
+                {dates.dateTime(run.created_at)}
               </p>
               <ul>
                 {items.map((i) => (

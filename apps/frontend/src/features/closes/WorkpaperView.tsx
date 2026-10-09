@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import type { AccrualWorkpaper } from "../../../../../packages/contracts/accrual";
 import type { PrepaidWorkpaper } from "../../../../../packages/contracts/prepaid";
@@ -76,36 +78,20 @@ export function readyForReview(paper: Paper) {
 }
 
 export function useClose(id: string | undefined) {
-  const [close, setClose] = useState<Close>();
-  const [papers, setPapers] = useState<Paper[]>([]);
-  const [more, setMore] = useState(false);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const generation = useRef(0);
-  const load = useCallback(async () => {
-    if (!id) return;
-    const current = ++generation.current;
-    setLoading(true);
-    setError("");
-    try {
-      const data = await workspaceRequest(`/${encodeURIComponent(id)}`);
-      if (current !== generation.current) return;
-      setClose(data.close);
-      setPapers(data.workpapers ?? []);
-      setMore(data.has_more);
-    } catch (e) {
-      if (current === generation.current) setError(e instanceof Error ? e.message : "Could not open the close.");
-    } finally {
-      if (current === generation.current) setLoading(false);
-    }
-  }, [id]);
-  useEffect(() => {
-    void load();
-    return () => {
-      generation.current++;
-    };
-  }, [load]);
-  return { close, papers, more, error, loading, reload: load };
+  // The close and its latest drafts, read with the page (its loader) and again after any change.
+  const read = useQuery({ ...workspaceQuery<{ close: Close; workpapers?: Paper[]; has_more?: boolean }>(`/${encodeURIComponent(id ?? "")}`), enabled: !!id });
+  const failed = read.error ? read.error.message || "Could not open the close." : "";
+  return {
+    close: read.data?.close,
+    papers: read.data?.workpapers ?? [],
+    more: !!read.data?.has_more,
+    // A close never read is an error; a later read that fails leaves the page as it was, with refreshError beside it.
+    error: read.data ? "" : failed,
+    refreshError: read.data ? failed : "",
+    // Only the first read: a read again in the background keeps the page as it is.
+    loading: read.isPending && !!id,
+    reload: async () => void (await read.refetch()),
+  };
 }
 
 function EvidencePane({ closeId, sources, onPickLine }: { closeId: string; sources: Source[]; onPickLine: (line: PickedLine) => void }) {
@@ -328,7 +314,7 @@ function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
 
 export default function WorkpaperView() {
   const { id, paperId } = useParams();
-  const { close, papers, more, error, loading, reload } = useClose(id);
+  const { close, papers, more, error, refreshError, loading, reload } = useClose(id);
   const [older, setOlder] = useState<Paper>();
   const [picked, setPicked] = useState<PickedLine & { paper: string }>();
   const [olderError, setOlderError] = useState("");
@@ -344,7 +330,8 @@ export default function WorkpaperView() {
     return () => {
       live = false;
     };
-  }, [close, paperId, listed, loading]);
+    // The close's identity and whether the draft is listed decide this, not each fresh read of the close.
+  }, [close?.id, paperId, !!listed, loading]);
   if (loading && !close) return <p role="status">Opening workpaper…</p>;
   if (error || olderError) return <p role="alert">{error || olderError}</p>;
   const saved = listed ?? older;
@@ -356,6 +343,7 @@ export default function WorkpaperView() {
   const blockers = saved.paper.blockers ?? [];
   return (
     <>
+      {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
       <EffortTracker closeId={close.id} activity="review" />
       <BackLink to={`/dashboard/closes/${close.id}?tab=workpapers`}>
         {close.entity} · {close.period}

@@ -1,7 +1,7 @@
-import { monthName, useDates, useNow, utcDay } from "../../data/time";
-import { workspaceQuery } from "../../data/queries";
-import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { daysBetween, monthName, useDates, useNow, useToday, utcDay } from "../../data/time";
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { type ReactNode, useId, useState } from "react";
 import { Link } from "react-router";
 import { askAssistant, starters } from "../dashboard/assistantStore";
 import { AskAgent } from "../dashboard/AskAgent";
@@ -74,9 +74,10 @@ export function localDate(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function due(on: string) {
-  const days = Math.round((Date.parse(on) - Date.parse(localDate())) / 86_400_000);
-  const day = new Date(`${on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+// due words a due date from today (both YYYY-MM-DD) with day, a calendar-day formatter (useDates().calendarDay).
+function due(on: string, today: string, format: (value: string) => string) {
+  const days = daysBetween(today, on);
+  const day = format(on);
   if (days < 0) return `Due ${day}, ${-days} day${days === -1 ? "" : "s"} overdue`;
   return days === 0 ? "Due today" : days === 1 ? "Due tomorrow" : `Due ${day}, in ${days} days`;
 }
@@ -90,6 +91,7 @@ function dueRule(days: number | null) {
 // HandOff hands a document or an account that needs a person to a teammate who can review the client's work, or says
 // who has it.
 function HandOff({ closeId, target, handable, handoff, refresh }: { closeId: string; target: { job_id: string } | { account_id: string }; handable: boolean; handoff?: Handoff; refresh: () => void }) {
+  const dates = useDates();
   const [people, setPeople] = useState<Person[]>();
   const [to, setTo] = useState("");
   const [note, setNote] = useState("");
@@ -112,7 +114,7 @@ function HandOff({ closeId, target, handable, handoff, refresh }: { closeId: str
     return (
       <>
         {" "}
-        · With {handoff.mine ? "you" : handoff.name} since {new Date(handoff.at).toLocaleDateString()}
+        · With {handoff.mine ? "you" : handoff.name} since {dates.date(handoff.at)}
         {handoff.note && <> · “{handoff.note}”</>}{" "}
         <button type="button" disabled={busy} onClick={() => void send(`/${closeId}/goal/handoffs/${handoff.id}/take-back`, {})}>
           {handoff.mine ? "Hand it back" : "Take it back"}
@@ -269,38 +271,33 @@ function headline(goal: Goal, progress: Status["progress"], needs: number) {
 // useGoal reads the close's goal and live progress, polling while shown. The plan's checks are heavier, so they are read
 // about once a minute and kept between polls.
 function useGoal(closeId: string, live: boolean, every: number) {
-  const [status, setStatus] = useState<Status>();
-  const [error, setError] = useState("");
-  const [asked, setAsked] = useState(0);
-  const checked = useRef<{ close: string; at: number; step?: Step }>({ close: "", at: 0 });
-  useEffect(() => {
-    if (!live) return;
-    let on = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = () => {
-      const verify = checked.current.close !== closeId || Date.now() - checked.current.at > 60_000;
-      return workspaceRequest(`/${closeId}/goal${verify ? "?verify=1" : ""}`)
-        .then((data: Status) => {
-          if (!on) return;
-          const step = data.progress.plan.find((s) => s.key === "verify");
-          if (verify) checked.current = { close: closeId, at: Date.now(), step };
-          else if (checked.current.step) data.progress.plan = data.progress.plan.map((s) => (s.key === "verify" ? (checked.current.step as Step) : s));
-          setStatus(data);
-          setError("");
-        })
-        .catch((e) => on && setError(e instanceof Error ? e.message : "The agent's progress is unavailable."))
-        .finally(() => on && (timer = setTimeout(poll, every)));
-    };
-    void poll();
-    return () => {
-      on = false;
-      clearTimeout(timer);
-    };
-  }, [closeId, live, asked]);
-  return { status, error, refresh: () => setAsked((n) => n + 1) };
+  const queryClient = useQueryClient();
+  // The plan's checks are read about once a minute (verify=1, as the page's loader reads them); the progress between
+  // them is read every few seconds and keeps the last checked plan step. The light read starts from the checked one,
+  // so a page rendered with the goal needs nothing more to show it.
+  const checkedPath = `/${closeId}/goal?verify=1`;
+  const checked = useQuery({ ...workspaceQuery<Status>(checkedPath), enabled: live, refetchInterval: 60_000 });
+  const light = useQuery({
+    ...workspaceQuery<Status>(`/${closeId}/goal`),
+    enabled: live,
+    refetchInterval: every,
+    initialData: () => queryClient.getQueryData<Status>(workspaceKey(checkedPath)),
+    initialDataUpdatedAt: () => queryClient.getQueryState(workspaceKey(checkedPath))?.dataUpdatedAt,
+  });
+  const step = checked.data?.progress.plan.find((s) => s.key === "verify");
+  const newest = light.data ?? checked.data;
+  const status = newest && step ? { ...newest, progress: { ...newest.progress, plan: newest.progress.plan.map((s) => (s.key === "verify" ? step : s)) } } : newest;
+  const failed = light.error ?? checked.error;
+  return {
+    status,
+    error: failed ? failed.message || "The agent's progress is unavailable." : "",
+    refresh: () => void Promise.all([checked.refetch(), light.refetch()]),
+  };
 }
 
 function Progress({ closeId, status, refresh }: { closeId: string; status: Status; refresh: () => void }) {
+  const dates = useDates();
+  const today = useToday();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -335,8 +332,8 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
         <strong>{headline(goal, progress, needs)}</strong>
       </p>
       <p className="assistant-note">
-        Handed over by {goal.author} · {new Date(goal.created_at).toLocaleDateString()}
-        {goal.due_on && !stopped ? ` · ${due(goal.due_on)}` : ""}
+        Handed over by {goal.author} · {dates.date(goal.created_at)}
+        {goal.due_on && !stopped ? ` · ${due(goal.due_on, today, dates.calendarDay)}` : ""}
       </p>
       {!stopped && (
         <>
@@ -403,7 +400,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
           <ol>
             {(full ?? activity).map((a, n) => (
               <li key={n}>
-                {new Date(a.at).toLocaleString()} · {a.text}
+                {dates.dateTime(a.at)} · {a.text}
               </li>
             ))}
           </ol>
@@ -605,6 +602,7 @@ export function DelegatedCloses({ client }: { client: string }) {
 
 // GoalCard is the assistant's card for handing its close to the agent: the proposal, then the goal's live progress.
 export function GoalCard({ closeId, dueOn, finish, everyMonth = false, outcome, live, onConfirm }: { closeId: string; dueOn: string; finish: string; everyMonth?: boolean; outcome?: { at: string } | null; live: boolean; onConfirm: (body: { due_on: string; finish: Finish; every_month: boolean }) => Promise<void> }) {
+  const dates = useDates();
   const { status, error, refresh } = useGoal(closeId, live, 5000);
   const card = (body: ReactNode) => (
     <div className="assistant-card">
@@ -613,7 +611,7 @@ export function GoalCard({ closeId, dueOn, finish, everyMonth = false, outcome, 
       {error && <p role="alert">{error}</p>}
     </div>
   );
-  if (!live) return card(<p>{outcome ? `Handed over ${new Date(outcome.at).toLocaleString()}. The newest card shows its progress.` : "A newer card replaced this one."}</p>);
+  if (!live) return card(<p>{outcome ? `Handed over ${dates.dateTime(outcome.at)}. The newest card shows its progress.` : "A newer card replaced this one."}</p>);
   if (!status) return card(!error && <p role="status">Loading the close…</p>);
   if (outcome || (status.goal && status.goal.state !== "stopped")) return card(<Progress closeId={closeId} status={status} refresh={refresh} />);
   if (status.signed_off) return card(<p>This close is signed off, so there is nothing left for me to prepare.</p>);
