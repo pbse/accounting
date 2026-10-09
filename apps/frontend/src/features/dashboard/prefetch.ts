@@ -18,8 +18,8 @@ function startRoute(to: string, launch: boolean) {
   const url = new URL(to, window.location.origin);
   const path = url.pathname.replace(/\/+$/, "");
   if (!path.startsWith("/dashboard")) return;
-  void pages.layout().catch(() => undefined);
-  const load = (page: () => Promise<unknown>) => void page().catch(() => undefined);
+  void pages.layout.load().catch(() => undefined);
+  const load = (page: { load: () => Promise<unknown> }) => void page.load().catch(() => undefined);
   const close = path.match(/^\/dashboard\/closes\/([^/]+)$/);
   if (path === "/dashboard") {
     load(pages.dashboard);
@@ -37,7 +37,10 @@ function startRoute(to: string, launch: boolean) {
   else if (path === "/dashboard/work") load(pages.preparation);
   else if (path === "/dashboard/settings") load(pages.settings);
   else if (path === "/dashboard/measure") load(pages.measure);
-  // The unread count in the top bar mounts once with the layout and then polls on its own.
+  // The layout shows nothing until it knows whether the person is an executive, then asks whether the firm has the
+  // worked example; at launch both are asked now. The unread count in the top bar mounts once with the layout and then
+  // polls on its own.
+  if (launch) prefetchWorkspace("/executive", "/examples");
   if (launch && path !== "/dashboard/executive" && !path.startsWith("/dashboard/executive/")) prefetchWorkspace("/attention");
 }
 

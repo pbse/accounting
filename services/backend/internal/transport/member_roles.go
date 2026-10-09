@@ -226,6 +226,7 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			return err
 		}
 		err = workos(r.Context(), "PUT", "/user_management/organization_memberships/"+url.PathEscape(membership.ID), map[string]string{"role_slug": in.Role}, nil)
+		forgetReviewers(org)
 		var refused statusError
 		switch {
 		case errors.As(err, &refused) && refused.code >= 400 && refused.code < 500:

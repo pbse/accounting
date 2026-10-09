@@ -603,7 +603,7 @@ func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPer
 		}
 		return members, nil
 	}
-	reviewers, err := firmReviewers(ctx, org)
+	reviewers, err := shownReviewers(ctx, org)
 	if err != nil {
 		return nil, err
 	}

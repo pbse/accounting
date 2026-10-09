@@ -1,0 +1,4 @@
+# Built scripts, styles and fonts carry a content hash in their names, so a browser keeps them for a year without
+# asking again; a new build has new names. index.html and the routes stay revalidated.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -7,18 +7,18 @@ import { EffortTracker } from "./features/closes/Effort";
 import { pages } from "./pages";
 
 const ClientRequest = lazy(() => import("./features/closes/ClientRequest"));
-const WorkspaceLayout = lazy(pages.layout);
+const WorkspaceLayout = pages.layout;
 const AccrualPreparation = lazy(() => import("./features/accruals/Prepare"));
 const LoanPreparation = lazy(() => import("./features/loans/Prepare"));
 const OwnerPreparation = lazy(() => import("./features/owners/Prepare"));
 const PayrollPreparation = lazy(() => import("./features/payroll/Prepare"));
 const PrepaidPreparation = lazy(() => import("./features/prepaids/Prepare"));
-const ClosesList = lazy(pages.closes);
-const Preparation = lazy(pages.preparation);
-const ClientClose = lazy(pages.close);
-const WorkpaperView = lazy(pages.workpaper);
-const Measure = lazy(pages.measure);
-const Settings = lazy(pages.settings);
+const ClosesList = pages.closes;
+const Preparation = pages.preparation;
+const ClientClose = pages.close;
+const WorkpaperView = pages.workpaper;
+const Measure = pages.measure;
+const Settings = pages.settings;
 const Executive = lazy(() => import("./features/executive/Executive"));
 
 function Gated({ children }: { children: ReactNode }) {
@@ -36,7 +36,7 @@ function CloseScoped({ children }: { children: ReactNode }) {
 }
 const Reconciliation = lazy(() => import("./features/reconciliation/Prepare"));
 const Settlement = lazy(() => import("./features/settlements/Prepare"));
-const Dashboard = lazy(pages.dashboard);
+const Dashboard = pages.dashboard;
 
 export function App() {
   return (
