@@ -236,6 +236,10 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM procedure_example_approvals WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`,
 			`DELETE FROM approval_requests WHERE close_id=$1`,
 			`DELETE FROM chat_messages WHERE close_id=$1 OR target_close_id=$1 OR $1=ANY(closes)`,
+			`DELETE FROM chat_sessions WHERE close_id=$1 OR (organization_id=(SELECT organization_id FROM client_closes WHERE id=$1) AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id))`,
+			// A surviving chat's activity and title follow its remaining turns, so nothing of the deleted close lingers.
+			`UPDATE chat_sessions s SET last_at=latest.at FROM (SELECT session_id,max(created_at) AS at FROM chat_messages GROUP BY session_id) latest WHERE latest.session_id=s.id AND s.organization_id=(SELECT organization_id FROM client_closes WHERE id=$1) AND s.last_at>latest.at`,
+			`UPDATE chat_sessions s SET title=t.fresh FROM (SELECT s2.id,COALESCE(NULLIF(left(regexp_replace((SELECT m.body FROM chat_messages m WHERE m.session_id=s2.id AND m.role='user' ORDER BY m.id LIMIT 1),'\s+',' ','g'),80),''),'Conversation') AS fresh FROM chat_sessions s2 WHERE NOT s2.renamed AND s2.organization_id=(SELECT organization_id FROM client_closes WHERE id=$1)) t WHERE t.id=s.id AND s.title<>t.fresh`,
 			`DELETE FROM portfolio_items WHERE close_id=$1`,
 			`DELETE FROM statement_extractions WHERE close_id=$1`,
 			`DELETE FROM workpapers WHERE close_id=$1`,

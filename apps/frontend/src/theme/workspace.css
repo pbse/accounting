@@ -614,6 +614,146 @@ aside.assistant {
   font-weight: 400;
   color: var(--ink);
 }
+/* Chats: the title of the chat shown, its rename box, the list of chats, and the rail's recent chats. */
+.assistant-title {
+  flex: 1 1 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.assistant-rename {
+  display: flex;
+  flex: 1 1 100%;
+  gap: var(--space-6);
+}
+.assistant-rename input {
+  flex: 1;
+  min-width: 0;
+}
+.assistant-chats {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-8) 0;
+}
+.assistant-chats-head {
+  display: flex;
+  gap: var(--space-6);
+  margin-bottom: var(--space-8);
+}
+.assistant-chats-head input {
+  flex: 1;
+  min-width: 0;
+}
+.assistant-chats h3 {
+  margin: var(--space-10) 0 var(--space-4);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.assistant-chats ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.app-shell .assistant-chats li button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: var(--space-8) var(--space-10);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-weight: 400;
+  color: var(--ink);
+}
+.app-shell .assistant-chats li button:hover,
+.app-shell .assistant-chats li button.current {
+  background: var(--fill);
+}
+.assistant-chat-title,
+.rail-chat-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.assistant-chat-scope,
+.rail-chat-scope {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.rail-chats {
+  position: relative;
+}
+.rail-chats > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.rail-chats > summary::-webkit-details-marker {
+  display: none;
+}
+.rail-chats[open] > div {
+  position: absolute;
+  left: calc(100% + var(--space-8));
+  bottom: 0;
+  z-index: 20;
+  width: 260px;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgb(16 24 40 / 16%);
+}
+.app-shell .rail-chat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: var(--space-8) var(--space-10);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink);
+}
+.app-shell .rail-chat.new,
+.app-shell .rail-chat.all {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-8);
+  font-weight: 500;
+}
+.assistant-messages[hidden] {
+  display: none;
+}
+.app-shell .assistant-more {
+  width: 100%;
+  margin-top: var(--space-8);
+  font-size: 13px;
+}
+.app-shell .rail-chat:hover {
+  background: var(--fill);
+}
+.rail-chat-empty {
+  margin: var(--space-6) var(--space-10);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+@media (max-width: 1099px) {
+  .rail-chats[open] > div {
+    left: 0;
+    bottom: calc(100% + var(--space-8));
+  }
+}
+
 .assistant-context {
   display: flex;
   flex-wrap: wrap;

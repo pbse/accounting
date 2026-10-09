@@ -6,6 +6,9 @@ The **Agent** button (bottom right of every signed-in workspace page, and in the
 
 ## Context and history
 
+A member's conversations are chats (sessions, migration 138), each in one scope and titled by its first question. A question continues the scope's latest chat while it is less than 12 hours quiet and otherwise starts a new one; "+" starts one at will; the rail's chats menu lists the five latest with "All chats", and the panel's list shows every chat grouped by day with its scope and a filter; a chat is renamed or deleted from the panel's menu. `GET …/chat?session=` reads one chat (without it, the current one or none), `POST …/chat` takes `session_id` (an id, `new`, or empty) and `picked` (a chat opened on purpose is continued whatever its age; the current one rolls over after 12 quiet hours), `GET /v1/closes/chat/sessions` lists them (pages of 50, `offset`, `has_more`) and `POST /v1/closes/chat/sessions/{id}` renames (`title`) or deletes. The model sees one chat's turns only. Clearing deletes the chat.
+
+
 - On a client close the conversation is about that close; its chip shows the client and month. On a draft, a second chip names the draft, and questions that name the draft or workpaper are about it; other questions stay about the close.
 - Anywhere else the conversation is firm-wide.
 - Each conversation belongs to the member who wrote it: nobody else reads it, including firm administrators. Switching to another close opens that close's conversation from empty; a question or answer never carries over to another client, and a late answer for the previous page is dropped.

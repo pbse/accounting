@@ -3915,3 +3915,12 @@ PR 5 of the [agentic chat plan](agent-chat.md): an executive gets the panel over
 - Frontend `npm run check`: passes; the top bar shows Agent for an executive, the panel takes `executive` and shows the executive's chips, scope chip and placeholder, with no command list or palette.
 
 Not verified: the panel over the executive pages in a browser (the layout check has no executive fixture).
+
+## 2026-10-08: many chats per member (PR 6, migration 138)
+
+PR 6 of the [agentic chat plan](agent-chat.md): chats are sessions (`chat_sessions`), titled by their first question, continued while less than 12 hours quiet and otherwise started afresh, listed in the rail (five latest, "New chat", "All chats") and in the panel (grouped by day, filtered, scoped), renamed and deleted; the model is replayed one chat's turns only. Local run on a fresh PostgreSQL migrated through 138:
+
+- `go test ./internal/transport -run 'TestAgentChat|TestAgentEval|TestExecutives|TestChat|TestAssistant|TestPeriodic|TestExpire'`: pass. `TestAgentChatSessionsAreManyAndKeptApart` covers the title, the current chat, `new`, reading a chat by id, the list with counts, another member seeing none, rename, a chat that is not the member's (404), delete taking its messages, the 12-hour quiet window opening a new chat, a close's chat with its label, one chat's history replayed, and clearing. Older fixtures that insert messages without a session are carried by migration 138's trigger.
+- Frontend `npm run check`: passes.
+
+Not verified: the rail's chats menu and the panel's list in a browser (no layout-check coverage was added; the rail keeps its width, the menu floats beside it).

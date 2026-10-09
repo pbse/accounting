@@ -16,18 +16,65 @@ func closesLiteral(ids []string) string {
 }
 
 // pruneConversation deletes every turn pair whose reads touched a close the member can no longer open, or that no
+// longer exists, in one scope, or in every scope of the member when closeID is "*" (before their chats are listed);
 // longer exists, before the conversation is shown or replayed; the question goes with its answer. A pair's closes are
 // written on both messages, so one statement finds both.
 func pruneConversation(ctx context.Context, db *sql.DB, org, author, closeID string, firmWide, executive bool) error {
-	_, err := db.ExecContext(ctx, `DELETE FROM chat_messages m WHERE m.organization_id=$1 AND m.author=$2 AND m.close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND m.executive=`+strconv.FormatBool(executive)+` AND EXISTS(SELECT 1 FROM unnest(m.closes) AS touched(id) WHERE NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.id=touched.id AND c.organization_id=$1 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))))`, org, author, closeID, firmWide)
-	return err
+	result, err := db.ExecContext(ctx, `DELETE FROM chat_messages m WHERE m.organization_id=$1 AND m.author=$2 AND ($3='*' OR m.close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint) AND m.executive=`+strconv.FormatBool(executive)+` AND EXISTS(SELECT 1 FROM unnest(m.closes) AS touched(id) WHERE NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.id=touched.id AND c.organization_id=$1 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))))`, org, author, closeID, firmWide)
+	if err != nil {
+		return err
+	}
+	// Only when something was pruned: a chat whose every turn was removed is gone with them (nothing dead is listed
+	// or continued), and one whose first question went is retitled by the first that remains, unless the member named
+	// it. A read that pruned nothing costs nothing more.
+	if n, _ := result.RowsAffected(); n > 0 {
+		db.ExecContext(ctx, `DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, org, author)
+		// A chat's activity is that of its remaining turns: a pruned last turn does not keep it current.
+		db.ExecContext(ctx, `UPDATE chat_sessions s SET last_at=latest.at FROM (SELECT session_id,max(created_at) AS at FROM chat_messages GROUP BY session_id) latest WHERE latest.session_id=s.id AND s.organization_id=$1 AND s.author=$2 AND s.last_at>latest.at`, org, author)
+		retitleSessions(ctx, db, org, author)
+	}
+	return nil
+}
+
+// retitleSessions gives every chat of the member that was not named by them the title of its first remaining
+// question, so a pruned first question leaves no trace in the list or the header.
+func retitleSessions(ctx context.Context, db *sql.DB, org, author string) {
+	rows, err := db.QueryContext(ctx, `SELECT s.id,s.title,(SELECT m.body FROM chat_messages m WHERE m.session_id=s.id AND m.role='user' ORDER BY m.id LIMIT 1) FROM chat_sessions s WHERE s.organization_id=$1 AND s.author=$2 AND NOT s.renamed`, org, author)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type change struct {
+		id    int64
+		title string
+	}
+	var changes []change
+	for rows.Next() {
+		var id int64
+		var title string
+		var first sql.NullString
+		if rows.Scan(&id, &title, &first) != nil || !first.Valid {
+			continue
+		}
+		if want := chatTitle(first.String); want != title {
+			changes = append(changes, change{id, want})
+		}
+	}
+	rows.Close()
+	for _, c := range changes {
+		db.ExecContext(ctx, `UPDATE chat_sessions SET title=$3 WHERE id=$1 AND NOT renamed AND organization_id=$2`, c.id, org, c.title)
+	}
 }
 
 // agentHistory is the conversation the model sees: the last 20 turns as plain text, each member message redacted as
 // it is sent. Only a kept answer and its question are replayable; a firm-wide pair whose reads touched no close is
 // not, since nothing verified its client scope; a close conversation is already bound to its close.
-func agentHistory(ctx context.Context, db *sql.DB, org, author, closeID string, executive bool) ([]llm.Message, error) {
-	rows, err := db.QueryContext(ctx, `SELECT role,body,array_to_json(closes)::text FROM chat_messages WHERE organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND executive=`+strconv.FormatBool(executive)+` AND replayable AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY id DESC LIMIT 40`, org, author, closeID)
+func agentHistory(ctx context.Context, db *sql.DB, org, author, closeID string, executive bool, session string) ([]llm.Message, error) {
+	// A new chat starts with no history: only its own session's turns are replayed.
+	if session == "" {
+		return nil, nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT role,body,array_to_json(closes)::text FROM chat_messages WHERE organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND executive=`+strconv.FormatBool(executive)+` AND session_id=$4::bigint AND replayable AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY id DESC LIMIT 40`, org, author, closeID, session)
 	if err != nil {
 		return nil, err
 	}
