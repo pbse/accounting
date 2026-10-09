@@ -1345,13 +1345,14 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if sessionID != "" {
 			// The chat may have gone while the answer was made (its last turns pruned once a close was lost); the
 			// answer then opens a new chat rather than failing.
-			var still bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id=$1::bigint)`, sessionID).Scan(&still); err != nil {
+			// The chat is locked through the insert, so a deletion elsewhere waits or is seen here.
+			var locked int64
+			switch err = tx.QueryRowContext(r.Context(), `SELECT id FROM chat_sessions WHERE id=$1::bigint FOR UPDATE`, sessionID).Scan(&locked); {
+			case err == sql.ErrNoRows:
+				sessionID = ""
+			case err != nil:
 				problem(w, 503, "The message could not be saved.")
 				return
-			}
-			if !still {
-				sessionID = ""
 			}
 		}
 		if sessionID == "" {

@@ -298,12 +298,14 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
         }, () => undefined);
       }
     } finally {
+      // Only the request still current unlocks the composer: an answer abandoned by a chat switch is not the newer
+      // request's to release.
       if (asked === generation.current) {
         setPending("");
         setSteps([]);
         setAsking("");
+        setBusy(false);
       }
-      setBusy(false);
     }
   }
   // A confirmation holds the composer, so no other answer can replace the card's result while it runs.
@@ -315,7 +317,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
       const data = await workspaceRequest(closeId ? `${path}/${id}/confirm` : `/chat/confirm/${id}`, body);
       if (asked === generation.current) setMessages(data.messages);
     } finally {
-      setBusy(false);
+      if (asked === generation.current) setBusy(false);
     }
   }
   // Only the newest card follows the close's work; older ones keep what they started.
