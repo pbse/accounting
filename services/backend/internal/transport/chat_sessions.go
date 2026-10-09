@@ -21,9 +21,9 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 		Messages int       `json:"messages"`
 	}
 	mux.HandleFunc("GET /v1/closes/chat/sessions", func(w http.ResponseWriter, r *http.Request) {
-		// Firm-wide turns that touched a close the member can no longer open are pruned first, and a chat left without
-		// turns (pruned, expired) is removed, so nothing listed fails when opened.
-		if err := pruneConversation(r.Context(), db, organization(r), subject(r), "", firmAccess(r), executive(r)); err != nil {
+		// Turns in any chat that touched a close the member can no longer open are pruned first, and a chat left
+		// without turns (pruned, expired) is removed, so nothing listed fails when opened or shows a lost client's words.
+		if err := pruneConversation(r.Context(), db, organization(r), subject(r), "*", firmAccess(r), executive(r)); err != nil {
 			problem(w, 503, "Your chats are unavailable.")
 			return
 		}
