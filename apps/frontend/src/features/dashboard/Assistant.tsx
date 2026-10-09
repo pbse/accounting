@@ -279,7 +279,12 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
         setError(e instanceof Error ? e.message : "The agent is unavailable.");
         // Nothing from a failed attempt is saved; the member's text stays in the box to send again.
         if ("text" in body) setText(body.text);
-        workspaceRequest(session ? `${path}?session=${encodeURIComponent(session.id)}` : path).then((data) => asked === generation.current && setMessages(data.messages), () => undefined);
+        // What was saved before the answer was cut off is shown, with the chat it was saved in.
+        workspaceRequest(session ? `${path}?session=${encodeURIComponent(session.id)}` : path).then((data) => {
+          if (asked !== generation.current) return;
+          setMessages(data.messages);
+          if (data.session) setSession({ id: data.session.id, title: data.session.title });
+        }, () => undefined);
       }
     } finally {
       if (asked === generation.current) {
