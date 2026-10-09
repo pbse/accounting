@@ -711,18 +711,23 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
   // Older chats come a page at a time, appended below, under the same filter; a page that arrives after the filter
   // or the list changed is dropped.
   const listing = useRef(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   useEffect(() => {
     listing.current += 1;
+    setLoadingMore(false);
   }, [version, filter]);
   function showMore() {
+    if (loadingMore) return;
     const asked = listing.current;
+    setLoadingMore(true);
     loadSessions(50, sessions?.length ?? 0, filter)
       .then((page) => {
         if (asked !== listing.current) return;
         setSessions((current) => [...(current ?? []), ...page.sessions]);
         setMore(page.hasMore);
       })
-      .catch(() => asked === listing.current && setMore(false));
+      .catch(() => asked === listing.current && setMore(false))
+      .finally(() => asked === listing.current && setLoadingMore(false));
   }
   const shown = sessions ?? [];
   const day = (iso: string) => {
@@ -764,8 +769,8 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
         </div>
       ))}
       {more && (
-        <button type="button" className="assistant-more" onClick={showMore}>
-          Show older chats
+        <button type="button" className="assistant-more" disabled={loadingMore} onClick={showMore}>
+          {loadingMore ? "Loading…" : "Show older chats"}
         </button>
       )}
     </section>

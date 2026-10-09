@@ -42,6 +42,8 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`, org)
 	must(err)
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	var beta string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Beta','2026-09') RETURNING id::text`, org).Scan(&beta))
 	defer func() {
 		for _, q := range []string{`DELETE FROM assistant_answers WHERE organization_id=$1`, `DELETE FROM chat_sessions WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
@@ -133,7 +135,8 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	// A chat's title follows its first remaining question once the first was pruned; a named chat keeps its name.
 	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id) VALUES($1,'user_a','user','Second question here',$2::bigint),($1,'user_a','assistant','Second answer.',$2::bigint)`, org, s1)
 	must(err)
-	_, err = db.Exec(`DELETE FROM chat_messages WHERE session_id=$1::bigint AND body IN ('What needs me today?','Here is what needs you today.') OR (session_id=$1::bigint AND id=(SELECT min(id) FROM chat_messages WHERE session_id=$1::bigint))`, s1)
+	// The first pair touched Beta, which the member cannot open: listing prunes it and the chat is retitled.
+	_, err = db.Exec(`UPDATE chat_messages SET closes=ARRAY[$2::bigint] WHERE session_id=$1::bigint AND id IN (SELECT id FROM chat_messages WHERE session_id=$1::bigint ORDER BY id LIMIT 2)`, s1, beta)
 	must(err)
 	titles := map[string]string{}
 	for _, item := range list("user_a").Sessions {
