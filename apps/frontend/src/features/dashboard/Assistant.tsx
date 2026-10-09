@@ -153,6 +153,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
   function load(id?: string) {
     const asked = ++generation.current;
     setPicked(!!id);
+    setRenaming(null);
     setLoaded(false);
     setError("");
     setLive([]);
@@ -180,6 +181,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     setMessages([]);
     setSession(null);
     setPicked(false);
+    setRenaming(null);
     setLive([]);
     setLiveLinks([]);
     setError("");
