@@ -11,6 +11,8 @@ import (
 type toolCap struct {
 	array string
 	limit int
+	// arrays are further top-level arrays cut to the same limit (an overview lists closes and their reports).
+	arrays []string
 }
 
 // A read's lineage says where its result names the closes it drew on, so a conversation can record every close an
@@ -39,18 +41,58 @@ func capResult(raw []byte, c toolCap) ([]byte, bool, int) {
 	} else if json.Unmarshal(raw, &object) != nil || object == nil {
 		return raw, false, 0
 	}
-	if json.Unmarshal(object[c.array], &rows) != nil || len(rows) <= c.limit {
-		return raw, false, len(rows)
+	if json.Unmarshal(object[c.array], &rows) != nil {
+		return raw, false, 0
 	}
-	cut, _ := json.Marshal(rows[:c.limit])
-	object[c.array] = cut
+	total, truncated := len(rows), false
+	for _, name := range append([]string{c.array}, c.arrays...) {
+		var items []json.RawMessage
+		if json.Unmarshal(object[name], &items) != nil || len(items) <= c.limit {
+			continue
+		}
+		cut, _ := json.Marshal(items[:c.limit])
+		object[name] = cut
+		truncated = true
+	}
+	if !truncated {
+		return raw, false, total
+	}
 	object["truncated"], _ = json.Marshal(true)
-	object["total"], _ = json.Marshal(len(rows))
+	object["total"], _ = json.Marshal(total)
 	out, err := json.Marshal(object)
 	if err != nil {
-		return raw, false, len(rows)
+		return raw, false, total
 	}
-	return out, true, len(rows)
+	return out, true, total
+}
+
+// projectPublication is the part of a published report the model is sent: by default its headline (the publication,
+// the pack's entity, month, currency, basis and status, the Profit and Loss measures and working capital), or one
+// section in full, so a large frozen pack is read a section at a time rather than dropped whole.
+func projectPublication(value any, section string) any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	pack, _ := object["pack"].(map[string]any)
+	publication, _ := object["publication"].(map[string]any)
+	switch section {
+	case "profit_and_loss", "balance_sheet", "working_capital":
+		return map[string]any{"publication": publication, "section": section, section: pack[section]}
+	case "commentary":
+		return map[string]any{"publication": publication, "section": section, "commentary": publication["commentary"]}
+	}
+	summary := map[string]any{}
+	for _, key := range []string{"entity", "period", "currency", "basis", "as_of", "status", "overall", "note", "working_capital"} {
+		if v, ok := pack[key]; ok {
+			summary[key] = v
+		}
+	}
+	if pl, ok := pack["profit_and_loss"].(map[string]any); ok {
+		summary["profit_and_loss"] = map[string]any{"measures": pl["measures"]}
+	}
+	summary["sections"] = []string{"profit_and_loss", "balance_sheet", "working_capital", "commentary"}
+	return map[string]any{"publication": publication, "section": "summary", "pack": summary}
 }
 
 // lineageOf collects the closes a result names. pinned is the conversation's close for a close-scoped read. The second

@@ -11,7 +11,7 @@ import (
 // a result without a cap, or within it, is sent as it is.
 func TestModelReadsAreCappedNotDropped(t *testing.T) {
 	raw := []byte(`{"state":"ready","rows":[{"account":"Cash"},{"account":"AR"},{"account":"AP"}]}`)
-	body, truncated, total := capResult(raw, toolCap{"rows", 2})
+	body, truncated, total := capResult(raw, toolCap{array: "rows", limit: 2})
 	var out struct {
 		Rows      []map[string]string `json:"rows"`
 		Truncated bool                `json:"truncated"`
@@ -21,7 +21,7 @@ func TestModelReadsAreCappedNotDropped(t *testing.T) {
 	if err := json.Unmarshal(body, &out); err != nil || !truncated || total != 3 || len(out.Rows) != 2 || !out.Truncated || out.Total != 3 || out.State != "ready" || out.Rows[1]["account"] != "AR" {
 		t.Fatalf("capped result: %s truncated=%v total=%d err=%v", body, truncated, total, err)
 	}
-	same, truncated, _ := capResult(raw, toolCap{"rows", 3})
+	same, truncated, _ := capResult(raw, toolCap{array: "rows", limit: 3})
 	if truncated || string(same) != string(raw) {
 		t.Fatalf("a result within its cap changed: %s", same)
 	}
@@ -29,15 +29,15 @@ func TestModelReadsAreCappedNotDropped(t *testing.T) {
 	if truncated || string(same) != string(raw) {
 		t.Fatalf("a result without a cap changed: %s", same)
 	}
-	list, truncated, total := capResult([]byte(`[{"id":"1"},{"id":"2"},{"id":"3"}]`), toolCap{"items", 2})
+	list, truncated, total := capResult([]byte(`[{"id":"1"},{"id":"2"},{"id":"3"}]`), toolCap{array: "items", limit: 2})
 	if err := json.Unmarshal(list, &out); err != nil || !truncated || total != 3 || !out.Truncated || out.Total != 3 || !strings.Contains(string(list), `"items":[{"id":"1"},{"id":"2"}]`) {
 		t.Fatalf("a bare array is capped as items: %s truncated=%v total=%d err=%v", list, truncated, total, err)
 	}
-	if same, truncated, _ := capResult([]byte(`[{"id":"1"}]`), toolCap{"items", 2}); truncated || string(same) != `[{"id":"1"}]` {
+	if same, truncated, _ := capResult([]byte(`[{"id":"1"}]`), toolCap{array: "items", limit: 2}); truncated || string(same) != `[{"id":"1"}]` {
 		t.Fatalf("a short bare array changed: %s", same)
 	}
 	text := []byte(`"a document's text"`)
-	if same, _, _ := capResult(text, toolCap{"rows", 1}); string(same) != string(text) {
+	if same, _, _ := capResult(text, toolCap{array: "rows", limit: 1}); string(same) != string(text) {
 		t.Fatalf("a text result changed: %s", same)
 	}
 }
