@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
@@ -30,6 +31,7 @@ export function Readiness({
   closeId: string;
   papers: { id: string; kind: string; review_state: string }[];
 }) {
+  const dates = useDates();
   const [status, setStatus] = useState<Status>();
   const [scope, setScope] = useState<Scope>();
   const [editing, setEditing] = useState(false);
@@ -395,7 +397,7 @@ export function Readiness({
                 {status.history.map((h) => (
                   <li key={h.id}>
                     <strong>{h.decision.replaceAll("_", " ")}</strong> ·{" "}
-                    {h.actor} · {new Date(h.created_at).toLocaleString()}
+                    {h.actor} · {dates.dateTime(h.created_at)}
                     <p>{h.note}</p>
                   </li>
                 ))}

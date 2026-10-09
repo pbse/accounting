@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
 import { Collections } from "./Collections";
@@ -28,6 +29,7 @@ const statuses: Record<Item["kind"], Record<string, string>> = {
 const tone: Record<string, string> = { promised: "status ok", handed_to_bill_pay: "status ok", disputed: "status danger", on_hold: "status warn", following_up: "status info" };
 
 export function OpenItems({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [items, setItems] = useState<Items>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -150,7 +152,7 @@ export function OpenItems({ closeId }: { closeId: string }) {
       ) : (
         <>
           <p className="note">
-            Open in the capture of {new Date(items.captured_at).toLocaleString()}. A document is settled only when a later capture that read every open item no longer
+            Open in the capture of {dates.dateTime(items.captured_at)}. A document is settled only when a later capture that read every open item no longer
             lists it. Promised dates and bill-pay handoffs are what the cash plan will use. A customer is contacted only by a collection email a person approves, under
             the client's authority; nothing here pays a bill or writes anything off: a write-off is a correction prepared in the close.{" "}
             <button type="button" onClick={() => setVersion((n) => n + 1)}>

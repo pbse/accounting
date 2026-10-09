@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import { workspaceRequest } from "./workspace";
@@ -13,6 +14,7 @@ type Status = {
 };
 
 export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
+  const dates = useDates();
   const [status, setStatus] = useState<Status>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -183,7 +185,7 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
       )}
       {status?.snapshots.map((s) => (
         <p key={s.id}>
-          Snapshot #{s.id} for {s.period}, captured {new Date(s.captured_at).toLocaleString()}.{" "}
+          Snapshot #{s.id} for {s.period}, captured {dates.dateTime(s.captured_at)}.{" "}
           <button onClick={() => void download(s.id)}>Download exact JSON</button>
         </p>
       ))}
@@ -200,6 +202,7 @@ type Grant = { id?: string; state?: string; account_ids?: string[]; kinds?: stri
 
 // A person's grant lets approved drafts of the listed kinds post to the listed Xero accounts, up to a limit, until expiry.
 function XeroGrant({ closeId, connectionId }: { closeId: string; connectionId: string }) {
+  const dates = useDates();
   const [grant, setGrant] = useState<Grant>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -244,7 +247,7 @@ function XeroGrant({ closeId, connectionId }: { closeId: string; connectionId: s
         <>
           <p>
             Grant #{grant.id}: {grant.kinds?.join(", ")} drafts to {grant.account_ids?.length} accounts, up to {grant.max_amount} per journal, until{" "}
-            {grant.expires_at ? new Date(grant.expires_at).toLocaleString() : "—"}. {grant.reason}
+            {grant.expires_at ? dates.dateTime(grant.expires_at) : "—"}. {grant.reason}
           </p>
           <label>
             Type REVOKE XERO POSTING

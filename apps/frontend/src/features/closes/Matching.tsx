@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useRef, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
 
@@ -24,6 +25,7 @@ const label = (item: Item) => [item.kind === "document" ? "" : item.kind, item.n
 
 // Uploaded prepaid invoices beside the latest capture's bills and purchases, paired only on a unique currency and exact amount.
 export function Matching({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [report, setReport] = useState<Report>();
   const [error, setError] = useState("");
   const latest = useRef(0);
@@ -72,7 +74,7 @@ export function Matching({ closeId }: { closeId: string }) {
       ) : (
         <>
           <p className="note">
-            {report.note} Captured {new Date(report.captured_at).toLocaleString()}.
+            {report.note} Captured {dates.dateTime(report.captured_at)}.
           </p>
           {groups("Possible matches", report.pairs)}
           {groups("Same amount, more than one candidate", report.ambiguous)}

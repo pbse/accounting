@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { Link } from "react-router";
 import { type FormEvent, useEffect, useState } from "react";
 import { clientAsk, type CoverageStatus } from "./ask";
@@ -29,6 +30,7 @@ type Flux = { state: "ready" | "waiting"; reason?: string; currency?: string; th
 const kind = (c: Change) => (c.class === "Expense" ? "Expense" : c.class === "Revenue" ? "Income" : "Reported amount");
 
 export function Flux({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [flux, setFlux] = useState<Flux>();
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
@@ -97,8 +99,8 @@ export function Flux({ closeId }: { closeId: string }) {
       ) : (
         <>
           <p>
-            Profit and Loss {flux.this!.period} (snapshot #{flux.this!.snapshot_id}, captured {new Date(flux.this!.captured_at).toLocaleString()}) against{" "}
-            {flux.last!.period} (snapshot #{flux.last!.snapshot_id}, captured {new Date(flux.last!.captured_at).toLocaleString()}), largest movements first.{" "}
+            Profit and Loss {flux.this!.period} (snapshot #{flux.this!.snapshot_id}, captured {dates.dateTime(flux.this!.captured_at)}) against{" "}
+            {flux.last!.period} (snapshot #{flux.last!.snapshot_id}, captured {dates.dateTime(flux.last!.captured_at)}), largest movements first.{" "}
             {flux.note}
           </p>
           {(flux.this!.stale || flux.last!.stale) && <p role="status">A snapshot's source was replaced or its connection is inactive; capture again before relying on these figures.</p>}
@@ -181,7 +183,7 @@ export function Flux({ closeId }: { closeId: string }) {
               <fieldset disabled={busy}>
                 <legend>Client request I drafted from these changes</legend>
                 <p>
-                  Check the books first: anything recorded after this month's capture on {new Date(flux.this!.captured_at).toLocaleString()} is not in these figures. Edit the
+                  Check the books first: anything recorded after this month's capture on {dates.dateTime(flux.this!.captured_at)} is not in these figures. Edit the
                   wording as you need. Nothing is sent until you approve it and then approve the email.
                 </p>
                 <label>

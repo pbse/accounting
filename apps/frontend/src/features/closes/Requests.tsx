@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useRef, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
@@ -17,6 +18,7 @@ export function Requests({
   closeId: string;
   papers: { id: string; kind: string; review_state: string }[];
 }) {
+  const dates = useDates();
   const [history, setHistory] = useState<Draft[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -113,7 +115,7 @@ export function Requests({
       {latest && (
         <>
           <p>
-            Draft #{latest.id} · {new Date(latest.created_at).toLocaleString()}{" "}
+            Draft #{latest.id} · {dates.dateTime(latest.created_at)}{" "}
             · {latest.created_by} · draft revision; delivery history is in Work
           </p>
           {latest.stale && (
@@ -163,7 +165,7 @@ export function Requests({
             {history.map((d) => (
               <article key={d.id}>
                 <h3>
-                  Draft #{d.id} · {new Date(d.created_at).toLocaleString()}
+                  Draft #{d.id} · {dates.dateTime(d.created_at)}
                 </h3>
                 <p>
                   {d.created_by} · workpapers{" "}

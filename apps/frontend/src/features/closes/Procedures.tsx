@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
 import { ProcedureLearning } from "./ProcedureLearning";
@@ -32,6 +33,7 @@ export function Procedures({
   entity: string;
   onApplied: () => void;
 }) {
+  const dates = useDates();
   const [versions, setVersions] = useState<Version[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -209,7 +211,7 @@ export function Procedures({
                     )}
                     <p>
                       Approval record: {v.reason} · {v.actor} ·{" "}
-                      {new Date(v.created_at).toLocaleString()}
+                      {dates.dateTime(v.created_at)}
                     </p>
                     {v.enabled && k !== "basis" && k !== "owner" && k !== "payroll" && <>
                       <button disabled={busy} onClick={() => void preview(v)}>Preview affected work</button>

@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
@@ -41,6 +42,7 @@ const postings = { proposed: "proposed", posted_after_capture: "posted after thi
 const side = (amount: string) => (/^-?0(\.0+)?$/.test(amount) ? "0.00" : amount.startsWith("-") ? `${amount.slice(1)} Cr` : `${amount} Dr`);
 
 export function TieOut({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [board, setBoard] = useState<Board>();
   const [error, setError] = useState("");
   useEffect(() => {
@@ -74,7 +76,7 @@ export function TieOut({ closeId }: { closeId: string }) {
         <>
           <p>
             {board.snapshot.source === "xero" ? "Xero" : "QuickBooks"} Trial Balance from snapshot #{board.snapshot.id}, captured{" "}
-            {new Date(board.snapshot.captured_at).toLocaleString()}, against the latest version of each workpaper in this close
+            {dates.dateTime(board.snapshot.captured_at)}, against the latest version of each workpaper in this close
             {board.currency ? ` (${board.currency})` : ""}. Nothing is changed in the ledger.
           </p>
           {board.snapshot.stale && <p role="status">This snapshot's source was replaced or the connection is no longer active. Capture a new snapshot before relying on it.</p>}

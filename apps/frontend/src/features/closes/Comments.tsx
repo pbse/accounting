@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
@@ -7,6 +8,7 @@ export type PickedLine = { sourceId: string; name: string; line: number };
 
 // Questions on a draft and its earlier versions; any left open keeps the draft from approval.
 export function Comments({ closeId, paperId, fields, picked, canComment }: { closeId: string; paperId: string; fields: string[]; picked?: PickedLine; canComment: boolean }) {
+  const dates = useDates();
   const path = `/${closeId}/workpapers/${paperId}/comments`;
   const [comments, setComments] = useState<Comment[]>([]);
   const [anchor, setAnchor] = useState("general");
@@ -45,10 +47,10 @@ export function Comments({ closeId, paperId, fields, picked, canComment }: { clo
             {c.workpaper_id !== paperId && (
               <> · on <Link to={`/dashboard/closes/${closeId}/workpapers/${c.workpaper_id}`}>draft #{c.workpaper_id}</Link></>
             )}{" "}
-            · {c.author} · {new Date(c.created_at).toLocaleString()}
+            · {c.author} · {dates.dateTime(c.created_at)}
             <p>{c.body}</p>
             {c.resolved_at ? (
-              <p>Resolved by {c.resolved_by} on {new Date(c.resolved_at).toLocaleString()}: {c.resolution}</p>
+              <p>Resolved by {c.resolved_by} on {dates.dateTime(c.resolved_at)}: {c.resolution}</p>
             ) : (
               <form onSubmit={(e) => { e.preventDefault(); void send({ action: "resolve", id: c.id, resolution: resolutions[c.id] ?? "" }); }}>
                 <label>How it was resolved<input required value={resolutions[c.id] ?? ""} onChange={(e) => setResolutions({ ...resolutions, [c.id]: e.target.value })} /></label>

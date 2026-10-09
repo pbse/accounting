@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { workspaceQuery } from "../../data/queries";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -217,24 +218,28 @@ type NativeAccount = { account_id: string; account: string; reconciled: number; 
 
 // Xero's own reconciled flags for this account, beside (not confirming) the reviewer's cited native status.
 function NativeFlags({ closeId, account }: { closeId: string; account: string }) {
-  const [text, setText] = useState("");
+  const dates = useDates();
+  // The flags as read; the sentence is written as it renders, so the capture time reads in the person's zone once known.
+  const [read, setRead] = useState<{ text: string } | { flags: NativeAccount; at: string }>();
   useEffect(() => {
     let live = true;
     workspaceRequest(`/${closeId}/native-reconciliation`)
       .then((out: { status: string; reason?: string; captured_at?: string; accounts?: NativeAccount[] }) => {
         if (!live) return;
-        if (out.status !== "read") return setText(`Provider flags not read: ${out.reason ?? ""}`);
+        if (out.status !== "read") return setRead({ text: `Provider flags not read: ${out.reason ?? ""}` });
         const named = (out.accounts ?? []).filter((a) => a.account.trim().toLowerCase() === account.trim().toLowerCase());
-        if (named.length !== 1) return setText(`No single Xero bank account is named ${account}, so Xero's flags are not shown.`);
-        const a = named[0];
-        setText(`Xero flagged ${a.reconciled} of ${a.reconciled + a.unreconciled + a.unknown} captured records for ${a.account} as reconciled at ${new Date(out.captured_at ?? "").toLocaleString()}${a.unknown ? ` (${a.unknown} without a flag)` : ""}; native account completion and statement settlement were not verified.`);
+        if (named.length !== 1) return setRead({ text: `No single Xero bank account is named ${account}, so Xero's flags are not shown.` });
+        setRead({ flags: named[0], at: out.captured_at ?? "" });
       })
-      .catch(() => live && setText("Provider flags are unavailable."));
+      .catch(() => live && setRead({ text: "Provider flags are unavailable." }));
     return () => {
       live = false;
     };
   }, [closeId, account]);
-  return text ? <p className="note">{text}</p> : null;
+  if (!read) return null;
+  if ("text" in read) return <p className="note">{read.text}</p>;
+  const a = read.flags;
+  return <p className="note">{`Xero flagged ${a.reconciled} of ${a.reconciled + a.unreconciled + a.unknown} captured records for ${a.account} as reconciled at ${dates.dateTime(read.at)}${a.unknown ? ` (${a.unknown} without a flag)` : ""}; native account completion and statement settlement were not verified.`}</p>;
 }
 
 function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
@@ -313,6 +318,7 @@ function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
 }
 
 export default function WorkpaperView() {
+  const dates = useDates();
   const { id, paperId } = useParams();
   const { close, papers, more, error, refreshError, loading, reload } = useClose(id);
   const [older, setOlder] = useState<Paper>();
@@ -375,7 +381,7 @@ export default function WorkpaperView() {
           </div>
         }
       >
-        <ReviewPill state={saved.review_state} /> Prepared {new Date(saved.created_at).toLocaleString()}
+        <ReviewPill state={saved.review_state} /> Prepared {dates.dateTime(saved.created_at)}
         {saved.paper.revises ? ` · recalculated from draft #${saved.paper.revises}` : ""}
       </PageHeader>
       {more && <p className="note">Review navigation covers the latest 100 drafts in this close.</p>}

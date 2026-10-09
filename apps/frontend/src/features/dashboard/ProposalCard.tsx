@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "../closes/workspace";
@@ -8,6 +9,7 @@ type Outcome = { at: string } & Record<string, unknown>;
 // draft, running a portfolio goal on the closes a preview listed, or opening a client's month. It shows exactly what was proposed and runs only
 // when the author confirms; the server previews the goal again and refuses a changed selection.
 export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onConfirm }: { kind: "approval" | "portfolio" | "open_close"; proposal: Record<string, unknown>; closeId?: string; outcome?: Outcome | null; live: boolean; onConfirm: (body: { reason: string }) => Promise<void> }) {
+  const dates = useDates();
   const [reason, setReason] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -60,7 +62,7 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
       ].filter(Boolean);
       return card(
         <p>
-          {String(outcome.action ?? "")} on {String(outcome.closes ?? "")} close{outcome.closes === 1 ? "" : "s"}: {parts.join(", ") || "no outcome recorded"} · confirmed {new Date(outcome.at).toLocaleString()}.{" "}
+          {String(outcome.action ?? "")} on {String(outcome.closes ?? "")} close{outcome.closes === 1 ? "" : "s"}: {parts.join(", ") || "no outcome recorded"} · confirmed {dates.dateTime(outcome.at)}.{" "}
           {stalled && <span role="alert">{stalled} </span>}
           <Link to="/dashboard">Work →</Link>
         </p>,
@@ -69,14 +71,14 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
     if (kind === "open_close") {
       return card(
         <p>
-          {outcome.created ? `Opened ${month}` : `${month} was already open`} · confirmed {new Date(outcome.at).toLocaleString()}.{" "}
+          {outcome.created ? `Opened ${month}` : `${month} was already open`} · confirmed {dates.dateTime(outcome.at)}.{" "}
           <Link to={`/dashboard/closes/${String(outcome.close_id ?? "")}`}>Open the close →</Link>
         </p>,
       );
     }
     return card(
       <p>
-        Review requested for draft #{String(args.workpaper_id ?? "")} · confirmed {new Date(outcome.at).toLocaleString()}.{" "}
+        Review requested for draft #{String(args.workpaper_id ?? "")} · confirmed {dates.dateTime(outcome.at)}.{" "}
         <Link to={`/dashboard/closes/${closeId}/workpapers/${String(args.workpaper_id ?? "")}`}>Open the draft →</Link>
       </p>,
     );

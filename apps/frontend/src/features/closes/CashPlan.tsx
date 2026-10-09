@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
 import { AskAgent } from "../dashboard/AskAgent";
 import { amount, workspaceRequest } from "./workspace";
@@ -52,6 +53,7 @@ const negative = (value: string) => value.startsWith("-");
 
 // readOnly is an executive's view: the plan alone, without schedules to edit or the agent.
 export function CashPlan({ closeId, readOnly = false }: { closeId: string; readOnly?: boolean }) {
+  const dates = useDates();
   const [plan, setPlan] = useState<Plan>();
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [error, setError] = useState("");
@@ -128,7 +130,7 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
       )}
       <p>
         <strong>{plan.entity}</strong> · 13 weeks from {plan.start} · {plan.currency} · opening book cash {show(plan.opening.amount)} at{" "}
-        {new Date(plan.opening.as_of).toLocaleString()}
+        {dates.dateTime(plan.opening.as_of)}
       </p>
       <p className={negative(plan.lowest.amount) ? undefined : "note"} role={negative(plan.lowest.amount) ? "alert" : undefined}>
         Lowest end-of-day book cash: <strong>{show(plan.lowest.amount)}</strong> on {plan.lowest.on}.
@@ -510,6 +512,7 @@ const reviewStates = {
 // Reviewed plans: a person accepts the assumptions of the plan in view and it is kept as it was; later captures show
 // how actual book cash compared with what it expected.
 function Reviews({ closeId, plan, scenario, readOnly }: { closeId: string; plan: Extract<Plan, { state: "ready" }>; scenario: string; readOnly: boolean }) {
+  const dates = useDates();
   const [list, setList] = useState<Review[]>([]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -557,7 +560,7 @@ function Reviews({ closeId, plan, scenario, readOnly }: { closeId: string; plan:
             const show = (value: string) => amount(value, r.currency);
             return (
             <li key={r.id}>
-              <strong>{r.scenario_name ? `With “${r.scenario_name}”` : "As it stood"}</strong> · from {r.start} · reviewed by {r.reviewed_by} {new Date(r.reviewed_at).toLocaleString()} ·{" "}
+              <strong>{r.scenario_name ? `With “${r.scenario_name}”` : "As it stood"}</strong> · from {r.start} · reviewed by {r.reviewed_by} {dates.dateTime(r.reviewed_at)} ·{" "}
               {loadedFor === plan.digest ? <span className={reviewStates[r.state][0]}>{reviewStates[r.state][1]}</span> : <span className="status info">Checking…</span>} · lowest {show(r.lowest.amount)} on {r.lowest.on}
               <p>Assumptions accepted: {r.assumptions}</p>
               {r.actuals.length > 0 && (
@@ -577,7 +580,7 @@ function Reviews({ closeId, plan, scenario, readOnly }: { closeId: string; plan:
                     {r.actuals.map((a) => (
                       <tr key={a.captured_at}>
                         <th scope="row" style={{ textAlign: "left", fontWeight: 400 }}>
-                          {new Date(a.captured_at).toLocaleString()}
+                          {dates.dateTime(a.captured_at)}
                         </th>
                         <td>{show(a.forecast)}</td>
                         {a.actual === undefined ? (

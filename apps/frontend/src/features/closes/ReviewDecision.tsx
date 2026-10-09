@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
@@ -25,6 +26,7 @@ export function ReviewDecision({
   onChange: () => void;
   autoLoad?: boolean;
 }) {
+  const dates = useDates();
   const [review, setReview] = useState<Review>();
   const [comparison, setComparison] = useState<{
     previous_id: string;
@@ -106,7 +108,7 @@ export function ReviewDecision({
               <h4>Since your last review</h4>
               {since.last_review ? (
                 <p>
-                  You {since.last_review.decision.replaceAll("_", " ")} draft #{since.last_review.workpaper_id} on {new Date(since.last_review.at).toLocaleString()}.
+                  You {since.last_review.decision.replaceAll("_", " ")} draft #{since.last_review.workpaper_id} on {dates.dateTime(since.last_review.at)}.
                   {since.last_review.workpaper_id !== paperId && ` ${since.changes.length} field${since.changes.length === 1 ? "" : "s"} changed since then.`}
                 </p>
               ) : (
@@ -227,7 +229,7 @@ export function ReviewDecision({
               {review.history.map((h) => (
                 <li key={h.id}>
                   <strong>{h.decision.replaceAll("_", " ")}</strong> · {h.actor}{" "}
-                  · {new Date(h.created_at).toLocaleString()}
+                  · {dates.dateTime(h.created_at)}
                   <p>{h.note}</p>
                 </li>
               ))}

@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "../closes/workspace";
@@ -30,6 +31,7 @@ const jobs = (n: number) => `${n} job${n === 1 ? "" : "s"}`;
 // its author confirms that list, and then follows the jobs its confirmation covered.
 // proposedReason is the reason the agent gave for stopping, shown for the member to keep or change.
 export function ActionCard({ closeId, action, outcome, live, proposedReason = "", onConfirm }: { closeId: string; action: CardAction; outcome?: Outcome | null; live: boolean; proposedReason?: string; onConfirm: (body: { digest: string; reason: string }) => Promise<void> }) {
+  const dates = useDates();
   const [status, setStatus] = useState<Status>();
   const [work, setWork] = useState<Work[]>();
   const [error, setError] = useState("");
@@ -70,7 +72,7 @@ export function ActionCard({ closeId, action, outcome, live, proposedReason = ""
       <>
         <p>
           {done[action]} {jobs(outcome.jobs.length)}
-          {outcome.run_id ? ` as run #${outcome.run_id}` : ""} · confirmed {new Date(outcome.at).toLocaleString()}
+          {outcome.run_id ? ` as run #${outcome.run_id}` : ""} · confirmed {dates.dateTime(outcome.at)}
         </p>
         {live && work && (
           <ul>
@@ -147,7 +149,7 @@ export function ActionCard({ closeId, action, outcome, live, proposedReason = ""
       )}
       {run && (
         <p role="status">
-          Close preparation run #{run.id} · started by {run.actor} · {new Date(run.created_at).toLocaleString()} ·{" "}
+          Close preparation run #{run.id} · started by {run.actor} · {dates.dateTime(run.created_at)} ·{" "}
           {Object.entries(run.items.reduce<Record<string, number>>((n, i) => ({ ...n, [words(i.state)]: (n[words(i.state)] ?? 0) + 1 }), {}))
             .map(([state, count]) => `${count} ${state}`)
             .join(" · ")}
