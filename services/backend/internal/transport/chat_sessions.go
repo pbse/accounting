@@ -31,8 +31,8 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 		}
 		// A filter matches the title or the close's name, whatever page the chat is on.
 		q := strings.Join(strings.Fields(r.URL.Query().Get("q")), " ")
-		if len(q) > 100 {
-			q = q[:100]
+		if runes := []rune(q); len(runes) > 100 {
+			q = string(runes[:100])
 		}
 		rows, err := db.QueryContext(r.Context(), `SELECT s.id::text,s.title,COALESCE(s.close_id::text,''),COALESCE(c.entity||' · '||c.period,''),s.last_at,(SELECT count(*) FROM chat_messages m WHERE m.session_id=s.id)
  FROM chat_sessions s LEFT JOIN client_closes c ON c.id=s.close_id
@@ -83,7 +83,7 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 		switch in.Action {
 		case "rename":
 			title := strings.Join(strings.Fields(in.Title), " ")
-			if len(title) < 1 || len(title) > 80 {
+			if n := len([]rune(title)); n < 1 || n > 80 {
 				problem(w, 422, "Name the chat in 1–80 characters.")
 				return
 			}

@@ -124,6 +124,8 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	call("user_b", "GET", "/v1/closes/chat?session="+s1, nil, 404)
 	call("user_a", "GET", "/v1/closes/chat?session=abc", nil, 404)
 	// Rename, a chat that is not the member's, and delete.
+	call("user_a", "POST", "/v1/closes/chat/sessions/"+s2, map[string]any{"action": "rename", "title": strings.Repeat("é", 81)}, 422)
+	call("user_a", "POST", "/v1/closes/chat/sessions/"+s2, map[string]any{"action": "rename", "title": strings.Repeat("é", 80)}, 200)
 	call("user_a", "POST", "/v1/closes/chat/sessions/"+s2, map[string]any{"action": "rename", "title": "  Blocked   work "}, 200)
 	if l := list("user_a"); l.Sessions[0].Title != "Blocked work" {
 		t.Fatalf("the chat is renamed: %+v", l)
@@ -197,6 +199,7 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	if len(page.Sessions) != 11 || page.HasMore {
 		t.Fatalf("a filter searches every page by title: %d", len(page.Sessions))
 	}
+	call("user_a", "GET", "/v1/closes/chat/sessions?q="+strings.Repeat("%E4%B8%AD", 120), nil, 200)
 	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=alpha", nil, 200), &page))
 	if len(page.Sessions) != 1 {
 		t.Fatalf("a filter searches by the close's name: %d", len(page.Sessions))

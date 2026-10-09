@@ -4,7 +4,7 @@ BEGIN;
 -- otherwise left behind for a new one (docs/agent-chat.md, "Sessions"). Deleting a session takes its messages.
 CREATE TABLE chat_sessions (
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
- organization_id text NOT NULL REFERENCES organizations(id),
+ organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
  author text NOT NULL,
  close_id bigint REFERENCES client_closes(id) ON DELETE CASCADE,
  executive boolean NOT NULL DEFAULT false,

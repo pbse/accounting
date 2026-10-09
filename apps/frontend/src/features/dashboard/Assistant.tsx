@@ -164,7 +164,14 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
         setMessages(data.messages);
         setSession(data.session ? { id: data.session.id, title: data.session.title } : null);
       })
-      .catch((e) => asked === generation.current && setError(e instanceof Error ? e.message : "Conversation unavailable."))
+      .catch((e) => {
+        if (asked !== generation.current) return;
+        // A chat that could not be opened (deleted elsewhere, no longer accessible) leaves nothing of the one before.
+        setMessages([]);
+        setSession(null);
+        setPicked(false);
+        setError(e instanceof Error ? e.message : "Conversation unavailable.");
+      })
       .finally(() => asked === generation.current && setLoaded(true));
   }
   // startNew leaves the current chat where it is and opens a fresh one; nothing is saved until its first question.
