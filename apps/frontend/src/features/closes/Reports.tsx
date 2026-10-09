@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { Fragment, useEffect, useState } from "react";
 import { AskAgent } from "../dashboard/AskAgent";
 import { LedgerSelection } from "./Coverage";
@@ -66,6 +67,7 @@ export function Reports({ closeId }: { closeId: string }) {
 // A pack's statements, live or as published. Staff can ask the agent, open each figure's ledger rows and publish;
 // an executive reads the figures alone.
 export function PackView({ closeId, pack, staff = false, onPack }: { closeId: string; pack: Extract<Pack, { state: "ready" }>; staff?: boolean; onPack?: (pack: Pack) => void }) {
+  const dates = useDates();
   const [account, setAccount] = useState("");
   const show = (value: string | null) => (value === null ? "–" : amount(value, pack.currency));
   const compared = !!pack.prior;
@@ -136,7 +138,7 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         <strong>
           {pack.entity} · {pack.period}
         </strong>{" "}
-        · {pack.basis} basis · {pack.currency} · captured from {pack.source === "quickbooks" ? "QuickBooks" : "Xero"} {new Date(pack.as_of).toLocaleString()} ·{" "}
+        · {pack.basis} basis · {pack.currency} · captured from {pack.source === "quickbooks" ? "QuickBooks" : "Xero"} {dates.dateTime(pack.as_of)} ·{" "}
         <span className={statusClass}>{statusText}</span>
       </p>
       {pack.stale && <p role="alert">This capture is no longer current: its connection or evidence changed. Capture the month again before relying on these figures.</p>}
@@ -145,7 +147,7 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         {pack.note}{" "}
         {prior ? (
           <>
-            Compared with {prior.period} (<span className={statusLabels[prior.status][0]}>{statusLabels[prior.status][1]}</span>), captured {new Date(prior.as_of).toLocaleString()}
+            Compared with {prior.period} (<span className={statusLabels[prior.status][0]}>{statusLabels[prior.status][1]}</span>), captured {dates.dateTime(prior.as_of)}
             {prior.stale ? "; that capture is no longer current" : ""}. Totals are the sums of the accounts listed above them.
           </>
         ) : (
@@ -293,6 +295,7 @@ const publishedStates = {
 
 // Publishing freezes this pack with the reviewer's commentary; exports come from the frozen version, never the live figures.
 export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?: Pack; onOpen?: (id: string) => void }) {
+  const dates = useDates();
   const [list, setList] = useState<Published[]>();
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -347,12 +350,12 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
         <ul>
           {list.map((p) => (
             <li key={p.id}>
-              <strong>Version {p.version}</strong> · published by {p.published_by} {new Date(p.published_at).toLocaleString()} ·{" "}
+              <strong>Version {p.version}</strong> · published by {p.published_by} {dates.dateTime(p.published_at)} ·{" "}
               <span className={publishedStates[p.state][0]}>{publishedStates[p.state][1]}</span>
               <p>{p.commentary}</p>
               {p.reason && <p className="note">Corrects version {list.find((q) => q.id === p.supersedes)?.version}: {p.reason}</p>}
               <p className="note">
-                {p.acknowledgments.length === 0 ? "Not acknowledged yet." : `Acknowledged by ${p.acknowledgments.map((a) => `${a.subject} (${new Date(a.at).toLocaleDateString()})`).join(", ")}.`}
+                {p.acknowledgments.length === 0 ? "Not acknowledged yet." : `Acknowledged by ${p.acknowledgments.map((a) => `${a.subject} (${dates.date(a.at)})`).join(", ")}.`}
               </p>
               {onOpen && <button type="button" onClick={() => onOpen(p.id)}>Read version {p.version}</button>}{" "}
               <button type="button" onClick={() => void download(p, "pdf")}>PDF</button> <button type="button" onClick={() => void download(p, "csv")}>CSV</button>{" "}

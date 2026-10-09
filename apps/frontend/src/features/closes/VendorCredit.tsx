@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useState, type FormEvent } from "react";
 import type { PrepaidWorkpaper } from "../../../../../packages/contracts/prepaid";
 import type { Source } from "./Evidence";
@@ -6,6 +7,7 @@ import { workspaceRequest } from "./workspace";
 type Intent = { state: string; digest?: string; realm?: string; vendor_name?: string; unbooked_confirmed_by?: string; credit?: unknown; readback?: unknown; error?: string; external_id?: string; approval_expires_at?: string; configured?: boolean };
 
 export function VendorCredit({ closeId, paperId, paper, sources, approved }: { closeId: string; paperId: string; paper: PrepaidWorkpaper; sources: Source[]; approved: boolean }) {
+  const dates = useDates();
   const [intent, setIntent] = useState<Intent>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -46,7 +48,7 @@ export function VendorCredit({ closeId, paperId, paper, sources, approved }: { c
         <label><input type="checkbox" name="unbooked_confirmed" required /> I checked the current QuickBooks books and confirmed this credit has not been recorded or included in the booked prepaid balance. Posting it will require a fresh ledger capture and workpaper review.</label>
         <button className="primary" disabled={busy}>{intent.state === "not_prepared" ? "Preview native VendorCredit" : "Replace preview and reset approval"}</button>
       </form>}
-      {(intent.state === "preview" || intent.state === "approved") && <><p>Accountant approval binds this exact vendor, evidence, date, amount and accounts for ten minutes. A posting attempt is never retried automatically.</p><label>Type {intent.state === "preview" ? "APPROVE VENDOR CREDIT" : "POST VENDOR CREDIT"}<input value={confirmation} onChange={e => setConfirmation(e.target.value)} autoComplete="off" /></label><button disabled={busy || confirmation !== (intent.state === "preview" ? "APPROVE VENDOR CREDIT" : "POST VENDOR CREDIT")} onClick={() => void run({ action: intent.state === "preview" ? "approve" : "execute", digest: intent.digest, confirmation })}>{intent.state === "preview" ? "Approve exact credit" : "Post once to QuickBooks"}</button>{intent.approval_expires_at && <p>Approval expires {new Date(intent.approval_expires_at).toLocaleString()}.</p>}</>}
+      {(intent.state === "preview" || intent.state === "approved") && <><p>Accountant approval binds this exact vendor, evidence, date, amount and accounts for ten minutes. A posting attempt is never retried automatically.</p><label>Type {intent.state === "preview" ? "APPROVE VENDOR CREDIT" : "POST VENDOR CREDIT"}<input value={confirmation} onChange={e => setConfirmation(e.target.value)} autoComplete="off" /></label><button disabled={busy || confirmation !== (intent.state === "preview" ? "APPROVE VENDOR CREDIT" : "POST VENDOR CREDIT")} onClick={() => void run({ action: intent.state === "preview" ? "approve" : "execute", digest: intent.digest, confirmation })}>{intent.state === "preview" ? "Approve exact credit" : "Post once to QuickBooks"}</button>{intent.approval_expires_at && <p>Approval expires {dates.dateTime(intent.approval_expires_at)}.</p>}</>}
       {intent.external_id && <button disabled={busy} onClick={() => void run({ action: "verify", digest: intent.digest })}>Verify saved VendorCredit in QuickBooks</button>}
     </>}
   </details>;

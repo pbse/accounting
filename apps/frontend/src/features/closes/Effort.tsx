@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
@@ -52,6 +53,7 @@ export const minutes = (value: number) => (value < 1 ? "< 1 min" : `${Math.round
 const hours = (seconds: number) => (seconds < 3600 ? minutes(seconds / 60) : `${(seconds / 3600).toFixed(1)} h`);
 
 export function EffortCard({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [summary, setSummary] = useState<Summary>();
   const [error, setError] = useState("");
   const [form, setForm] = useState({ activity: "prepare" as EntryActivity, minutes: "", note: "" });
@@ -101,7 +103,7 @@ export function EffortCard({ closeId }: { closeId: string }) {
         <dt>Tracked workspace activity</dt>
         <dd>
           {minutes(summary.tracked_seconds / 60)}
-          {summary.tracking_since ? ` since ${new Date(summary.tracking_since).toLocaleDateString()}` : ""}
+          {summary.tracking_since ? ` since ${dates.date(summary.tracking_since)}` : ""}
           {Object.keys(summary.tracked_by_activity).length > 0 &&
             ` · approximately ${Object.entries(summary.tracked_by_activity)
               .map(([key, seconds]) => `${labels[key as Activity]} ${minutes((seconds ?? 0) / 60)}`)
@@ -114,7 +116,7 @@ export function EffortCard({ closeId }: { closeId: string }) {
         <dt>Delivered requests without a reply</dt>
         <dd>
           {summary.open_requests}
-          {summary.oldest_open_since ? ` · oldest since ${new Date(summary.oldest_open_since).toLocaleDateString()}` : ""}
+          {summary.oldest_open_since ? ` · oldest since ${dates.date(summary.oldest_open_since)}` : ""}
         </dd>
       </dl>
       <details>
@@ -146,7 +148,7 @@ export function EffortCard({ closeId }: { closeId: string }) {
           <ul>
             {summary.entries.map((entry, index) => (
               <li key={index}>
-                {entryLabels[entry.activity]} · {entry.minutes} min · {entry.note} · {new Date(entry.created_at).toLocaleDateString()}
+                {entryLabels[entry.activity]} · {entry.minutes} min · {entry.note} · {dates.date(entry.created_at)}
                 {entry.mine ? " · you" : ""}
               </li>
             ))}

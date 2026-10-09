@@ -1,9 +1,11 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
 type Reply = { id: string; request_id: string; envelope_from: string; header_from: string; body: string; addresses_match: boolean; state: string; received_at: string; decision_note?: string };
 
 export function EmailReplies({ closeId, onReleased }: { closeId: string; onReleased: () => void }) {
+  const dates = useDates();
   const [items, setItems] = useState<Reply[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,7 +34,7 @@ export function EmailReplies({ closeId, onReleased }: { closeId: string; onRelea
     {loaded && items.length === 0 && <p>No email replies received for this close.</p>}
     {items.map(item => <article key={item.id}>
       <h3>Request #{item.request_id} · {item.state}</h3>
-      <p>Received {new Date(item.received_at).toLocaleString()} from {item.envelope_from}. Message From: {item.header_from}. {item.addresses_match ? "Addresses match the approved recipient; identity still needs review." : "Sender differs from the approved recipient. Keep held and use the secure link."}</p>
+      <p>Received {dates.dateTime(item.received_at)} from {item.envelope_from}. Message From: {item.header_from}. {item.addresses_match ? "Addresses match the approved recipient; identity still needs review." : "Sender differs from the approved recipient. Keep held and use the secure link."}</p>
       <pre>{item.body}</pre>
       {item.state === "held" && <form onSubmit={e => { e.preventDefault(); const data = new FormData(e.currentTarget); void decide(item.id, String(data.get("action")) as "release" | "reject", String(data.get("reason")), String(data.get("verification_reference") ?? "")); }}>
         <label>Decision reason<input name="reason" required minLength={5} maxLength={2000} /></label>

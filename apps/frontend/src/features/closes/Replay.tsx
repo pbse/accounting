@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 import { RowList } from "@close/ui/components/RowList";
@@ -6,6 +7,7 @@ import { SectionHeader } from "@close/ui/components/SectionHeader";
 type Item = { job_id: string; source_name: string; confirmed_kind: string; replay_kind?: string; kept: boolean; changed_fields: string[]; error?: string };
 
 export function Replay({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [result, setResult] = useState<{ model: string; reasoning_effort?: string | null; items: Item[]; actor?: string; created_at?: string }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -40,7 +42,7 @@ export function Replay({ closeId }: { closeId: string }) {
       {error && <p role="alert">{error}</p>}
       {result?.created_at && (
         <p className="note">
-          Saved {new Date(result.created_at).toLocaleString()} · {result.actor === "scheduled-replay" ? "checked automatically for this model and effort" : `run by ${result.actor}`}
+          Saved {dates.dateTime(result.created_at)} · {result.actor === "scheduled-replay" ? "checked automatically for this model and effort" : `run by ${result.actor}`}
         </p>
       )}
       {result && (

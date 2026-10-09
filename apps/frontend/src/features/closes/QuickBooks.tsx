@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
@@ -49,6 +50,7 @@ export function QuickBooks({
   closeId: string;
   entity: string;
 }) {
+  const dates = useDates();
   const [status, setStatus] = useState<Status>();
   const [syncs, setSyncs] = useState<TransactionSync[]>([]);
   const [transactions, setTransactions] = useState<TransactionRow[]>([]);
@@ -317,8 +319,8 @@ export function QuickBooks({
           {syncs.length === 0 ? <p>No transaction capture requested.</p> : (
             <ul>{syncs.map((s) => <li key={s.id}>
               {s.period} transactions · {s.state.replaceAll("_", " ")} · attempt {s.attempts}/3
-              {s.state === "completed" && <> · {s.latest ? "latest completed" : "historical"} · evidence #{s.evidence_id} · {Object.values(s.counts ?? {}).reduce((n, count) => n + count, 0)} records · {s.started_at ? `${new Date(s.started_at).toLocaleString()} to ` : ""}{s.finished_at && new Date(s.finished_at).toLocaleString()} · {s.completeness || "legacy capture; count completeness unverified"} <button onClick={() => void download(s.id, true)}>Download transactions</button></>}
-              {s.state === "unchanged" && <> · no source change · evidence #{s.evidence_id} · checked {s.finished_at && new Date(s.finished_at).toLocaleString()}{s.completeness && ` · ${s.completeness}`}</>}
+              {s.state === "completed" && <> · {s.latest ? "latest completed" : "historical"} · evidence #{s.evidence_id} · {Object.values(s.counts ?? {}).reduce((n, count) => n + count, 0)} records · {s.started_at ? `${dates.dateTime(s.started_at)} to ` : ""}{s.finished_at && dates.dateTime(s.finished_at)} · {s.completeness || "legacy capture; count completeness unverified"} <button onClick={() => void download(s.id, true)}>Download transactions</button></>}
+              {s.state === "unchanged" && <> · no source change · evidence #{s.evidence_id} · checked {s.finished_at && dates.dateTime(s.finished_at)}{s.completeness && ` · ${s.completeness}`}</>}
               {s.error && <span role="alert"> · {s.error}</span>}
             </li>)}</ul>
           )}
@@ -342,7 +344,7 @@ export function QuickBooks({
               {status.data.snapshots.map((s) => (
                 <li key={s.id}>
                   Snapshot #{s.id} · {s.period ? `${s.period} accrual reports · source #${s.source_id}` : "account directory only"} · {s.account_count} accounts ·{" "}
-                  {new Date(s.captured_at).toLocaleString()} · realm {s.realm}
+                  {dates.dateTime(s.captured_at)} · realm {s.realm}
                   {s.connection_id !== c?.id || c?.state !== "active"
                     ? " · historical connection"
                     : ""}{" "}

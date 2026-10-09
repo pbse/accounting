@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
 
@@ -11,6 +12,7 @@ const show = (amount: string, currency: string) => (currency ? money(amount, cur
 
 // Receivables and payables aged at month-end from the latest capture's open items. Statements are downloads only.
 export function Aging({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [report, setReport] = useState<Report>();
   const [error, setError] = useState("");
   useEffect(() => {
@@ -80,7 +82,7 @@ export function Aging({ closeId }: { closeId: string }) {
       ) : (
         <>
           <p className="note">
-            {report.note} Captured {new Date(report.captured_at).toLocaleString()}; aged against {report.month_end}.
+            {report.note} Captured {dates.dateTime(report.captured_at)}; aged against {report.month_end}.
           </p>
           {!report.complete && <p role="status">Incomplete: some open items could not be read in this capture, so totals may be missing documents.</p>}
           {table("Receivables", report.receivables, true)}

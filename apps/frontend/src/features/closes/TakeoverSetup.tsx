@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
@@ -15,10 +16,21 @@ type Setup = { id: string; digest: string; timezone: string; confirmed_by: strin
 type View = { takeover: boolean; content?: Content; digest?: string; problems?: string[]; setups?: Setup[]; you?: string[] };
 
 const plain = (s: string) => s.replaceAll("_", " ");
-const zones = Intl.supportedValuesOf("timeZone");
 
 // The opening month's takeover setup: what the client is taken over with, read from the firm's records and confirmed once.
 export function TakeoverSetup({ closeId }: { closeId: string }) {
+  // The device's zone is the browser's own, read once the page has hydrated: a server render would name its own.
+  const [device, setDevice] = useState("");
+  const [zones, setZones] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      setDevice(Intl.DateTimeFormat().resolvedOptions().timeZone ?? "");
+      setZones(Intl.supportedValuesOf("timeZone"));
+    } catch {
+      // No zone to suggest; the person types it.
+    }
+  }, []);
+  const dates = useDates();
   const [view, setView] = useState<View>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -100,17 +112,17 @@ export function TakeoverSetup({ closeId }: { closeId: string }) {
       </dl>
       {latest && latest.digest === view.digest && !editing ? (
         <p role="status">
-          Confirmed by {latest.confirmed_by} on {new Date(latest.confirmed_at).toLocaleString()}; the client's timezone is {latest.timezone}.{" "}
+          Confirmed by {latest.confirmed_by} on {dates.dateTime(latest.confirmed_at)}; the client's timezone is {latest.timezone}.{" "}
           <button type="button" onClick={() => setEditing(true)}>Change the timezone</button>
         </p>
       ) : (
         <form onSubmit={(e) => void confirm(e)}>
           <fieldset disabled={busy}>
-            {latest && <p role="status">The setup changed since it was confirmed on {new Date(latest.confirmed_at).toLocaleDateString()}. This month stays confirmed; confirm again to record the change.</p>}
+            {latest && <p role="status">The setup changed since it was confirmed on {dates.date(latest.confirmed_at)}. This month stays confirmed; confirm again to record the change.</p>}
             {view.problems?.map((p) => <p role="alert" key={p}>{p}</p>)}
             <label>
               Client's timezone
-              <input name="timezone" required list="takeover-zones" defaultValue={latest?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone} />
+              <input name="timezone" required list="takeover-zones" defaultValue={latest?.timezone ?? device} key={latest?.timezone ?? device} />
               <datalist id="takeover-zones">{zones.map((z) => <option key={z} value={z} />)}</datalist>
             </label>
             <label>

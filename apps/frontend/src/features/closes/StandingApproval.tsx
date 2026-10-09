@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
@@ -10,6 +11,7 @@ const covers = {
 };
 
 export function StandingApproval({ closeId, paperId, kind, approved }: { closeId: string; paperId: string; kind: keyof typeof covers; approved: boolean }) {
+  const dates = useDates();
   const [grant, setGrant] = useState<Grant | null>();
   const [reason, setReason] = useState("");
   const [confirmed, setConfirmed] = useState(false);
@@ -46,7 +48,7 @@ export function StandingApproval({ closeId, paperId, kind, approved }: { closeId
       {grant ? (
         <>
           <p>
-            Standing approval #{grant.id} by {grant.granted_by} since {new Date(grant.created_at).toLocaleDateString()}
+            Standing approval #{grant.id} by {grant.granted_by} since {dates.date(grant.created_at)}
             {grant.workpaper_id !== paperId ? `, granted on draft #${grant.workpaper_id}` : ""}: {grant.reason}
           </p>
           {grant.in_force ? (

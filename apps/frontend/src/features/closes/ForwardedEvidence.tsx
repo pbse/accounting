@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
@@ -6,6 +7,7 @@ type File = { id: string; name: string; digest: string; state: string; error: st
 type Status = { configured: boolean; links: Link[]; files: File[] };
 
 export function ForwardedEvidence({ closeId, onReleased }: { closeId: string; onReleased: () => void }) {
+  const dates = useDates();
   const [status, setStatus] = useState<Status>();
   const [address, setAddress] = useState("");
   const [reasons, setReasons] = useState<Record<string, string>>({});
@@ -63,12 +65,12 @@ export function ForwardedEvidence({ closeId, onReleased }: { closeId: string; on
       <button disabled={busy} onClick={() => void issue()}>Issue a seven-day evidence address</button>
       {address && <p><strong>Copy and share once:</strong> <code>{address}</code> <button onClick={() => void navigator.clipboard.writeText(address)}>Copy address</button></p>}
       {status.links.filter((link) => !link.revoked_at && new Date(link.expires_at) > new Date()).map((link) =>
-        <p key={link.digest}>Issued {new Date(link.issued_at).toLocaleString()} · expires {new Date(link.expires_at).toLocaleString()} <button disabled={busy} onClick={() => void revoke(link.digest)}>Revoke address</button></p>)}
+        <p key={link.digest}>Issued {dates.dateTime(link.issued_at)} · expires {dates.dateTime(link.expires_at)} <button disabled={busy} onClick={() => void revoke(link.digest)}>Revoke address</button></p>)}
     </>}
     <h3>Forwarded attachments</h3>
     {status?.files.length === 0 && <p>No forwarded attachments.</p>}
     {status?.files.map((file) => <article key={file.id}>
-      <p><strong>{file.name}</strong> · {file.state} · received {new Date(file.received_at).toLocaleString()} from unverified {file.from_address}{file.subject && ` · ${file.subject}`}</p>
+      <p><strong>{file.name}</strong> · {file.state} · received {dates.dateTime(file.received_at)} from unverified {file.from_address}{file.subject && ` · ${file.subject}`}</p>
       {file.error && <p role="alert">{file.error}</p>}
       {file.source_id && <p>Evidence #{file.source_id}. Identical bytes reuse an existing source; a changed document needs explicit comparison or replacement.</p>}
       {(file.state === "clean" || file.state === "released") && file.scanned_at && Date.now() - new Date(file.scanned_at).getTime() < 24 * 60 * 60 * 1000 && <button onClick={() => void download(file)}>Download scanned original</button>}

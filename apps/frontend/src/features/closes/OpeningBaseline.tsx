@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
@@ -17,6 +18,7 @@ type View = { takeover: boolean; refusal?: string; digest?: string; items?: Item
 // A client's first close in the firm is its opening month: the reviewer notes each account that does not tie, which
 // becomes inherited cleanup that later months wait for until it is resolved with a reference.
 export function OpeningBaseline({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [view, setView] = useState<View>();
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -68,7 +70,7 @@ export function OpeningBaseline({ closeId }: { closeId: string }) {
       {view.refusal ? (
         <p className="empty">{view.refusal}</p>
       ) : current ? (
-        <p role="status">Reviewed by {baselines[0].reviewed_by} on {new Date(baselines[0].reviewed_at).toLocaleString()} for the current balances.</p>
+        <p role="status">Reviewed by {baselines[0].reviewed_by} on {dates.dateTime(baselines[0].reviewed_at)} for the current balances.</p>
       ) : (
         <form onSubmit={review}>
           <fieldset disabled={busy}>

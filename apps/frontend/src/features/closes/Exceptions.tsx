@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
@@ -41,6 +42,7 @@ const labels: Record<Found["type"], [string, string]> = {
 };
 
 export function Exceptions({ closeId }: { closeId: string }) {
+  const dates = useDates();
   const [scan, setScan] = useState<Scan>();
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
@@ -97,12 +99,12 @@ export function Exceptions({ closeId }: { closeId: string }) {
         </p>
       ) : scan.capture.unread ? (
         <p role="status">
-          The newest Xero capture, from {new Date(scan.capture.finished_at).toLocaleString()}, has no transactions: {scan.capture.unread}
+          The newest Xero capture, from {dates.dateTime(scan.capture.finished_at)}, has no transactions: {scan.capture.unread}
         </p>
       ) : (
         <>
           <p>
-            Checked all {scan.scanned} transactions in the {ledger} capture from {new Date(scan.capture.finished_at).toLocaleString()} (
+            Checked all {scan.scanned} transactions in the {ledger} capture from {dates.dateTime(scan.capture.finished_at)} (
             {scan.capture.source === "xero" ? `Xero snapshot #${scan.capture.id}` : `evidence #${scan.capture.evidence_id}`}). Open invoice and bill
             balances are as of that capture; days past due are counted at month-end. Each item is a question with the evidence still missing,
             not a conclusion. Nothing is changed in {ledger}.
@@ -157,7 +159,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
       ) : (
         <>
           <p>
-            From the {balances.snapshot.source === "xero" ? "Xero" : "QuickBooks"} Trial Balance in snapshot #{balances.snapshot.id}, captured {new Date(balances.snapshot.captured_at).toLocaleString()}.
+            From the {balances.snapshot.source === "xero" ? "Xero" : "QuickBooks"} Trial Balance in snapshot #{balances.snapshot.id}, captured {dates.dateTime(balances.snapshot.captured_at)}.
             Contra accounts, retained earnings and owner draws are skipped because they normally sit on the opposite side.
           </p>
           {balances.snapshot.stale && (

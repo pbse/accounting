@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { DriveEvidence } from "./DriveEvidence";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
@@ -412,6 +413,7 @@ export function PreparationJobs({
   closeId: string;
   onComplete: () => void;
 }) {
+  const dates = useDates();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -471,7 +473,7 @@ export function PreparationJobs({
               }
             />
             {p.plan.kind} · instructions #{p.id} ·{" "}
-            {new Date(p.created_at).toLocaleString()}
+            {dates.dateTime(p.created_at)}
           </label>
           <details>
             <summary>Inspect instructions and evidence</summary>
@@ -512,7 +514,7 @@ export function PreparationJobs({
             {j.state === "queued"
               ? "Waiting for worker or processing"
               : j.state}{" "}
-            · {new Date(j.created_at).toLocaleString()}
+            · {dates.dateTime(j.created_at)}
             {j.error && <p role="alert">{j.error}</p>}
             {j.state === "completed" && (
               <>

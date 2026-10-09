@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
@@ -7,10 +8,10 @@ type Grant = { id: string; close_id: string; period: string; workpaper_id: strin
 type Value = { value: string; count: number; last_period: string; close_id: string; workpaper_id: string; approved_by: string; approved_at: string };
 type Memory = { entity: string; aliases: Alias[]; standing_approvals: Grant[]; accounts: { kind: string; field: string; values: Value[] }[] };
 
-const day = (at: string) => new Date(at).toLocaleDateString();
 
 // What the system remembers about this client and who decided it; each can be retired or revoked here.
 export function Memory({ closeId }: { closeId: string }) {
+  const day = useDates().date;
   const [memory, setMemory] = useState<Memory>();
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);

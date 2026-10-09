@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
@@ -18,6 +19,7 @@ const cents = (amount: string) => (/^-?(0|[1-9]\d{0,9})\.\d{2}$/.test(amount) ? 
 
 // One PDF statement's proposed rows, checked page by page against the original before they become CSV evidence.
 export function StatementRows({ closeId, evidenceId, onConfirmed }: { closeId: string; evidenceId: string; onConfirmed: () => void }) {
+  const dates = useDates();
   const base = `/${closeId}/evidence/${evidenceId}/statement`;
   const [review, setReview] = useState<Review>();
   const [rows, setRows] = useState<Row[]>([]);
@@ -78,7 +80,7 @@ export function StatementRows({ closeId, evidenceId, onConfirmed }: { closeId: s
           </button>
         </>
       ) : extraction.confirmed_at ? (
-        <p>Confirmed {new Date(extraction.confirmed_at).toLocaleString()} as evidence #{extraction.produced_id}.</p>
+        <p>Confirmed {dates.dateTime(extraction.confirmed_at)} as evidence #{extraction.produced_id}.</p>
       ) : (
         <>
           {review.checks.page_problems.map((p) => (

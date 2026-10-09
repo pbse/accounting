@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 
@@ -55,6 +56,7 @@ export function Posting({
   closeId: string;
   paperId: string;
 }) {
+  const dates = useDates();
   const [intent, setIntent] = useState<Intent>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -165,7 +167,7 @@ export function Posting({
                   <p>
                     Approval expires:{" "}
                     {intent.approval_expires_at
-                      ? new Date(intent.approval_expires_at).toLocaleString()
+                      ? dates.dateTime(intent.approval_expires_at)
                       : "Unknown"}
                   </p>
                   <button
@@ -204,6 +206,7 @@ type ProductionIntent = Intent & {
   stalled?: boolean;
 };
 export function ProductionPosting({ closeId, paperId }: { closeId: string; paperId: string }) {
+  const dates = useDates();
   const [intent, setIntent] = useState<ProductionIntent>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -237,7 +240,7 @@ export function ProductionPosting({ closeId, paperId }: { closeId: string; paper
       {intent.id && <p>Saved intent #{intent.id} · grant #{intent.grant_id} · company realm {intent.realm}</p>}
       {intent.request_id && <p>Provider request ID: <code>{intent.request_id}</code></p>}
       {intent.external_id && <p>QuickBooks journal #{intent.external_id}</p>}
-      {intent.verified_at && <p>Canonical readback saved {new Date(intent.verified_at).toLocaleString()}</p>}
+      {intent.verified_at && <p>Canonical readback saved {dates.dateTime(intent.verified_at)}</p>}
       {intent.journal && <details open><summary>Exact journal to review</summary><pre>{JSON.stringify(intent.journal, null, 2)}</pre></details>}
       {intent.ledger_before?.accounts && <table>
         <thead><tr><th>Account</th><th>Type</th><th>Balance now</th><th>After this journal</th></tr></thead>

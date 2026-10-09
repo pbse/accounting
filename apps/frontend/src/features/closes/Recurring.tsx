@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useState, type FormEvent } from "react";
 import { money as show, workspaceRequest } from "./workspace";
 import { scheduleTerms, type Schedule } from "../prepaids/MethodFields";
@@ -34,6 +35,7 @@ const difference = (scheduled: string, entered: string, currency: string) => {
 };
 
 export function Recurring({ closeId, currency, onPrepared }: { closeId: string; currency: string; onPrepared: () => void }) {
+  const dates = useDates();
   const [preview, setPreview] = useState<Preview>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,7 +69,7 @@ export function Recurring({ closeId, currency, onPrepared }: { closeId: string; 
     {error && <p role="alert">{error}</p>}
     {queued && <p role="status">{queued}</p>}
     {preview && <>
-      <p>{preview.snapshot.id ? `QuickBooks ${preview.snapshot.period} snapshot #${preview.snapshot.id}, captured ${new Date(preview.snapshot.captured_at!).toLocaleString()}` : "No current-period QuickBooks snapshot. Capture reports above first."}</p>
+      <p>{preview.snapshot.id ? `QuickBooks ${preview.snapshot.period} snapshot #${preview.snapshot.id}, captured ${dates.dateTime(preview.snapshot.captured_at!)}` : "No current-period QuickBooks snapshot. Capture reports above first."}</p>
       {preview.items.length === 0 && <p>No carried schedules need a current-period balance comparison.</p>}
       {preview.items.map(item => <form key={item.id} onSubmit={e => void prepare(e, item)}>
         <fieldset disabled={busy || !!item.blocker}>

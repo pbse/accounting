@@ -1,3 +1,4 @@
+import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
 
@@ -6,6 +7,7 @@ type Grant = { id?: string; state?: string; realm?: string; company?: string; ac
 type Status = { production_configured: boolean; hosted: boolean; data: { production_connection: Connection | null } };
 
 export function ProductionAccess({ closeId, entity, currency }: { closeId: string; entity: string; currency: string }) {
+  const dates = useDates();
   const [status, setStatus] = useState<Status>();
   const [grant, setGrant] = useState<Grant>();
   const [error, setError] = useState("");
@@ -85,7 +87,7 @@ export function ProductionAccess({ closeId, entity, currency }: { closeId: strin
       {c && <button disabled={busy || !confirmed} onClick={() => void connectionAction("disconnect")}>Disconnect production company locally</button>}
       <h4>Client-specific production grant</h4>
       {grant?.id ? <>
-        <p>Grant #{grant.id}: accounts {grant.account_ids?.join(", ")}; covers {grant.kinds?.join(", ")} drafts; maximum {money(grant.max_amount, currency)} per journal, Bill line or supplier credit; expires {grant.expires_at ? new Date(grant.expires_at).toLocaleString() : "unknown"}.</p>
+        <p>Grant #{grant.id}: accounts {grant.account_ids?.join(", ")}; covers {grant.kinds?.join(", ")} drafts; maximum {money(grant.max_amount, currency)} per journal, Bill line or supplier credit; expires {grant.expires_at ? dates.dateTime(grant.expires_at) : "unknown"}.</p>
         <p>Reason: {grant.reason}</p>
         <label>Type REVOKE PRODUCTION GRANT<input value={phrase} onChange={e => setPhrase(e.target.value)} autoComplete="off" /></label>
         <button disabled={busy || phrase !== "REVOKE PRODUCTION GRANT"} onClick={() => void grantAction("revoke")}>Revoke this grant</button>
