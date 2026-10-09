@@ -169,6 +169,11 @@ func TestAgentChatAnswersAnExecutive(t *testing.T) {
 		if calls != 0 || last.Body != executiveOff || len(last.Citations) != 1 || last.Citations[0]["href"] != "/dashboard/executive" {
 			t.Fatalf("at %s an executive gets the fixed line without a model: calls=%d %+v", level, calls, last)
 		}
+		var replayable bool
+		must(db.QueryRow(`SELECT replayable FROM chat_messages WHERE organization_id=$1 AND executive ORDER BY id DESC LIMIT 1`, org).Scan(&replayable))
+		if replayable {
+			t.Fatalf("at %s the fixed pair is never replayed to a model later", level)
+		}
 	}
 	if link := executiveLink(mcpTool{name: "read_publication", path: "/v1/closes/{close_id}/management-pack/publications/{publication_id}"}, map[string]any{"close_id": "7", "publication_id": "3"}); link.Href != "/dashboard/executive/reports?close=7&publication=3" {
 		t.Fatalf("a report is cited as the version read: %s", link.Href)

@@ -1212,7 +1212,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		// Only a kept answer and its question are replayed to the model; a question whose answer was not kept stays on
 		// screen but never reaches a later request.
-		replayable := !agent || result.outcome == "kept" && result.known
+		// An executive's fixed line was never sent to a model, and its question never will be, whatever the level later.
+		replayable := !agent && !fixed || agent && result.outcome == "kept" && result.known
 		// The answer names its question (question_id), so a card's confirmation reaches the question it was asked by
 		// however the author's requests interleaved.
 		questionID := ""

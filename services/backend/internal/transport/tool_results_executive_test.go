@@ -45,13 +45,13 @@ func TestProjectPublicationsKeepsEveryReportCompact(t *testing.T) {
 
 func TestAnExecutiveCitationStaysOnTheirPages(t *testing.T) {
 	var value any
-	d := json.NewDecoder(strings.NewReader(`{"closes":[{"id":"7","entity":"Alpha"}],"published":[{"close_id":"7","net_income":"10.00"}]}`))
+	d := json.NewDecoder(strings.NewReader(`{"closes":[{"id":"7","entity":"Alpha"}],"published":[{"close_id":"7","publication_id":"3","net_income":"10.00"}]}`))
 	d.UseNumber()
 	d.Decode(&value)
 	reads := map[string]agentRead{"t1": {text: "{}", value: value, link: chatCitation{"Your business overview", "/dashboard/executive"}, title: "Your business overview", tool: "executive_overview", executive: true}}
 	cited, why := agentSupport("facts", "Net income is 10.00.", []agentSupportEntry{{"t1", 0, "/published/0/net_income", "10.00", ""}}, reads, nil)
-	if why != "" || len(cited) != 1 || cited[0].Href != "/dashboard/executive/reports?close=7" {
-		t.Fatalf("a published row cites the executive's reports page: %v %s", cited, why)
+	if why != "" || len(cited) != 1 || cited[0].Href != "/dashboard/executive/reports?close=7&publication=3" {
+		t.Fatalf("a published row cites the executive's reports page at the version read: %v %s", cited, why)
 	}
 	if executiveRowLink("/dashboard/closes/7?tab=evidence") != "/dashboard/executive/reports?close=7" || executiveRowLink("/dashboard") != "/dashboard" {
 		t.Fatal("only a close's page is moved to the reports page")

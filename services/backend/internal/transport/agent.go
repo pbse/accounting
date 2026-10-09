@@ -678,10 +678,15 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				}
 				href = own
 			}
-			// A listed report is cited as its own version, which the executive's Reports page opens.
-			if read.executive && read.tool == "list_publications" {
-				if id := rowField(read.value, s.path, "id"); id != "" {
-					href = read.link.Href + "&publication=" + url.QueryEscape(id)
+			// A report an executive's row names is cited as that version, which their Reports page opens: a listed
+			// report's own number, or the publication an overview row carries.
+			if read.executive && strings.Contains(href, "?close=") && !strings.Contains(href, "&publication=") {
+				id := rowField(read.value, s.path, "publication_id")
+				if id == "" && read.tool == "list_publications" {
+					id = rowField(read.value, s.path, "id")
+				}
+				if id != "" {
+					href += "&publication=" + url.QueryEscape(id)
 				}
 			}
 		}
