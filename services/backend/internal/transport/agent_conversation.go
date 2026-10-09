@@ -20,11 +20,43 @@ func closesLiteral(ids []string) string {
 // written on both messages, so one statement finds both.
 func pruneConversation(ctx context.Context, db *sql.DB, org, author, closeID string, firmWide, executive bool) error {
 	defer func() {
-		// A chat whose every turn was removed is gone with them: nothing dead is listed or continued.
+		// A chat whose every turn was removed is gone with them: nothing dead is listed or continued; one whose first
+		// question went is retitled by the first that remains, unless the member named it.
 		db.ExecContext(ctx, `DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, org, author)
+		retitleSessions(ctx, db, org, author)
 	}()
 	_, err := db.ExecContext(ctx, `DELETE FROM chat_messages m WHERE m.organization_id=$1 AND m.author=$2 AND m.close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND m.executive=`+strconv.FormatBool(executive)+` AND EXISTS(SELECT 1 FROM unnest(m.closes) AS touched(id) WHERE NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.id=touched.id AND c.organization_id=$1 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))))`, org, author, closeID, firmWide)
 	return err
+}
+
+// retitleSessions gives every chat of the member that was not named by them the title of its first remaining
+// question, so a pruned first question leaves no trace in the list or the header.
+func retitleSessions(ctx context.Context, db *sql.DB, org, author string) {
+	rows, err := db.QueryContext(ctx, `SELECT s.id,s.title,(SELECT m.body FROM chat_messages m WHERE m.session_id=s.id AND m.role='user' ORDER BY m.id LIMIT 1) FROM chat_sessions s WHERE s.organization_id=$1 AND s.author=$2 AND NOT s.renamed`, org, author)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type change struct {
+		id    int64
+		title string
+	}
+	var changes []change
+	for rows.Next() {
+		var id int64
+		var title string
+		var first sql.NullString
+		if rows.Scan(&id, &title, &first) != nil || !first.Valid {
+			continue
+		}
+		if want := chatTitle(first.String); want != title {
+			changes = append(changes, change{id, want})
+		}
+	}
+	rows.Close()
+	for _, c := range changes {
+		db.ExecContext(ctx, `UPDATE chat_sessions SET title=$3 WHERE id=$1 AND NOT renamed AND organization_id=$2`, c.id, org, c.title)
+	}
 }
 
 // agentHistory is the conversation the model sees: the last 20 turns as plain text, each member message redacted as

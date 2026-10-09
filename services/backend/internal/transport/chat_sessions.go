@@ -99,7 +99,7 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 				problem(w, 422, "Name the chat in 1–80 characters.")
 				return
 			}
-			result, err = db.ExecContext(r.Context(), `UPDATE chat_sessions SET title=$5 WHERE `+own, organization(r), subject(r), executive(r), id, title)
+			result, err = db.ExecContext(r.Context(), `UPDATE chat_sessions SET title=$5,renamed=true WHERE `+own, organization(r), subject(r), executive(r), id, title)
 		case "delete":
 			result, err = db.ExecContext(r.Context(), `DELETE FROM chat_sessions WHERE `+own, organization(r), subject(r), executive(r), id)
 		default:

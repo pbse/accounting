@@ -130,6 +130,18 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	if l := list("user_a"); l.Sessions[0].Title != "Blocked work" {
 		t.Fatalf("the chat is renamed: %+v", l)
 	}
+	// A chat's title follows its first remaining question once the first was pruned; a named chat keeps its name.
+	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id) VALUES($1,'user_a','user','Second question here',$2::bigint),($1,'user_a','assistant','Second answer.',$2::bigint)`, org, s1)
+	must(err)
+	_, err = db.Exec(`DELETE FROM chat_messages WHERE session_id=$1::bigint AND body IN ('What needs me today?','Here is what needs you today.') OR (session_id=$1::bigint AND id=(SELECT min(id) FROM chat_messages WHERE session_id=$1::bigint))`, s1)
+	must(err)
+	titles := map[string]string{}
+	for _, item := range list("user_a").Sessions {
+		titles[item.ID] = item.Title
+	}
+	if titles[s1] != "Second question here" || titles[s2] != "Blocked work" {
+		t.Fatalf("the title follows the first remaining question, a chosen name stays: %v", titles)
+	}
 	call("user_a", "POST", "/v1/closes/chat", map[string]any{"text": "x", "session_id": "999999999"}, 404)
 	call("user_b", "POST", "/v1/closes/chat/sessions/"+s2, map[string]any{"action": "delete"}, 404)
 	call("user_a", "POST", "/v1/closes/chat/sessions/"+s2, map[string]any{"action": "delete"}, 200)

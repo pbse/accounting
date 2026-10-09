@@ -9,6 +9,9 @@ CREATE TABLE chat_sessions (
  close_id bigint REFERENCES client_closes(id) ON DELETE CASCADE,
  executive boolean NOT NULL DEFAULT false,
  title text NOT NULL CHECK (length(title) BETWEEN 1 AND 80),
+ -- renamed says the member chose the title; otherwise it follows the chat's first question, even once that question
+ -- was pruned (a lost client's turns leave no trace in the list).
+ renamed boolean NOT NULL DEFAULT false,
  created_at timestamptz NOT NULL DEFAULT now(),
  last_at timestamptz NOT NULL DEFAULT now()
 );
