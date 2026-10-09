@@ -55,7 +55,7 @@ func TestInvitationEmailsSay(t *testing.T) {
 	if e.Subject != "Prashant Bansal invited you to join Acme <Advisors> on Krith" || e.From != "Krith <hello@mail.krith.test>" || len(e.To) != 1 || e.To[0] != "nia@acme.test" {
 		t.Fatalf("the invitation names who sent it and the firm, from Krith's sender: %+v", e)
 	}
-	for _, want := range []string{"Prashant Bansal invited you to join Acme <Advisors> on Krith, as Firm admin.", "Krith’s agents prepare the month-end close", "Join Acme <Advisors>: https://app.example.test/v1/auth/login?invitation=tok_1", "Sign in with Google as nia@acme.test. The invitation is open until 15 October 2026.", "Nothing happens unless you join.", "Agents prepare. People sign."} {
+	for _, want := range []string{"Prashant Bansal invited you to join Acme <Advisors> on Krith, as Firm admin.", "Krith’s agents prepare the month-end close", "Join Acme <Advisors>: https://app.example.test/v1/auth/login?invitation=tok_1", "Sign in with Google as nia@acme.test. The invitation is open until 15 October 2026.", "Nothing happens unless you join.", "Krith\nThe work, prepared."} {
 		if !strings.Contains(e.Text, want) {
 			t.Fatalf("the invitation says %q:\n%s", want, e.Text)
 		}

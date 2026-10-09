@@ -50,7 +50,7 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 	emailed := func(workosID string) (to, inviter, token string) {
 		t.Helper()
 		var sealed []byte
-		err := db.QueryRow(`SELECT e.recipient,e.inviter,e.link FROM platform_emails e JOIN member_invitations i ON i.id=e.invitation WHERE i.workos_id=$1 AND e.kind='invitation' AND e.subject IS NULL`, workosID).Scan(&to, &inviter, &sealed)
+		err := db.QueryRow(`SELECT e.recipient,e.inviter,e.link FROM platform_emails e JOIN member_invitations i ON i.id=e.invitation WHERE i.workos_id=$1 AND e.kind='invitation' AND e.subject IS NULL ORDER BY e.id LIMIT 1`, workosID).Scan(&to, &inviter, &sealed)
 		if err == sql.ErrNoRows {
 			return "", "", ""
 		}
@@ -150,6 +150,35 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 	}
 	if to, inviter, token := emailed("invitation_1"); to != "new@example.com" || inviter != "Ada Admin" || token != "tok_1" {
 		t.Fatalf("Krith's email for the invitation is queued with its sender's name and its sealed token: %q %q %q", to, inviter, token)
+	}
+	// The list says whether the email has gone, and a newer email for the same invitation replaces one still waiting.
+	emailState := func(email string) string {
+		t.Helper()
+		var listed []struct {
+			Email      string  `json:"email"`
+			EmailState *string `json:"email_state"`
+		}
+		must(json.Unmarshal(call("user_admin", "GET", path, nil, 200), &listed))
+		for _, i := range listed {
+			if i.Email == email && i.EmailState != nil {
+				return *i.EmailState
+			}
+		}
+		return ""
+	}
+	if s := emailState("new@example.com"); s != "queued" {
+		t.Fatalf("the list shows the invitation's email waiting: %q", s)
+	}
+	var invited string
+	must(db.QueryRow(`SELECT id::text FROM member_invitations WHERE workos_id='invitation_1'`).Scan(&invited))
+	tx, err := db.Begin()
+	must(err)
+	must(queueInvitationEmail(t.Context(), tx, org, invited, "new@example.com", "tok_1b", "Ada Admin"))
+	must(tx.Commit())
+	var states string
+	must(db.QueryRow(`SELECT string_agg(state,',' ORDER BY id) FROM platform_emails WHERE invitation=$1::bigint`, invited).Scan(&states))
+	if states != "cancelled,queued" {
+		t.Fatalf("a newer email replaces the one still waiting: %s", states)
 	}
 	send("new@example.com", "preparer", 409)
 	var first string

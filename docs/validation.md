@@ -3939,7 +3939,9 @@ Request: an invitation arrived from `welcome@workos-mail.com`, under the WorkOS 
     - plain text and simple HTML.
   - **Queueing.** The email is queued in the same transaction that opens the invitation. A send settled later from WorkOS's list, and a staff resend, queue it too. Its link's WorkOS token is sealed while it waits and cleared once it is done. It is sent only while the invitation is open and the firm enabled.
   - **The Join button.** `/v1/auth/login?invitation=<token>` checks the token with WorkOS and against the firm's open invitation. It then goes straight to Google with the invited address suggested. The callback sends `invitation_token` with the code, so WorkOS accepts the invitation as it signs the person in. A token that can't be used lands on `/login?error=invitation`.
-  - **Wording.** The firm's invitation panel, the staff console and the privacy notice (dated 8 October 2026) now say Krith sends invitations.
+  - **Visible delivery.** The firm's invitation list and the staff person view show each invitation's email state, with "revoke it and invite again" when it did not go. Sending answers "Invitation created. Krith is emailing it…", not "sent". A firm reads only its own invitation emails (policy `firm_invitations`).
+  - **One at a time.** A newer email for the same invitation replaces one still waiting.
+  - **Wording.** The firm's invitation panel, the staff console and the privacy notice (dated 8 October 2026) now say Krith sends invitations. The email is signed "Krith · The work, prepared.", at the user's request.
 - **Tested.** On a fresh local PostgreSQL with every migration applied:
   - `TestInvitationEmailsSay` (new);
   - `TestPlatformEmailsAreSentOnceWithKrithsKey` (extended with an open and a revoked invitation);
@@ -3948,7 +3950,8 @@ Request: an invitation arrived from `welcome@workos-mail.com`, under the WorkOS 
   - `TestStaffFindAPersonAcrossFirmsAndEndTheirSessions`: a resend queues one email each time, none when the renewal is unconfirmed;
   - the rest of the transport and delivery packages pass, except the two PDF tests that need Poppler, which isn't installed locally;
   - both apps typecheck;
-  - the HTML was rendered in headless Edge and checked by eye.
+  - the HTML was rendered in headless Edge and checked by eye;
+  - the row-level security policies were probed as a non-superuser role on the local database: a firm sees only its own invitation emails and cannot write one, and the platform context sees all.
 
 Not verified:
 - a real invitation accepted through Google in production;

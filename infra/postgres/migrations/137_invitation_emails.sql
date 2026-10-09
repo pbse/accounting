@@ -11,4 +11,6 @@ ALTER TABLE platform_emails ADD COLUMN link bytea;
 ALTER TABLE platform_emails ADD CONSTRAINT platform_emails_shape CHECK (CASE WHEN kind = 'invitation' THEN invitation IS NOT NULL AND subject IS NULL
  ELSE subject IS NOT NULL AND invitation IS NULL AND link IS NULL END);
 CREATE INDEX platform_emails_invitation ON platform_emails(invitation) WHERE invitation IS NOT NULL;
+-- A firm's invitation list shows whether each invitation's email went, so the firm reads its own invitation emails.
+CREATE POLICY firm_invitations ON platform_emails FOR SELECT USING (kind = 'invitation' AND current_setting('app.organization',true) = organization_id);
 COMMIT;

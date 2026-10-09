@@ -240,7 +240,7 @@ func invitationEmail(recipient, firm, from, app string, invite invitation) (Emai
 		"Join " + firm + ": " + invite.Link + "\n\n" +
 		"Sign in with Google as " + recipient + ". The invitation is open until " + until + ".\n\n" +
 		"Not expecting this? You can ignore it. Nothing happens unless you join.\n\n" +
-		"Krith\nAgents prepare. People sign.\n"
+		"Krith\nThe work, prepared.\n"
 	e := html.EscapeString
 	page := `<!doctype html><html><body style="margin:0;padding:0;background:#f6f5f2">` +
 		`<div style="max-width:520px;margin:0 auto;padding:40px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1c1b19">` +
@@ -253,7 +253,7 @@ func invitationEmail(recipient, firm, from, app string, invite invitation) (Emai
 		`<p style="font-size:14px;line-height:1.5;margin:24px 0 0;color:#55524b">Sign in with Google as <strong>` + e(recipient) + `</strong>. The invitation is open until ` + e(until) + `.</p>` +
 		`</div>` +
 		`<p style="font-size:13px;line-height:1.5;margin:24px 0 4px;color:#7a766d">Not expecting this? You can ignore it. Nothing happens unless you join.</p>` +
-		`<p style="font-size:13px;line-height:1.5;margin:0;color:#7a766d">Krith · Agents prepare. People sign.</p>` +
+		`<p style="font-size:13px;line-height:1.5;margin:0;color:#7a766d">Krith · The work, prepared.</p>` +
 		`</div></body></html>`
 	return Email{From: from, To: []string{recipient}, Subject: subject, Text: text, HTML: page}, nil
 }

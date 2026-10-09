@@ -45,7 +45,9 @@ func platformContext(ctx context.Context) context.Context {
 }
 
 // queueInvitationEmail queues Krith's email for an open invitation (docs/sign-in.md#invitations). Its link carries
-// WorkOS's invitation token, sealed while the email waits; the worker sends it only while the invitation is open.
+// WorkOS's invitation token, sealed while the email waits; the worker sends it only while the invitation is open. It
+// replaces one for the same invitation still waiting, so a resend is one email: one never tried is cancelled, and one
+// retried after an unanswered attempt is unknown, since it may have gone. One the worker is sending now is left to it.
 func queueInvitationEmail(ctx context.Context, q execer, org, invitation, email, token, inviter string) error {
 	if token == "" {
 		return errors.New("WorkOS gave no invitation token")
@@ -54,7 +56,13 @@ func queueInvitationEmail(ctx context.Context, q execer, org, invitation, email,
 	if err != nil {
 		return err
 	}
-	_, err = q.ExecContext(platformContext(ctx), `INSERT INTO platform_emails(kind,organization_id,recipient,invitation,inviter,link) VALUES('invitation',$1,$2,$3::bigint,$4,$5)`,
+	ctx = platformContext(ctx)
+	if _, err = q.ExecContext(ctx, `UPDATE platform_emails SET state=CASE WHEN attempts>0 THEN 'unknown' ELSE 'cancelled' END,finished_at=now(),link=NULL,
+ error=CASE WHEN attempts>0 THEN 'Replaced by a newer email for the invitation after an unconfirmed attempt' ELSE 'Replaced by a newer email for the invitation before it was sent' END
+ WHERE invitation=$1::bigint AND state='queued'`, invitation); err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx, `INSERT INTO platform_emails(kind,organization_id,recipient,invitation,inviter,link) VALUES('invitation',$1,$2,$3::bigint,$4,$5)`,
 		org, email, invitation, inviter, sealed)
 	return err
 }
@@ -356,7 +364,8 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 		err := reconcileInvitations(r.Context(), db, org)
 		var raw []byte
 		if err == nil {
-			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(i) - 'organization_id' - 'workos_id' ORDER BY i.state NOT IN ('sending','pending'),i.id::bigint DESC),'[]'::jsonb) FROM (SELECT member_invitations.id::text AS id,organization_id,email,role_name,workos_id,state,invited_by,reason,subject,expires_at,created_at,decided_at FROM member_invitations WHERE organization_id=$1 ORDER BY member_invitations.id DESC LIMIT 50) i`, org).Scan(&raw)
+			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(i) - 'organization_id' - 'workos_id' ORDER BY i.state NOT IN ('sending','pending'),i.id::bigint DESC),'[]'::jsonb) FROM (SELECT member_invitations.id::text AS id,organization_id,email,role_name,workos_id,state,invited_by,reason,subject,expires_at,created_at,decided_at,
+ (SELECT e.state FROM platform_emails e WHERE e.invitation=member_invitations.id ORDER BY e.id DESC LIMIT 1) AS email_state FROM member_invitations WHERE organization_id=$1 ORDER BY member_invitations.id DESC LIMIT 50) i`, org).Scan(&raw)
 		}
 		if err != nil {
 			problem(w, 503, "Invitations are unavailable.")
@@ -490,7 +499,8 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "WorkOS made the invitation, but it could not be recorded yet. The invitation list settles it from WorkOS and sends its email then.")
 			return
 		}
-		jsonReply(w, 200, map[string]string{"id": id, "message": "Invitation sent to " + email + "."})
+		// The email is queued, not yet sent: the list shows when it has gone, or that it could not be.
+		jsonReply(w, 200, map[string]string{"id": id, "message": "Invitation created. Krith is emailing it to " + email + " now; the list shows when it has gone."})
 	})
 }
 
