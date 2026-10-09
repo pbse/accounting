@@ -11,7 +11,7 @@ export function RailChats({ closeId, navigate }: { closeId: string; navigate: (t
     if (!open) return;
     let live = true;
     loadSessions(5)
-      .then((list) => live && setSessions(list))
+      .then((page) => live && setSessions(page.sessions))
       .catch(() => live && setSessions([]));
     return () => {
       live = false;

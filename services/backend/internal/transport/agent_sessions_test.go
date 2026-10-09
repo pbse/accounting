@@ -121,6 +121,8 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	if l := list("user_b"); len(l.Sessions) != 0 {
 		t.Fatalf("another member sees none of them: %+v", l)
 	}
+	call("user_b", "GET", "/v1/closes/chat?session="+s1, nil, 404)
+	call("user_a", "GET", "/v1/closes/chat?session=abc", nil, 404)
 	// Rename, a chat that is not the member's, and delete.
 	call("user_a", "POST", "/v1/closes/chat/sessions/"+s2, map[string]any{"action": "rename", "title": "  Blocked   work "}, 200)
 	if l := list("user_a"); l.Sessions[0].Title != "Blocked work" {
@@ -169,7 +171,26 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	if l := list("user_a"); len(l.Sessions) != 2 {
 		t.Fatalf("the cleared chat is gone: %+v", l)
 	}
-	if long := chatTitle(strings.Repeat("word ", 30)); len(long) > 84 || !strings.HasSuffix(long, "…") {
+	if long := chatTitle(strings.Repeat("word ", 30)); len([]rune(long)) > 80 || !strings.HasSuffix(long, "…") {
 		t.Fatalf("a long first question is cut at a word: %q", long)
+	}
+	if long := chatTitle(strings.Repeat("é", 100)); len([]rune(long)) != 80 || !strings.HasSuffix(long, "…") {
+		t.Fatalf("a title is cut by characters, the ellipsis within the limit: %q", long)
+	}
+	// Older chats are reached a page at a time.
+	_, err = db.Exec(`INSERT INTO chat_sessions(organization_id,author,title,last_at) SELECT $1,'user_a','Older chat '||n,now()-(n||' days')::interval FROM generate_series(1,60) n`, org)
+	must(err)
+	var page struct {
+		Sessions   []struct{ ID string } `json:"sessions"`
+		HasMore    bool                  `json:"has_more"`
+		NextOffset int                   `json:"next_offset"`
+	}
+	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions", nil, 200), &page))
+	if len(page.Sessions) != 50 || !page.HasMore || page.NextOffset != 50 {
+		t.Fatalf("the first page is 50 with more to come: %d %v %d", len(page.Sessions), page.HasMore, page.NextOffset)
+	}
+	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?offset=50", nil, 200), &page))
+	if len(page.Sessions) != 12 || page.HasMore {
+		t.Fatalf("the last page holds the rest: %d %v", len(page.Sessions), page.HasMore)
 	}
 }

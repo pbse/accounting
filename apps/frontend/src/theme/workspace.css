@@ -728,8 +728,16 @@ aside.assistant {
 .app-shell .rail-chat.all {
   flex-direction: row;
   align-items: center;
-  gap: var(--space-6);
+  gap: var(--space-8);
   font-weight: 500;
+}
+.assistant-messages[hidden] {
+  display: none;
+}
+.app-shell .assistant-more {
+  width: 100%;
+  margin-top: var(--space-8);
+  font-size: 13px;
 }
 .app-shell .rail-chat:hover {
   background: var(--fill);

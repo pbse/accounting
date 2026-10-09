@@ -21,14 +21,18 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 		Messages int       `json:"messages"`
 	}
 	mux.HandleFunc("GET /v1/closes/chat/sessions", func(w http.ResponseWriter, r *http.Request) {
-		limit := 50
+		// Pages of up to 50, newest first; has_more says whether an older page follows at the next offset.
+		limit, offset := 50, 0
 		if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n < limit {
 			limit = n
+		}
+		if n, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && n > 0 {
+			offset = n
 		}
 		rows, err := db.QueryContext(r.Context(), `SELECT s.id::text,s.title,COALESCE(s.close_id::text,''),COALESCE(c.entity||' · '||c.period,''),s.last_at,(SELECT count(*) FROM chat_messages m WHERE m.session_id=s.id)
  FROM chat_sessions s LEFT JOIN client_closes c ON c.id=s.close_id
  WHERE s.organization_id=$1 AND s.author=$2 AND s.executive=$3 AND (s.close_id IS NULL OR $4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
- ORDER BY s.last_at DESC,s.id DESC LIMIT $5`, organization(r), subject(r), executive(r), firmAccess(r), limit)
+ ORDER BY s.last_at DESC,s.id DESC LIMIT $5 OFFSET $6`, organization(r), subject(r), executive(r), firmAccess(r), limit+1, offset)
 		if err != nil {
 			problem(w, 503, "Your chats are unavailable.")
 			return
@@ -47,7 +51,11 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 			problem(w, 503, "Your chats are unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"sessions": sessions})
+		more := len(sessions) > limit
+		if more {
+			sessions = sessions[:limit]
+		}
+		jsonReply(w, 200, map[string]any{"sessions": sessions, "has_more": more, "next_offset": offset + len(sessions)})
 	})
 	mux.HandleFunc("POST /v1/closes/chat/sessions/{session}", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

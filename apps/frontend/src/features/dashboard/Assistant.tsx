@@ -120,6 +120,9 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
   const [about, setAbout] = useState(false);
   // The chat shown: null is a fresh chat, saved on its first question. The list view shows every chat to switch to.
   const [session, setSession] = useState<{ id: string; title: string } | null>(null);
+  // picked says the member opened this chat on purpose (from the list or the rail): it is continued by id. The current
+  // chat is the server's to continue or, after 12 quiet hours, to replace, even with the panel left open.
+  const [picked, setPicked] = useState(false);
   const [view, setView] = useState<"chat" | "chats">("chat");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
@@ -149,6 +152,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
   // load shows one chat: the id given, or the scope's current one (a chat less than 12 hours quiet), else a fresh one.
   function load(id?: string) {
     const asked = ++generation.current;
+    setPicked(!!id);
     setLoaded(false);
     setError("");
     setLive([]);
@@ -168,6 +172,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     ++generation.current;
     setMessages([]);
     setSession(null);
+    setPicked(false);
     setLive([]);
     setLiveLinks([]);
     setError("");
@@ -175,27 +180,25 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     setLoaded(true);
     input.current?.focus();
   }
-  // A chat asked for from outside (the rail, a link) is taken by the panel of its scope.
+  // A chat asked for from outside (the rail, the list) is taken by the panel of its scope: on mount, the request
+  // decides what is shown; afterwards each new request does. Without one, the scope's current chat is shown.
   const request = useSessionRequest();
   const handledSession = useRef(0);
+  const started = useRef(false);
   useEffect(() => {
-    if (!request || request.n === handledSession.current || request.closeId !== closeId) return;
-    handledSession.current = request.n;
-    if (request.session === "new") startNew();
-    else if (request.session === "all") setView("chats");
-    else load(request.session);
+    const fresh = request && request.n !== handledSession.current && request.closeId === closeId;
+    if (fresh) {
+      handledSession.current = request.n;
+      if (request.session === "new") startNew();
+      else if (request.session === "all") {
+        if (!started.current) load();
+        setView("chats");
+      } else load(request.session);
+    } else if (!started.current) load();
+    started.current = true;
   }, [request, closeId]);
   useEffect(() => {
     input.current?.focus();
-    const current = request && request.n !== handledSession.current && request.closeId === closeId ? request : null;
-    if (current) {
-      handledSession.current = current.n;
-      if (current.session === "new") startNew();
-      else if (current.session === "all") {
-        load();
-        setView("chats");
-      } else load(current.session);
-    } else load();
     if (closeId)
       workspaceRequest(`/${closeId}`)
         .then((data) => setLabel(`${data.close.entity} · ${data.close.period}`))
@@ -244,7 +247,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     };
     try {
       // The member's own date resolves day names such as "by Friday"; the agent's steps and text arrive as events.
-      const data = await workspaceRequest(path, { ...body, session_id: session?.id ?? "new", today: localDate() }, false, onEvent);
+      const data = await workspaceRequest(path, { ...body, session_id: session ? (picked ? session.id : "") : "new", today: localDate() }, false, onEvent);
       if (asked !== generation.current) return;
       setMessages(data.messages);
       if (data.session) setSession({ id: data.session.id, title: data.session.title });
@@ -405,7 +408,21 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
           session && <span className="assistant-title" title={session.title}>{session.title}</span>
         )}
       </p>
-      {view === "chats" && <Chats closeId={closeId} current={session?.id ?? ""} onOpen={(id, target) => { if (target === closeId) load(id); else openSession(id, target); }} onNew={startNew} />}
+      {view === "chats" && (
+        <Chats
+          closeId={closeId}
+          current={session?.id ?? ""}
+          onOpen={(id, target) => {
+            if (target === closeId) load(id);
+            else {
+              // A close's chat is read with its page beside it; a firm-wide one outside a close.
+              navigate(target ? `/dashboard/closes/${target}` : "/dashboard");
+              openSession(id, target);
+            }
+          }}
+          onNew={startNew}
+        />
+      )}
       {about && executive && (
         <p className="assistant-about">
           Answers come from your clients’ published reports, cash plan and budget, read with your access and listed under each answer. With the firm’s Agent chat on firm-wide, every question goes to the configured model provider with the reads the agent chooses and the last turns of this conversation; below that level a question gets one fixed line and is not sent anywhere. The agent proposes nothing for an executive and changes nothing.
@@ -634,16 +651,26 @@ function StepList({ steps, done }: { steps: Step[]; done: boolean }) {
 function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: string; onOpen: (id: string, closeId: string) => void; onNew: () => void }) {
   const version = useSessionsVersion();
   const [sessions, setSessions] = useState<ChatSession[]>();
+  const [more, setMore] = useState(false);
   const [filter, setFilter] = useState("");
   useEffect(() => {
     let live = true;
     loadSessions()
-      .then((list) => live && setSessions(list))
+      .then((page) => live && (setSessions(page.sessions), setMore(page.hasMore)))
       .catch(() => live && setSessions([]));
     return () => {
       live = false;
     };
   }, [version]);
+  // Older chats come a page at a time, appended below.
+  function showMore() {
+    loadSessions(50, sessions?.length ?? 0)
+      .then((page) => {
+        setSessions((current) => [...(current ?? []), ...page.sessions]);
+        setMore(page.hasMore);
+      })
+      .catch(() => setMore(false));
+  }
   const shown = (sessions ?? []).filter((s) => !filter || `${s.title} ${s.close}`.toLowerCase().includes(filter.toLowerCase()));
   const day = (iso: string) => {
     const at = new Date(iso);
@@ -683,6 +710,11 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
           </ul>
         </div>
       ))}
+      {more && !filter && (
+        <button type="button" className="assistant-more" onClick={showMore}>
+          Show older chats
+        </button>
+      )}
     </section>
   );
 }

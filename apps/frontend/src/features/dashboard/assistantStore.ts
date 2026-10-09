@@ -89,9 +89,9 @@ export function useSessionsVersion() {
   return useSyncExternalStore(subscribe, () => sessionsVersion, () => 0);
 }
 
-export async function loadSessions(limit = 50): Promise<ChatSession[]> {
-  const data = await workspaceRequest(`/chat/sessions?limit=${limit}`);
-  return (data.sessions ?? []) as ChatSession[];
+export async function loadSessions(limit = 50, offset = 0): Promise<{ sessions: ChatSession[]; hasMore: boolean }> {
+  const data = await workspaceRequest(`/chat/sessions?limit=${limit}&offset=${offset}`);
+  return { sessions: (data.sessions ?? []) as ChatSession[], hasMore: !!data.has_more };
 }
 
 // nextReview is the first draft in the review queue, the target of /review.

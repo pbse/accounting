@@ -108,8 +108,8 @@ func commandText(command, argument string, closeScoped bool) string {
 // chatTitle names a new chat by its first question: one line, at most 80 characters, cut at a word.
 func chatTitle(text string) string {
 	title := strings.Join(strings.Fields(text), " ")
-	if len(title) > 80 {
-		cut := title[:80]
+	if runes := []rune(title); len(runes) > 80 {
+		cut := string(runes[:79])
 		if i := strings.LastIndexByte(cut, ' '); i > 40 {
 			cut = cut[:i]
 		}
@@ -119,6 +119,17 @@ func chatTitle(text string) string {
 		title = "Conversation"
 	}
 	return title
+}
+
+// namedSession is the chat a GET names: a number, or nothing.
+func namedSession(r *http.Request) string {
+	if id := r.URL.Query().Get("session"); id != "" {
+		if _, err := strconv.ParseInt(id, 10, 64); err == nil {
+			return id
+		}
+		return "none"
+	}
+	return ""
 }
 
 // executiveHelp answers an executive's command; executiveOff answers an executive's question while the firm's agent
@@ -820,10 +831,11 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		return id, err
 	}
+	// sessionJSON is the chat as the panel shows it, found in the member's own scope and nowhere else.
 	sessionJSON := func(r *http.Request, id string) (map[string]any, error) {
 		var title, closeID, label string
 		var last time.Time
-		err := db.QueryRowContext(r.Context(), `SELECT s.title,COALESCE(s.close_id::text,''),COALESCE(c.entity||' · '||c.period,''),s.last_at FROM chat_sessions s LEFT JOIN client_closes c ON c.id=s.close_id WHERE s.id=$1::bigint`, id).Scan(&title, &closeID, &label, &last)
+		err := db.QueryRowContext(r.Context(), `SELECT title,COALESCE(close_id::text,''),COALESCE((SELECT c.entity||' · '||c.period FROM client_closes c WHERE c.id=chat_sessions.close_id),''),last_at FROM chat_sessions WHERE `+scopeOf(r)+` AND id=$4::bigint`, organization(r), subject(r), r.PathValue("id"), id).Scan(&title, &closeID, &label, &last)
 		if err != nil {
 			return nil, err
 		}
@@ -845,6 +857,10 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		if session == "none" && r.Method == http.MethodGet {
+			problem(w, 404, "That chat is no longer yours, or no longer exists.")
+			return
+		}
 		if session == "" || session == "none" {
 			out := map[string]any{"messages": []chatMessage{}, "session": nil}
 			for k, v := range extra {
@@ -854,6 +870,10 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		current, err := sessionJSON(r, session)
+		if err == sql.ErrNoRows {
+			problem(w, 404, "That chat is no longer yours, or no longer exists.")
+			return
+		}
 		if err != nil {
 			problem(w, 503, "Conversation unavailable.")
 			return
@@ -1615,10 +1635,10 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	}
 	mux.HandleFunc("POST /v1/closes/{id}/chat/{message}/confirm", confirm)
 	mux.HandleFunc("POST /v1/closes/chat/confirm/{message}", confirm)
-	mux.HandleFunc("GET /v1/closes/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, r.URL.Query().Get("session"), nil) })
+	mux.HandleFunc("GET /v1/closes/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, namedSession(r), nil) })
 	registerChatSessions(mux, db, scopeOf)
 	mux.HandleFunc("POST /v1/closes/chat", post)
-	mux.HandleFunc("GET /v1/closes/{id}/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, r.URL.Query().Get("session"), nil) })
+	mux.HandleFunc("GET /v1/closes/{id}/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, namedSession(r), nil) })
 	mux.HandleFunc("POST /v1/closes/{id}/chat", post)
 }
 
