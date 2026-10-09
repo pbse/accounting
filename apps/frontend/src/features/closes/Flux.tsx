@@ -1,6 +1,8 @@
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { Link } from "react-router";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { clientAsk, type CoverageStatus } from "./ask";
 import { PasscodeNotice, SendRequestEmail } from "./Email";
 import { workspaceRequest } from "./workspace";
@@ -31,23 +33,16 @@ const kind = (c: Change) => (c.class === "Expense" ? "Expense" : c.class === "Re
 
 export function Flux({ closeId }: { closeId: string }) {
   const dates = useDates();
-  const [flux, setFlux] = useState<Flux>();
-  const [error, setError] = useState("");
+  const queryClient = useQueryClient();
+  const read = useQuery(workspaceQuery<Flux>(`/${closeId}/flux`));
+  const flux = read.data;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Changes are unavailable." : "");
   const [copied, setCopied] = useState("");
-  const [coverage, setCoverage] = useState<CoverageStatus>();
+  // Without coverage the questions can still be copied.
+  const coverage = useQuery(workspaceQuery<CoverageStatus>(`/${closeId}/coverage`)).data;
   const [sent, setSent] = useState<{ id: string; recipient: string; link: string; passcode: string; queued?: boolean }>();
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/flux`)
-      .then((data) => live && setFlux(data))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Changes are unavailable."));
-    // Without coverage the questions can still be copied.
-    workspaceRequest(`/${closeId}/coverage`).then((data) => live && setCoverage(data), () => {});
-    return () => {
-      live = false;
-    };
-  }, [closeId]);
   if (!flux) return error ? <p role="alert">{error}</p> : null;
   const questions = (flux.changes ?? []).flatMap((c) => c.questions ?? []);
   const ask: ReturnType<typeof clientAsk> = coverage ? clientAsk(flux, coverage) : { accounts: [], questions: [], asked: {}, withdraw: {} };
@@ -62,14 +57,13 @@ export function Flux({ closeId }: { closeId: string }) {
       // The draft was approved as shown, so both months and coverage are read again and must still give it.
       const [nowFlux, nowCoverage]: [Flux, CoverageStatus] = await Promise.all([workspaceRequest(`/${closeId}/flux`), workspaceRequest(`/${closeId}/coverage`)]);
       if (reviewed(nowFlux, clientAsk(nowFlux, nowCoverage)) !== reviewed(flux!, ask)) {
-        setFlux(nowFlux);
-        setCoverage(nowCoverage);
+        queryClient.setQueryData(workspaceKey(`/${closeId}/flux`), nowFlux);
+        queryClient.setQueryData(workspaceKey(`/${closeId}/coverage`), nowCoverage);
         throw new Error("The comparison or its coverage changed while you were reviewing. Check the updated draft.");
       }
       const recipient = String(form.get("recipient") ?? "").trim();
       const result = await workspaceRequest(`/${closeId}/coverage`, { action: "request", digest: nowCoverage.coverage.digest, accounts: ask.accounts, jobs: [], body: form.get("body"), recipient, confirmed: form.has("confirmed") });
       setSent({ id: result.id, recipient, link: `${window.location.origin}/request#${result.link_token}`, passcode: result.passcode ?? "" });
-      workspaceRequest(`/${closeId}/coverage`).then(setCoverage, () => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : "The request could not be approved.");
     } finally {

@@ -1,7 +1,8 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
-import { workspaceRequest } from "./workspace";
 import { LedgerSelection } from "./Coverage";
 import { RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
@@ -43,18 +44,10 @@ const labels: Record<Found["type"], [string, string]> = {
 
 export function Exceptions({ closeId }: { closeId: string }) {
   const dates = useDates();
-  const [scan, setScan] = useState<Scan>();
-  const [error, setError] = useState("");
+  const read = useQuery(workspaceQuery<Scan>(`/${closeId}/quickbooks/exceptions`));
+  const scan = read.data;
+  const error = read.error ? read.error.message || "Exceptions are unavailable." : "";
   const [copied, setCopied] = useState("");
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/quickbooks/exceptions`)
-      .then((data) => live && setScan(data))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Exceptions are unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [closeId]);
   if (!scan) return error ? <p role="alert">{error}</p> : null;
   const balances = scan.balances;
   const questions = [...scan.items, ...balances.items].map((item) => item.question);

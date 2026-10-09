@@ -5,7 +5,7 @@ import { Login } from "./features/auth/Login";
 import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
-import { closeTab } from "./data/closeTabs";
+import { closeTab, type CloseTab } from "./data/closeTabs";
 import { appData, effortPath, prefetch, prefetchLater, workPath, workspaceKey, workViews } from "./data/queries";
 
 // The app's routes, as React Router data routes: the browser runs them (main.tsx) and so does the edge, which renders a
@@ -77,8 +77,11 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const id = params.id;
   const tab = closeTab(url.searchParams.get("tab"));
-  const overview = tab === "overview" ? [`/${id}/goal?verify=1`, `/${id}/brief`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")] : [];
-  await prefetch(context, `/${encodeURIComponent(id)}`, ...overview);
+  const reads: Partial<Record<CloseTab, string[]>> = {
+    overview: [`/${id}/goal?verify=1`, `/${id}/brief`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")],
+    books: [`/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/coverage`, `/${id}/aging`, `/${id}/open-items`],
+  };
+  await prefetch(context, `/${encodeURIComponent(id)}`, ...(reads[tab] ?? []));
   return null;
 }
 
@@ -94,6 +97,19 @@ async function preparationLoader({ context, request }: LoaderFunctionArgs) {
 async function measureLoader({ context, request }: LoaderFunctionArgs) {
   if (!prefetching) return null;
   await prefetch(context, effortPath(new URL(request.url).searchParams.get("period") ?? ""), "/track-record");
+  return null;
+}
+
+// A workpaper reads its close and the close's latest drafts, the workpaper among them; its documents load in the
+// browser, as files.
+async function workpaperLoader({ context, params }: LoaderFunctionArgs) {
+  if (!prefetching || !params.id || !params.paperId) return null;
+  const paper = `/${params.id}/workpapers/${params.paperId}`;
+  const closePath = `/${encodeURIComponent(params.id)}`;
+  await prefetch(context, closePath, `${paper}/reviews`, `${paper}/changes`, `${paper}/since-review`, `${paper}/comments`, `${paper}/standing-approval`);
+  // A draft older than the close's latest hundred is read by itself, only then.
+  const listed = context.get(appData).queryClient.getQueryData<{ close?: { id: string }; workpapers?: { id: string }[] }>(workspaceKey(closePath));
+  if (listed?.close && !listed.workpapers?.some((w) => w.id === params.paperId)) await prefetch(context, `/${listed.close.id}/workpapers/${params.paperId}?record=1`);
   return null;
 }
 
@@ -141,7 +157,7 @@ export const routes: RouteObject[] = createRoutesFromElements(
       <Route path="review" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "review" as const })} />
       <Route path="closes" loader={clientsLoader} lazy={page(() => import("./features/closes/ClosesList"))} />
       <Route path="closes/:id" loader={closeLoader} lazy={page(() => import("./features/closes/ClientClose"))} />
-      <Route path="closes/:id/workpapers/:paperId" lazy={page(() => import("./features/closes/WorkpaperView"))} />
+      <Route path="closes/:id/workpapers/:paperId" loader={workpaperLoader} lazy={page(() => import("./features/closes/WorkpaperView"))} />
       <Route path="firm" element={<Navigate to="/dashboard/settings?tab=firm" replace />} />
       <Route path="attention" element={<Navigate to="/dashboard" replace />} />
       <Route path="work" loader={preparationLoader} lazy={page(async () => ({ default: (await import("./features/closes/Work")).Work }))} />

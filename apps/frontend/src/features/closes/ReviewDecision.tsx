@@ -1,3 +1,5 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
@@ -27,36 +29,30 @@ export function ReviewDecision({
   autoLoad?: boolean;
 }) {
   const dates = useDates();
-  const [review, setReview] = useState<Review>();
-  const [comparison, setComparison] = useState<{
-    previous_id: string;
-    changes: { field: string; before: string; after: string }[];
-  }>();
-  const [since, setSince] = useState<{ last_review: null | { workpaper_id: string; decision: string; at: string }; changes: { field: string; before: string; after: string }[]; reasons: string[] }>();
-  const [note, setNote] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function load() {
-    setBusy(true);
-    setError("");
-    try {
-      const [decision, changes, sinceReview] = await Promise.all([
-        workspaceRequest(`/${closeId}/workpapers/${paperId}/reviews`),
-        workspaceRequest(`/${closeId}/workpapers/${paperId}/changes`),
-        workspaceRequest(`/${closeId}/workpapers/${paperId}/since-review`),
-      ]);
-      setReview(decision);
-      setComparison(changes);
-      setSince(sinceReview);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Review unavailable.");
-    } finally {
-      setBusy(false);
-    }
-  }
+  // The decision, the comparison with the previous version and what changed since the last review: read with the page
+  // when the panel opens by itself, otherwise when the person asks.
+  const [asked, setAsked] = useState(autoLoad);
   useEffect(() => {
-    if (autoLoad) void load();
+    if (autoLoad) setAsked(true);
   }, [autoLoad]);
+  const base = `/${closeId}/workpapers/${paperId}`;
+  const decision = useQuery({ ...workspaceQuery<Review>(`${base}/reviews`), enabled: asked });
+  const changes = useQuery({ ...workspaceQuery<{ previous_id: string; changes: { field: string; before: string; after: string }[] }>(`${base}/changes`), enabled: asked });
+  const sinceReview = useQuery({ ...workspaceQuery<{ last_review: null | { workpaper_id: string; decision: string; at: string }; changes: { field: string; before: string; after: string }[]; reasons: string[] }>(`${base}/since-review`), enabled: asked });
+  const review = decision.data;
+  const comparison = changes.data;
+  const since = sinceReview.data;
+  const [note, setNote] = useState("");
+  const [actionError, setError] = useState("");
+  const readFailed = decision.error ?? changes.error ?? sinceReview.error;
+  const error = actionError || (readFailed ? readFailed.message || "Review unavailable." : "");
+  const [acting, setBusy] = useState(false);
+  const busy = acting || decision.isFetching || changes.isFetching || sinceReview.isFetching;
+  async function load() {
+    setError("");
+    setAsked(true);
+    await Promise.all([decision.refetch(), changes.refetch(), sinceReview.refetch()]);
+  }
   async function decide(decision: string) {
     if (!review) return;
     setBusy(true);

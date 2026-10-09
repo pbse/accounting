@@ -1,6 +1,6 @@
 import { useDates } from "../../data/time";
-import { workspaceQuery } from "../../data/queries";
-import { useQuery } from "@tanstack/react-query";
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import type { AccrualWorkpaper } from "../../../../../packages/contracts/accrual";
@@ -321,23 +321,15 @@ export default function WorkpaperView() {
   const dates = useDates();
   const { id, paperId } = useParams();
   const { close, papers, more, error, refreshError, loading, reload } = useClose(id);
-  const [older, setOlder] = useState<Paper>();
   const [picked, setPicked] = useState<PickedLine & { paper: string }>();
-  const [olderError, setOlderError] = useState("");
+  const queryClient = useQueryClient();
   const listed = papers.find((paper) => paper.id === paperId);
-  useEffect(() => {
-    setOlder(undefined);
-    setOlderError("");
-    if (loading || listed || !close) return;
-    let live = true;
-    workspaceRequest(`/${close.id}/workpapers/${paperId}?record=1`)
-      .then((record: Paper) => live && setOlder(record))
-      .catch((e) => live && setOlderError(e instanceof Error ? e.message : "Workpaper unavailable."));
-    return () => {
-      live = false;
-    };
-    // The close's identity and whether the draft is listed decide this, not each fresh read of the close.
-  }, [close?.id, paperId, !!listed, loading]);
+  // A draft older than the close's latest hundred is read by itself (the loader reads it too when the close lacks it).
+  const olderPath = `/${close?.id ?? id}/workpapers/${paperId}?record=1`;
+  const olderRead = useQuery({ ...workspaceQuery<Paper>(olderPath), enabled: !!close && !listed && !loading });
+  const older = listed ? undefined : olderRead.data;
+  const olderError = !listed && olderRead.error ? olderRead.error.message || "Workpaper unavailable." : "";
+  const setOlder = (update: (current: Paper | undefined) => Paper | undefined) => queryClient.setQueryData<Paper>(workspaceKey(olderPath), (current) => update(current));
   if (loading && !close) return <p role="status">Opening workpaper…</p>;
   if (error || olderError) return <p role="alert">{error || olderError}</p>;
   const saved = listed ?? older;

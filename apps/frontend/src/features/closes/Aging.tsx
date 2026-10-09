@@ -1,5 +1,7 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { money, workspaceRequest } from "./workspace";
 
 type Party = { id: string; name: string; currency: string; buckets: string[]; unaged: string; credits: string; open: string; unresolved: number };
@@ -13,13 +15,10 @@ const show = (amount: string, currency: string) => (currency ? money(amount, cur
 // Receivables and payables aged at month-end from the latest capture's open items. Statements are downloads only.
 export function Aging({ closeId }: { closeId: string }) {
   const dates = useDates();
-  const [report, setReport] = useState<Report>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    workspaceRequest(`/${closeId}/aging`)
-      .then(setReport)
-      .catch((e) => setError(e instanceof Error ? e.message : "Aging unavailable."));
-  }, [closeId]);
+  const read = useQuery(workspaceQuery<Report>(`/${closeId}/aging`));
+  const report = read.data;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Aging unavailable." : "");
   async function statement(party: Party) {
     try {
       const blob = await workspaceRequest(`/${closeId}/aging/statement?customer=${encodeURIComponent(party.id)}&currency=${encodeURIComponent(party.currency)}`, undefined, true);
