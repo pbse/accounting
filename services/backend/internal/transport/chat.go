@@ -1377,7 +1377,11 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			_, err = tx.ExecContext(r.Context(), `UPDATE chat_sessions SET last_at=now() WHERE id=$1::bigint`, sessionID)
 		}
 		if err == nil {
-			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` AND (id<(SELECT min(id) FROM (SELECT id FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` ORDER BY id DESC LIMIT 200) kept) OR ($3='' AND created_at<now()-interval '30 days'))`, org, author, closeID, sessionID)
+			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` AND id<(SELECT min(id) FROM (SELECT id FROM chat_messages WHERE `+scopeOf(r)+sessionScope("$4::bigint")+` ORDER BY id DESC LIMIT 200) kept)`, org, author, closeID, sessionID)
+		}
+		// Firm-wide turns older than 30 days go whichever chat holds them, as they always did.
+		if err == nil && closeID == "" {
+			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+` AND created_at<now()-interval '30 days'`, org, author, closeID)
 		}
 		if err == nil {
 			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_sessions WHERE `+scopeOf(r)+` AND close_id IS NULL AND last_at<now()-interval '30 days'`, org, author, closeID)
