@@ -319,6 +319,22 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 	if s, n, _ := state(oz); s != "cancelled" || n != 0 || len(seen["oz"]) != 0 {
 		t.Fatalf("a revoked invitation's email is cancelled unsent: %s %d", s, n)
 	}
+	// A resend's email replaces one whose attempt went unanswered: the older is never tried again, and only the newer goes.
+	pia := invite("pia", "pending")
+	if _, err := db.Exec(`UPDATE platform_emails SET state='sending',attempts=1,claimed_at=now()-interval '5 minutes' WHERE id=$1`, pia); err != nil {
+		t.Fatal(err)
+	}
+	var resent string
+	if err := db.QueryRow(`INSERT INTO platform_emails(kind,organization_id,recipient,invitation,inviter,link) SELECT kind,organization_id,recipient,invitation,inviter,link FROM platform_emails WHERE id=$1 RETURNING id::text`, pia).Scan(&resent); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	if s, n, _ := state(pia); s != "unknown" || n != 1 {
+		t.Fatalf("an unconfirmed email a resend replaced is not tried again, and stays unknown: %s %d", s, n)
+	}
+	if s, _, _ := state(resent); s != "sent" || len(seen["pia"]) != 1 {
+		t.Fatalf("only the resend's email goes: %s %d", s, len(seen["pia"]))
+	}
 
 	// What waited more than a day is not sent; finished rows go after 30 days.
 	old := queue("joined", "dee")

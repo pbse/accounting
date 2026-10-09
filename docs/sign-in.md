@@ -107,7 +107,7 @@ How it works:
   - with WorkOS's browser session, whose sign-in the API doesn't run, it is WorkOS's own acceptance page (`accept_invitation_url`).
 
   Either way it is sealed with `SECRETS_KEY`, bound to the firm, while the email waits, and cleared once the email is done. `cmd/rotate-secrets` re-encrypts the links still waiting. A send WorkOS shows already accepted when it is settled is recorded with no email, since its link could not work.
-- **One at a time.** A newer email for the same invitation replaces one still waiting: cancelled if never tried, unknown if an attempt went unanswered. One being sent at that moment is left to finish.
+- **One at a time.** A newer email for the same invitation replaces one still waiting: cancelled if never tried, unknown if an attempt went unanswered. One being sent at that moment finishes, but is never tried again once replaced. A staff resend answers "Invitation renewed. Krith is emailing it again now", not "sent".
 - **Seen by the firm.** The firm's invitation list says whether each open invitation's email is on its way, sent, or not sent (revoke and invite again). The staff console's person view shows the same. A firm reads only its own invitation emails (policy `firm_invitations`). Sending an invitation answers "Invitation created. Krith is emailing it to … now", not "sent".
 - **Only while open.** The worker sends the email only while the invitation is still open and the firm enabled; otherwise it is cancelled. Retries, unknown outcomes, the `platform.unknown_email` alert, expiry and deletion work as for [welcome emails](#welcome-emails).
 - **The Join button**, with server sessions, opens `/v1/auth/login?invitation=<token>`:

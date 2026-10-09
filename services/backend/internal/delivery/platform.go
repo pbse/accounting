@@ -104,9 +104,10 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	var expires sql.NullTime
 	var link []byte
 	// A welcome or joined email says the person is in the firm, so it goes only while the firm is enabled and the person
-	// still a member; an invitation, only while the firm is enabled and the invitation still open.
+	// still a member; an invitation, only while the firm is enabled, the invitation still open, and no newer email for it
+	// (a resend) has replaced this one, so an attempt in flight during the resend is never tried again.
 	err = tx.QueryRowContext(ctx, `SELECT e.id,e.kind,e.organization_id,e.recipient,o.name,COALESCE(o.email_domain,''),e.attempts,
- COALESCE(CASE WHEN e.kind='invitation' THEN o.enabled AND i.state='pending' AND i.expires_at>now()
+ COALESCE(CASE WHEN e.kind='invitation' THEN o.enabled AND i.state='pending' AND i.expires_at>now() AND NOT EXISTS(SELECT 1 FROM platform_emails n WHERE n.invitation=e.invitation AND n.id>e.id)
   ELSE o.enabled AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=e.organization_id AND m.subject=e.subject AND m.granted) END,false),
  e.inviter,COALESCE(i.role_name,''),i.expires_at,e.link
  FROM platform_emails e JOIN organizations o ON o.id=e.organization_id LEFT JOIN member_invitations i ON i.id=e.invitation
@@ -121,7 +122,7 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	if !current {
 		// Nothing more is sent. One never tried is cancelled; one tried before may have been sent, so it stays unknown.
 		if _, err = tx.ExecContext(ctx, `UPDATE platform_emails SET state=CASE WHEN attempts>0 THEN 'unknown' ELSE 'cancelled' END,claimed_at=NULL,finished_at=now(),link=NULL,
- error=CASE WHEN kind='invitation' THEN CASE WHEN attempts>0 THEN 'The firm was suspended or the invitation closed after an unconfirmed attempt' ELSE 'The firm was suspended or the invitation closed before it was sent' END
+ error=CASE WHEN kind='invitation' THEN CASE WHEN attempts>0 THEN 'The firm was suspended, the invitation closed, or a newer email replaced it after an unconfirmed attempt' ELSE 'The firm was suspended, the invitation closed, or a newer email replaced it before it was sent' END
   WHEN attempts>0 THEN 'The firm was suspended or the person removed after an unconfirmed attempt' ELSE 'The firm was suspended or the person removed before it was sent' END WHERE id=$1`, id); err != nil {
 			return false, err
 		}

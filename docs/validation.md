@@ -3940,12 +3940,12 @@ Request: an invitation arrived from `welcome@workos-mail.com`, under the WorkOS 
   - **Queueing.** The email is queued in the same transaction that opens the invitation. A send settled later from WorkOS's list, and a staff resend, queue it too. Its link's WorkOS token is sealed while it waits and cleared once it is done. It is sent only while the invitation is open and the firm enabled.
   - **The Join button.** `/v1/auth/login?invitation=<token>` checks the token with WorkOS and against the firm's open invitation. It then goes straight to Google with the invited address suggested. The callback sends `invitation_token` with the code, so WorkOS accepts the invitation as it signs the person in. A token that can't be used lands on `/login?error=invitation`.
   - **Visible delivery.** The firm's invitation list and the staff person view show each invitation's email state, with "revoke it and invite again" when it did not go. Sending answers "Invitation created. Krith is emailing it…", not "sent". A firm reads only its own invitation emails (policy `firm_invitations`).
-  - **One at a time.** A newer email for the same invitation replaces one still waiting.
+  - **One at a time.** A newer email for the same invitation replaces one still waiting, and an attempt in flight is never retried once replaced. A staff resend answers "renewed… emailing it again", not "sent".
   - **Either session mode.** The Join link is chosen when the email is queued: Krith's sign-in with the invitation token under server sessions, WorkOS's acceptance page under browser sessions. A send WorkOS shows already accepted when it is settled gets no email.
   - **Wording.** The firm's invitation panel, the staff console and the privacy notice (dated 8 October 2026) now say Krith sends invitations. The email is signed "Krith · The work, prepared.", at the user's request.
 - **Tested.** On a fresh local PostgreSQL with every migration applied:
   - `TestInvitationEmailsSay` (new);
-  - `TestPlatformEmailsAreSentOnceWithKrithsKey` (extended with an open and a revoked invitation);
+  - `TestPlatformEmailsAreSentOnceWithKrithsKey` (extended): an open and a revoked invitation, and an unanswered attempt a resend replaced, which stays unknown while only the newer email goes;
   - `TestEmailInvitationsEnrollOnlyAcceptedInvitees`: queued on send and on settle, none on a race-revoked send;
   - `TestServerSessionKeepsWorkOSTokensOnTheServer`: the Join button, the token sent with the code, refusals, staff ignoring it;
   - `TestStaffFindAPersonAcrossFirmsAndEndTheirSessions`: a resend queues one email each time, none when the renewal is unconfirmed;

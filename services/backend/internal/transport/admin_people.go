@@ -451,5 +451,6 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		adminFirmProblem(w, err, "invitation resend")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"message": "Invitation sent again.", "expires_at": expires})
+	// The email is queued, not yet sent: the person view shows when it has gone.
+	jsonReply(w, 200, map[string]any{"message": "Invitation renewed. Krith is emailing it again now; this view shows when it has gone.", "expires_at": expires})
 }
