@@ -154,7 +154,7 @@ The panel is a conversation, not a help widget. The spec, against the audit of 2
 - **Phone:** full-screen sheet, header with back, composer pinned to the bottom with safe-area padding, steps and cards in the same column.
 - **Motion:** the drawer slides in, messages fade and rise 4px, steps tick; all under `prefers-reduced-motion`.
 - **Names:** one name everywhere, "Agent", in the header, the sidebar, the floating button and the aria labels.
-- **Executive view:** the panel over the executive's own pages (PR 5): the agent offers exactly `executive_overview` (`GET /v1/closes/executive`), `list_publications`, `read_publication`, `cash_plan` and `budget_comparison`, firm-wide, naming a close by the id the overview gives; no card is offered; links lead to the executive's pages; the starter chips are the executive's questions and there are no commands; with the firm's agent off the executive gets one fixed line and no model call.
+- **Executive view:** the panel over the executive's own pages (PR 5): the agent offers exactly `executive_overview` (`GET /v1/closes/executive`), `list_publications`, `read_publication`, `cash_plan` and `budget_comparison`, firm-wide, naming a close by the id the overview gives; no card is offered; links lead to the executive's pages; the starter chips are the executive's questions and there are no commands; with the firm's agent off the executive gets one fixed line and no model call; their conversation is kept apart from any firm-wide one of the same person (`chat_messages.executive`, migration 137), and the overview is capped at 40 closes with the truncation marker, so a cut overview's answer is shown once.
 
 ## Evaluation and acceptance
 

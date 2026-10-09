@@ -246,7 +246,8 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
   }
   function submitLine(line: string) {
     if (!line || busy) return;
-    if (!line.startsWith("/")) {
+    // An executive has no commands: whatever they type is a question.
+    if (executive || !line.startsWith("/")) {
       void send({ text: line, workpaper_id: paperId });
       return;
     }

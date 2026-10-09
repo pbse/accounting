@@ -778,13 +778,16 @@ func searchCitations(hits []searchHit) []chatCitation {
 func registerChat(mux *http.ServeMux, db *sql.DB) {
 	// scope binds every query to the firm, the signed-in author and one conversation.
 	const scope = `organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint`
+	// An executive's conversation is kept apart from the firm-wide one of the same person: what they asked and were told
+	// as a member never shows, and is never replayed, once they are an executive, and the other way round.
+	scopeOf := func(r *http.Request) string { return scope + " AND executive=" + strconv.FormatBool(executive(r)) }
 	history := func(w http.ResponseWriter, r *http.Request, extra map[string]any) {
 		// Pairs whose reads touched a close the member can no longer open, or that no longer exists, are deleted first.
-		if err := pruneConversation(r.Context(), db, organization(r), subject(r), r.PathValue("id"), firmAccess(r)); err != nil {
+		if err := pruneConversation(r.Context(), db, organization(r), subject(r), r.PathValue("id"), firmAccess(r), executive(r)); err != nil {
 			problem(w, 503, "Conversation unavailable.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),every_month,COALESCE(outcome,'null'::jsonb),COALESCE(proposal,'null'::jsonb),COALESCE(target_close_id::text,''),COALESCE((SELECT t.entity||' · '||t.period FROM client_closes t WHERE t.id=chat_messages.target_close_id),''),COALESCE(steps,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),every_month,COALESCE(outcome,'null'::jsonb),COALESCE(proposal,'null'::jsonb),COALESCE(target_close_id::text,''),COALESCE((SELECT t.entity||' · '||t.period FROM client_closes t WHERE t.id=chat_messages.target_close_id),''),COALESCE(steps,'null'::jsonb),created_at FROM chat_messages WHERE `+scopeOf(r)+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Conversation unavailable.")
 			return
@@ -877,7 +880,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		// An executive at off gets one fixed line and no model, never the keyword reads of the firm's work.
 		fixed := exec && !agent
 		if in.Action == "clear" {
-			if _, err := db.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scope, org, author, closeID); err != nil {
+			if _, err := db.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r), org, author, closeID); err != nil {
 				problem(w, 503, "Conversation could not be cleared.")
 				return
 			}
@@ -965,7 +968,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		} else {
 			// A follow-up may keep the account of the previous question in this conversation.
 			var previous string
-			if err := db.QueryRowContext(r.Context(), `SELECT body FROM chat_messages WHERE `+scope+` AND role='user' ORDER BY id DESC LIMIT 1`, org, author, closeID).Scan(&previous); err != nil && err != sql.ErrNoRows {
+			if err := db.QueryRowContext(r.Context(), `SELECT body FROM chat_messages WHERE `+scopeOf(r)+` AND role='user' ORDER BY id DESC LIMIT 1`, org, author, closeID).Scan(&previous); err != nil && err != sql.ErrNoRows {
 				problem(w, 503, "Conversation unavailable.")
 				return
 			}
@@ -1032,11 +1035,11 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Conversation unavailable.")
 				return
 			}
-			if err := pruneConversation(r.Context(), db, org, author, closeID, firmAccess(r)); err != nil {
+			if err := pruneConversation(r.Context(), db, org, author, closeID, firmAccess(r), exec); err != nil {
 				problem(w, 503, "Conversation unavailable.")
 				return
 			}
-			earlier, err := agentHistory(r.Context(), db, org, author, closeID)
+			earlier, err := agentHistory(r.Context(), db, org, author, closeID, exec)
 			if err != nil {
 				problem(w, 503, "Conversation unavailable.")
 				return
@@ -1170,7 +1173,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace,scope,rounds,tool_calls) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,NULLIF($6,'')::jsonb,$7,$8,$9)`, org, author, closeID, attempted, latency, trace, answerScope, result.rounds, result.calls)
 		}
 		// A question whose answer was not kept, or was shown once, leaves the conversation when it next advances.
-		if _, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scope+` AND NOT replayable AND outcome IS NULL`, org, author, closeID); err != nil {
+		if _, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+` AND NOT replayable AND outcome IS NULL`, org, author, closeID); err != nil {
 			problem(w, 503, "The message could not be saved.")
 			return
 		}
@@ -1217,14 +1220,14 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			monthly                                                             bool
 		}{{"user", in.Text, "[]", "", "", "", "", "", "", false}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish, proposal, target, steps, reply.monthly}} {
 			var id string
-			if err = tx.QueryRowContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes,replayable,question_id) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[],$16,NULLIF($17,'')::bigint) RETURNING id::text`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes, replayable, questionID).Scan(&id); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes,replayable,question_id,executive) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[],$16,NULLIF($17,'')::bigint,$18) RETURNING id::text`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes, replayable, questionID, exec).Scan(&id); err != nil {
 				break
 			}
 			questionID = id
 		}
 		// A conversation keeps its latest 200 messages; firm-wide ones also expire after 30 days.
 		if err == nil {
-			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scope+` AND (id<(SELECT min(id) FROM (SELECT id FROM chat_messages WHERE `+scope+` ORDER BY id DESC LIMIT 200) kept) OR ($3='' AND created_at<now()-interval '30 days'))`, org, author, closeID)
+			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r)+` AND (id<(SELECT min(id) FROM (SELECT id FROM chat_messages WHERE `+scopeOf(r)+` ORDER BY id DESC LIMIT 200) kept) OR ($3='' AND created_at<now()-interval '30 days'))`, org, author, closeID)
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The message could not be saved.")
@@ -1257,7 +1260,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		var action, target, proposalRaw string
-		if err = tx.QueryRowContext(r.Context(), `SELECT action,COALESCE(target_close_id::text,''),COALESCE(proposal::text,'{}') FROM chat_messages WHERE `+scope+` AND id::text=$4 AND action IS NOT NULL AND outcome IS NULL FOR UPDATE`, org, author, closeID, r.PathValue("message")).Scan(&action, &target, &proposalRaw); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT action,COALESCE(target_close_id::text,''),COALESCE(proposal::text,'{}') FROM chat_messages WHERE `+scopeOf(r)+` AND id::text=$4 AND action IS NOT NULL AND outcome IS NULL FOR UPDATE`, org, author, closeID, r.PathValue("message")).Scan(&action, &target, &proposalRaw); err != nil {
 			problem(w, 409, "This card was already confirmed or is no longer in your conversation.")
 			return
 		}
@@ -1289,7 +1292,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		// record keeps what the confirmation started on the card, once.
 		record := func(outcome map[string]any, failure string) {
 			raw, _ := json.Marshal(outcome)
-			if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET outcome=$5::jsonb||jsonb_build_object('at',now()) WHERE `+scope+` AND id::text=$4`, org, author, closeID, r.PathValue("message"), string(raw)); err != nil || tx.Commit() != nil {
+			if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET outcome=$5::jsonb||jsonb_build_object('at',now()) WHERE `+scopeOf(r)+` AND id::text=$4`, org, author, closeID, r.PathValue("message"), string(raw)); err != nil || tx.Commit() != nil {
 				problem(w, 503, failure)
 				return
 			}
@@ -1322,7 +1325,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				problem(w, refused.status, refused.message)
 				return
 			}
-			if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET target_close_id=CASE WHEN id::text=$4 THEN $5::bigint ELSE target_close_id END,closes=(SELECT COALESCE(array_agg(DISTINCT c ORDER BY c),'{}') FROM unnest(closes||$5::bigint) c) WHERE `+scope+` AND (id::text=$4 OR id=(SELECT question_id FROM chat_messages WHERE `+scope+` AND id::text=$4))`, org, author, closeID, r.PathValue("message"), item.ID); err != nil {
+			if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET target_close_id=CASE WHEN id::text=$4 THEN $5::bigint ELSE target_close_id END,closes=(SELECT COALESCE(array_agg(DISTINCT c ORDER BY c),'{}') FROM unnest(closes||$5::bigint) c) WHERE `+scopeOf(r)+` AND (id::text=$4 OR id=(SELECT question_id FROM chat_messages WHERE `+scopeOf(r)+` AND id::text=$4))`, org, author, closeID, r.PathValue("message"), item.ID); err != nil {
 				problem(w, 503, "The close could not be opened. Ask for it again.")
 				return
 			}

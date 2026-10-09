@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"strconv"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -17,16 +18,16 @@ func closesLiteral(ids []string) string {
 // pruneConversation deletes every turn pair whose reads touched a close the member can no longer open, or that no
 // longer exists, before the conversation is shown or replayed; the question goes with its answer. A pair's closes are
 // written on both messages, so one statement finds both.
-func pruneConversation(ctx context.Context, db *sql.DB, org, author, closeID string, firmWide bool) error {
-	_, err := db.ExecContext(ctx, `DELETE FROM chat_messages m WHERE m.organization_id=$1 AND m.author=$2 AND m.close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND EXISTS(SELECT 1 FROM unnest(m.closes) AS touched(id) WHERE NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.id=touched.id AND c.organization_id=$1 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))))`, org, author, closeID, firmWide)
+func pruneConversation(ctx context.Context, db *sql.DB, org, author, closeID string, firmWide, executive bool) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM chat_messages m WHERE m.organization_id=$1 AND m.author=$2 AND m.close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND m.executive=`+strconv.FormatBool(executive)+` AND EXISTS(SELECT 1 FROM unnest(m.closes) AS touched(id) WHERE NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.id=touched.id AND c.organization_id=$1 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))))`, org, author, closeID, firmWide)
 	return err
 }
 
 // agentHistory is the conversation the model sees: the last 20 turns as plain text, each member message redacted as
 // it is sent. Only a kept answer and its question are replayable; a firm-wide pair whose reads touched no close is
 // not, since nothing verified its client scope; a close conversation is already bound to its close.
-func agentHistory(ctx context.Context, db *sql.DB, org, author, closeID string) ([]llm.Message, error) {
-	rows, err := db.QueryContext(ctx, `SELECT role,body,array_to_json(closes)::text FROM chat_messages WHERE organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND replayable AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY id DESC LIMIT 40`, org, author, closeID)
+func agentHistory(ctx context.Context, db *sql.DB, org, author, closeID string, executive bool) ([]llm.Message, error) {
+	rows, err := db.QueryContext(ctx, `SELECT role,body,array_to_json(closes)::text FROM chat_messages WHERE organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND executive=`+strconv.FormatBool(executive)+` AND replayable AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY id DESC LIMIT 40`, org, author, closeID)
 	if err != nil {
 		return nil, err
 	}

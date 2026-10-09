@@ -74,7 +74,7 @@ A message that starts with **draft** and otherwise names only a client request (
 
 ## Executives
 
-A client's executive gets the same panel over their own pages. Their conversation is firm-wide only (a close conversation is refused, as every close route is for an executive) and the agent offers exactly their reads: the business overview (`GET /v1/closes/executive`), a close's published reports and one report as frozen, the 13-week cash plan and the budget comparison, naming a close by the id the overview gives. No card is offered and no command runs (`422`); the starter chips are the executive's own questions; citations link to the executive's pages. With the firm's agent at `off`, an executive's question gets one fixed line pointing to the business overview and no model is called.
+A client's executive gets the same panel over their own pages. Their conversation is firm-wide only (a close conversation is refused, as every close route is for an executive) and the agent offers exactly their reads: the business overview (`GET /v1/closes/executive`), a close's published reports and one report as frozen, the 13-week cash plan and the budget comparison, naming a close by the id the overview gives. No card is offered and no command runs (`422`); the starter chips are the executive's own questions; citations link to the executive's pages. With the firm's agent at `off`, an executive's question gets one fixed line pointing to the business overview and no model is called. An executive's conversation is its own (`chat_messages.executive`, migration 137): what the same person asked and was told as a member never shows and is never replayed once they are an executive, and the other way round.
 
 ## Search
 

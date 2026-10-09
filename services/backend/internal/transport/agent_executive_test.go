@@ -49,6 +49,9 @@ func TestAgentChatAnswersAnExecutive(t *testing.T) {
 			db.Exec(q, org)
 		}
 	}()
+	// A firm-work pair the same person had as a member: never shown to them as an executive, never replayed.
+	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,citations,closes,replayable) VALUES($1,'user_x','user','What is in the unpublished draft?','[]','{}',true),($1,'user_x','assistant','The unpublished draft secret.','[]','{}',true)`, org)
+	must(err)
 	t.Setenv("OPENAI_API_KEY", "mock-only-key")
 	t.Setenv("OPENAI_MODEL", "mock-only-model")
 	calls := 0
@@ -60,6 +63,9 @@ func TestAgentChatAnswersAnExecutive(t *testing.T) {
 	http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
 		calls++
 		raw, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(raw), "unpublished draft") {
+			t.Fatalf("a member's firm-work turn reached the model for the executive: %s", raw)
+		}
 		var sent struct {
 			Tools []struct {
 				Name string `json:"name"`
@@ -146,7 +152,14 @@ func TestAgentChatAnswersAnExecutive(t *testing.T) {
 		t.Fatalf("a command is not an executive's: %s", body)
 	}
 	call("POST", "/v1/closes/"+alpha+"/chat", map[string]string{"text": "Where does this close stand?"}, 403)
-	call("GET", "/v1/closes/chat", nil, 200)
+	if shown := string(call("GET", "/v1/closes/chat", nil, 200)); strings.Contains(shown, "unpublished draft") || !strings.Contains(shown, "Alpha has") {
+		t.Fatalf("an executive sees their own conversation and not the member's: %s", shown)
+	}
+	var kept int
+	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1 AND NOT executive`, org).Scan(&kept))
+	if kept != 2 {
+		t.Fatalf("the member's pair is kept apart, untouched: %d", kept)
+	}
 	// With the firm's agent off, one fixed line and no model call.
 	_, err = db.Exec(`UPDATE organizations SET agent_chat='off' WHERE id=$1`, org)
 	must(err)
