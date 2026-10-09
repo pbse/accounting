@@ -67,25 +67,31 @@ func capResult(raw []byte, c toolCap) ([]byte, bool, int) {
 }
 
 // projectCashPlan is the 13-week cash plan as the model is sent it: every week's totals, with each week's dated items
-// cut to eight and the rest counted (more_items), so a client with many open invoices and bills still fits the read.
+// and every other list of items (past due, after the horizon, unscheduled) cut to eight and the rest counted
+// (more_<list>), so a client with many open invoices and bills still fits the read.
 func projectCashPlan(value any) any {
 	object, ok := value.(map[string]any)
 	if !ok {
 		return value
 	}
-	weeks, ok := object["weeks"].([]any)
-	if !ok {
-		return value
+	cut := func(o map[string]any, key string) {
+		if items, ok := o[key].([]any); ok && len(items) > 8 {
+			o[key] = items[:8]
+			o["more_"+key] = len(items) - 8
+		}
 	}
-	for _, week := range weeks {
-		w, ok := week.(map[string]any)
-		if !ok {
+	for key, v := range object {
+		if key == "weeks" {
+			if weeks, ok := v.([]any); ok {
+				for _, week := range weeks {
+					if w, ok := week.(map[string]any); ok {
+						cut(w, "items")
+					}
+				}
+			}
 			continue
 		}
-		if items, ok := w["items"].([]any); ok && len(items) > 8 {
-			w["items"] = items[:8]
-			w["more_items"] = len(items) - 8
-		}
+		cut(object, key)
 	}
 	return object
 }

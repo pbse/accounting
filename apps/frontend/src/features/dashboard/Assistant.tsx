@@ -320,7 +320,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
       </p>
       {about && executive && (
         <p className="assistant-about">
-          Answers come from your clients’ published reports, cash plan and budget, read with your access and listed under each answer. Every question goes to the configured model provider with the reads the agent chooses and the last turns of this conversation. The agent proposes nothing for an executive and changes nothing.
+          Answers come from your clients’ published reports, cash plan and budget, read with your access and listed under each answer. With the firm’s Agent chat on firm-wide, every question goes to the configured model provider with the reads the agent chooses and the last turns of this conversation; below that level a question gets one fixed line and is not sent anywhere. The agent proposes nothing for an executive and changes nothing.
         </p>
       )}
       {about && !executive && (

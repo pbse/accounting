@@ -60,9 +60,9 @@ func TestAnExecutiveCitationStaysOnTheirPages(t *testing.T) {
 
 func TestProjectCashPlanKeepsEveryWeekAndCutsItsItems(t *testing.T) {
 	var value any
-	json.Unmarshal([]byte(`{"opening":{"amount":"1.00"},"weeks":[{"week":"2026-10-12","receipts":"9.00","items":[1,2,3,4,5,6,7,8,9,10]},{"week":"2026-10-19","items":[1]}]}`), &value)
+	json.Unmarshal([]byte(`{"opening":{"amount":"1.00"},"weeks":[{"week":"2026-10-12","receipts":"9.00","items":[1,2,3,4,5,6,7,8,9,10]},{"week":"2026-10-19","items":[1]}],"past_due":[1,2,3,4,5,6,7,8,9],"unscheduled":[1]}`), &value)
 	out, _ := json.Marshal(projectCashPlan(value))
-	if !strings.Contains(string(out), `"items":[1,2,3,4,5,6,7,8],"more_items":2`) || !strings.Contains(string(out), `"items":[1],`) || strings.Count(string(out), `"week"`) != 2 || strings.Count(string(out), "more_items") != 1 {
+	if !strings.Contains(string(out), `"items":[1,2,3,4,5,6,7,8],"more_items":2`) || !strings.Contains(string(out), `"items":[1],`) || strings.Count(string(out), `"week"`) != 2 || strings.Count(string(out), "more_items") != 1 || !strings.Contains(string(out), `"more_past_due":1`) || !strings.Contains(string(out), `"past_due":[1,2,3,4,5,6,7,8]`) || strings.Contains(string(out), "more_unscheduled") {
 		t.Fatalf("each week keeps eight items and counts the rest: %s", out)
 	}
 }
