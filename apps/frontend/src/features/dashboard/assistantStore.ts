@@ -6,6 +6,8 @@ import type { Ask } from "./commands";
 export const starters = {
   firm: ["What needs me today?", "What is ready for review?", "What is blocked?"],
   close: ["Where does this close stand?", "What blocks sign-off?", "What changed from last month?"],
+  // An executive's questions go to the agent as they are: there are no commands for an executive.
+  executive: ["How is my business doing?", "What does my latest report say?", "What is my cash position for the next 13 weeks?"],
 };
 export const starterCommands: Record<string, Ask> = {
   "What needs me today?": { command: "status", argument: "" },

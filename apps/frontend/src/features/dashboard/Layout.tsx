@@ -121,7 +121,7 @@ export default function WorkspaceLayout() {
               </label>
             </form>
           )}
-          {known && !executive && signedIn && (
+          {known && signedIn && (
             <button type="button" className="button primary ask-agent" aria-label="Open the agent" onClick={openAssistant}>
               <Icon name="agent" /> <span>Agent</span>
             </button>
@@ -156,7 +156,7 @@ export default function WorkspaceLayout() {
           </div>
         </main>
       </div>
-      {executive === false && <Assistant />}
+      {executive !== undefined && <Assistant executive={executive} />}
     </div>
   );
 }

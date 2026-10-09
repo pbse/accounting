@@ -112,7 +112,7 @@ export default function Executive({ view }: { view: ExecutiveView }) {
       {view === "reports" && close && (
         <>
           {picker}
-          <PublishedReport key={close.id} closeId={close.id} newest={published.find((p) => p.close_id === close.id)?.publication_id} />
+          <PublishedReport key={`${close.id}/${params.get("publication") ?? ""}`} closeId={close.id} newest={params.get("publication") ?? published.find((p) => p.close_id === close.id)?.publication_id} />
           <Budget key={`budget-${close.id}`} closeId={close.id} readOnly />
         </>
       )}
@@ -145,7 +145,8 @@ export default function Executive({ view }: { view: ExecutiveView }) {
   );
 }
 
-// The close's published versions; the newest is shown as it was frozen, and any other can be opened.
+// The close's published versions; the newest is shown as it was frozen, or the version a link names (an agent's
+// citation opens the version it cited), and any other can be opened.
 function PublishedReport({ closeId, newest }: { closeId: string; newest?: string }) {
   const [open, setOpen] = useState(newest);
   const [shown, setShown] = useState<{ publication: { version: number; commentary: string }; pack: Extract<Pack, { state: "ready" }> }>();

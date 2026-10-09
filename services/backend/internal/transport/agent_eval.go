@@ -74,7 +74,7 @@ func AddAgentEvalEvidence(ctx context.Context, db *sql.DB, firm AcceptanceFirm, 
 // RecordAgentEvalReads makes each of the question's expected reads as the firm's member, exactly as the loop would
 // make them, and returns what the routes answered. A card's tool is never run: a card proposes, it does not act.
 func RecordAgentEvalReads(ctx context.Context, db *sql.DB, firm AcceptanceFirm, closeID, entity, today string, q agenteval.Question) ([]agenteval.Read, error) {
-	tools := agentTools(q.Scope == "close", "firm")
+	tools := agentTools(q.Scope == "close", "firm", false)
 	store := savedCloses(db, strings.Repeat("a", 32))
 	var reads []agenteval.Read
 	for _, name := range q.Tools {
