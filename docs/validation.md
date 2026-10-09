@@ -3924,3 +3924,35 @@ PR 6 of the [agentic chat plan](agent-chat.md): chats are sessions (`chat_sessio
 - Frontend `npm run check`: passes.
 
 Not verified: the rail's chats menu and the panel's list in a browser (no layout-check coverage was added; the rail keeps its width, the menu floats beside it).
+
+## Sign-in: Krith sends a firm's invitations, and its Join button accepts them with Google (2026-10-08)
+
+Request: an invitation arrived from `welcome@workos-mail.com`, under the WorkOS team's name ("Nivi"), with WorkOS's text. The user asked why it didn't come from getkrith.com, and for clearer, more agentic, simple and distinctive wording. WorkOS was sending its own invitation email.
+
+- **Change.**
+  - **Sending.** WorkOS still holds each invitation; Krith sends the email. It goes from `PLATFORM_EMAIL_FROM` through the platform email worker, as a new `platform_emails` kind, `invitation` (migration 137). The email:
+    - subject "<Inviter> invited you to join <firm> on Krith";
+    - says who invited them and the role;
+    - one sentence on what Krith's agents prepare;
+    - one Join button;
+    - the address to sign in as and the closing date;
+    - plain text and simple HTML.
+  - **Queueing.** The email is queued in the same transaction that opens the invitation. A send settled later from WorkOS's list, and a staff resend, queue it too. Its link's WorkOS token is sealed while it waits and cleared once it is done. It is sent only while the invitation is open and the firm enabled.
+  - **The Join button.** `/v1/auth/login?invitation=<token>` checks the token with WorkOS and against the firm's open invitation. It then goes straight to Google with the invited address suggested. The callback sends `invitation_token` with the code, so WorkOS accepts the invitation as it signs the person in. A token that can't be used lands on `/login?error=invitation`.
+  - **Wording.** The firm's invitation panel, the staff console and the privacy notice (dated 8 October 2026) now say Krith sends invitations.
+- **Tested.** On a fresh local PostgreSQL with every migration applied:
+  - `TestInvitationEmailsSay` (new);
+  - `TestPlatformEmailsAreSentOnceWithKrithsKey` (extended with an open and a revoked invitation);
+  - `TestEmailInvitationsEnrollOnlyAcceptedInvitees`: queued on send and on settle, none on a race-revoked send;
+  - `TestServerSessionKeepsWorkOSTokensOnTheServer`: the Join button, the token sent with the code, refusals, staff ignoring it;
+  - `TestStaffFindAPersonAcrossFirmsAndEndTheirSessions`: a resend queues one email each time, none when the renewal is unconfirmed;
+  - the rest of the transport and delivery packages pass, except the two PDF tests that need Poppler, which isn't installed locally;
+  - both apps typecheck;
+  - the HTML was rendered in headless Edge and checked by eye.
+
+Not verified:
+- a real invitation accepted through Google in production;
+- WorkOS's resend endpoint with its invitation email turned off.
+
+WorkOS's invitation email still has to be turned off in production (`isInvitationEmailEnabled: false`), or invitees get both emails.
+

@@ -251,7 +251,7 @@ export function Invitations() {
           Invite by email
         </button>
       </SectionHeader>
-      <p>WorkOS emails the invitation. Once they accept it and sign in, they join the firm. Assign their clients under client assignments if their role cannot see every client.</p>
+      <p>Krith emails the invitation. Its Join button signs them in with Google and they join the firm. Assign their clients under client assignments if their role cannot see every client.</p>
       {list.length === 0 ? (
         <p className="empty">Nobody has been invited yet.</p>
       ) : (
@@ -272,7 +272,7 @@ export function Invitations() {
       {message && <p role="status">{message}</p>}
       {error && !open && <p role="alert">{error}</p>}
       {readError && <p role="alert">{readError.message || "Invitations are unavailable."} The list is from the last read.</p>}
-      <Dialog open={open} onClose={dismiss} title="Invite by email" description="WorkOS emails the invitation; they join the firm once they accept it and sign in.">
+      <Dialog open={open} onClose={dismiss} title="Invite by email" description="Krith emails the invitation; its Join button signs them in with Google, and they join the firm.">
         <form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
           <fieldset disabled={busy}>
             <label>Email<input type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>

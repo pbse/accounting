@@ -186,10 +186,19 @@ func systemContext(ctx context.Context) context.Context {
 
 // firmTokens exchanges the sign-in code and settles which organization the session is for. Only a company address may
 // sign in. A person in several organizations goes to the firm of their address's domain; a person in no firm finds or
-// creates it (domainFirm), and the session is then renewed into it. A refusal names why for the login page.
-func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind sessionKind, code string) (workosTokens, string, *firmChoice, error) {
-	tokens, _, err := c.authenticate(ctx, map[string]string{"grant_type": "authorization_code", "code": code})
+// creates it (domainFirm), and the session is then renewed into it. A sign-in from an invitation's Join button carries
+// its token, so WorkOS accepts the invitation as it signs the person in. A refusal names why for the login page.
+func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind sessionKind, code, invitation string) (workosTokens, string, *firmChoice, error) {
+	fields := map[string]string{"grant_type": "authorization_code", "code": code}
+	if invitation != "" {
+		fields["invitation_token"] = invitation
+	}
+	tokens, refused, err := c.authenticate(ctx, fields)
 	var choice *organizationChoice
+	// WorkOS turned down the sign-in with its invitation: closed since the person opened it, or not for this account.
+	if refused && invitation != "" && !errors.As(err, &choice) {
+		return tokens, refuseInvitation, nil, nil
+	}
 	if errors.As(err, &choice) {
 		if _, company := companyDomain(choice.User.Email); !company {
 			return tokens, refusePersonal, nil, nil
@@ -502,8 +511,24 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		if !kind.returnPath(back) {
 			back = kind.home
 		}
+		w.Header().Set("Cache-Control", "no-store")
+		// An invitation's Join button (docs/sign-in.md#invitations): Google, with the invited address suggested, and the
+		// invitation's token kept for the callback, which accepts it with the sign-in. Only an invitation still open is.
+		invitation, hint := "", ""
+		if token := r.URL.Query().Get("invitation"); token != "" && !kind.staff {
+			why := ""
+			if hint, why = openInvitation(r.Context(), db, token); why != "" {
+				http.Redirect(w, r, "/login?error="+why, http.StatusFound)
+				return
+			}
+			invitation, provider = token, providers["google"]
+		}
 		state := randomToken()
-		setCookie(w, loginCookie, state+"."+base64.RawURLEncoding.EncodeToString([]byte(back)), 600)
+		started := state + "." + base64.RawURLEncoding.EncodeToString([]byte(back))
+		if invitation != "" {
+			started += "." + base64.RawURLEncoding.EncodeToString([]byte(invitation))
+		}
+		setCookie(w, loginCookie, started, 600)
 		if provider == "" {
 			provider = "authkit"
 		}
@@ -511,19 +536,24 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		if org != "" {
 			query.Set("organization_id", org)
 		}
-		w.Header().Set("Cache-Control", "no-store")
+		if hint != "" {
+			query.Set("login_hint", hint)
+		}
 		http.Redirect(w, r, workosAPI+"/user_management/authorize?"+query.Encode(), http.StatusFound)
 	})
 	mux.HandleFunc("GET /v1/auth/callback", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		setCookie(w, loginCookie, "", -1)
 		cookie, err := r.Cookie(loginCookie)
-		var state, encoded string
+		var state, encoded, invited string
 		if err == nil {
-			state, encoded, _ = strings.Cut(cookie.Value, ".")
+			var rest string
+			state, rest, _ = strings.Cut(cookie.Value, ".")
+			encoded, invited, _ = strings.Cut(rest, ".")
 		}
 		raw, _ := base64.RawURLEncoding.DecodeString(encoded)
 		back := string(raw)
+		invitation, _ := base64.RawURLEncoding.DecodeString(invited)
 		// Sign-in only ever returns a staff session to the console, so the return path says which kind this is.
 		kind, check := firmSession, verifier
 		if staffSession.returnPath(back) {
@@ -550,7 +580,10 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			again(refuseExpired)
 			return
 		}
-		tokens, refusal, choice, err := c.firmTokens(r.Context(), db, kind, r.URL.Query().Get("code"))
+		if kind.staff {
+			invitation = nil
+		}
+		tokens, refusal, choice, err := c.firmTokens(r.Context(), db, kind, r.URL.Query().Get("code"), string(invitation))
 		if choice != nil {
 			// They work in several firms: the login page asks which, and the sign-in finishes with their answer.
 			choice.Back, choice.Expires = back, time.Now().Add(10*time.Minute)

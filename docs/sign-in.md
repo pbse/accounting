@@ -74,7 +74,7 @@ Krith emails each person once when they come into a firm by signing in:
 - **You've joined <firm> on Krith:** to each colleague who joins by their address. It says they can't open any clients until the administrator decides.
 
 How it works:
-- **Queued with the sign-in.** `domainFirm` and `joinFirm` write the email to `platform_emails` (migration 130) in the sign-in's own transaction, so a sign-in that fails sends nothing. A person gets one per firm, however often they sign in. People who come by invitation get WorkOS's invitation email instead.
+- **Queued with the sign-in.** `domainFirm` and `joinFirm` write the email to `platform_emails` (migration 130) in the sign-in's own transaction, so a sign-in that fails sends nothing. A person gets one per firm, however often they sign in. People who come by invitation get Krith's invitation email instead ([invitations](#invitations)).
 - **Sent by the worker.** The worker's `platform_emails` loop (`delivery.RunPlatformEmails`) sends each one through Resend, with Krith's own send-only key and sender, never a firm's connection. The idempotency key is the row's, so a retry never sends twice.
 - **Only while they belong.** Before sending, the worker checks that the firm is still enabled and the person still a member. If either has changed, nothing more is sent: an email never tried is cancelled, and one tried before stays unknown, since it may have gone.
 - **Retries and refusals.** An attempt with an uncertain outcome (no answer, a server error, or success without Resend's message ID) is retried twice, a minute apart. If it is still uncertain, it is recorded as unknown, because Resend may have sent it. A refusal is final: failed, or unknown when it answers a retry, since the attempt before may have been sent. A last attempt the worker stopped holding before Resend answered is unknown too.
@@ -87,6 +87,33 @@ Settings:
 - Links use `PUBLIC_APP_URL`.
 - Without the key and a valid sender, the worker logs that platform emails are off and sends nothing.
 
+## Invitations
+
+A firm administrator invites someone by email from Security center → People and roles. WorkOS holds the invitation, but **Krith sends the email**, from the same sender and through the same queue as the welcome emails. WorkOS's own invitation email is turned off ([setup](#setup-once-per-environment)).
+
+The email:
+- **Subject:** "<Inviter> invited you to join <firm> on Krith", or "You're invited to join <firm> on Krith" when WorkOS has no name or address for the inviter.
+- **Body:**
+  - who invited them and the role it gives;
+  - one sentence on what Krith does;
+  - one **Join <firm>** button;
+  - the address to sign in as, and the date the invitation closes.
+- **Format:** plain text and simple HTML.
+
+How it works:
+- **Queued with the invitation.** When WorkOS confirms the invitation, the app opens it and queues the email (`platform_emails`, kind `invitation`, migration 137) in one transaction. A send WorkOS confirmed but the app did not record is settled from WorkOS's list later, and its email is queued then. A staff resend renews the invitation in WorkOS and queues the email again.
+- **The token.** The Join link carries WorkOS's invitation token. The token is sealed with `SECRETS_KEY` while the email waits, and cleared once the email is done.
+- **Only while open.** The worker sends the email only while the invitation is still open and the firm enabled; otherwise it is cancelled. Retries, unknown outcomes, the `platform.unknown_email` alert, expiry and deletion work as for [welcome emails](#welcome-emails).
+- **The Join button** opens `/v1/auth/login?invitation=<token>`:
+  1. The API looks the token up in WorkOS. It goes on only if the firm still holds that invitation open, enabled, for the address WorkOS has. Otherwise the person lands on `/login?error=invitation`, or `unavailable` when WorkOS can't be reached.
+  2. The person goes straight to Google, with the invited address suggested (`login_hint`). The token waits in the sign-in cookie.
+  3. The callback sends the token with the code (`invitation_token`). WorkOS accepts the invitation as it signs the person in and gives them its role in the firm.
+  4. The app then enrolls them as for any accepted invitation.
+  5. If WorkOS turns the token down, because the invitation has closed or the Google account isn't the invited one, the login page says so (`invitation`).
+- **Staff sign-ins** never take an invitation.
+
+WorkOS accepts an organization's invitation from any account at the same company domain. Because Google is offered the invited address, a colleague's account is used only if the person picks it. If one does, that colleague joins as a member with no access, by their address as usual, and the invited person needs a new invitation.
+
 ## Why a sign-in is turned away
 
 The callback sends the person back to `/login?error=…`, and the page explains it. Nothing about the person goes in the address.
@@ -95,7 +122,8 @@ The callback sends the person back to `/login?error=…`, and the page explains 
 | --- | --- |
 | `company` | A personal address |
 | `ask` | Their domain's organization is a firm registered under another domain; they join it by invitation |
-| `invited` | The firm invited this person and they have not accepted yet |
+| `invited` | The firm invited this person and they have not accepted yet: the login page points them to the invitation email's Join button |
+| `invitation` | An invitation's Join button that can't be used: the invitation is unknown, closed or withdrawn, or WorkOS turned it down for this Google account |
 | `hosting` | A new firm's domain whose mail is not hosted by Google Workspace or Microsoft 365 |
 | `unverified` | An address WorkOS has not verified |
 | `removed` | The firm removed this person, or WorkOS deactivated their membership |
@@ -123,6 +151,7 @@ In WorkOS (production environment):
 - **Authentication → OAuth providers → Google:** enter the client ID and secret ("Your app's credentials") and enable it. Done 2026-10-06.
 - **Turn off password and passkey sign-in, and keep every other social provider (Microsoft among them) off**, so AuthKit's own page (still used for any unknown provider name) offers only Google. Check the AuthKit page afterwards. Done in production 2026-10-06: Google is the only method on (password, passkeys and Magic Auth off; Microsoft OAuth was never enabled).
 - **Roles:** `firm-admin` and `member` exist. Keep `member` without permissions.
+- **Emails:** turn off WorkOS's invitation email (Authentication → Emails, or `isInvitationEmailEnabled: false`); Krith sends its own ([invitations](#invitations)). Otherwise invitees get two.
 - **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, the default redirect URI `https://getkrith.com/login` (where WorkOS sends a sign-in it started itself), and the sign-out URI `https://getkrith.com/`.
 
 In GitHub (production environment variables): set `AUTH_SESSION=server`, then run Deploy production. The API needs `WORKOS_API_KEY` and `SECRETS_KEY`, which production already has.
@@ -145,4 +174,15 @@ In GitHub (production environment variables): set `AUTH_SESSION=server`, then ru
 The welcome emails have their own tests in `internal/delivery`:
 - `TestPlatformEmailsSay` checks what each email says, and that a malformed recipient or an unknown kind is refused.
 - `TestPlatformEmailsNeedKrithsSender` checks that nothing is sent without the key and a valid sender.
-- `TestPlatformEmailsAreSentOnceWithKrithsKey` runs against a fake Resend. It checks that emails go out with Krith's key and each row's own idempotency key. An uncertain attempt is retried under the same key, including a success without Resend's message ID, and is recorded as unknown after three tries. A refusal is final, but unknown when it answers a retry. An abandoned last attempt, or one unconfirmed after a day, is unknown. `TestUnknownPlatformEmailsAlertUntilSettled` checks the alert: it names the key, not the address, and resolves once the email is settled. An email for someone removed before it went out, or for a suspended firm, is cancelled unsent, or stays unknown if an attempt went unanswered. An email older than a day expires unsent, and a row finished over 30 days ago is deleted.
+- `TestInvitationEmailsSay` checks the invitation's subject, text and HTML. The firm's name is escaped in HTML. Without the inviter's name it still invites. It needs its link to Krith, its role and its expiry.
+- `TestPlatformEmailsAreSentOnceWithKrithsKey` runs against a fake Resend. It checks that emails go out with Krith's key and each row's own idempotency key. An uncertain attempt is retried under the same key, including a success without Resend's message ID, and is recorded as unknown after three tries. A refusal is final, but unknown when it answers a retry. An abandoned last attempt, or one unconfirmed after a day, is unknown. `TestUnknownPlatformEmailsAlertUntilSettled` checks the alert: it names the key, not the address, and resolves once the email is settled. An email for someone removed before it went out, or for a suspended firm, is cancelled unsent, or stays unknown if an attempt went unanswered. An email older than a day expires unsent, and a row finished over 30 days ago is deleted. An open invitation's email goes with its link and sender's name, and its sealed token is gone once it is done. A revoked invitation's email is cancelled unsent.
+
+Invitations are tested in `internal/transport`:
+- `TestEmailInvitationsEnrollOnlyAcceptedInvitees`: a sent invitation queues Krith's email with the inviter's name and sealed token. So does a send settled later from WorkOS's list. One revoked while it was being sent queues none.
+- `TestServerSessionKeepsWorkOSTokensOnTheServer`:
+  - the Join button goes to Google with the invited address suggested;
+  - the callback sends the token with the code, and WorkOS turning it down lands on `invitation`;
+  - an unknown token, an invitation the firm revoked, and one WorkOS shows accepted are not used;
+  - WorkOS down is `unavailable`;
+  - a staff sign-in ignores an invitation.
+- `TestStaffFindAPersonAcrossFirmsAndEndTheirSessions`: each staff resend queues the email once, with the token. An unconfirmed renewal queues none.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/secrets"
 )
 
 const workosAPI = "https://api.workos.com"
@@ -34,6 +35,76 @@ type workosInvitation struct {
 	RoleSlug       string    `json:"role_slug"`
 	ExpiresAt      time.Time `json:"expires_at"`
 	CreatedAt      time.Time `json:"created_at"`
+	// Token is what accepts the invitation; Krith's invitation email carries it (docs/sign-in.md#invitations).
+	Token string `json:"token"`
+}
+
+// platformContext is ctx with no firm: Krith's own emails (platform_emails) are written only outside any one firm.
+func platformContext(ctx context.Context) context.Context {
+	return context.WithValue(auth.WithActor(ctx, nil), systemKey{}, true)
+}
+
+// queueInvitationEmail queues Krith's email for an open invitation (docs/sign-in.md#invitations). Its link carries
+// WorkOS's invitation token, sealed while the email waits; the worker sends it only while the invitation is open.
+func queueInvitationEmail(ctx context.Context, q execer, org, invitation, email, token, inviter string) error {
+	if token == "" {
+		return errors.New("WorkOS gave no invitation token")
+	}
+	sealed, err := secrets.Seal("platform-email:invitation", []byte(token))
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(platformContext(ctx), `INSERT INTO platform_emails(kind,organization_id,recipient,invitation,inviter,link) VALUES('invitation',$1,$2,$3::bigint,$4,$5)`,
+		org, email, invitation, inviter, sealed)
+	return err
+}
+
+// openInvitation checks an invitation's Join button before sign-in: WorkOS must know its token, and the firm (still
+// enabled) hold that invitation open, for the address WorkOS has. It returns that address, to suggest to Google, or why
+// not, for the login page.
+func openInvitation(ctx context.Context, db *sql.DB, token string) (string, string) {
+	if len(token) > 200 || os.Getenv("WORKOS_API_KEY") == "" {
+		return "", refuseInvitation
+	}
+	var found workosInvitation
+	err := workos(ctx, "GET", "/user_management/invitations/by_token/"+url.PathEscape(token), nil, &found)
+	var status statusError
+	switch {
+	case errors.As(err, &status) && status.code >= 400 && status.code < 500 && status.code != http.StatusTooManyRequests:
+		return "", refuseInvitation
+	case err != nil:
+		return "", refuseUnavailable
+	}
+	email := strings.ToLower(strings.TrimSpace(found.Email))
+	var open bool
+	if err = db.QueryRowContext(systemContext(ctx), `SELECT EXISTS(SELECT 1 FROM member_invitations i JOIN organizations o ON o.id=i.organization_id AND o.enabled
+ WHERE i.workos_id=$1 AND i.organization_id=$2 AND i.email=$3 AND i.state='pending' AND i.expires_at>now())`, found.ID, found.OrganizationID, email).Scan(&open); err != nil {
+		return "", refuseUnavailable
+	}
+	if !open || found.State != "pending" {
+		return "", refuseInvitation
+	}
+	return email, ""
+}
+
+// inviterName is how an invitation email names who sent it: their name in WorkOS, else their address, else nothing.
+func inviterName(ctx context.Context, subject string) string {
+	var user struct {
+		First string `json:"first_name"`
+		Last  string `json:"last_name"`
+		Email string `json:"email"`
+	}
+	if !strings.HasPrefix(subject, "user_") || workos(ctx, "GET", "/user_management/users/"+url.PathEscape(subject), nil, &user) != nil {
+		return ""
+	}
+	name := strings.Join(strings.Fields(user.First+" "+user.Last), " ")
+	if name == "" {
+		name = strings.TrimSpace(user.Email)
+	}
+	if r := []rune(name); len(r) > 120 {
+		name = string(r[:120])
+	}
+	return name
 }
 
 func workos(ctx context.Context, method, path string, body, out any) error {
@@ -228,11 +299,35 @@ func settleInvitations(ctx context.Context, db *sql.DB, org string) error {
 			}
 			continue
 		}
-		if _, err = db.ExecContext(ctx, `UPDATE member_invitations SET state='pending',workos_id=$2,expires_at=$3 WHERE id::text=$1 AND state='sending'`, u.id, m.ID, m.ExpiresAt); err != nil {
+		// The send is settled, and Krith's email for it queued, together; without the token, it waits for the next list.
+		if m.Token == "" && (workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(m.ID), nil, &m) != nil || m.Token == "") {
+			continue
+		}
+		if err = settleInvitation(ctx, db, org, u.id, u.email, m, inviterName(ctx, u.inviter)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// settleInvitation opens a send WorkOS completed but the app did not record, and queues Krith's email for it.
+func settleInvitation(ctx context.Context, db *sql.DB, org, id, email string, m workosInvitation, inviter string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE member_invitations SET state='pending',workos_id=$2,expires_at=$3 WHERE id::text=$1 AND state='sending'`, id, m.ID, m.ExpiresAt)
+	if err != nil {
+		return err
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	if err = queueInvitationEmail(ctx, tx, org, id, email, m.Token, inviter); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func registerInvitations(mux *http.ServeMux, db *sql.DB) {
@@ -361,12 +456,25 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 502, "WorkOS did not confirm the invitation. The address stays reserved until the invitation list finds it in WorkOS, or you revoke it.")
 			return
 		}
+		// The invitation opens and Krith's email for it is queued together. If either fails, the invitation list settles
+		// it from WorkOS later and queues the email then.
+		inviter := inviterName(r.Context(), me)
 		var n int64
-		result, err := db.ExecContext(r.Context(), `UPDATE member_invitations SET state='pending',workos_id=$2,expires_at=$3 WHERE id::text=$1 AND state='sending'`, id, sent.ID, sent.ExpiresAt)
+		opened, err := db.BeginTx(r.Context(), nil)
 		if err == nil {
-			n, err = result.RowsAffected()
+			defer opened.Rollback()
+			var result sql.Result
+			if result, err = opened.ExecContext(r.Context(), `UPDATE member_invitations SET state='pending',workos_id=$2,expires_at=$3 WHERE id::text=$1 AND state='sending'`, id, sent.ID, sent.ExpiresAt); err == nil {
+				n, err = result.RowsAffected()
+			}
+			if err == nil && n == 1 {
+				if err = queueInvitationEmail(r.Context(), opened, org, id, email, sent.Token, inviter); err == nil {
+					err = opened.Commit()
+				}
+			}
 		}
 		if err == nil && n == 0 {
+			opened.Rollback()
 			// Revoked while it was being sent: revoke it in WorkOS, and record it only once WorkOS confirms, so the
 			// invitation list retries otherwise.
 			message := "The invitation was revoked while it was being sent, and is revoked in WorkOS."
@@ -379,7 +487,7 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if err != nil {
-			problem(w, 503, "WorkOS sent the invitation, but it could not be recorded yet. The invitation list settles it from WorkOS.")
+			problem(w, 503, "WorkOS made the invitation, but it could not be recorded yet. The invitation list settles it from WorkOS and sends its email then.")
 			return
 		}
 		jsonReply(w, 200, map[string]string{"id": id, "message": "Invitation sent to " + email + "."})

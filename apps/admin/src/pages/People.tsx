@@ -160,7 +160,7 @@ export function People() {
   );
 }
 
-// Resend asks WorkOS to email a pending invitation again; revoke closes an open one in the app,
+// Resend renews a pending invitation in WorkOS and sends Krith's invitation email again; revoke closes an open one in the app,
 // then in WorkOS. Each says what happened.
 export function InvitationActions({ firm, invitation, allowed, onDone }: { firm: string; invitation: { id: string; state: string }; allowed: boolean; onDone: (message: string) => void }) {
   const base = `/v1/admin/firms/${encodeURIComponent(firm)}/invitations/${encodeURIComponent(invitation.id)}`;

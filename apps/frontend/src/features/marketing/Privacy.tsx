@@ -3,7 +3,7 @@ import { MAILBOX } from "./Contact";
 
 // The privacy notice. Each statement follows what the service does today; when the code changes, change the page and
 // its date (docs/marketing-site.md).
-const updated = "7 October 2026";
+const updated = "8 October 2026";
 
 const PROVIDERS = [
   { name: "Cloudflare", does: "Hosts the website and runs the application; scans client files for malware; receives clients’ email replies to a firm’s requests; delivers contact notes to our inbox." },
@@ -11,7 +11,7 @@ const PROVIDERS = [
   { name: "WorkOS", does: "Sign-in, roles and invitations." },
   { name: "OpenAI or Anthropic", does: "AI reading of documents. Your firm’s workspace names the provider it uses." },
   { name: "Google (Gemini API)", does: "Reads the text of each page of the PDFs a firm adds, sent as an image of the page. On the paid service we use, Google does not use them to improve its products and keeps them only briefly, to detect abuse. Firm settings show whether it is in use." },
-  { name: "Resend", does: "Sends emails a person at the firm has approved, through the firm’s own sender, and our own email to each firm member when they set up or join a firm." },
+  { name: "Resend", does: "Sends emails a person at the firm has approved, through the firm’s own sender, and our own emails to firm members: the invitations a firm sends, and a note when someone sets up or joins a firm." },
   { name: "Google (Workspace and Gmail)", does: "Our team’s email, which receives mail sent to our addresses and the notes sent through our contact page." },
 ];
 
@@ -41,7 +41,7 @@ export function Privacy() {
               <strong>People who write to us:</strong> the name, email address, firm and note you send through our contact page or to {MAILBOX}. We keep it to reply to you, and forward it to our team’s inbox. To limit repeated notes, we also keep a one-way digest of the network address a note came from, never the address itself, and clear it after an hour.
             </li>
             <li>
-              <strong>Firm members:</strong> name, email address and roles, which our sign-in provider WorkOS holds for us; which clients each person may work on; and a record of what each person does in Krith, such as confirming facts, approving drafts and signing off a close. When someone sets up or joins a firm by signing in, we email them once, from Krith, and keep a record of that email for 30 days.
+              <strong>Firm members:</strong> name, email address and roles, which our sign-in provider WorkOS holds for us; which clients each person may work on; and a record of what each person does in Krith, such as confirming facts, approving drafts and signing off a close. When a firm invites someone, we email them the invitation from Krith. When someone sets up or joins a firm by signing in, we email them once, from Krith. We keep a record of each of these emails for 30 days.
             </li>
             <li>
               <strong>Client data a firm provides:</strong> documents the firm uploads, forwards or imports from Google Drive; replies and files a client sends through a private request link; ledger data read from QuickBooks or Xero and payout reports from Stripe, when the firm connects them; and the workpapers, questions, reviews and assistant conversations built from them.

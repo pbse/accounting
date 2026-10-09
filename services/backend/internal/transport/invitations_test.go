@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/secrets"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -44,6 +45,20 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 		}
 	}()
 	t.Setenv("WORKOS_API_KEY", "sk_test_synthetic")
+	t.Setenv("SECRETS_KEY", strings.Repeat("ab", 32))
+	// emailed is Krith's invitation email queued for this invitation: its recipient, sender's name and opened token.
+	emailed := func(workosID string) (to, inviter, token string) {
+		t.Helper()
+		var sealed []byte
+		err := db.QueryRow(`SELECT e.recipient,e.inviter,e.link FROM platform_emails e JOIN member_invitations i ON i.id=e.invitation WHERE i.workos_id=$1 AND e.kind='invitation' AND e.subject IS NULL`, workosID).Scan(&to, &inviter, &sealed)
+		if err == sql.ErrNoRows {
+			return "", "", ""
+		}
+		must(err)
+		opened, err := secrets.Open("platform-email:invitation", sealed)
+		must(err)
+		return to, inviter, string(opened)
+	}
 	mode, invState, acceptedBy, status, verified := "ok", "pending", "", "active", true
 	var sent map[string]string
 	revoked, lookups, created := "", 0, 0
@@ -72,7 +87,7 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 			case "fail":
 				code = 500
 			default:
-				code, body = 201, `{"id":"invitation_`+string(rune('0'+created))+`","state":"pending","expires_at":"`+expires+`"}`
+				code, body = 201, `{"id":"invitation_`+string(rune('0'+created))+`","state":"pending","expires_at":"`+expires+`","token":"tok_`+string(rune('0'+created))+`"}`
 			}
 		case p == "/user_management/invitations" && r.Method == "GET":
 			body = `{"data":[` + listed[r.URL.Query().Get("email")] + `],"list_metadata":{}}`
@@ -80,8 +95,8 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 			revoked = p
 		case strings.HasPrefix(p, "/user_management/users/"):
 			lookups++
-			email := map[string]string{"user_new": "New@Example.com", "user_gone": "gone@example.com"}[strings.TrimPrefix(p, "/user_management/users/")]
-			body = `{"email":"` + email + `","email_verified":` + map[bool]string{true: "true", false: "false"}[verified] + `}`
+			email := map[string]string{"user_new": "New@Example.com", "user_gone": "gone@example.com", "user_admin": "ada@example.com"}[strings.TrimPrefix(p, "/user_management/users/")]
+			body = `{"email":"` + email + `","first_name":"Ada","last_name":"Admin","email_verified":` + map[bool]string{true: "true", false: "false"}[verified] + `}`
 		case strings.HasPrefix(p, "/user_management/invitations/"):
 			var email string
 			db.QueryRow(`SELECT email FROM member_invitations WHERE workos_id=$1`, strings.TrimPrefix(p, "/user_management/invitations/")).Scan(&email)
@@ -133,6 +148,9 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 	if s, id := state("new@example.com"); s != "pending" || id != "invitation_1" || sent["email"] != "new@example.com" || sent["organization_id"] != org || sent["role_slug"] != "preparer" || sent["inviter_user_id"] != "user_admin" {
 		t.Fatalf("WorkOS sends the invitation and it is kept pending: %s %s %v", s, id, sent)
 	}
+	if to, inviter, token := emailed("invitation_1"); to != "new@example.com" || inviter != "Ada Admin" || token != "tok_1" {
+		t.Fatalf("Krith's email for the invitation is queued with its sender's name and its sealed token: %q %q %q", to, inviter, token)
+	}
 	send("new@example.com", "preparer", 409)
 	var first string
 	must(db.QueryRow(`SELECT id::text FROM member_invitations WHERE organization_id=$1 AND workos_id='invitation_1'`, org).Scan(&first))
@@ -151,7 +169,7 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 	_, err = db.Exec(`UPDATE member_invitations SET created_at=now()-interval '1 minute' WHERE organization_id=$1 AND state='sending'`, org)
 	must(err)
 	candidate := func(id, inviter string) string {
-		return `{"id":"` + id + `","state":"pending","email":"other@example.com","organization_id":"` + org + `","role_slug":"preparer","inviter_user_id":"` + inviter + `","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `","expires_at":"` + expires + `"}`
+		return `{"id":"` + id + `","state":"pending","email":"other@example.com","organization_id":"` + org + `","role_slug":"preparer","inviter_user_id":"` + inviter + `","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `","expires_at":"` + expires + `","token":"tok_` + id + `"}`
 	}
 	call("user_admin", "GET", path, nil, 200)
 	listed["other@example.com"] = candidate("invitation_other", "user_someone_else")
@@ -168,6 +186,9 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 	call("user_admin", "GET", path, nil, 200)
 	if s, id := state("other@example.com"); s != "pending" || id != "invitation_listed" {
 		t.Fatalf("an unconfirmed send is settled from the matching WorkOS invitation: %s %s", s, id)
+	}
+	if to, inviter, token := emailed("invitation_listed"); to != "other@example.com" || inviter != "Ada Admin" || token != "tok_invitation_listed" {
+		t.Fatalf("a settled send has Krith's email queued then: %q %q %q", to, inviter, token)
 	}
 	send("late@example.com", "preparer", 502)
 	var late string
@@ -186,6 +207,9 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 	send("race@example.com", "preparer", 409)
 	if s, id := state("race@example.com"); s != "revoked" || id != "invitation_race" || revoked != "/user_management/invitations/invitation_race/revoke" {
 		t.Fatalf("an invitation revoked while it was being sent is revoked in WorkOS too: %s %s %s", s, id, revoked)
+	}
+	if to, _, _ := emailed("invitation_race"); to != "" {
+		t.Fatal("an invitation revoked while it was being sent has no email queued")
 	}
 	mode = "ok"
 	send("new@example.com", "preparer", 200)
