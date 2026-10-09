@@ -69,7 +69,8 @@ func queueInvitationEmail(ctx context.Context, q execer, org, invitation, email,
 	if link == "" {
 		return errors.New("WorkOS gave no way to accept the invitation")
 	}
-	sealed, err := secrets.Seal("platform-email:invitation-link", []byte(link))
+	// Bound to the firm, as cmd/rotate-secrets re-encrypts it.
+	sealed, err := secrets.Seal(org+"/platform-email:invitation-link", []byte(link))
 	if err != nil {
 		return err
 	}

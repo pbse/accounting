@@ -97,7 +97,7 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	}
 	defer tx.Rollback()
 	var id int64
-	var kind, recipient, firm, domain string
+	var kind, org, recipient, firm, domain string
 	var attempts int
 	var current bool
 	var invite invitation
@@ -105,13 +105,13 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	var link []byte
 	// A welcome or joined email says the person is in the firm, so it goes only while the firm is enabled and the person
 	// still a member; an invitation, only while the firm is enabled and the invitation still open.
-	err = tx.QueryRowContext(ctx, `SELECT e.id,e.kind,e.recipient,o.name,COALESCE(o.email_domain,''),e.attempts,
+	err = tx.QueryRowContext(ctx, `SELECT e.id,e.kind,e.organization_id,e.recipient,o.name,COALESCE(o.email_domain,''),e.attempts,
  COALESCE(CASE WHEN e.kind='invitation' THEN o.enabled AND i.state='pending' AND i.expires_at>now()
   ELSE o.enabled AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=e.organization_id AND m.subject=e.subject AND m.granted) END,false),
  e.inviter,COALESCE(i.role_name,''),i.expires_at,e.link
  FROM platform_emails e JOIN organizations o ON o.id=e.organization_id LEFT JOIN member_invitations i ON i.id=e.invitation
  WHERE ((e.state='queued' AND e.next_attempt_at<=now()) OR (e.state='sending' AND e.claimed_at<now()-interval '2 minutes')) AND e.attempts<3 AND e.created_at>now()-interval '23 hours'
- ORDER BY e.id FOR UPDATE OF e SKIP LOCKED LIMIT 1`).Scan(&id, &kind, &recipient, &firm, &domain, &attempts, &current, &invite.Inviter, &invite.Role, &expires, &link)
+ ORDER BY e.id FOR UPDATE OF e SKIP LOCKED LIMIT 1`).Scan(&id, &kind, &org, &recipient, &firm, &domain, &attempts, &current, &invite.Inviter, &invite.Role, &expires, &link)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -137,7 +137,7 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	invite.Expires = expires.Time
 	if kind == "invitation" {
 		var opened []byte
-		if opened, err = secrets.Open("platform-email:invitation-link", link); err == nil {
+		if opened, err = secrets.Open(org+"/platform-email:invitation-link", link); err == nil {
 			invite.Link = string(opened)
 		}
 	}

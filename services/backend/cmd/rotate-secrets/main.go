@@ -31,7 +31,7 @@ func main() {
 	if _, err = tx.ExecContext(ctx, `SELECT set_config('app.organization','*',true)`); err != nil {
 		log.Fatal(err)
 	}
-	if _, err = tx.ExecContext(ctx, `LOCK TABLE quickbooks_connections,xero_connections,stripe_connections,email_connections,email_outbox IN ACCESS EXCLUSIVE MODE`); err != nil {
+	if _, err = tx.ExecContext(ctx, `LOCK TABLE quickbooks_connections,xero_connections,stripe_connections,email_connections,email_outbox,platform_emails IN ACCESS EXCLUSIVE MODE`); err != nil {
 		log.Fatal("Could not isolate rotation; no changes committed: ", err)
 	}
 	queries := []struct{ table, column, scope, query string }{
@@ -41,6 +41,8 @@ func main() {
 		{"email_connections", "credential", "resend", `SELECT id::text,organization_id,credential FROM email_connections FOR UPDATE`},
 		{"email_connections", "webhook_secret", "resend-webhook", `SELECT id::text,organization_id,webhook_secret FROM email_connections WHERE webhook_secret IS NOT NULL FOR UPDATE`},
 		{"email_outbox", "payload", "email", `SELECT m.id,o.organization_id,m.payload FROM email_outbox m JOIN email_connections o ON o.id=m.connection_id FOR UPDATE OF m`},
+		// The Join link of an invitation email still waiting (docs/sign-in.md#invitations).
+		{"platform_emails", "link", "platform-email:invitation-link", `SELECT id::text,organization_id,link FROM platform_emails WHERE link IS NOT NULL FOR UPDATE`},
 	}
 	count := 0
 	for _, q := range queries {

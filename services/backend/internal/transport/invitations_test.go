@@ -56,7 +56,7 @@ func TestEmailInvitationsEnrollOnlyAcceptedInvitees(t *testing.T) {
 			return "", "", ""
 		}
 		must(err)
-		opened, err := secrets.Open("platform-email:invitation-link", sealed)
+		opened, err := secrets.Open(org+"/platform-email:invitation-link", sealed)
 		must(err)
 		return to, inviter, string(opened)
 	}

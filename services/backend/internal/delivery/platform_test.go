@@ -295,7 +295,7 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 			org, who+"@"+domain, "invitation_"+who+suffix, state).Scan(&invitation); err != nil {
 			t.Fatal(err)
 		}
-		sealed, err := secrets.Seal("platform-email:invitation-link", []byte("https://app.example.test/v1/auth/login?invitation=tok_"+who))
+		sealed, err := secrets.Seal(org+"/platform-email:invitation-link", []byte("https://app.example.test/v1/auth/login?invitation=tok_"+who))
 		if err != nil {
 			t.Fatal(err)
 		}

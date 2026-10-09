@@ -3952,7 +3952,8 @@ Request: an invitation arrived from `welcome@workos-mail.com`, under the WorkOS 
   - the rest of the transport and delivery packages pass, except the two PDF tests that need Poppler, which isn't installed locally;
   - both apps typecheck;
   - the HTML was rendered in headless Edge and checked by eye;
-  - the row-level security policies were probed as a non-superuser role on the local database: a firm sees only its own invitation emails and cannot write one, and the platform context sees all.
+  - the row-level security policies were probed as a non-superuser role on the local database: a firm sees only its own invitation emails and cannot write one, and the platform context sees all;
+  - `cmd/rotate-secrets` on a fresh local database re-encrypted a waiting Join link sealed with the old key (bound to its firm), which the new key then opened; before the rotation, it could not.
 
 Not verified:
 - a real invitation accepted through Google in production;

@@ -216,7 +216,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		if err := db.QueryRow(`SELECT string_agg(state,',' ORDER BY id),(array_agg(recipient ORDER BY id DESC))[1],(array_agg(link ORDER BY id DESC))[1] FROM platform_emails WHERE invitation=$1::bigint AND kind='invitation'`, invitation).Scan(&states, &to, &sealed); err != nil {
 			t.Fatal(err)
 		}
-		if opened, err := secrets.Open("platform-email:invitation-link", sealed); err != nil || string(opened) != "https://auth.example.test/invite/tok_resent" || to != email {
+		if opened, err := secrets.Open(firm+"/platform-email:invitation-link", sealed); err != nil || string(opened) != "https://auth.example.test/invite/tok_resent" || to != email {
 			t.Fatalf("a resend's email goes to the invitee with the invitation's Join link: %q %q %v", to, opened, err)
 		}
 		return states
