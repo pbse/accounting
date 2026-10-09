@@ -114,22 +114,58 @@ type reviewer struct {
 
 // firmReviewers reads each active member's WorkOS roles in the firm; a member holds the permissions of all their roles,
 // as their session does.
+// shownReviewers is firmReviewers for what a page only shows (the roster's people, their names and reach), answered
+// from a copy up to a minute old: each read is two WorkOS calls, most of a roster read's time. Anything that decides
+// (an assignment, an owner, a hand-off) still calls firmReviewers. A role changed here forgets the copy at once
+// (forgetReviewers); one changed in WorkOS itself shows within the minute.
+var shown = struct {
+	sync.Mutex
+	at, forgot map[string]time.Time
+	firms      map[string]map[string]reviewer
+}{at: map[string]time.Time{}, forgot: map[string]time.Time{}, firms: map[string]map[string]reviewer{}}
+
+func shownReviewers(ctx context.Context, org string) (map[string]reviewer, error) {
+	shown.Lock()
+	if at, ok := shown.at[org]; ok && time.Since(at) < time.Minute {
+		firm := shown.firms[org]
+		shown.Unlock()
+		return firm, nil
+	}
+	shown.Unlock()
+	started := time.Now()
+	firm, err := firmReviewers(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	shown.Lock()
+	// A copy read before a role change was forgotten must not replace that forgetting.
+	if forgot, ok := shown.forgot[org]; !ok || forgot.Before(started) {
+		shown.at[org], shown.firms[org] = started, firm
+	}
+	shown.Unlock()
+	return firm, nil
+}
+
+func forgetReviewers(org string) {
+	shown.Lock()
+	delete(shown.at, org)
+	delete(shown.firms, org)
+	shown.forgot[org] = time.Now()
+	shown.Unlock()
+}
+
 func firmReviewers(ctx context.Context, org string) (map[string]reviewer, error) {
 	if os.Getenv("WORKOS_API_KEY") == "" {
 		return nil, errors.New("WorkOS is not configured")
 	}
+	// The firm's roles and its memberships are two WorkOS reads; they run together.
 	var roles struct {
 		Data []workosRole `json:"data"`
 	}
-	if err := workos(ctx, "GET", "/authorization/organizations/"+url.PathEscape(org)+"/roles", nil, &roles); err != nil {
-		return nil, err
-	}
-	held := map[string][]string{}
-	for _, role := range roles.Data {
-		if role.Permissions != nil {
-			held[role.Slug] = *role.Permissions
-		}
-	}
+	rolesRead := make(chan error, 1)
+	go func() {
+		rolesRead <- workos(ctx, "GET", "/authorization/organizations/"+url.PathEscape(org)+"/roles", nil, &roles)
+	}()
 	type role struct {
 		Slug string `json:"slug"`
 	}
@@ -144,8 +180,17 @@ func firmReviewers(ctx context.Context, org string) (map[string]reviewer, error)
 			LastName  string `json:"last_name"`
 		} `json:"user"`
 	}](ctx, "/user_management/organization_memberships", url.Values{"organization_id": {org}, "statuses": {"active"}, "limit": {"100"}})
+	if rolesErr := <-rolesRead; rolesErr != nil {
+		return nil, rolesErr
+	}
 	if err != nil {
 		return nil, err
+	}
+	held := map[string][]string{}
+	for _, role := range roles.Data {
+		if role.Permissions != nil {
+			held[role.Slug] = *role.Permissions
+		}
 	}
 	out := map[string]reviewer{}
 	for _, m := range memberships {

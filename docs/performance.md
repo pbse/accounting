@@ -65,6 +65,29 @@ code, then its data. Now:
 
 Prefetching runs only with the cookie session production uses (`VITE_AUTH_SESSION=server`).
 
+## Measured in production (2026-10-08, signed in, from the US east coast)
+
+| Moment | Result |
+| --- | --- |
+| Clicking from one page to Home | All seven of Home's reads done in about 200 ms |
+| Clicking to Clients | Done in 280–440 ms, most of it the roster's WorkOS reads |
+| Clicking to Settings | Done in about 470 ms; its code loaded first, since nothing hovered the link |
+| Reloading Home | First reads done at about 680 ms; the rest started near 2 s |
+
+The reload was slow for three reasons, now fixed:
+
+- **Scripts were revalidated.** Every built script was served with `max-age=0`, so a reload asked again for about 30
+  files. `apps/frontend/public/_headers` now marks `/assets/*` immutable for a year; their names carry a content hash.
+- **Pages suspended.** `React.lazy` suspends a page on its first render even when its code is already loaded, and
+  React waits up to 300 ms before revealing suspended content. A launch suspended twice, for the layout and the page.
+  `apps/frontend/src/pages.tsx` now draws a page at once when its code is already loaded.
+- **The layout's checks waited.** The layout shows nothing until it knows whether the person is an executive, then asks
+  whether the firm has the worked example. Both are now prefetched at launch.
+
+The roster also read the firm's roles and memberships from WorkOS one after the other on every read. They now run
+together, and what the roster only shows comes from a copy up to a minute old. Anything that decides, such as an
+assignment or a hand-off, still reads WorkOS. A role changed in Krith forgets the copy at once.
+
 ## How to check a page
 
 Every API response carries a `Server-Timing` header, which the browser's network panel shows under Timing:
