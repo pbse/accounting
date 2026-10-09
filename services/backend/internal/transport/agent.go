@@ -858,6 +858,9 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			if t.name == "list_publications" {
 				value = projectPublications(value)
 			}
+			if t.name == "cash_plan" {
+				value = projectCashPlan(value)
+			}
 			redacted, _ = json.Marshal(redactValues(value))
 		default:
 			ok = false

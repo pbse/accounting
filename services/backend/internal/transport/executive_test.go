@@ -98,7 +98,11 @@ func TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews(t *testing.T
 	for _, path := range []string{base + "/management-pack", base + "/workpapers", base, base + "/export", "/v1/closes", "/v1/closes/attention", "/v1/closes/search?q=rent", base + "/cash-obligations"} {
 		call("user_ceo", ceo, "GET", path, nil, 403)
 	}
-	call("user_ceo", ceo, "POST", "/v1/closes/chat", map[string]any{"message": "show me the payroll workpaper"}, 403)
+	// The conversation is the executive's, firm-wide only; the firm's agent is off here, so the fixed line answers.
+	if shown := string(call("user_ceo", ceo, "POST", "/v1/closes/chat", map[string]any{"text": "show me the payroll workpaper"}, 200)); !strings.Contains(shown, executiveOff) {
+		t.Fatalf("an executive's question at off gets the fixed line: %s", shown)
+	}
+	call("user_ceo", ceo, "POST", base+"/chat", map[string]any{"text": "show me the payroll workpaper"}, 403)
 	call("user_ceo", ceo, "GET", "/v1/closes/"+beta+"/management-pack/publications", nil, 404)
 	must(json.Unmarshal(call("user_ceo", ceo, "GET", "/v1/closes/executive", nil, 200), &overview))
 	if overview.Published[0]["acknowledged"] != true {

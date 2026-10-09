@@ -66,6 +66,30 @@ func capResult(raw []byte, c toolCap) ([]byte, bool, int) {
 	return out, true, total
 }
 
+// projectCashPlan is the 13-week cash plan as the model is sent it: every week's totals, with each week's dated items
+// cut to eight and the rest counted (more_items), so a client with many open invoices and bills still fits the read.
+func projectCashPlan(value any) any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	weeks, ok := object["weeks"].([]any)
+	if !ok {
+		return value
+	}
+	for _, week := range weeks {
+		w, ok := week.(map[string]any)
+		if !ok {
+			continue
+		}
+		if items, ok := w["items"].([]any); ok && len(items) > 8 {
+			w["items"] = items[:8]
+			w["more_items"] = len(items) - 8
+		}
+	}
+	return object
+}
+
 // projectPublications is a close's published reports as the model is sent them: each report's number, version, who
 // published it and when, its state and how many acknowledged it, with its commentary and reason cut to a line, so a
 // long listing stays within the read limit and every report's number is seen.

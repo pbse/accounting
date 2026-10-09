@@ -57,3 +57,12 @@ func TestAnExecutiveCitationStaysOnTheirPages(t *testing.T) {
 		t.Fatal("only a close's page is moved to the reports page")
 	}
 }
+
+func TestProjectCashPlanKeepsEveryWeekAndCutsItsItems(t *testing.T) {
+	var value any
+	json.Unmarshal([]byte(`{"opening":{"amount":"1.00"},"weeks":[{"week":"2026-10-12","receipts":"9.00","items":[1,2,3,4,5,6,7,8,9,10]},{"week":"2026-10-19","items":[1]}]}`), &value)
+	out, _ := json.Marshal(projectCashPlan(value))
+	if !strings.Contains(string(out), `"items":[1,2,3,4,5,6,7,8],"more_items":2`) || !strings.Contains(string(out), `"items":[1],`) || strings.Count(string(out), `"week"`) != 2 || strings.Count(string(out), "more_items") != 1 {
+		t.Fatalf("each week keeps eight items and counts the rest: %s", out)
+	}
+}
