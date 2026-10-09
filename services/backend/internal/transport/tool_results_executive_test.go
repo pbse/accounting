@@ -33,3 +33,27 @@ func TestProjectPublicationReadsASectionAtATime(t *testing.T) {
 		t.Fatalf("the commentary section is the publication's text: %s", commentary)
 	}
 }
+
+func TestProjectPublicationsKeepsEveryReportCompact(t *testing.T) {
+	var value any
+	json.Unmarshal([]byte(`{"publications":[{"id":"9","version":2,"published_by":"pat","published_at":"2026-10-01T00:00:00Z","state":"current","commentary":"`+strings.Repeat("x", 400)+`","acknowledgments":[{"subject":"a"},{"subject":"b"}]},{"id":"8","version":1,"commentary":"short"}]}`), &value)
+	out, _ := json.Marshal(projectPublications(value))
+	if strings.Count(string(out), `"id"`) != 2 || len(string(out)) > 500 || !strings.Contains(string(out), `"acknowledged_by":2`) || strings.Contains(string(out), `"acknowledgments"`) {
+		t.Fatalf("each report is listed compactly: %s", out)
+	}
+}
+
+func TestAnExecutiveCitationStaysOnTheirPages(t *testing.T) {
+	var value any
+	d := json.NewDecoder(strings.NewReader(`{"closes":[{"id":"7","entity":"Alpha"}],"published":[{"close_id":"7","net_income":"10.00"}]}`))
+	d.UseNumber()
+	d.Decode(&value)
+	reads := map[string]agentRead{"t1": {text: "{}", value: value, link: chatCitation{"Your business overview", "/dashboard/executive"}, title: "Your business overview", tool: "executive_overview", executive: true}}
+	cited, why := agentSupport("facts", "Net income is 10.00.", []agentSupportEntry{{"t1", 0, "/published/0/net_income", "10.00", ""}}, reads, nil)
+	if why != "" || len(cited) != 1 || cited[0].Href != "/dashboard/executive/reports?close=7" {
+		t.Fatalf("a published row cites the executive's reports page: %v %s", cited, why)
+	}
+	if executiveRowLink("/dashboard/closes/7?tab=evidence") != "/dashboard/executive/reports?close=7" || executiveRowLink("/dashboard") != "/dashboard" {
+		t.Fatal("only a close's page is moved to the reports page")
+	}
+}

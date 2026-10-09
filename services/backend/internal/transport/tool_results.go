@@ -66,6 +66,47 @@ func capResult(raw []byte, c toolCap) ([]byte, bool, int) {
 	return out, true, total
 }
 
+// projectPublications is a close's published reports as the model is sent them: each report's number, version, who
+// published it and when, its state and how many acknowledged it, with its commentary and reason cut to a line, so a
+// long listing stays within the read limit and every report's number is seen.
+func projectPublications(value any) any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	rows, ok := object["publications"].([]any)
+	if !ok {
+		return value
+	}
+	out := make([]any, 0, len(rows))
+	for _, row := range rows {
+		p, ok := row.(map[string]any)
+		if !ok {
+			continue
+		}
+		compact := map[string]any{}
+		for _, key := range []string{"id", "version", "published_by", "published_at", "state", "supersedes"} {
+			if v, ok := p[key]; ok {
+				compact[key] = v
+			}
+		}
+		for _, key := range []string{"commentary", "reason"} {
+			if text, ok := p[key].(string); ok {
+				if len(text) > 200 {
+					text = text[:200] + "…"
+				}
+				compact[key] = text
+			}
+		}
+		if acks, ok := p["acknowledgments"].([]any); ok {
+			compact["acknowledged_by"] = len(acks)
+		}
+		out = append(out, compact)
+	}
+	object["publications"] = out
+	return object
+}
+
 // projectPublication is the part of a published report the model is sent: by default its headline (the publication,
 // the pack's entity, month, currency, basis and status, the Profit and Loss measures and working capital), or one
 // section in full, so a large frozen pack is read a section at a time rather than dropped whole.

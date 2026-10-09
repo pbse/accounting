@@ -247,6 +247,16 @@ func agentLink(t mcpTool, args map[string]any) chatCitation {
 	return chatCitation{t.title, base + tabs[t.name]}
 }
 
+// executiveRowLink keeps a row's own page on the executive's side: a close a row names opens as its reports page.
+func executiveRowLink(href string) string {
+	if id, ok := strings.CutPrefix(href, "/dashboard/closes/"); ok {
+		id, _, _ = strings.Cut(id, "?")
+		id, _, _ = strings.Cut(id, "/")
+		return "/dashboard/executive/reports?close=" + url.QueryEscape(id)
+	}
+	return href
+}
+
 // executiveLink is where an executive reads what a tool read: their own pages, never the firm's workspace.
 func executiveLink(t mcpTool, args map[string]any) chatCitation {
 	closeID, _ := args["close_id"].(string)
@@ -507,6 +517,8 @@ type agentRead struct {
 	link  chatCitation
 	title string
 	tool  string
+	// executive says the read was an executive's: a row's own page is their reports page, never a close's.
+	executive bool
 }
 
 // agentSupport checks an answer against the reads: every support step ran, every pointer or quote resolves to its
@@ -619,6 +631,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				idKey = "id"
 			}
 			if own := linkAt(read.value, s.path, idKey); own != "" {
+				if read.executive {
+					own = executiveRowLink(own)
+				}
 				href = own
 			}
 		}
@@ -835,6 +850,9 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				section, _ := args["section"].(string)
 				value = projectPublication(value, section)
 			}
+			if t.name == "list_publications" {
+				value = projectPublications(value)
+			}
 			redacted, _ = json.Marshal(redactValues(value))
 		default:
 			ok = false
@@ -893,7 +911,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		if executive {
 			link = executiveLink(t, args)
 		}
-		reads[step.ID] = agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title, tool: t.name}
+		reads[step.ID] = agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title, tool: t.name, executive: executive}
 		step.Status, step.Size, step.Truncated, step.Link = "ok", len(capped), truncated, &link
 		return step.ID + ": " + string(capped)
 	}
