@@ -1,3 +1,4 @@
+import { useDates, useNow } from "../../data/time";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../../lib/api";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
@@ -15,6 +16,7 @@ type Sender = {
 type Configuration = { connection: Sender | null; hosted: boolean };
 // The firm's verified sender: its state in view, and each change (connect or replace, tracking, disconnect) in a dialog.
 export function EmailSettings() {
+  const dates = useDates();
   const [data, setData] = useState<Configuration>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -104,7 +106,7 @@ export function EmailSettings() {
           <div className="row">
             <span>
               <strong>{connection.sender}</strong>
-              <small>Domain last checked {new Date(connection.verified_at).toLocaleString()}</small>
+              <small>Domain last checked {dates.dateTime(connection.verified_at)}</small>
             </span>
             <span className={`pill ${connection.tracking_configured ? "" : "muted"}`}>{connection.tracking_configured ? "Delivery tracked" : "Tracking not set up"}</span>
             <span>
@@ -225,13 +227,15 @@ export function SendRequestEmail({
   onQueued: (passcode: string) => void;
   reminder?: ReminderStatus;
 }) {
+  const dates = useDates();
+  const now = new Date(useNow());
   // The firm's rule decides when a reminder is due and how many are allowed; each still needs this approval.
   const stop = !previousId || !reminder ? "" : reminder.left <= 0
     ? "This request is unanswered after all the reminders the firm's rule allows. Contact the client another way."
-    : reminder.expires_at && (new Date(reminder.expires_at) <= new Date() || (reminder.due_at && new Date(reminder.due_at) >= new Date(reminder.expires_at)))
+    : reminder.expires_at && (new Date(reminder.expires_at) <= now || (reminder.due_at && new Date(reminder.due_at) >= new Date(reminder.expires_at)))
       ? "The private link has expired, or expires before the next reminder is due. Contact the client another way."
       : "";
-  const waiting = previousId && reminder?.due_at && new Date(reminder.due_at) > new Date() ? `Under the firm's rule the next reminder is due ${new Date(reminder.due_at).toLocaleString()}.` : "";
+  const waiting = previousId && reminder?.due_at && new Date(reminder.due_at) > now ? `Under the firm's rule the next reminder is due ${dates.dateTime(reminder.due_at)}.` : "";
   const [data, setData] = useState<Configuration>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -361,7 +365,8 @@ export function SettleEmail({ closeId, emailId }: { closeId: string; emailId: st
 export type ReminderStatus = { left: number; due_at?: string; expires_at?: string };
 export type EmailRecord = { id: string; state: string; delivery: string; reminder_of?: string; error: string; approved_by?: string; created_at: string };
 export function EmailHistory({emails, closeId}: {emails: EmailRecord[]; closeId?: string}) {
+  const dates = useDates();
   return <section aria-label="Email delivery history"><h5>Email history</h5>{emails.map(m=><div key={m.id}><p>
-    {m.reminder_of ? "Reminder" : "Initial email"} · {new Date(m.created_at).toLocaleString()} · {m.state.replaceAll("_"," ")} · delivery: {m.delivery.replaceAll("_"," ")}{m.approved_by ? ` · approved by ${m.approved_by}` : ""}. {m.error}
+    {m.reminder_of ? "Reminder" : "Initial email"} · {dates.dateTime(m.created_at)} · {m.state.replaceAll("_"," ")} · delivery: {m.delivery.replaceAll("_"," ")}{m.approved_by ? ` · approved by ${m.approved_by}` : ""}. {m.error}
   </p>{closeId && m.state === "unknown" && <SettleEmail closeId={closeId} emailId={m.id} />}</div>)}<p>Delivered means accepted by the recipient’s mail server, not read. Reminders require a separate approval after confirmed delivery. Replies and delivery failures block reminders.</p></section>;
 }

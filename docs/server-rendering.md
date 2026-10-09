@@ -71,7 +71,8 @@ and a read the cache already holds is not repeated.
 | Settings: Firm, Clients, Policies, Security | Layout only; the section reads in the browser |
 | Home (counts, review queue, goals, get started, dependencies, new in the books, closes handed to the agent) | Yes; other decision views and filters read when chosen |
 | Clients (the roster, recent closes and a search's matches) | Yes |
-| A close and its tabs, Preparation, Measure, Executive | Layout only; the page reads in the browser |
+| A close's Overview (the close and its drafts, the agent's goal, where it stands, the coordinator and its coverage, the work from its evidence) | Yes |
+| A close's other tabs, Preparation, Measure, Executive | Layout and the close's header; the tab reads in the browser |
 
 A page moves to "Yes" when its loader prefetches its reads and its components read them with `useQuery`.
 

@@ -5,7 +5,8 @@ import { Login } from "./features/auth/Login";
 import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
-import { appData, prefetch, workspaceKey } from "./data/queries";
+import { closeTab } from "./data/closeTabs";
+import { appData, prefetch, workPath, workspaceKey } from "./data/queries";
 
 // The app's routes, as React Router data routes: the browser runs them (main.tsx) and so does the edge, which renders a
 // workspace page on the server with its data (entry-server.tsx, docs/server-rendering.md). A page's code loads with
@@ -69,6 +70,18 @@ async function clientsLoader({ context, request }: LoaderFunctionArgs) {
   return null;
 }
 
+// A close reads itself and its drafts; its Overview also reads the agent's goal (with the plan's checks), where the close
+// stands, the preparation coordinator and the work from its evidence. Other tabs read as they render.
+async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
+  if (!prefetching || !params.id) return null;
+  const url = new URL(request.url);
+  const id = params.id;
+  const tab = closeTab(url.searchParams.get("tab"));
+  const overview = tab === "overview" ? [`/${id}/goal?verify=1`, `/${id}/brief`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")] : [];
+  await prefetch(context, `/${encodeURIComponent(id)}`, ...overview);
+  return null;
+}
+
 // Settings reads what its open section shows. Sections not listed read as they render.
 const settingsReads: Record<string, string[]> = {
   people: ["/members/people", "/members/roles", "/members/invitations", "/security/clients", "/access", "/members"],
@@ -105,7 +118,7 @@ export const routes: RouteObject[] = createRoutesFromElements(
       <Route path="close" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "close" as const })} />
       <Route path="review" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "review" as const })} />
       <Route path="closes" loader={clientsLoader} lazy={page(() => import("./features/closes/ClosesList"))} />
-      <Route path="closes/:id" lazy={page(() => import("./features/closes/ClientClose"))} />
+      <Route path="closes/:id" loader={closeLoader} lazy={page(() => import("./features/closes/ClientClose"))} />
       <Route path="closes/:id/workpapers/:paperId" lazy={page(() => import("./features/closes/WorkpaperView"))} />
       <Route path="firm" element={<Navigate to="/dashboard/settings?tab=firm" replace />} />
       <Route path="attention" element={<Navigate to="/dashboard" replace />} />

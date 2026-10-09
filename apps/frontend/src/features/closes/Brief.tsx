@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useDates } from "../../data/time";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { workspaceRequest } from "./workspace";
 import { RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
@@ -9,29 +10,18 @@ const tones: Record<Line["state"], string> = { done: "ok", attention: "warn", wa
 const words: Record<Line["state"], string> = { done: "Done", attention: "Needs you", waiting: "Waiting", info: "Note", unknown: "Not checked" };
 
 export function Brief({ closeId }: { closeId: string }) {
-  const [brief, setBrief] = useState<{ headline: string; lines: Line[]; at: Date }>();
-  const [error, setError] = useState("");
-  const [asked, setAsked] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/brief`)
-      .then((data) => {
-        if (!live) return;
-        setBrief({ ...data, at: new Date() });
-        setError("");
-      })
-      .catch((e) => live && setError(e instanceof Error ? e.message : "The close brief is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [closeId, asked]);
+  const dates = useDates();
+  // Read with the page and on Refresh; "As of" is when this answer was read, on the server or here.
+  const read = useQuery(workspaceQuery<{ headline: string; lines: Line[] }>(`/${closeId}/brief`));
+  const brief = read.data;
+  const error = read.error ? read.error.message || "The close brief is unavailable." : "";
   if (!brief) return error ? <p role="alert">{error}</p> : null;
   return (
     <section aria-label="Where this close stands">
       <SectionHeader title="Where this close stands">
         <span>
-          <small>As of {brief.at.toLocaleTimeString()}</small>{" "}
-          <button type="button" onClick={() => setAsked((n) => n + 1)}>
+          <small>As of {dates.time(read.dataUpdatedAt)}</small>{" "}
+          <button type="button" disabled={read.isFetching} onClick={() => void read.refetch()}>
             Refresh
           </button>
         </span>

@@ -1,4 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useDates } from "../../data/time";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
+import { useState, type FormEvent } from "react";
 import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
 import { workspaceRequest } from "./workspace";
 
@@ -9,31 +12,25 @@ type Status = {
   attachments: { id: string; request_id: string; name: string; state: string; error: string; scan_version: string; scanned_at?: string; source_id?: string; decision_note?: string }[];
 };
 export function Coverage({ closeId }: { closeId: string }) {
-  const [status, setStatus] = useState<Status>();
-  const [error, setError] = useState("");
+  const dates = useDates();
+  // Read with the page (the close's loader), then every five seconds.
+  const read = useQuery({ ...workspaceQuery<Status>(`/${closeId}/coverage`), refetchInterval: 5000 });
+  const status = read.data;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Coverage unavailable." : "");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [body, setBody] = useState("");
   const [link, setLink] = useState("");
   const [passcode, setPasscode] = useState("");
-  const [version, setVersion] = useState(0);
   const [accountSearch, setAccountSearch] = useState("");
   const [accountPage, setAccountPage] = useState(0);
-  useEffect(() => {
-    let live = true; let timer: ReturnType<typeof setTimeout>;
-    async function load() {
-      try { const value: Status = await workspaceRequest(`/${closeId}/coverage`); if (live) setStatus(value); }
-      catch (e) { if (live) setError(e instanceof Error ? e.message : "Coverage unavailable."); }
-      finally { if (live) timer = setTimeout(() => void load(), 5000); }
-    }
-    void load(); return () => { live = false; clearTimeout(timer); };
-  }, [closeId, version]);
   async function act(input: object, attachment?: string) {
     setBusy(true); setError("");
     try {
       const result = await workspaceRequest(attachment ? `/${closeId}/attachments/${attachment}` : `/${closeId}/coverage`, { digest: status?.coverage.digest, ...input });
       if (result.link_token) { setLink(`${window.location.origin}/request#${result.link_token}`); setPasscode(result.passcode ?? ""); }
-      setVersion(v => v + 1);
+      void read.refetch();
     } catch (e) { setError(e instanceof Error ? e.message : "Decision could not be confirmed."); }
     finally { setBusy(false); }
   }
@@ -52,7 +49,7 @@ export function Coverage({ closeId }: { closeId: string }) {
   return <section id="coverage-work" aria-labelledby="coverage-title">
     <h3 id="coverage-title">Coverage and client evidence</h3>
     {error && <p role="alert">{error}</p>}
-    <button disabled={busy} onClick={() => { setError(""); setVersion(v => v + 1); }}>Refresh coverage</button>
+    <button disabled={busy} onClick={() => { setError(""); void read.refetch(); }}>Refresh coverage</button>
     {!coverage ? <p>Loading coverage…</p> : !coverage.snapshot_id ? <p>Capture the month in the QuickBooks or Xero panel above to define account coverage.</p> : <>
       <p>{coverage.snapshot_id.startsWith("xero:") ? `Xero capture #${coverage.snapshot_id.slice(5)}` : `Ledger snapshot #${coverage.snapshot_id}`}. Confirm the complete set of required jobs for each account. Resolution then follows their current, approved drafts automatically. Uploads, matching names and client replies cannot approve accounting decisions.</p>
       {coverage.stale && <p role="alert">Ledger source or connection changed. Recapture before changing coverage.</p>}
@@ -97,9 +94,9 @@ export function Coverage({ closeId }: { closeId: string }) {
     <PasscodeNotice passcode={passcode} />
     {!!status?.requests.length && <details><summary>Approved consolidated requests ({status.requests.length})</summary>{status.requests.map(q => <article key={q.id}>
       <h4>Request #{q.id} · {q.recipient}</h4><pre>{q.body}</pre>
-      <p>{q.link?.revoked_at ? "Link revoked" : q.link && !q.live ? `${q.replied ? "Reply received; the link expired" : "Link expired"} ${new Date(q.link.expires_at).toLocaleString()}` : q.replied ? (q.open ? "Reply received; the client can add to it until the link expires" : "Reply received. It takes no more answers now that its work or coverage moved on; send a new request for anything still missing.") : q.stale ? `The client can no longer answer it: ${q.stale}` : q.link ? `Expires ${new Date(q.link.expires_at).toLocaleString()}` : "No current link"}</p>
+      <p>{q.link?.revoked_at ? "Link revoked" : q.link && !q.live ? `${q.replied ? "Reply received; the link expired" : "Link expired"} ${dates.dateTime(q.link.expires_at)}` : q.replied ? (q.open ? "Reply received; the client can add to it until the link expires" : "Reply received. It takes no more answers now that its work or coverage moved on; send a new request for anything still missing.") : q.stale ? `The client can no longer answer it: ${q.stale}` : q.link ? `Expires ${dates.dateTime(q.link.expires_at)}` : "No current link"}</p>
       {!!q.emails?.length && <EmailHistory emails={q.emails} closeId={closeId} />}
-      {!q.replied && q.live && !q.stale && (!q.email || (q.email.state==="accepted" && q.email.delivery==="delivered") || (q.reminder?.left ?? 1) <= 0) && <SendRequestEmail key={q.email?.id ?? "initial"} closeId={closeId} requestId={q.id} recipient={q.recipient} previousId={q.email?.id} reminder={q.reminder} onQueued={(p)=>{if(!q.email){setLink("");setPasscode(p);}setVersion(v=>v+1);}} />}
+      {!q.replied && q.live && !q.stale && (!q.email || (q.email.state==="accepted" && q.email.delivery==="delivered") || (q.reminder?.left ?? 1) <= 0) && <SendRequestEmail key={q.email?.id ?? "initial"} closeId={closeId} requestId={q.id} recipient={q.recipient} previousId={q.email?.id} reminder={q.reminder} onQueued={(p)=>{if(!q.email){setLink("");setPasscode(p);}void read.refetch();}} />}
       {(!q.link?.used_at || !q.link.revoked_at) && <>{(q.replied ? q.open !== false : !q.stale) && <button disabled={busy} onClick={() => void act({ action: "link", request_id: q.id, confirmed: true })}>Replace private link</button>}<button disabled={busy} onClick={() => void act({ action: "revoke", request_id: q.id, confirmed: true })}>Withdraw request</button></>}
     </article>)}</details>}
     <details open={!!status?.attachments.length}><summary>Client attachments ({status?.attachments.length ?? 0})</summary>
@@ -107,7 +104,7 @@ export function Coverage({ closeId }: { closeId: string }) {
       <p>For a missing or expired scan, ask the client to reopen their unexpired link and retry scanning the same original file. Local uploads cannot be released without a trusted scan.</p>
       {status?.attachments.map(a => <article key={a.id}>
         <h4>{a.name} · {a.state.replaceAll("_", " ")}</h4><p>Request #{a.request_id}{a.source_id ? ` · evidence #${a.source_id}` : ""}</p>
-        {a.error && <p role="alert">{a.error}</p>}<p>{a.scan_version}{a.scanned_at ? ` · ${new Date(a.scanned_at).toLocaleString()}` : ""}</p>
+        {a.error && <p role="alert">{a.error}</p>}<p>{a.scan_version}{a.scanned_at ? ` · ${dates.dateTime(a.scanned_at)}` : ""}</p>
         {["clean", "released"].includes(a.state) && <button onClick={() => void download(a.id, a.name)}>Download scanned file</button>}
         {!["released", "rejected"].includes(a.state) && <form onSubmit={e => {e.preventDefault(); const data = new FormData(e.currentTarget); void act({ action: data.get("action"), reason: data.get("reason"), confirmed: data.has("confirmed") }, a.id);}}><fieldset disabled={busy}>
           <label>Decision<select name="action"><option value="reject">Reject and retain in quarantine</option>{a.state === "clean" && <option value="release">Release to preparation and resume affected jobs</option>}</select></label>

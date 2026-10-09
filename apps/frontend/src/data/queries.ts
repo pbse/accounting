@@ -42,3 +42,8 @@ export async function prefetch(context: Readonly<RouterContextProvider>, ...path
   const { queryClient, read } = context.get(appData);
   await Promise.all(paths.map((path) => queryClient.prefetchQuery(workspaceQuery(path, read))));
 }
+
+// workPath is the Work list's read (features/closes/Work.tsx): a close's or the firm's, by view, client, page and
+// linked job. Its loader and the list build it the same way, so the prefetched read is the one the list asks for.
+export const workPath = (closeId: string | undefined, view: string, client = "", offset = 0, job = "") =>
+  `${closeId ? `/${closeId}/work` : "/work"}?view=${view}&client=${encodeURIComponent(client)}&offset=${offset}${job ? `&jobs=${encodeURIComponent(job)}` : ""}`;

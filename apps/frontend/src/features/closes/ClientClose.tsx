@@ -1,3 +1,5 @@
+import { closeTab, closeTabs, type CloseTab } from "../../data/closeTabs";
+import { monthName, useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { Icon } from "@close/ui/components/Icon";
@@ -47,18 +49,8 @@ import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { BackLink } from "@close/ui/components/BackLink";
 
 // Overview holds what needs a person; Books holds what the ledger shows; the rest is where each kind of work lives.
-const tabs = [
-  ["overview", "Overview"],
-  ["books", "Books"],
-  ["workpapers", "Workpapers"],
-  ["evidence", "Evidence"],
-  ["requests", "Requests"],
-  ["reports", "Reports"],
-  ["cash", "Cash plan"],
-  ["signoff", "Sign-off"],
-  ["settings", "Settings"],
-] as const;
-type Tab = (typeof tabs)[number][0];
+const tabs = closeTabs;
+type Tab = CloseTab;
 const tabActivity: Record<Tab, Activity> = { overview: "prepare", books: "review", workpapers: "prepare", evidence: "evidence", requests: "requests", reports: "review", cash: "review", signoff: "signoff", settings: "configuration" };
 const filters: Record<string, [string, (paper: Paper) => boolean]> = {
   all: ["All drafts", () => true],
@@ -161,9 +153,10 @@ export default function ClientClose() {
   const { id } = useParams();
   const location = useLocation();
   const [params, setParams] = useSearchParams();
-  const { close, papers, more, error, loading, reload } = useClose(id);
+  const { close, papers, more, error, refreshError, loading, reload } = useClose(id);
+  const dates = useDates();
   const [deleted, setDeleted] = useState("");
-  const tab: Tab = tabs.some(([key]) => key === params.get("tab")) ? (params.get("tab") as Tab) : "overview";
+  const tab: Tab = closeTab(params.get("tab"));
   const filter = filters[params.get("filter") ?? ""] ? params.get("filter")! : "all";
   useEffect(() => {
     if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView());
@@ -186,8 +179,9 @@ export default function ClientClose() {
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
       <BackLink to="/dashboard/closes">Clients</BackLink>
+      {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
       <PageHeader avatar={close.entity} title={close.entity} actions={<PrepareActions close={close} />}>
-        {new Date(`${close.period}-01T00:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" })} <PlanChips plan={close} />
+        {monthName(close.period)} <PlanChips plan={close} />
         {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]}</span>}
         {close.profile && close.profile.state !== "none" && <span className={close.profile.state === "conflict" || close.profile.state === "unknown" ? "chip warn" : "chip"} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
       </PageHeader>
@@ -245,7 +239,7 @@ export default function ClientClose() {
                 <span>
                   <ReviewPill state={paper.review_state} />
                 </span>
-                <small>{new Date(paper.created_at).toLocaleString()}</small>
+                <small>{dates.dateTime(paper.created_at)}</small>
                 <Icon name="arrow" />
               </Link>
             ))}
