@@ -1,10 +1,11 @@
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { AccountMenu } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
 import { openAssistant } from "./assistantStore";
 import { AttentionBadge } from "../closes/Attention";
-import { workspaceRequest } from "../closes/workspace";
+import { useQuery } from "@tanstack/react-query";
+import { workspaceQuery } from "../../data/queries";
 import { authKitClientId, useSession } from "../auth/Auth";
 import { Icon, type IconName } from "@close/ui/components/Icon";
 import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
@@ -38,35 +39,16 @@ export default function WorkspaceLayout() {
   const location = useLocation();
   const signedIn = useSignedIn();
   // Unknown until the server says; nothing of the workspace shows before then, so an executive never sees it.
-  const [executive, setExecutive] = useState<boolean>();
-  const [examples, setExamples] = useState(false);
+  const executiveRead = useQuery({ ...workspaceQuery<{ executive: boolean }>("/executive"), enabled: signedIn });
+  const executive = !signedIn ? undefined : executiveRead.data ? !!executiveRead.data.executive : executiveRead.isError ? false : undefined;
+  const examples = !!useQuery({ ...workspaceQuery<{ available: boolean }>("/examples"), enabled: executive === false }).data?.available;
   // A hosted session still loading is not yet signed out.
   const session = authKitClientId ? useSession() : undefined;
   const sessionLoading = session?.isLoading ?? false;
   const known = !sessionLoading && (!signedIn || executive !== undefined);
   useEffect(() => {
-    if (!signedIn) return;
-    let live = true;
-    workspaceRequest("/executive")
-      .then((data) => live && setExecutive(!!data.executive))
-      .catch(() => live && setExecutive(false));
-    return () => {
-      live = false;
-    };
-  }, [signedIn]);
-  useEffect(() => {
     if (executive && !location.pathname.startsWith("/dashboard/executive")) navigate("/dashboard/executive", { replace: true });
   }, [executive, location.pathname, navigate]);
-  useEffect(() => {
-    if (executive !== false) return;
-    let live = true;
-    workspaceRequest("/examples")
-      .then((data) => live && setExamples(!!data.available))
-      .catch(() => live && setExamples(false));
-    return () => {
-      live = false;
-    };
-  }, [executive]);
   useShellThemeColor();
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {

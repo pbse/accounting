@@ -48,7 +48,11 @@ function Panel() {
   const match = /^\/dashboard\/closes\/(\d+)(?:\/workpapers\/(\d+))?/.exec(location.pathname);
   const closeId = match?.[1] ?? "";
   const paperId = match?.[2] ?? "";
-  const [open, setOpen] = useState(readOpen);
+  // Closed on the server and in the browser's first render alike; a panel left open is reopened once hydrated.
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (readOpen()) setOpen(true);
+  }, []);
   const asked = usePending();
   useEffect(() => {
     if (asked && !open) toggle(true);

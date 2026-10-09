@@ -1,25 +1,67 @@
 import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
-import { Authentication } from "./features/auth/Auth";
-import { App } from "./App";
-import { prefetchOnIntent, prefetchRoute } from "./features/dashboard/prefetch";
+import { createRoot, hydrateRoot } from "react-dom/client";
+import { hydrate, type DehydratedState } from "@tanstack/react-query";
+import { createBrowserRouter, matchRoutes, RouterContextProvider, RouterProvider, type HydrationState } from "react-router";
+import { AppProviders, queryStateId } from "./app";
+import { appData, browserRead, newQueryClient } from "./data/queries";
+import { routes } from "./routes";
+import { onTokenChange } from "./features/closes/workspace";
 import "./styles.css";
 import "@close/ui/theme/tokens.css";
 import "@close/ui/theme/shell.css";
 import "./theme/workspace.css";
 
-// A workspace page's code and first data are asked for now, while React starts.
-prefetchRoute(window.location.pathname + window.location.search, true);
-prefetchOnIntent();
+declare global {
+  interface Window {
+    __staticRouterHydrationData?: HydrationState;
+  }
+}
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    {window.location.pathname === "/request" ? (
-      <App />
-    ) : (
-      <Authentication>
-        <App />
-      </Authentication>
-    )}
-  </StrictMode>,
-);
+const queryClient = newQueryClient();
+// A different local development token may see different data: nothing read with the last one is kept.
+onTokenChange(() => queryClient.clear());
+// A page the edge rendered (docs/server-rendering.md) carries its query cache and its loaders' results; the browser
+// starts from both instead of asking again.
+const state = document.getElementById(queryStateId)?.textContent;
+const rendered = !!state && !!window.__staticRouterHydrationData;
+if (state) {
+  try {
+    hydrate(queryClient, JSON.parse(state) as DehydratedState);
+  } catch {
+    // An unreadable cache only means the page asks for its data again.
+  }
+}
+
+async function start() {
+  if (rendered) {
+    // The server rendered the page with its code; the browser loads the same code before it hydrates, or the first
+    // render would differ from the HTML.
+    const lazy = matchRoutes(routes, window.location)?.filter((match) => match.route.lazy) ?? [];
+    await Promise.all(
+      lazy.map(async ({ route }) => {
+        const resolved = await (route.lazy as () => Promise<object>)();
+        Object.assign(route, { ...resolved, lazy: undefined });
+      }),
+    );
+  }
+  const router = createBrowserRouter(routes, {
+    hydrationData: rendered ? window.__staticRouterHydrationData : undefined,
+    getContext() {
+      const context = new RouterContextProvider();
+      context.set(appData, { queryClient, read: browserRead });
+      return context;
+    },
+  });
+  const tree = (
+    <StrictMode>
+      <AppProviders queryClient={queryClient} path={window.location.pathname}>
+        <RouterProvider router={router} />
+      </AppProviders>
+    </StrictMode>
+  );
+  const root = document.getElementById("root")!;
+  if (rendered) hydrateRoot(root, tree);
+  else createRoot(root).render(tree);
+}
+
+void start();

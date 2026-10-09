@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { authenticationHeaders, authKitClientId, serverSession } from "../auth/Auth";
+import { authenticationHeaders, authKitClientId } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
 import { RequestError } from "./requestError";
 // Kept in memory only. Refreshing requires unlocking again; never bake a token into frontend config.
@@ -10,6 +10,10 @@ export function unlock(value: string) {
   reads.clear();
   listeners.forEach((listener) => listener());
 }
+// onTokenChange calls back whenever the local development token changes, so cached reads made with another can go.
+export function onTokenChange(callback: () => void) {
+  listeners.add(callback);
+}
 export function useUnlocked() {
   return useSyncExternalStore(
     (listener) => {
@@ -17,6 +21,8 @@ export function useUnlocked() {
       return () => listeners.delete(listener);
     },
     () => token !== "",
+    // Nothing is unlocked on the server, nor while the browser hydrates its page.
+    () => false,
   );
 }
 // An agent event: a step the agent is making (running, then ok, refused, unavailable, omitted or proposed), the card
@@ -30,42 +36,21 @@ export type AgentEvent =
 // With onEvent, a streamed reply (application/x-ndjson) hands each event line to onEvent and resolves with its last
 // line, which must carry the conversation; any other ending is an error, so provisional text is never kept.
 // A read asked for again while it is still under way shares it: a page's parts often ask for the same data at once.
-// A read started ahead of a page (prefetchWorkspace) is also kept for the page's first ask within ten seconds, and
-// then forgotten. Any other finished read is forgotten at once, so a refresh always asks the server. Each caller gets
-// its own copy; failures are never shared; a change made through this helper, or a new token, forgets every read.
-const keptFor = 10_000;
-type SharedRead = { value: Promise<unknown>; settled: boolean; prefetched: boolean };
-const reads = new Map<string, SharedRead>();
+// Each caller gets its own copy; a finished read is forgotten at once, so a refresh always asks the server, and a
+// change made through this helper or a new token forgets every read. Pages that read through queries
+// (src/data/queries.ts) are cached there instead.
+const reads = new Map<string, Promise<unknown>>();
 
-function sharedRead(path: string, prefetch = false): Promise<unknown> {
-  const hit = reads.get(path);
-  if (hit && (!hit.settled || hit.prefetched)) {
-    // A page's ask uses up a prefetched read: finished, it is forgotten now; still under way, as soon as it ends.
-    if (!prefetch) {
-      if (hit.settled) reads.delete(path);
-      hit.prefetched = false;
-    }
-    return hit.value.then((v) => structuredClone(v));
+function sharedRead(path: string): Promise<unknown> {
+  let value = reads.get(path);
+  if (!value) {
+    const asked = send(path);
+    value = asked;
+    reads.set(path, asked);
+    const forget = () => reads.get(path) === asked && reads.delete(path);
+    asked.then(forget, forget);
   }
-  const entry: SharedRead = { value: send(path), settled: false, prefetched: prefetch };
-  reads.set(path, entry);
-  const forget = () => reads.get(path) === entry && reads.delete(path);
-  entry.value.then(
-    () => {
-      entry.settled = true;
-      if (entry.prefetched) window.setTimeout(forget, keptFor);
-      else forget();
-    },
-    forget,
-  );
-  return entry.value.then((v) => structuredClone(v));
-}
-
-// prefetchWorkspace starts reads a page is about to make, so they run while its code loads or while the pointer rests
-// on its link. Only a cookie session can ask before the page itself has signed in.
-export function prefetchWorkspace(...paths: string[]) {
-  if (!serverSession) return;
-  for (const path of paths) if (!reads.has(path)) sharedRead(path, true).catch(() => undefined);
+  return value.then((v) => structuredClone(v));
 }
 
 export async function workspaceRequest(

@@ -79,6 +79,19 @@ const securityActivity = `SELECT COALESCE(jsonb_agg(x ORDER BY x.at DESC),'[]'::
 ) events ORDER BY at DESC LIMIT 100) x`
 
 func registerSecurity(mux *http.ServeMux, db *sql.DB) {
+	// The clients an assignment can name, alone: the People section needs these and nothing else of the security read.
+	mux.HandleFunc("GET /v1/closes/security/clients", func(w http.ResponseWriter, r *http.Request) {
+		if !canManageMembers(r) {
+			problem(w, 403, "The firm's clients for assignments require clients:all and members:manage.")
+			return
+		}
+		var raw []byte
+		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(DISTINCT entity),'[]'::jsonb) FROM client_closes WHERE organization_id=$1`, organization(r)).Scan(&raw); err != nil {
+			problem(w, 503, "The firm's clients could not be read.")
+			return
+		}
+		jsonReply(w, 200, map[string]json.RawMessage{"clients": raw})
+	})
 	// One read of who can do what, which services and agents act for the firm, and what changed; firm administrators only.
 	mux.HandleFunc("GET /v1/closes/security", func(w http.ResponseWriter, r *http.Request) {
 		if !canManageMembers(r) {

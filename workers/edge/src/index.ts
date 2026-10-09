@@ -6,6 +6,8 @@ import { adminAsset, adminPath, forwardsToAPI, needsWorkspaceAuth, secureAdmin, 
 import { uploadScanRequest } from "./upload-scan";
 import { EmailMessage } from "cloudflare:email";
 import { contactMessage, noteToForward } from "./contact";
+import { render as renderWorkspace } from "./ssr";
+import { serveWorkspace, workspacePage } from "./workspace";
 
 export class CapabilityAPI extends Container<Env> {
   defaultPort = 8080;
@@ -196,6 +198,14 @@ export default {
     }
     // The home page comes with its words already in the HTML (apps/frontend/prerender.mjs); index.html stays the empty
     // shell every app route loads.
+    if (workspacePage(path))
+      return serveWorkspace(request, {
+        enabled: env.AUTH_SESSION === "server",
+        render: renderWorkspace,
+        asset: (r) => env.ASSETS.fetch(r),
+        call: (apiPath, cookie) => api(env).fetch(new Request(new URL(apiPath, request.url), { headers: { Cookie: cookie, Accept: "application/json" } })),
+        log: (message) => console.error(message),
+      });
     if (path === "/") return env.ASSETS.fetch(new Request(new URL("/static-home", request.url), request));
     if (path === "/static-home") return Response.redirect(new URL("/" + new URL(request.url).search, request.url).href, 301);
     return env.ASSETS.fetch(request);

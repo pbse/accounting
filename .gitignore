@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .prerender/
+dist-ssr/
 .wrangler/
 .env
 .env.*

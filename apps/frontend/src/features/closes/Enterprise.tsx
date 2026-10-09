@@ -6,6 +6,9 @@ import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
 import { workspaceRequest } from "./workspace";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useDates } from "../../data/time";
 
 type Member = { id: number; subject: string; granted: boolean; reason: string; actor: string; created_at: string };
 type Alert = { kind: string; close_id: string; item_id: string; state: string; age_minutes: number };
@@ -17,19 +20,26 @@ type RoleChange = { id: number; subject: string; from_role: string; to_role: str
 
 // The firm's people and their roles (docs/sign-in.md). Colleagues who sign in with the firm's company domain arrive
 // with the Member role, which opens nothing until an administrator gives them a role or assigns them clients.
+type PeoplePage = { people: Person[]; roles: RoleOption[]; changes: RoleChange[]; next: string };
+
 export function FirmPeople() {
-  const [page, setPage] = useState<{ people: Person[]; roles: RoleOption[]; changes: RoleChange[]; next: string }>();
+  const queryClient = useQueryClient();
+  // The first page is the page's query, read with the page; later pages are added as the person asks for them.
+  const first = useQuery(workspaceQuery<PeoplePage>("/members/people"));
+  const [more, setMore] = useState<PeoplePage[]>([]);
   const [subject, setSubject] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  // The first page, or the next one after the people already shown.
-  async function load(after = "") {
+  const dates = useDates();
+  const latest = more.at(-1) ?? first.data;
+  const page = first.data && latest ? { ...latest, people: [first.data, ...more].flatMap((p) => p.people) } : undefined;
+  async function load(after: string) {
     setBusy(true);
     try {
-      const next = await workspaceRequest(`/members/people${after ? `?after=${encodeURIComponent(after)}` : ""}`);
-      setPage((shown) => (after && shown ? { ...next, people: [...shown.people, ...next.people] } : next));
+      const next: PeoplePage = await workspaceRequest(`/members/people?after=${encodeURIComponent(after)}`);
+      setMore((shown) => [...shown, next]);
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "The firm’s people are unavailable.");
@@ -37,9 +47,11 @@ export function FirmPeople() {
       setBusy(false);
     }
   }
-  useEffect(() => {
-    void load();
-  }, []);
+  // After a change the list starts again from its first page.
+  const reload = async () => {
+    setMore([]);
+    await queryClient.invalidateQueries({ queryKey: workspaceKey("/members/people") });
+  };
   async function change(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -51,7 +63,7 @@ export function FirmPeople() {
       setMessage(result.message);
       setSubject("");
       setOpen(false);
-      await load();
+      await reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The role could not be changed.");
     } finally {
@@ -67,10 +79,10 @@ export function FirmPeople() {
     return (
       <section aria-label="People and roles">
         <h2>People and roles</h2>
-        {error ? (
+        {first.error ? (
           <p role="alert">
-            {error}{" "}
-            <button type="button" disabled={busy} onClick={() => void load()}>
+            {first.error.message || "The firm’s people are unavailable."}{" "}
+            <button type="button" disabled={first.isFetching} onClick={() => void first.refetch()}>
               Try again
             </button>
           </p>
@@ -103,7 +115,8 @@ export function FirmPeople() {
       {page.next && <p className="setting-actions"><button type="button" disabled={busy} onClick={() => void load(page.next)}>Show more people</button></p>}
       {message && <p role="status">{message}</p>}
       {error && !open && <p role="alert">{error}</p>}
-      {page.changes.length > 0 && <details><summary>Role changes ({page.changes.length})</summary><ol>{page.changes.map((c) => <li key={c.id}>{who(c.subject)}: {roleName(c.from_role)} → {roleName(c.to_role)}{c.state === "pending" ? " (awaiting WorkOS)" : c.state === "failed" ? " (not made)" : c.state === "unknown" ? " (outcome unknown: changed in WorkOS meanwhile)" : ""} · {c.reason} · by {who(c.actor)} · {new Date(c.created_at).toLocaleString()}</li>)}</ol></details>}
+      {first.error && <p role="alert">{first.error.message || "The firm’s people are unavailable."} The list is from the last read.</p>}
+      {page.changes.length > 0 && <details><summary>Role changes ({page.changes.length})</summary><ol>{page.changes.map((c) => <li key={c.id}>{who(c.subject)}: {roleName(c.from_role)} → {roleName(c.to_role)}{c.state === "pending" ? " (awaiting WorkOS)" : c.state === "failed" ? " (not made)" : c.state === "unknown" ? " (outcome unknown: changed in WorkOS meanwhile)" : ""} · {c.reason} · by {who(c.actor)} · {dates.dateTime(c.created_at)}</li>)}</ol></details>}
       <Dialog open={open} onClose={() => setOpen(false)} title="Change a person’s role" description="The role decides what they can open across the firm. It takes effect within five minutes.">
         <form onSubmit={(event) => void change(event)}><fieldset disabled={busy}>
           <label>Person
@@ -172,8 +185,12 @@ type Invitation = { id: string; email: string; role_name: string; state: string;
 const invitationStates: Record<string, string> = { sending: "Not yet confirmed by WorkOS", pending: "Waiting for them to accept", accepted: "Joined", revoked: "Revoked", expired: "Expired" };
 
 export function Invitations() {
-  const [roles, setRoles] = useState<{ configured: boolean; roles: Role[] }>();
-  const [list, setList] = useState<Invitation[]>([]);
+  const queryClient = useQueryClient();
+  const dates = useDates();
+  const rolesRead = useQuery(workspaceQuery<{ configured: boolean; roles: Role[] }>("/members/roles"));
+  const listRead = useQuery(workspaceQuery<Invitation[]>("/members/invitations"));
+  const roles = listRead.data ? rolesRead.data : undefined;
+  const list = listRead.data ?? [];
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("");
@@ -182,17 +199,8 @@ export function Invitations() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  async function load() {
-    try {
-      const [available, sent] = await Promise.all([workspaceRequest("/members/roles"), workspaceRequest("/members/invitations")]);
-      setRoles(available);
-      setList(sent);
-      setError("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Invitations are unavailable.");
-    }
-  }
-  useEffect(() => void load(), []);
+  const readError = rolesRead.error ?? listRead.error;
+  const load = () => Promise.all([rolesRead.refetch(), listRead.refetch()]);
   // Leaving the dialog discards the draft, so a later invitation is verified afresh.
   const dismiss = () => {
     setEmail("");
@@ -209,7 +217,7 @@ export function Invitations() {
       const result = await workspaceRequest("/members/invitations", body);
       setMessage(result.message);
       if (body.action === "send") dismiss();
-      await load();
+      await queryClient.invalidateQueries({ queryKey: workspaceKey("/members/invitations") });
     } catch (e) {
       setError(e instanceof Error ? e.message : "The invitation could not be sent.");
     } finally {
@@ -220,9 +228,9 @@ export function Invitations() {
     return (
       <section aria-label="Invitations">
         <h2>Invitations</h2>
-        {error ? (
+        {readError ? (
           <p role="alert">
-            {error}{" "}
+            {readError.message || "Invitations are unavailable."}{" "}
             <button type="button" onClick={() => void load()}>
               Try again
             </button>
@@ -251,7 +259,7 @@ export function Invitations() {
             <div className="row" key={i.id}>
               <span>
                 <strong>{i.email}</strong>
-                <small>{i.role_name} · invited by {i.invited_by} {new Date(i.created_at).toLocaleDateString()}</small>
+                <small>{i.role_name} · invited by {i.invited_by} {dates.date(i.created_at)}</small>
               </span>
               <span className={`pill ${i.state === "accepted" ? "" : i.state === "pending" || i.state === "sending" ? "info" : "neutral"}`}>{invitationStates[i.state] ?? i.state}</span>
               <span />
@@ -262,6 +270,7 @@ export function Invitations() {
       )}
       {message && <p role="status">{message}</p>}
       {error && !open && <p role="alert">{error}</p>}
+      {readError && <p role="alert">{readError.message || "Invitations are unavailable."} The list is from the last read.</p>}
       <Dialog open={open} onClose={dismiss} title="Invite by email" description="WorkOS emails the invitation; they join the firm once they accept it and sign in.">
         <form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
           <fieldset disabled={busy}>
@@ -328,23 +337,16 @@ export function OperationsSnapshot() {
 // Enrolling or revoking an exact WorkOS user, and the history of those decisions. WorkOS still owns identity and
 // roles; client assignments remain separate.
 export function MemberDecision() {
-  const [members, setMembers] = useState<Member[]>();
+  const queryClient = useQueryClient();
+  const dates = useDates();
+  const read = useQuery(workspaceQuery<Member[]>("/members"));
+  const members = read.data;
   const [subject, setSubject] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  async function load() {
-    try {
-      setMembers(await workspaceRequest("/members"));
-      setError("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Membership history unavailable.");
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, []);
+  const load = () => queryClient.invalidateQueries({ queryKey: workspaceKey("/members") });
   const current = members?.find((member) => member.subject === subject.trim());
   async function decide(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -364,9 +366,9 @@ export function MemberDecision() {
     }
   }
   if (!members)
-    return error ? (
+    return read.error ? (
       <p role="alert">
-        {error}{" "}
+        {read.error.message || "Membership history unavailable."}{" "}
         <button type="button" onClick={() => void load()}>
           Try again
         </button>
@@ -382,7 +384,8 @@ export function MemberDecision() {
       </p>
       {message && <p role="status">{message}</p>}
       {error && !open && <p role="alert">{error}</p>}
-      {members.length > 0 && <details><summary>Membership history ({members.length})</summary><ol>{members.map((member) => <li key={member.id}>{member.granted ? "Enrolled" : "Revoked"} · {member.subject} · {member.reason} · {member.actor} · {new Date(member.created_at).toLocaleString()}</li>)}</ol></details>}
+      {read.error && <p role="alert">{read.error.message || "Membership history unavailable."} The history is from the last read.</p>}
+      {members.length > 0 && <details><summary>Membership history ({members.length})</summary><ol>{members.map((member) => <li key={member.id}>{member.granted ? "Enrolled" : "Revoked"} · {member.subject} · {member.reason} · {member.actor} · {dates.dateTime(member.created_at)}</li>)}</ol></details>}
       <Dialog open={open} onClose={() => setOpen(false)} title="Enrol or revoke a member" description="An exact WorkOS user, enrolled into this firm or refused from its next request.">
         <form onSubmit={(event) => void decide(event)}><fieldset disabled={busy}>
           <label>Exact WorkOS user ID<input required pattern="user_.+" maxLength={200} value={subject} onChange={(event) => setSubject(event.target.value)} /></label>

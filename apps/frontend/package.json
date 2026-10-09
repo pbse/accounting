@@ -4,11 +4,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build && npm run prerender",
+    "build": "tsc --noEmit && vite build && npm run prerender && npm run build:ssr",
     "prerender": "vite build --ssr src/prerender.tsx --outDir .prerender && node prerender.mjs",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "build:ssr": "vite build --ssr src/entry-server.tsx --outDir dist-ssr"
   },
   "dependencies": {
+    "@tanstack/react-query": "5.104.1",
     "@workos-inc/authkit-react": "^0.16.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",

@@ -39,7 +39,8 @@ function subscribe(l: () => void) {
 }
 
 export function usePending() {
-  return useSyncExternalStore(subscribe, () => pending);
+  // A server render, and the browser's hydration of it, see nothing pending.
+  return useSyncExternalStore(subscribe, () => pending, () => null);
 }
 
 // Opening the panel from elsewhere (the sidebar) is counted, so every click opens and focuses it.
@@ -51,7 +52,7 @@ export function openAssistant() {
 }
 
 export function useOpenRequests() {
-  return useSyncExternalStore(subscribe, () => openRequests);
+  return useSyncExternalStore(subscribe, () => openRequests, () => 0);
 }
 
 // nextReview is the first draft in the review queue, the target of /review.
