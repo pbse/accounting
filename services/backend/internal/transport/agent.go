@@ -267,7 +267,12 @@ func executiveLink(t mcpTool, args map[string]any) chatCitation {
 	if t.name == "cash_plan" {
 		page = "/dashboard/executive/cash"
 	}
-	return chatCitation{t.title, page + "?close=" + url.QueryEscape(closeID)}
+	href := page + "?close=" + url.QueryEscape(closeID)
+	// A report is cited as the version read, which the Reports page then opens.
+	if id, ok := args["publication_id"].(string); ok && id != "" && t.name == "read_publication" {
+		href += "&publication=" + url.QueryEscape(id)
+	}
+	return chatCitation{t.title, href}
 }
 
 // agentSystem is the fixed part of the prompt, identical on every turn so the provider may cache it.

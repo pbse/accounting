@@ -18,7 +18,7 @@ import (
 
 // An executive asks firm-wide and gets exactly their reads (overview, published reports, cash plan, budget): the firm's
 // reads and every card are refused, links lead to the executive's own pages, the pair records the close read, commands
-// are not theirs, a close conversation is refused, and with the firm's agent off they get one fixed line and no model.
+// are not theirs, a close conversation is refused, and below the firm-wide level they get one fixed line and no model.
 func TestAgentChatAnswersAnExecutive(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -37,7 +37,7 @@ func TestAgentChatAnswersAnExecutive(t *testing.T) {
 	}
 	org := "org_AgentExec" + rand.Text()
 	var alpha string
-	_, err = db.Exec(`INSERT INTO organizations(id,name,agent_chat) VALUES($1,'Agent executive fixture','closes')`, org)
+	_, err = db.Exec(`INSERT INTO organizations(id,name,agent_chat) VALUES($1,'Agent executive fixture','firm')`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_x',true,'Synthetic','fixture')`, org)
 	must(err)
@@ -160,12 +160,17 @@ func TestAgentChatAnswersAnExecutive(t *testing.T) {
 	if kept != 2 {
 		t.Fatalf("the member's pair is kept apart, untouched: %d", kept)
 	}
-	// With the firm's agent off, one fixed line and no model call.
-	_, err = db.Exec(`UPDATE organizations SET agent_chat='off' WHERE id=$1`, org)
-	must(err)
-	calls = 0
-	last = ask("What does my latest report say?")
-	if calls != 0 || last.Body != executiveOff || len(last.Citations) != 1 || last.Citations[0]["href"] != "/dashboard/executive" {
-		t.Fatalf("at off an executive gets the fixed line without a model: calls=%d %+v", calls, last)
+	// Below the firm-wide level (closes, off), one fixed line and no model call: an executive asks outside a close.
+	for _, level := range []string{"closes", "off"} {
+		_, err = db.Exec(`UPDATE organizations SET agent_chat=$2 WHERE id=$1`, org, level)
+		must(err)
+		calls = 0
+		last = ask("What does my latest report say?")
+		if calls != 0 || last.Body != executiveOff || len(last.Citations) != 1 || last.Citations[0]["href"] != "/dashboard/executive" {
+			t.Fatalf("at %s an executive gets the fixed line without a model: calls=%d %+v", level, calls, last)
+		}
+	}
+	if link := executiveLink(mcpTool{name: "read_publication", path: "/v1/closes/{close_id}/management-pack/publications/{publication_id}"}, map[string]any{"close_id": "7", "publication_id": "3"}); link.Href != "/dashboard/executive/reports?close=7&publication=3" {
+		t.Fatalf("a report is cited as the version read: %s", link.Href)
 	}
 }

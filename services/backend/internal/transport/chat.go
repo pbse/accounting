@@ -108,7 +108,7 @@ func commandText(command, argument string, closeScoped bool) string {
 // executiveHelp answers an executive's command; executiveOff answers an executive's question while the firm's agent
 // is off.
 const executiveHelp = "I answer questions about your published reports, cash plan and budget; there are no commands here."
-const executiveOff = "The agent is not turned on for your firm yet. Your published reports, cash plan and budget are on the pages beside this one."
+const executiveOff = "The agent is not turned on firm-wide for your firm yet. Your published reports, cash plan and budget are on the pages beside this one."
 
 // chatHelp names the commands the server answers without a model.
 func chatHelp(closeScoped bool) string {
@@ -876,8 +876,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				command = ""
 			}
 		}
-		agent := command == "" && (exec && level != "off" || level == "firm" || level == "closes" && closeID != "")
-		// An executive at off gets one fixed line and no model, never the keyword reads of the firm's work.
+		agent := command == "" && (level == "firm" || level == "closes" && closeID != "")
+		// An executive asks outside a close, so only the firm-wide level sends their question to the model; below it they
+		// get one fixed line and no model, never the keyword reads of the firm's work.
 		fixed := exec && !agent
 		if in.Action == "clear" {
 			if _, err := db.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scopeOf(r), org, author, closeID); err != nil {

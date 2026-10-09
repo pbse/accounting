@@ -421,7 +421,7 @@ function ReminderRule({ policy, refresh }: { policy: Policy; refresh: () => void
 const agentLevels: { value: AgentChat; label: string; detail: string }[] = [
   { value: "off", label: "Off", detail: "Questions are answered only from the assistant's fixed reads and commands and are never sent to a model. Other model work the firm has allowed (document reading, Work commands, staff plan drafts) is unchanged." },
   { value: "closes", label: "On for client closes", detail: "A question inside a client close may be investigated and answered by the model, from reads of that close made with the member's own permissions. Questions asked outside a close are never sent." },
-  { value: "firm", label: "On firm-wide", detail: "As for client closes, and a question asked outside a close may be answered from the member's own lists across the clients they can open, with client names." },
+  { value: "firm", label: "On firm-wide", detail: "As for client closes, and a question asked outside a close may be answered from the member's own lists across the clients they can open, with client names. A client's executive may then ask about their published reports, cash plan and budget." },
 ];
 
 function AgentChatSetting({ policy, refresh }: { policy: Policy; refresh: () => void }) {
