@@ -121,6 +121,8 @@ var (
 // created only for someone joining for the first time (exact): for anyone the firm already enrolled, a membership
 // removed in WorkOS stays removed.
 func ensureMembership(ctx context.Context, org, user, role string, exact bool) error {
+	// A membership made or changed here shows on the firm's pages at once, not when the shown copies age.
+	defer forgetReviewers(org)
 	held, err := workosList[firmMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {user}, "organization_id": {org}, "statuses": {everyStatus}, "limit": {"100"}})
 	if err != nil {
 		return err

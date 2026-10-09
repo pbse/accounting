@@ -52,12 +52,7 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		// One page of WorkOS's memberships at a time; the list asks for the next with its cursor.
-		var page struct {
-			Data         []firmMembership `json:"data"`
-			ListMetadata struct {
-				After string `json:"after"`
-			} `json:"list_metadata"`
-		}
+		var page membershipPage
 		query := url.Values{"organization_id": {org}, "statuses": {everyStatus}, "limit": {strconv.Itoa(peoplePage)}}
 		if after != "" {
 			query.Set("after", after)
@@ -70,9 +65,14 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			reads                         sync.WaitGroup
 		)
 		reads.Go(func() {
-			listed = workos(r.Context(), "GET", "/user_management/organization_memberships?"+query.Encode(), nil, &page)
+			// The list shows the memberships from a copy at most about 30 seconds behind; a role change here forgets it.
+			page, listed = membershipsShown.get(r.Context(), org+"|"+query.Encode(), func(ctx context.Context) (membershipPage, error) {
+				var read membershipPage
+				err := workos(ctx, "GET", "/user_management/organization_memberships?"+query.Encode(), nil, &read)
+				return read, err
+			})
 		})
-		reads.Go(func() { roles, _, rolesRead = firmRoles(r.Context(), r) })
+		reads.Go(func() { roles, rolesRead = shownFirmRoles(r.Context(), r) })
 		reads.Go(func() {
 			rows, err := db.QueryContext(r.Context(), `SELECT subject,granted FROM current_organization_members WHERE organization_id=$1`, org)
 			if err != nil {
@@ -375,3 +375,13 @@ func rememberShownUser(id string, user workosUser, asked time.Time) {
 	}
 	shownUsers.users[id], shownUsers.at[id] = user, asked
 }
+
+// membershipPage is one page of the firm's WorkOS memberships, as the people list reads it.
+type membershipPage struct {
+	Data         []firmMembership `json:"data"`
+	ListMetadata struct {
+		After string `json:"after"`
+	} `json:"list_metadata"`
+}
+
+var membershipsShown = newShownCache[membershipPage](30*time.Second, 2*time.Minute, 10*time.Minute)

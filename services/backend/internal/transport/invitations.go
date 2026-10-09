@@ -53,16 +53,43 @@ func plainPermission(name string) string {
 }
 
 // firmRoles lists the organization's WorkOS roles; only a role whose listed permissions the actor all holds is allowed.
+// firmRoles reads the firm's roles from WorkOS and says which the person asking may give: what decides a role or an
+// invitation reads this. shownFirmRoles is the same from a copy at most about 30 seconds behind, for what a page shows.
 func firmRoles(ctx context.Context, r *http.Request) ([]map[string]any, map[string]workosRole, error) {
+	list, err := readFirmRoles(ctx, organization(r))
+	if err != nil {
+		return nil, nil, err
+	}
+	out, allowed := rolesFor(list, auth.Actor(r.Context()).Permissions)
+	return out, allowed, nil
+}
+
+var rolesShown = newShownCache[[]workosRole](30*time.Second, 2*time.Minute, 10*time.Minute)
+
+func shownFirmRoles(ctx context.Context, r *http.Request) ([]map[string]any, error) {
+	org := organization(r)
+	list, err := rolesShown.get(ctx, org, func(ctx context.Context) ([]workosRole, error) { return readFirmRoles(ctx, org) })
+	if err != nil {
+		return nil, err
+	}
+	out, _ := rolesFor(list, auth.Actor(r.Context()).Permissions)
+	return out, nil
+}
+
+func readFirmRoles(ctx context.Context, org string) ([]workosRole, error) {
 	var list struct {
 		Data []workosRole `json:"data"`
 	}
-	if err := workos(ctx, "GET", "/authorization/organizations/"+url.PathEscape(organization(r))+"/roles", nil, &list); err != nil {
-		return nil, nil, err
+	if err := workos(ctx, "GET", "/authorization/organizations/"+url.PathEscape(org)+"/roles", nil, &list); err != nil {
+		return nil, err
 	}
-	held := auth.Actor(r.Context()).Permissions
+	return list.Data, nil
+}
+
+// rolesFor lists the roles as a page shows them, each allowed only if held holds every permission it grants.
+func rolesFor(list []workosRole, held []string) ([]map[string]any, map[string]workosRole) {
 	out, allowed := []map[string]any{}, map[string]workosRole{}
-	for _, role := range list.Data {
+	for _, role := range list {
 		plain, ok := []string{}, role.Permissions != nil
 		if role.Permissions != nil {
 			for _, p := range *role.Permissions {
@@ -75,7 +102,7 @@ func firmRoles(ctx context.Context, r *http.Request) ([]map[string]any, map[stri
 		}
 		out = append(out, map[string]any{"slug": role.Slug, "name": role.Name, "description": role.Description, "permissions": plain, "allowed": ok})
 	}
-	return out, allowed, nil
+	return out, allowed
 }
 
 // invitationEnrollment enrolls a signed-in subject the app has never decided on, when WorkOS shows the firm's pending
@@ -218,7 +245,7 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, map[string]any{"configured": false, "roles": []any{}})
 			return
 		}
-		roles, _, err := firmRoles(r.Context(), r)
+		roles, err := shownFirmRoles(r.Context(), r)
 		if err != nil {
 			problem(w, 502, "WorkOS roles are unavailable.")
 			return

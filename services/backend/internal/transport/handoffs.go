@@ -114,44 +114,20 @@ type reviewer struct {
 
 // firmReviewers reads each active member's WorkOS roles in the firm; a member holds the permissions of all their roles,
 // as their session does.
-// shownReviewers is firmReviewers for what a page only shows (the roster's people, their names and reach), answered
-// from a copy up to a minute old: each read is two WorkOS calls, most of a roster read's time. Anything that decides
-// (an assignment, an owner, a hand-off) still calls firmReviewers. A role changed here forgets the copy at once
-// (forgetReviewers); one changed in WorkOS itself shows within the minute.
-var shown = struct {
-	sync.Mutex
-	at, forgot map[string]time.Time
-	firms      map[string]map[string]reviewer
-}{at: map[string]time.Time{}, forgot: map[string]time.Time{}, firms: map[string]map[string]reviewer{}}
+// shownReviewers is firmReviewers for what a page only shows (the roster's people, their names and reach): two WorkOS
+// calls, most of a roster read's time, so it comes from a copy (shownCache) at most about 30 seconds behind. Anything
+// that decides (an assignment, an owner, a hand-off) still calls firmReviewers, and a role changed here forgets the
+// copy at once (forgetReviewers).
+var reviewersShown = newShownCache[map[string]reviewer](30*time.Second, 2*time.Minute, 10*time.Minute)
 
 func shownReviewers(ctx context.Context, org string) (map[string]reviewer, error) {
-	shown.Lock()
-	if at, ok := shown.at[org]; ok && time.Since(at) < time.Minute {
-		firm := shown.firms[org]
-		shown.Unlock()
-		return firm, nil
-	}
-	shown.Unlock()
-	started := time.Now()
-	firm, err := firmReviewers(ctx, org)
-	if err != nil {
-		return nil, err
-	}
-	shown.Lock()
-	// A copy read before a role change was forgotten must not replace that forgetting.
-	if forgot, ok := shown.forgot[org]; !ok || forgot.Before(started) {
-		shown.at[org], shown.firms[org] = started, firm
-	}
-	shown.Unlock()
-	return firm, nil
+	return reviewersShown.get(ctx, org, func(ctx context.Context) (map[string]reviewer, error) { return firmReviewers(ctx, org) })
 }
 
+// forgetReviewers drops the firm's shown copies of who reviews and who belongs, after a change made here.
 func forgetReviewers(org string) {
-	shown.Lock()
-	delete(shown.at, org)
-	delete(shown.firms, org)
-	shown.forgot[org] = time.Now()
-	shown.Unlock()
+	reviewersShown.forget(org)
+	membershipsShown.forget(org + "|")
 }
 
 func firmReviewers(ctx context.Context, org string) (map[string]reviewer, error) {
