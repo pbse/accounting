@@ -6,7 +6,7 @@ import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
 import { closeTab } from "./data/closeTabs";
-import { appData, prefetch, prefetchLater, workPath, workspaceKey } from "./data/queries";
+import { appData, effortPath, prefetch, prefetchLater, workPath, workspaceKey, workViews } from "./data/queries";
 
 // The app's routes, as React Router data routes: the browser runs them (main.tsx) and so does the edge, which renders a
 // workspace page on the server with its data (entry-server.tsx, docs/server-rendering.md). A page's code loads with
@@ -82,6 +82,21 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   return null;
 }
 
+// Preparation opens the view a link names, or Active.
+async function preparationLoader({ context, request }: LoaderFunctionArgs) {
+  if (!prefetching) return null;
+  const asked = new URL(request.url).searchParams.get("view") ?? "";
+  await prefetch(context, workPath(undefined, workViews.some(([key]) => key === asked) ? asked : "active"));
+  return null;
+}
+
+// Measure reads the month's effort (or the latest months') and the track record.
+async function measureLoader({ context, request }: LoaderFunctionArgs) {
+  if (!prefetching) return null;
+  await prefetch(context, effortPath(new URL(request.url).searchParams.get("period") ?? ""), "/track-record");
+  return null;
+}
+
 // Settings reads what its open section shows. Sections not listed read as they render.
 const settingsReads: Record<string, string[]> = {
   connections: ["/agent-access"],
@@ -129,10 +144,10 @@ export const routes: RouteObject[] = createRoutesFromElements(
       <Route path="closes/:id/workpapers/:paperId" lazy={page(() => import("./features/closes/WorkpaperView"))} />
       <Route path="firm" element={<Navigate to="/dashboard/settings?tab=firm" replace />} />
       <Route path="attention" element={<Navigate to="/dashboard" replace />} />
-      <Route path="work" lazy={page(async () => ({ default: (await import("./features/closes/Work")).Work }))} />
+      <Route path="work" loader={preparationLoader} lazy={page(async () => ({ default: (await import("./features/closes/Work")).Work }))} />
       <Route path="security" element={<Navigate to="/dashboard/settings?tab=security" replace />} />
       <Route path="settings" loader={settingsLoader} lazy={page(() => import("./features/settings/Settings"))} />
-      <Route path="measure" lazy={page(() => import("./features/closes/Measure"))} />
+      <Route path="measure" loader={measureLoader} lazy={page(() => import("./features/closes/Measure"))} />
       <Route path="executive" lazy={page(() => import("./features/executive/Executive"), { view: "overview" as const })} />
       <Route path="executive/reports" lazy={page(() => import("./features/executive/Executive"), { view: "reports" as const })} />
       <Route path="executive/cash" lazy={page(() => import("./features/executive/Executive"), { view: "cash" as const })} />

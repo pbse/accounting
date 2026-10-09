@@ -72,7 +72,9 @@ and a read the cache already holds is not repeated.
 | Home (counts, review queue, goals, get started, dependencies, new in the books, closes handed to the agent) | Yes; other decision views and filters read when chosen |
 | Clients (the roster, recent closes and a search's matches) | Yes |
 | A close's Overview (the close and its drafts, the agent's goal, where it stands, the coordinator and its coverage, the work from its evidence) | Yes |
-| A close's other tabs, Preparation, Measure, Executive | Layout and the close's header; the tab reads in the browser |
+| Preparation (the view a link names, or Active) and Measure (effort and the track record) | Yes |
+| Executive overview | Yes; it shows the layout's read |
+| A close's other tabs, a workpaper, Executive reports, cash plan and decisions | Layout (and the close's header); the rest reads in the browser |
 
 A page moves to "Yes" when its loader prefetches its reads and its components read them with `useQuery`.
 

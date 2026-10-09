@@ -1,5 +1,5 @@
 import { useDates } from "../../data/time";
-import { workPath, workspaceQuery } from "../../data/queries";
+import { workPath, workspaceQuery, workViews } from "../../data/queries";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { PrepaidMethodFields, readCredits } from "../prepaids/MethodFields";
 import { AccrualConfirmations } from "../accruals/Prepare";
@@ -100,16 +100,7 @@ const labels: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-const views: [string, string][] = [
-  ["active", "Active"],
-  ["mine", "Mine"],
-  ["needs_confirmation", "Decisions"],
-  ["blocked", "Blockers"],
-  ["running", "Running"],
-  ["waiting_client", "Client requests"],
-  ["completed", "Prepared"],
-  ["all", "All"],
-];
+const views = workViews;
 const tones: Record<string, string> = {
   needs_confirmation: "status warn",
   failed: "status danger",
