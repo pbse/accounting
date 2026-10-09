@@ -1,3 +1,6 @@
+import { monthName, useDates, useNow, utcDay } from "../../data/time";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { askAssistant, starters } from "../dashboard/assistantStore";
@@ -78,9 +81,6 @@ function due(on: string) {
   return days === 0 ? "Due today" : days === 1 ? "Due tomorrow" : `Due ${day}, in ${days} days`;
 }
 
-function monthName(period: string) {
-  return new Date(`${period}-01T00:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" });
-}
 
 // dueRule says how a monthly hand-over dates each month.
 function dueRule(days: number | null) {
@@ -544,7 +544,7 @@ function delegatedState(g: Delegated): [string, string] {
 function delegatedFacts(s: Delegated["summary"]) {
   const facts: string[] = [];
   // In UTC, as the close's plan says it.
-  if (s.books?.state === "done" && s.books.read_at) facts.push(`Books read ${new Date(s.books.read_at).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })}`);
+  if (s.books?.state === "done" && s.books.read_at) facts.push(`Books read ${utcDay(s.books.read_at)}`);
   else if (s.books?.state === "none") facts.push("No ledger connected: uploaded documents only");
   else if (s.books) facts.push(s.books.text);
   if (s.coverage?.stale) facts.push("Account coverage waits on a new capture");
@@ -554,22 +554,13 @@ function delegatedFacts(s: Delegated["summary"]) {
 }
 
 // DelegatedCloses is Work's list of every close handed to the agent that you can see, those needing a person first.
-export function DelegatedCloses({ refresh, client }: { refresh: number; client: string }) {
-  const [list, setList] = useState<{ goals: Delegated[]; more: boolean }>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/goals?client=${encodeURIComponent(client)}`)
-      .then((data: { goals: Delegated[]; more: boolean }) => {
-        if (!live) return;
-        setList(data);
-        setError("");
-      })
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Delegated closes are unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [refresh, client]);
+export function DelegatedCloses({ client }: { client: string }) {
+  const dates = useDates();
+  const now = useNow();
+  // Read with the page, then every 30 seconds; a later read that fails keeps the last list beside its error.
+  const read = useQuery({ ...workspaceQuery<{ goals: Delegated[]; more: boolean }>(`/goals?client=${encodeURIComponent(client)}`), refetchInterval: 30_000 });
+  const list = read.data;
+  const error = read.error ? read.error.message || "Delegated closes are unavailable." : "";
   if (error && !list?.goals.length) return <p role="alert">{error}</p>;
   if (!list?.goals.length) return null;
   return (
@@ -583,7 +574,7 @@ export function DelegatedCloses({ refresh, client }: { refresh: number; client: 
           const [tone, state] = delegatedState(g);
           // Progress older than ten minutes says when the agent last looked, so it is not taken as current.
           const asOf = g.summary.as_of ? new Date(g.summary.as_of) : undefined;
-          const stale = asOf && Date.now() - asOf.getTime() > 600_000 ? asOf : undefined;
+          const stale = asOf && now - asOf.getTime() > 600_000 ? asOf : undefined;
           return (
             <Link className="row" key={g.id} to={`/dashboard/closes/${g.close_id}`}>
               <EntityCell
@@ -592,7 +583,7 @@ export function DelegatedCloses({ refresh, client }: { refresh: number; client: 
                 detail={
                   <>
                     To get it {finishes[g.finish]}
-                    {g.due_on && ` by ${new Date(`${g.due_on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}`} · handed over by {g.author}
+                    {g.due_on && ` by ${dates.calendarDay(g.due_on)}`} · handed over by {g.author}
                     {g.handed > 0 && ` · ${g.handed} with teammates`}
                   </>
                 }
@@ -601,7 +592,7 @@ export function DelegatedCloses({ refresh, client }: { refresh: number; client: 
               </EntityCell>
               <span className={tone}>
                 {state}
-                {stale && ` · as of ${stale.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}
+                {stale && ` · as of ${dates.dateTime(stale)}`}
               </span>
               <Icon name="arrow" />
             </Link>
