@@ -53,7 +53,7 @@ and a read the cache already holds is not repeated.
 ## Rules for code that renders on the server
 
 - **No browser APIs during render.** Use `window`, `document`, `localStorage` and `Notification` only in effects and
-  event handlers.
+  event handlers. The address's fragment never reaches the server: read it with `useBrowserHash()` (`data/browser.ts`), empty until hydrated.
 - **External stores need a server value.** `useSyncExternalStore` needs a third argument.
 - **Dates come from `useDates()`** (`apps/frontend/src/data/time.ts`). It formats in one locale and the person's own
   time zone from their settings, so the server and the browser write the same text. `toLocaleString()` would differ
@@ -76,7 +76,12 @@ and a read the cache already holds is not repeated.
 | Executive overview | Yes; it shows the layout's read |
 | A close's Books tab (tie-out, exceptions, changes from last month, aging, open items) | Yes; matching, corrections and credit applications read when opened |
 | A workpaper (the draft, its review, changes, comments and standing approval) | Yes; its documents load in the browser, as files |
-| A close's other tabs, Executive reports, cash plan and decisions | Layout and the close's header; the rest reads in the browser |
+| A close's Evidence tab (documents, preparation instructions and jobs, QuickBooks, Xero, Stripe) | Yes; forwarding, Google Drive and historical exports read in the browser |
+| A close's Requests, Reports (management pack, publications, budget), Sign-off (takeover setup, opening baseline, readiness, effort) and Settings (client memory, replay) tabs | Yes; Settings' production access reads in the browser |
+| A close's Cash plan tab, Executive reports, cash plan and decisions | Layout and the close's header; the rest reads in the browser |
+
+Every workspace route renders on the server without failing; what a page does not prefetch renders as loading and
+reads in the browser, as before.
 
 A page moves to "Yes" when its loader prefetches its reads and its components read them with `useQuery`.
 

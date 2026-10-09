@@ -1,3 +1,5 @@
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
@@ -32,30 +34,24 @@ export function Readiness({
   papers: { id: string; kind: string; review_state: string }[];
 }) {
   const dates = useDates();
-  const [status, setStatus] = useState<Status>();
+  const queryClient = useQueryClient();
+  const read = useQuery(workspaceQuery<Status>(`/${closeId}/readiness`));
+  const status = read.data;
+  // An action or a refresh answers with the readiness itself, which replaces the read one.
+  const setStatus = (next: Status) => queryClient.setQueryData(workspaceKey(`/${closeId}/readiness`), next);
   const [scope, setScope] = useState<Scope>();
   const [editing, setEditing] = useState(false);
-  const [error, setError] = useState("");
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Readiness unavailable." : "");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  // Another close starts with its own scope and nothing being edited.
   useEffect(() => {
-    let live = true;
-    setStatus(undefined);
     setScope(undefined);
     setEditing(false);
     setError("");
-    void workspaceRequest(`/${closeId}/readiness`)
-      .then((data: Status) => {
-        if (live) setStatus(data);
-      })
-      .catch((e: Error) => {
-        if (live) setError(e.message);
-      });
-    return () => {
-      live = false;
-    };
   }, [closeId]);
   async function refresh() {
     setBusy(true);

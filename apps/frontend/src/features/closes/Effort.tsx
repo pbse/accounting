@@ -1,3 +1,5 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
@@ -54,32 +56,25 @@ const hours = (seconds: number) => (seconds < 3600 ? minutes(seconds / 60) : `${
 
 export function EffortCard({ closeId }: { closeId: string }) {
   const dates = useDates();
-  const [summary, setSummary] = useState<Summary>();
-  const [error, setError] = useState("");
+  const read = useQuery(workspaceQuery<Summary>(`/${closeId}/effort`));
+  const summary = read.data;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Effort is unavailable." : "");
   const [form, setForm] = useState({ activity: "prepare" as EntryActivity, minutes: "", note: "" });
   const [busy, setBusy] = useState(false);
-  const [refresh, setRefresh] = useState(0);
+  // Time recorded elsewhere on the page (the heartbeat) reads the summary again.
   useEffect(() => {
-    const recorded = () => setRefresh((n) => n + 1);
+    const recorded = () => void read.refetch();
     window.addEventListener("effort-recorded", recorded);
     return () => window.removeEventListener("effort-recorded", recorded);
-  }, []);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/effort`)
-      .then((data) => live && setSummary(data))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Effort is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [closeId, refresh]);
+  }, [read.refetch]);
   async function record() {
     setBusy(true);
     setError("");
     try {
       await workspaceRequest(`/${closeId}/effort/entries`, { activity: form.activity, minutes: Number(form.minutes), note: form.note });
       setForm({ ...form, minutes: "", note: "" });
-      setRefresh((n) => n + 1);
+      void read.refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Time could not be recorded.");
     } finally {

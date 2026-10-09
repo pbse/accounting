@@ -1,5 +1,8 @@
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useBrowserHash } from "../../data/browser";
 import { useDates } from "../../data/time";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useLocation } from "react-router";
 import { workspaceRequest } from "./workspace";
 
@@ -15,22 +18,20 @@ type Status = {
 
 export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
   const dates = useDates();
-  const [status, setStatus] = useState<Status>();
-  const [error, setError] = useState("");
+  const queryClient = useQueryClient();
+  const read = useQuery(workspaceQuery<Status>(`/${closeId}/xero`));
+  const status = read.data;
+  // An action answers with the new status, which replaces the read one.
+  const setStatus = (next: Status) => queryClient.setQueryData(workspaceKey(`/${closeId}/xero`), next);
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Xero status unavailable." : "");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [tenant, setTenant] = useState("");
-  const [callback] = useState(() => new URLSearchParams(window.location.hash.slice(1)));
-  async function load() {
-    try {
-      setStatus(await workspaceRequest(`/${closeId}/xero`));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Xero status unavailable.");
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, [closeId]);
+  const hash = useBrowserHash();
+  // The provider's answer, once the page has hydrated (see useBrowserHash).
+  const callback = useMemo(() => new URLSearchParams(hash.slice(1)), [hash]);
+  const load = async () => void (await read.refetch());
   async function action(name: string) {
     setBusy(true);
     setError("");
@@ -82,7 +83,7 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
     </label>
   );
   return (
-    <details id="xero" open={callback.has("xero_code") || window.location.hash === "#xero"}>
+    <details id="xero" open={callback.has("xero_code") || hash === "#xero"}>
       <summary>Xero month-end Trial Balance</summary>
       <p>This reads the organisation, its chart of accounts and the Trial Balance at month-end. It writes to Xero only an approved draft's manual journal, under a client grant, after a person approves and a person posts it. Xero data is not used to train models.</p>
       {error && <p role="alert">{error}</p>}

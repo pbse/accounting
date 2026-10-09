@@ -1,5 +1,6 @@
+import { useBrowserHash } from "../../data/browser";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { money, workspaceRequest } from "./workspace";
 
 type Connection = { id: string; state: string; realm: string; company_name: string; error: string };
@@ -19,7 +20,9 @@ export function ProductionAccess({ closeId, entity, currency }: { closeId: strin
   const [expiry, setExpiry] = useState("");
   const [reason, setReason] = useState("");
   const [phrase, setPhrase] = useState("");
-  const [callback] = useState(() => new URLSearchParams(window.location.hash.slice(1)));
+  const hash = useBrowserHash();
+  // The provider's answer, once the page has hydrated (see useBrowserHash).
+  const callback = useMemo(() => new URLSearchParams(hash.slice(1)), [hash]);
   async function load() {
     try {
       const next = await workspaceRequest(`/${closeId}/quickbooks`);
@@ -69,7 +72,7 @@ export function ProductionAccess({ closeId, entity, currency }: { closeId: strin
   }
   const c = status?.data.production_connection;
   const callbackHere = callback.get("qbo_env") === "production" && callback.has("qbo_code");
-  return <details id="quickbooks-production" open={callbackHere || window.location.hash === "#quickbooks-production"}>
+  return <details id="quickbooks-production" open={callbackHere || hash === "#quickbooks-production"}>
     <summary>Production QuickBooks authorization and client grant</summary>
     <p>Once confirmed, this company is the client's books: the agent reads its accounts, reports and transactions for evidence and exceptions. Production posting is always a separate human decision. The connected QuickBooks company name must exactly match the close client <strong>{entity}</strong>. The grant limits this client to listed account IDs, the draft kinds it covers, a maximum per journal, Bill line or supplier credit, and an expiry.</p>
     <button disabled={busy} onClick={() => void load()}>Refresh production status</button>

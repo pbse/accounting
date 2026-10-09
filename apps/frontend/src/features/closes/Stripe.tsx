@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 
 type Status = {
@@ -14,22 +16,18 @@ const reports: Record<string, string> = {
 
 // A read-only Stripe connection brings the month's itemized reports into the close, as if uploaded.
 export function Stripe({ closeId, entity }: { closeId: string; entity: string }) {
-  const [status, setStatus] = useState<Status>();
-  const [error, setError] = useState("");
+  const queryClient = useQueryClient();
+  const read = useQuery(workspaceQuery<Status>(`/${closeId}/stripe`));
+  const status = read.data;
+  // An action answers with the new status, which replaces the read one.
+  const setStatus = (next: Status) => queryClient.setQueryData(workspaceKey(`/${closeId}/stripe`), next);
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Stripe status unavailable." : "");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [key, setKey] = useState("");
   const [report, setReport] = useState("payout_reconciliation");
-  async function load() {
-    try {
-      setStatus(await workspaceRequest(`/${closeId}/stripe`));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Stripe status unavailable.");
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, [closeId]);
+  const load = async () => void (await read.refetch());
   async function act(action: string) {
     setBusy(true);
     setError("");
