@@ -16,6 +16,6 @@ export default {
     }
     const size = Number(request.headers.get("Content-Length"));
     if (!Number.isInteger(size) || size < 1 || size > (binary ? 5 * 1024 * 1024 : 512 * 1024)) return new Response("Invalid size", { status: 413 });
-    return env.SCANNER.getByName("text-scanner").fetch(request);
+    return env.SCANNER.getByName("text-scanner-enam", { locationHint: "enam" }).fetch(request);
   },
 } satisfies ExportedHandler<Env>;

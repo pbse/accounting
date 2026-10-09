@@ -50,6 +50,13 @@ Atlanta. The edge now uses a new object, `api-enam`, made with the location hint
 allows two instances, because the old object's container keeps its instance until it sleeps, 24 hours after its last
 request.
 
+Every server is in eastern North America, the database's region (AWS us-east-2): the API, the preparation worker
+and the scanner containers are constrained to `ENAM`, and their Durable Objects (`api-enam`,
+`preparation-worker-enam`, `text-scanner-enam`) were made with the location hint `enam`. The earlier worker object ran
+in Paris. Each container application allows two instances so a new object can start while the old one's container
+sleeps. The context machine, off in production, keeps its object `context-machine`, because that object stores the
+machine's rotated sign-in; its container is constrained to `ENAM`.
+
 ## In the browser
 
 A page used to load its pieces one after another: the main script, the layout's code, the session check, the page's
