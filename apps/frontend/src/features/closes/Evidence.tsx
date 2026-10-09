@@ -1,3 +1,5 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { DriveEvidence } from "./DriveEvidence";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -130,9 +132,17 @@ export function Evidence({
     before: string;
     after: string;
   }>();
-  const [files, setFiles] = useState<EvidenceFile[]>([]);
+  // The close's documents with their checks, read with the page; the polls below refresh them while documents are read.
+  const initial = useQuery(workspaceQuery<EvidenceFile[]>(`/${closeId}/evidence?checks=1`));
+  const [files, setFiles] = useState<EvidenceFile[]>(initial.data ?? []);
+  const [seeded, setSeeded] = useState(initial.dataUpdatedAt);
+  if (initial.dataUpdatedAt !== seeded) {
+    setSeeded(initial.dataUpdatedAt);
+    setFiles((previous) => (initial.data ?? []).map((file) => ({ ...file, checks: file.checks ?? previous.find((old) => old.id === file.id)?.checks })));
+  }
   const checking = useRef(false);
-  const [message, setMessage] = useState("");
+  const [actionMessage, setMessage] = useState("");
+  const message = actionMessage || (initial.error ? initial.error.message || "Could not load evidence." : "");
   const [busy, setBusy] = useState(false);
   async function load(includeChecks = true) {
     try {
@@ -142,9 +152,6 @@ export function Evidence({
       setMessage(e instanceof Error ? e.message : "Could not load evidence.");
     }
   }
-  useEffect(() => {
-    void load();
-  }, [closeId]);
   const extracting = files.some((f) =>
     ["queued", "processing"].includes(f.extraction_state),
   );
@@ -414,38 +421,17 @@ export function PreparationJobs({
   onComplete: () => void;
 }) {
   const dates = useDates();
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const plansRead = useQuery(workspaceQuery<Plan[]>(`/${closeId}/preparations`));
+  // The jobs are read again every three seconds while any is queued.
+  const jobsRead = useQuery({ ...workspaceQuery<Job[]>(`/${closeId}/jobs`), refetchInterval: (query) => ((query.state.data ?? []).some((job) => job.state === "queued") ? 3000 : false) });
+  const plans = plansRead.data ?? [];
+  const jobs = jobsRead.data ?? [];
   const [selected, setSelected] = useState<string[]>([]);
-  const [message, setMessage] = useState("");
+  const [actionMessage, setMessage] = useState("");
+  const failed = plansRead.error ?? jobsRead.error;
+  const message = actionMessage || (failed ? failed.message || "Could not load preparation." : "");
   const [busy, setBusy] = useState(false);
-  async function refresh() {
-    try {
-      const [p, j] = await Promise.all([
-        workspaceRequest(`/${closeId}/preparations`),
-        workspaceRequest(`/${closeId}/jobs`),
-      ]);
-      setPlans(p);
-      setJobs(j);
-    } catch (e) {
-      setMessage(
-        e instanceof Error ? e.message : "Could not load preparation.",
-      );
-    }
-  }
-  useEffect(() => {
-    void refresh();
-  }, [closeId]);
-  const pending = jobs.some((job) => job.state === "queued");
-  useEffect(() => {
-    if (!pending) return;
-    const timer = setInterval(() => {
-      workspaceRequest(`/${closeId}/jobs`)
-        .then(setJobs)
-        .catch((e) => setMessage(e.message));
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [closeId, pending]);
+  const refresh = async () => void (await Promise.all([plansRead.refetch(), jobsRead.refetch()]));
   return (
     <section>
       <h2>Run saved preparation instructions</h2>

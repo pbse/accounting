@@ -1,5 +1,7 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 import { RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
@@ -8,14 +10,12 @@ type Item = { job_id: string; source_name: string; confirmed_kind: string; repla
 
 export function Replay({ closeId }: { closeId: string }) {
   const dates = useDates();
-  const [result, setResult] = useState<{ model: string; reasoning_effort?: string | null; items: Item[]; actor?: string; created_at?: string }>();
+  // The last saved run, read with the page; a run made here replaces it on screen.
+  const saved = useQuery(workspaceQuery<{ run: { model: string; reasoning_effort?: string | null; items: Item[]; actor?: string; created_at?: string } | null }>(`/${closeId}/replay`)).data?.run ?? undefined;
+  const [ran, setResult] = useState<{ model: string; reasoning_effort?: string | null; items: Item[]; actor?: string; created_at?: string }>();
+  const result = ran ?? saved;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => {
-    workspaceRequest(`/${closeId}/replay`)
-      .then((saved: { run: { model: string; reasoning_effort?: string | null; items: Item[]; actor: string; created_at: string } | null }) => saved.run && setResult((current) => current ?? saved.run!))
-      .catch(() => undefined);
-  }, [closeId]);
   async function run() {
     setBusy(true);
     setError("");

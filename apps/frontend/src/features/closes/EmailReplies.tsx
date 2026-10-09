@@ -1,23 +1,22 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 
 type Reply = { id: string; request_id: string; envelope_from: string; header_from: string; body: string; addresses_match: boolean; state: string; received_at: string; decision_note?: string };
 
 export function EmailReplies({ closeId, onReleased }: { closeId: string; onReleased: () => void }) {
   const dates = useDates();
-  const [items, setItems] = useState<Reply[]>([]);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const read = useQuery(workspaceQuery<Reply[]>(`/${closeId}/email-replies`));
+  const items = read.data ?? [];
+  const loaded = read.data !== undefined;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Email replies unavailable." : "");
+  const [acting, setBusy] = useState(false);
+  const busy = acting || read.isFetching;
   const [releasing, setReleasing] = useState<Record<string, boolean>>({});
-  async function load() {
-    setBusy(true); setError("");
-    try { setItems(await workspaceRequest(`/${closeId}/email-replies`)); setLoaded(true); }
-    catch (e) { setError(e instanceof Error ? e.message : "Email replies unavailable."); }
-    finally { setBusy(false); }
-  }
-  useEffect(() => { void load(); }, [closeId]);
+  const load = async () => { setError(""); await read.refetch(); };
   async function decide(id: string, action: "release" | "reject", reason: string, verificationReference: string) {
     setBusy(true); setError("");
     try {

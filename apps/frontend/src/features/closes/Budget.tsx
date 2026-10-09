@@ -1,4 +1,6 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
+import { type FormEvent, useState } from "react";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
@@ -41,20 +43,13 @@ type Report = {
 // Budget against actual for the close month and the fiscal year to date, from an approved baseline the firm imported.
 // readOnly is an executive's view: the comparison alone, without budget versions to import or approve.
 export function Budget({ closeId, readOnly = false }: { closeId: string; readOnly?: boolean }) {
-  const [report, setReport] = useState<Report>();
-  const [error, setError] = useState("");
+  const read = useQuery(workspaceQuery<Report>(`/${closeId}/budget`));
+  const report = read.data;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "The budget comparison is unavailable." : "");
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/budget`)
-      .then((data) => live && (setReport(data), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "The budget comparison is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [closeId, version]);
+
   async function act(body: Record<string, unknown>, done: string) {
     setBusy(true);
     setError("");
@@ -62,7 +57,7 @@ export function Budget({ closeId, readOnly = false }: { closeId: string; readOnl
     try {
       const result = await workspaceRequest(`/${closeId}/budget`, body);
       setSaved(result.problems?.length ? `${done} ${result.problems.length} line(s) still need a ledger account.` : done);
-      setVersion((n) => n + 1);
+      void read.refetch();
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "The budget could not be saved.");

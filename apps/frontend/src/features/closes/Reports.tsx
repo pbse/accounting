@@ -1,5 +1,7 @@
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useState } from "react";
 import { AskAgent } from "../dashboard/AskAgent";
 import { LedgerSelection } from "./Coverage";
 import { amount, workspaceRequest } from "./workspace";
@@ -42,17 +44,12 @@ const statusLabels = { provisional: ["status warn", "Provisional"], signed_off: 
 // The month's management accounts from the close's captured reports. Every figure links to its ledger rows when the
 // capture holds them; a reviewer publishes a signed-off pack as a frozen version.
 export function Reports({ closeId }: { closeId: string }) {
-  const [pack, setPack] = useState<Pack>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/management-pack`)
-      .then((data) => live && setPack(data))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "The management pack is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [closeId]);
+  const queryClient = useQueryClient();
+  const read = useQuery(workspaceQuery<Pack>(`/${closeId}/management-pack`));
+  const pack = read.data;
+  const error = read.error ? read.error.message || "The management pack is unavailable." : "";
+  // An import answers with the pack, which replaces the read one.
+  const setPack = (next: Pack) => queryClient.setQueryData(workspaceKey(`/${closeId}/management-pack`), next);
   if (!pack) return error ? <p role="alert">{error}</p> : <p role="status">Preparing the management pack…</p>;
   if (pack.state === "waiting")
     return (
@@ -296,20 +293,12 @@ const publishedStates = {
 // Publishing freezes this pack with the reviewer's commentary; exports come from the frozen version, never the live figures.
 export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?: Pack; onOpen?: (id: string) => void }) {
   const dates = useDates();
-  const [list, setList] = useState<Published[]>();
-  const [error, setError] = useState("");
+  const read = useQuery(workspaceQuery<{ publications: Published[] }>(`/${closeId}/management-pack/publications`));
+  const list = read.data?.publications;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Publications are unavailable." : "");
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/management-pack/publications`)
-      .then((data) => live && setList(data.publications))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Publications are unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [closeId, version]);
   async function act(body: Record<string, unknown>, done: string) {
     setBusy(true);
     setError("");
@@ -317,7 +306,7 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
     try {
       await workspaceRequest(`/${closeId}/management-pack/publications`, body);
       setSaved(done);
-      setVersion((n) => n + 1);
+      void read.refetch();
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "The pack could not be published.");

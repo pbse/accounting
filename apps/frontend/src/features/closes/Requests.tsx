@@ -1,5 +1,7 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
 type Draft = {
@@ -19,23 +21,30 @@ export function Requests({
   papers: { id: string; kind: string; review_state: string }[];
 }) {
   const dates = useDates();
-  const [history, setHistory] = useState<Draft[]>([]);
-  const [selected, setSelected] = useState<string[]>([]);
+  // The saved revisions, newest first, read with the page; the editor shows the newest (keyed by it), and the selection
+  // starts from it each time a new revision arrives.
+  const read = useQuery(workspaceQuery<Draft[]>(`/${closeId}/requests`));
+  const history = read.data ?? [];
+  const loaded = read.data !== undefined;
+  const latest = history[0];
+  const [selected, setSelected] = useState<string[]>(latest?.workpaper_ids ?? []);
+  // The selection starts again for each close and each new revision.
+  const revision = `${closeId}:${latest?.id ?? ""}`;
+  const [selectedFor, setSelectedFor] = useState(revision);
+  if (revision !== selectedFor) {
+    setSelectedFor(revision);
+    setSelected(latest?.workpaper_ids ?? []);
+  }
   const editor = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [message, setMessage] = useState("");
-  const latest = history[0];
-  async function load() {
-    const drafts: Draft[] = await workspaceRequest(`/${closeId}/requests`);
-    setHistory(drafts);
-    if (editor.current) editor.current.value = drafts[0]?.body ?? "";
-    setSelected(drafts[0]?.workpaper_ids ?? []);
-    setLoaded(true);
-  }
-  useEffect(() => {
-    void load().catch((e) => setMessage(e.message));
-  }, [closeId]);
+  const [actionMessage, setMessage] = useState("");
+  const message = actionMessage || (read.error ? read.error.message : "");
+  // Reloading puts the saved wording back in the editor, even when no newer revision came (the editor is keyed by one).
+  const load = async () => {
+    const answer = await read.refetch();
+    if (answer.error) throw answer.error;
+    if (editor.current) editor.current.value = answer.data?.[0]?.body ?? "";
+  };
   async function save(generate: boolean, body?: string) {
     setBusy(true);
     setMessage("");

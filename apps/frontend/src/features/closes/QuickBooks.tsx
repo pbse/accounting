@@ -1,5 +1,8 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
+import { useBrowserHash } from "../../data/browser";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 
@@ -51,19 +54,28 @@ export function QuickBooks({
   entity: string;
 }) {
   const dates = useDates();
-  const [status, setStatus] = useState<Status>();
-  const [syncs, setSyncs] = useState<TransactionSync[]>([]);
+  // The connection and its transaction captures, read with the page; the captures are read again every five seconds
+  // while one is queued or running.
+  const connectionRead = useQuery(workspaceQuery<Status>(`/${closeId}/quickbooks`));
+  const syncsRead = useQuery({
+    ...workspaceQuery<TransactionSync[]>(`/${closeId}/quickbooks/entities`),
+    refetchInterval: (query) => ((query.state.data ?? []).some((s) => s.state === "queued" || s.state === "running") ? 5000 : false),
+  });
+  const status = connectionRead.data;
+  const syncs = syncsRead.data ?? [];
   const [transactions, setTransactions] = useState<TransactionRow[]>([]);
   const [transactionKind, setTransactionKind] = useState("");
   const [transactionOffset, setTransactionOffset] = useState(0);
   const [transactionMore, setTransactionMore] = useState(false);
   const [transactionsLoaded, setTransactionsLoaded] = useState(false);
-  const [error, setError] = useState("");
+  const [actionError, setError] = useState("");
+  const readFailed = connectionRead.error ?? syncsRead.error;
+  const error = actionError || (readFailed ? readFailed.message || "Connection unavailable." : "");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const [callback] = useState(
-    () => new URLSearchParams(window.location.hash.slice(1)),
-  );
+  const hash = useBrowserHash();
+  // The provider's answer, once the page has hydrated (see useBrowserHash).
+  const callback = useMemo(() => new URLSearchParams(hash.slice(1)), [hash]);
   useEffect(() => {
     if (callback.has("qbo_code"))
       window.history.replaceState(
@@ -72,21 +84,11 @@ export function QuickBooks({
         window.location.pathname + window.location.search,
       );
   }, [callback]);
-  async function load() {
-    try {
-      const [connection, transactions] = await Promise.all([
-        workspaceRequest(`/${closeId}/quickbooks`),
-        workspaceRequest(`/${closeId}/quickbooks/entities`),
-      ]);
-      setStatus(connection);
-      setSyncs(transactions);
-      setError("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Connection unavailable.");
-    }
-  }
+  const load = async () => {
+    setError("");
+    await Promise.all([connectionRead.refetch(), syncsRead.refetch()]);
+  };
   useEffect(() => {
-    void load();
     setTransactions([]);
     setTransactionOffset(0);
     setTransactionsLoaded(false);
@@ -97,11 +99,6 @@ export function QuickBooks({
     setTransactionOffset(0);
     setTransactionsLoaded(false);
   }, [latestCaptureId]);
-  useEffect(() => {
-    if (!syncs.some((s) => s.state === "queued" || s.state === "running")) return;
-    const timer = window.setInterval(() => void load(), 5000);
-    return () => window.clearInterval(timer);
-  }, [closeId, syncs]);
   async function captureTransactions() {
     setBusy(true);
     setError("");
@@ -189,7 +186,7 @@ export function QuickBooks({
   const production = c ? c.environment === "production" : !!status?.production_configured;
   const company = production ? "production company" : "sandbox company";
   return (
-    <details id="quickbooks-ledger" open={(callback.has("qbo_code") && callback.get("qbo_env") !== "production") || location.hash === "#quickbooks-ledger"}>
+    <details id="quickbooks-ledger" open={(callback.has("qbo_code") && callback.get("qbo_env") !== "production") || hash === "#quickbooks-ledger"}>
       <summary>QuickBooks ledger evidence</summary>
       <p>
         Reads {entity}'s QuickBooks {company}. This reader cannot post

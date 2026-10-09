@@ -80,6 +80,11 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   const reads: Partial<Record<CloseTab, string[]>> = {
     overview: [`/${id}/goal?verify=1`, `/${id}/brief`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")],
     books: [`/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/coverage`, `/${id}/aging`, `/${id}/open-items`],
+    evidence: [`/${id}/evidence?checks=1`, `/${id}/preparations`, `/${id}/jobs`, `/${id}/quickbooks`, `/${id}/quickbooks/entities`, `/${id}/xero`, `/${id}/stripe`],
+    requests: [`/${id}/requests`, `/${id}/email-replies`],
+    reports: [`/${id}/management-pack`, `/${id}/management-pack/publications`, `/${id}/budget`],
+    signoff: [`/${id}/takeover-setup`, `/${id}/opening-baseline`, `/${id}/readiness`, `/${id}/effort`],
+    settings: [`/${id}/memory`, `/${id}/replay`],
   };
   await prefetch(context, `/${encodeURIComponent(id)}`, ...(reads[tab] ?? []));
   return null;

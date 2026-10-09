@@ -1,5 +1,7 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 
@@ -12,22 +14,18 @@ type Memory = { entity: string; aliases: Alias[]; standing_approvals: Grant[]; a
 // What the system remembers about this client and who decided it; each can be retired or revoked here.
 export function Memory({ closeId }: { closeId: string }) {
   const day = useDates().date;
-  const [memory, setMemory] = useState<Memory>();
+  const read = useQuery(workspaceQuery<Memory>(`/${closeId}/memory`));
+  const memory = read.data;
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    workspaceRequest(`/${closeId}/memory`)
-      .then(setMemory)
-      .catch((e) => setError(e instanceof Error ? e.message : "Client memory is unavailable."));
-  }, [closeId, version]);
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Client memory is unavailable." : "");
   async function act(path: string, body: unknown) {
     setBusy(true);
     setError("");
     try {
       await workspaceRequest(path, body);
-      setVersion((v) => v + 1);
+      void read.refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The change could not be saved.");
     } finally {

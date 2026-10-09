@@ -1,3 +1,5 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router";
@@ -31,20 +33,12 @@ export function TakeoverSetup({ closeId }: { closeId: string }) {
     }
   }, []);
   const dates = useDates();
-  const [view, setView] = useState<View>();
-  const [error, setError] = useState("");
+  const read = useQuery(workspaceQuery<View>(`/${closeId}/takeover-setup`));
+  const view = read.data;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "The takeover setup is unavailable." : "");
   const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState(0);
   const [editing, setEditing] = useState(false);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/takeover-setup`)
-      .then((data) => live && (setView(data), setError("")))
-      .catch((e) => live && (setView(undefined), setError(e instanceof Error ? e.message : "The takeover setup is unavailable.")));
-    return () => {
-      live = false;
-    };
-  }, [closeId, version]);
   if (!view) return error ? <p role="alert">{error}</p> : null;
   if (!view.takeover || !view.content) return null;
   const { content } = view;
@@ -56,7 +50,7 @@ export function TakeoverSetup({ closeId }: { closeId: string }) {
     setError("");
     try {
       await workspaceRequest(`/${closeId}/takeover-setup`, { digest: view.digest, timezone: String(form.get("timezone") ?? "").trim(), confirmed: form.has("confirmed") });
-      setVersion((n) => n + 1);
+      void read.refetch();
       setEditing(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "That could not be saved.");

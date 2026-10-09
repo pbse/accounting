@@ -1,5 +1,7 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
@@ -19,20 +21,13 @@ type View = { takeover: boolean; refusal?: string; digest?: string; items?: Item
 // becomes inherited cleanup that later months wait for until it is resolved with a reference.
 export function OpeningBaseline({ closeId }: { closeId: string }) {
   const dates = useDates();
-  const [view, setView] = useState<View>();
-  const [error, setError] = useState("");
+  const read = useQuery(workspaceQuery<View>(`/${closeId}/opening-baseline`));
+  const view = read.data;
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "The opening baseline is unavailable." : "");
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(`/${closeId}/opening-baseline`)
-      .then((data) => live && (setView(data), setError("")))
-      .catch((e) => live && (setView(undefined), setError(e instanceof Error ? e.message : "The opening baseline is unavailable.")));
-    return () => {
-      live = false;
-    };
-  }, [closeId, version]);
+
   async function send(path: string, body: Record<string, unknown>, done: string) {
     setBusy(true);
     setError("");
@@ -40,7 +35,7 @@ export function OpeningBaseline({ closeId }: { closeId: string }) {
     try {
       await workspaceRequest(`/${closeId}/opening-baseline${path}`, body);
       setSaved(done);
-      setVersion((n) => n + 1);
+      void read.refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "That could not be saved.");
     } finally {
