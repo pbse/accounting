@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { monthShort } from "../../data/time";
+import { effortPath, workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
@@ -7,7 +9,6 @@ import { DotChart } from "@close/ui/components/DotChart";
 import { HexMap } from "@close/ui/components/HexMap";
 import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { minutes } from "./Effort";
-import { workspaceRequest } from "./workspace";
 
 type Row = {
   close_id: string;
@@ -37,23 +38,14 @@ type Report = {
   firm_assistance_minutes?: number;
 };
 
-const monthLabel = (period: string) => new Date(`${period}-01T00:00:00`).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+const monthLabel = monthShort;
 
 export default function Measure() {
   const [params, setParams] = useSearchParams();
-  const [report, setReport] = useState<Report>();
-  const [error, setError] = useState("");
   const period = params.get("period") ?? "";
-  useEffect(() => {
-    let live = true;
-    setError("");
-    workspaceRequest(`/effort${period ? `?period=${period}` : ""}`)
-      .then((data) => live && setReport(data))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Effort is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [period]);
+  const read = useQuery(workspaceQuery<Report>(effortPath(period)));
+  const report = read.data;
+  const error = read.error ? read.error.message || "Effort is unavailable." : "";
   return (
     <>
       <PageHeader
@@ -164,7 +156,7 @@ type TrackRow = {
 const share = (part: number, whole: number) => (whole === 0 ? "—" : `${part} of ${whole} (${Math.round((100 * part) / whole)}%)`);
 
 function TrackRecord() {
-  const [data, setData] = useState<{
+  const read = useQuery(workspaceQuery<{
     window_from: string;
     clients: TrackRow[];
     unlinked_human_drafts: number;
@@ -172,17 +164,9 @@ function TrackRecord() {
     window_to: string;
     coverage: Record<"straight_through" | "person_confirmed" | "carried" | "other_agent" | "people" | "straight_judged" | "straight_approved" | "straight_revised" | "straight_sent_back" | "straight_refreshed" | "failed_jobs" | "unsupported_intakes", number>;
     assistant?: { asked: number; kept: number; median_seconds: number | null };
-  }>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/track-record")
-      .then((result) => live && setData(result))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "The track record is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, []);
+  }>("/track-record"));
+  const data = read.data;
+  const error = read.error ? read.error.message || "The track record is unavailable." : "";
   if (!data) return error ? <p role="alert">{error}</p> : null;
   // How people treated the agent's work across the listed clients (every client unless the list stops at 200): each
   // whole splits into two parts that never overlap.

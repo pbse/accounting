@@ -56,3 +56,18 @@ export function prefetchLater(context: Readonly<RouterContextProvider>, ...paths
   const { queryClient, read } = context.get(appData);
   for (const path of paths) void queryClient.prefetchQuery(workspaceQuery(path, read));
 }
+
+// The Preparation page's views (features/closes/Work.tsx); its loader opens the one a link names, or Active.
+export const workViews: [string, string][] = [
+  ["active", "Active"],
+  ["mine", "Mine"],
+  ["needs_confirmation", "Decisions"],
+  ["blocked", "Blockers"],
+  ["running", "Running"],
+  ["waiting_client", "Client requests"],
+  ["completed", "Prepared"],
+  ["all", "All"],
+];
+
+// effortPath is Measure's effort read for a month, or the latest months.
+export const effortPath = (period: string) => `/effort${period ? `?period=${period}` : ""}`;

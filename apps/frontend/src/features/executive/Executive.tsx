@@ -1,3 +1,6 @@
+import { useDates } from "../../data/time";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
@@ -35,18 +38,12 @@ const pages: Record<ExecutiveView, [string, IconName, string]> = {
 // A client's executive: published results, the cash plan and their own acknowledgments, for the clients they are given.
 export default function Executive({ view }: { view: ExecutiveView }) {
   const [params, setParams] = useSearchParams();
-  const [data, setData] = useState<Overview>();
-  const [error, setError] = useState("");
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/executive")
-      .then((value) => live && (setData(value), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Your reports are unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [version]);
+  // The layout's loader reads this with every workspace page.
+  const read = useQuery(workspaceQuery<Overview>("/executive"));
+  const data = read.data;
+  const dates = useDates();
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Your reports are unavailable." : "");
   const [title, icon, description] = pages[view];
   const header = (
     <PageHeader icon={icon} title={title}>
@@ -80,7 +77,8 @@ export default function Executive({ view }: { view: ExecutiveView }) {
   async function acknowledge(p: Published) {
     try {
       await workspaceRequest(`/${p.close_id}/management-pack/publications`, { action: "acknowledge", publication_id: p.publication_id });
-      setVersion((n) => n + 1);
+      setError("");
+      void read.refetch();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The acknowledgment could not be recorded.");
     }
@@ -102,7 +100,7 @@ export default function Executive({ view }: { view: ExecutiveView }) {
                     {p.entity} · {p.period}
                   </strong>
                 </Link>{" "}
-                · version {p.version}, published {new Date(p.published_at).toLocaleDateString()} · net income {show(p, p.net_income)} · book cash {show(p, p.book_cash)} · working
+                · version {p.version}, published {dates.date(p.published_at)} · net income {show(p, p.net_income)} · book cash {show(p, p.book_cash)} · working
                 capital {show(p, p.working_capital)} ·{" "}
                 {p.acknowledged ? <span className="status ok">Acknowledged</span> : <span className="status warn">Waiting for your acknowledgment</span>}
               </li>
