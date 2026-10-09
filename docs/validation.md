@@ -3941,6 +3941,7 @@ Request: an invitation arrived from `welcome@workos-mail.com`, under the WorkOS 
   - **The Join button.** `/v1/auth/login?invitation=<token>` checks the token with WorkOS and against the firm's open invitation. It then goes straight to Google with the invited address suggested. The callback sends `invitation_token` with the code, so WorkOS accepts the invitation as it signs the person in. A token that can't be used lands on `/login?error=invitation`.
   - **Visible delivery.** The firm's invitation list and the staff person view show each invitation's email state, with "revoke it and invite again" when it did not go. Sending answers "Invitation created. Krith is emailing it…", not "sent". A firm reads only its own invitation emails (policy `firm_invitations`).
   - **One at a time.** A newer email for the same invitation replaces one still waiting.
+  - **Either session mode.** The Join link is chosen when the email is queued: Krith's sign-in with the invitation token under server sessions, WorkOS's acceptance page under browser sessions. A send WorkOS shows already accepted when it is settled gets no email.
   - **Wording.** The firm's invitation panel, the staff console and the privacy notice (dated 8 October 2026) now say Krith sends invitations. The email is signed "Krith · The work, prepared.", at the user's request.
 - **Tested.** On a fresh local PostgreSQL with every migration applied:
   - `TestInvitationEmailsSay` (new);

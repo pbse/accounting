@@ -72,7 +72,12 @@ func TestInvitationEmailsSay(t *testing.T) {
 	if e, err = platformEmail("invitation", "nia@acme.test", "Acme", "", "Krith <hello@mail.krith.test>", "https://app.example.test", invite); err != nil || e.Subject != "You’re invited to join Acme on Krith" {
 		t.Fatalf("without the inviter's name it still invites: %q %v", e.Subject, err)
 	}
-	for _, bad := range []invitation{{Role: "Member", Expires: until}, {Role: "Member", Link: "https://elsewhere.test/v1/auth/login?invitation=x", Expires: until}, {Role: "Member", Link: invite.Link}, {Link: invite.Link, Expires: until}} {
+	// WorkOS's own acceptance page, with browser sessions, is a Join link too.
+	invite.Link = "https://auth.example.test/invite?token=tok_1"
+	if e, err = platformEmail("invitation", "nia@acme.test", "Acme", "", "Krith <hello@mail.krith.test>", "https://app.example.test", invite); err != nil || !strings.Contains(e.Text, "Join Acme: https://auth.example.test/invite?token=tok_1") {
+		t.Fatalf("WorkOS's acceptance page is the Join link with browser sessions: %v %s", err, e.Text)
+	}
+	for _, bad := range []invitation{{Role: "Member", Expires: until}, {Role: "Member", Link: "javascript:alert(1)", Expires: until}, {Role: "Member", Link: invite.Link}, {Link: invite.Link, Expires: until}} {
 		if _, err := platformEmail("invitation", "nia@acme.test", "Acme", "", "Krith <hello@mail.krith.test>", "https://app.example.test", bad); err == nil {
 			t.Fatalf("an invitation needs its link to Krith, its role and its expiry: %+v", bad)
 		}
@@ -290,7 +295,7 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 			org, who+"@"+domain, "invitation_"+who+suffix, state).Scan(&invitation); err != nil {
 			t.Fatal(err)
 		}
-		sealed, err := secrets.Seal("platform-email:invitation", []byte("tok_"+who))
+		sealed, err := secrets.Seal("platform-email:invitation-link", []byte("https://app.example.test/v1/auth/login?invitation=tok_"+who))
 		if err != nil {
 			t.Fatal(err)
 		}

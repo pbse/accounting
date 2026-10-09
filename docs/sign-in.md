@@ -102,11 +102,15 @@ The email:
 
 How it works:
 - **Queued with the invitation.** When WorkOS confirms the invitation, the app opens it and queues the email (`platform_emails`, kind `invitation`, migration 137) in one transaction. A send WorkOS confirmed but the app did not record is settled from WorkOS's list later, and its email is queued then. A staff resend renews the invitation in WorkOS and queues the email again.
-- **The token.** The Join link carries WorkOS's invitation token. The token is sealed with `SECRETS_KEY` while the email waits, and cleared once the email is done.
+- **The Join link** is chosen when the email is queued:
+  - with server sessions (production), it signs the person in with Google and the invitation token (below);
+  - with WorkOS's browser session, whose sign-in the API doesn't run, it is WorkOS's own acceptance page (`accept_invitation_url`).
+
+  Either way it is sealed with `SECRETS_KEY` while the email waits, and cleared once the email is done. A send WorkOS shows already accepted when it is settled is recorded with no email, since its link could not work.
 - **One at a time.** A newer email for the same invitation replaces one still waiting: cancelled if never tried, unknown if an attempt went unanswered. One being sent at that moment is left to finish.
 - **Seen by the firm.** The firm's invitation list says whether each open invitation's email is on its way, sent, or not sent (revoke and invite again). The staff console's person view shows the same. A firm reads only its own invitation emails (policy `firm_invitations`). Sending an invitation answers "Invitation created. Krith is emailing it to … now", not "sent".
 - **Only while open.** The worker sends the email only while the invitation is still open and the firm enabled; otherwise it is cancelled. Retries, unknown outcomes, the `platform.unknown_email` alert, expiry and deletion work as for [welcome emails](#welcome-emails).
-- **The Join button** opens `/v1/auth/login?invitation=<token>`:
+- **The Join button**, with server sessions, opens `/v1/auth/login?invitation=<token>`:
   1. The API looks the token up in WorkOS. It goes on only if the firm still holds that invitation open, enabled, for the address WorkOS has. Otherwise the person lands on `/login?error=invitation`, or `unavailable` when WorkOS can't be reached.
   2. The person goes straight to Google, with the invited address suggested (`login_hint`). The token waits in the sign-in cookie.
   3. The callback sends the token with the code (`invitation_token`). WorkOS accepts the invitation as it signs the person in and gives them its role in the firm.
@@ -180,7 +184,7 @@ The welcome emails have their own tests in `internal/delivery`:
 - `TestPlatformEmailsAreSentOnceWithKrithsKey` runs against a fake Resend. It checks that emails go out with Krith's key and each row's own idempotency key. An uncertain attempt is retried under the same key, including a success without Resend's message ID, and is recorded as unknown after three tries. A refusal is final, but unknown when it answers a retry. An abandoned last attempt, or one unconfirmed after a day, is unknown. `TestUnknownPlatformEmailsAlertUntilSettled` checks the alert: it names the key, not the address, and resolves once the email is settled. An email for someone removed before it went out, or for a suspended firm, is cancelled unsent, or stays unknown if an attempt went unanswered. An email older than a day expires unsent, and a row finished over 30 days ago is deleted. An open invitation's email goes with its link and sender's name, and its sealed token is gone once it is done. A revoked invitation's email is cancelled unsent.
 
 Invitations are tested in `internal/transport`:
-- `TestEmailInvitationsEnrollOnlyAcceptedInvitees`: a sent invitation queues Krith's email with the inviter's name and sealed token, and the list shows it waiting. A newer email replaces one still waiting. A send settled later from WorkOS's list queues one too. One revoked while it was being sent queues none.
+- `TestEmailInvitationsEnrollOnlyAcceptedInvitees`: a sent invitation queues Krith's email with the inviter's name and sealed token, and the list shows it waiting. A newer email replaces one still waiting. A send settled later from WorkOS's list queues one too; one WorkOS shows already accepted is settled with none. One revoked while it was being sent queues none. `TestInvitationLinksFollowTheSessionMode` checks the Join link for each session mode.
 - `TestServerSessionKeepsWorkOSTokensOnTheServer`:
   - the Join button goes to Google with the invited address suggested;
   - the callback sends the token with the code, and WorkOS turning it down lands on `invitation`;

@@ -62,7 +62,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		code, body := 200, `{}`
 		// Each resend moves WorkOS's expiry an hour on, so its copy tells one resend from the next.
 		copyOf := func() string {
-			return `{"id":"` + workosID + `","state":"pending","token":"tok_resent","expires_at":"` + time.Now().Add(7*24*time.Hour+time.Duration(resent)*time.Hour).UTC().Format(time.RFC3339) + `"}`
+			return `{"id":"` + workosID + `","state":"pending","token":"tok_resent","accept_invitation_url":"https://auth.example.test/invite/tok_resent","expires_at":"` + time.Now().Add(7*24*time.Hour+time.Duration(resent)*time.Hour).UTC().Format(time.RFC3339) + `"}`
 		}
 		switch p := r.URL.Path; {
 		case workosDown:
@@ -216,8 +216,8 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		if err := db.QueryRow(`SELECT string_agg(state,',' ORDER BY id),(array_agg(recipient ORDER BY id DESC))[1],(array_agg(link ORDER BY id DESC))[1] FROM platform_emails WHERE invitation=$1::bigint AND kind='invitation'`, invitation).Scan(&states, &to, &sealed); err != nil {
 			t.Fatal(err)
 		}
-		if opened, err := secrets.Open("platform-email:invitation", sealed); err != nil || string(opened) != "tok_resent" || to != email {
-			t.Fatalf("a resend's email goes to the invitee with the invitation's token: %q %q %v", to, opened, err)
+		if opened, err := secrets.Open("platform-email:invitation-link", sealed); err != nil || string(opened) != "https://auth.example.test/invite/tok_resent" || to != email {
+			t.Fatalf("a resend's email goes to the invitee with the invitation's Join link: %q %q %v", to, opened, err)
 		}
 		return states
 	}

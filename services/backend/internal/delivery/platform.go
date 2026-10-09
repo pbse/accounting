@@ -136,9 +136,9 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	state, providerID, message := "sent", "", ""
 	invite.Expires = expires.Time
 	if kind == "invitation" {
-		var token []byte
-		if token, err = secrets.Open("platform-email:invitation", link); err == nil {
-			invite.Link = app + "/v1/auth/login?" + url.Values{"invitation": {string(token)}}.Encode()
+		var opened []byte
+		if opened, err = secrets.Open("platform-email:invitation-link", link); err == nil {
+			invite.Link = string(opened)
 		}
 	}
 	var email Email
@@ -170,8 +170,8 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	return true, err
 }
 
-// invitation is what an invitation email says beyond the firm: who sent it, the role it gives, until when, and the link
-// that signs the person in with it.
+// invitation is what an invitation email says beyond the firm: who sent it, the role it gives, until when, and the Join
+// link the API chose for it: Krith's own sign-in with the invitation, or WorkOS's acceptance page.
 type invitation struct {
 	Inviter, Role, Link string
 	Expires             time.Time
@@ -213,7 +213,7 @@ func platformEmail(kind, recipient, firm, domain, from, app string, invite invit
 			"You can’t open any clients yet. Your firm’s administrator decides what you can open, and it appears in your workspace once they do.\n\n" +
 			"Open Krith: " + app + "/dashboard\n\n"
 	case "invitation":
-		return invitationEmail(recipient, firm, from, app, invite)
+		return invitationEmail(recipient, firm, from, invite)
 	default:
 		return Email{}, fmt.Errorf("Unknown platform email %q.", kind)
 	}
@@ -223,9 +223,9 @@ func platformEmail(kind, recipient, firm, domain, from, app string, invite invit
 
 // invitationEmail asks the person to join the firm, says what Krith does for them, and gives one button: it signs them
 // in with Google and accepts the invitation in the same step.
-func invitationEmail(recipient, firm, from, app string, invite invitation) (Email, error) {
+func invitationEmail(recipient, firm, from string, invite invitation) (Email, error) {
 	inviter, role := oneLine(invite.Inviter, 120), oneLine(invite.Role, 80)
-	if !strings.HasPrefix(invite.Link, app+"/") || invite.Expires.IsZero() || role == "" {
+	if link, err := url.Parse(invite.Link); err != nil || (link.Scheme != "https" && link.Scheme != "http") || link.Host == "" || invite.Expires.IsZero() || role == "" {
 		return Email{}, fmt.Errorf("The invitation's link, role or expiry is missing.")
 	}
 	// The HTML's heading names the firm, so its first line says only who invited them and as what.

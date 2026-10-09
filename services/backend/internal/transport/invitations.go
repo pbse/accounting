@@ -35,8 +35,24 @@ type workosInvitation struct {
 	RoleSlug       string    `json:"role_slug"`
 	ExpiresAt      time.Time `json:"expires_at"`
 	CreatedAt      time.Time `json:"created_at"`
-	// Token is what accepts the invitation; Krith's invitation email carries it (docs/sign-in.md#invitations).
-	Token string `json:"token"`
+	// Token is what accepts the invitation, and AcceptURL WorkOS's own page that does; Krith's invitation email carries
+	// one of them (docs/sign-in.md#invitations).
+	Token     string `json:"token"`
+	AcceptURL string `json:"accept_invitation_url"`
+}
+
+// invitationLink is the Join link of Krith's invitation email. With server sessions it signs the person in with Google
+// and accepts the invitation in one step (/v1/auth/login?invitation=); with WorkOS's browser session, whose sign-in
+// the API does not run, it is WorkOS's own acceptance page. Empty when WorkOS gave neither.
+func invitationLink(inv workosInvitation) string {
+	if os.Getenv("AUTH_SESSION") != "server" {
+		return inv.AcceptURL
+	}
+	app := strings.TrimRight(os.Getenv("PUBLIC_APP_URL"), "/")
+	if inv.Token == "" || app == "" {
+		return ""
+	}
+	return app + "/v1/auth/login?" + url.Values{"invitation": {inv.Token}}.Encode()
 }
 
 // platformContext is ctx with no firm: Krith's own emails (platform_emails) are written only outside any one firm.
@@ -44,15 +60,16 @@ func platformContext(ctx context.Context) context.Context {
 	return context.WithValue(auth.WithActor(ctx, nil), systemKey{}, true)
 }
 
-// queueInvitationEmail queues Krith's email for an open invitation (docs/sign-in.md#invitations). Its link carries
-// WorkOS's invitation token, sealed while the email waits; the worker sends it only while the invitation is open. It
-// replaces one for the same invitation still waiting, so a resend is one email: one never tried is cancelled, and one
-// retried after an unanswered attempt is unknown, since it may have gone. One the worker is sending now is left to it.
-func queueInvitationEmail(ctx context.Context, q execer, org, invitation, email, token, inviter string) error {
-	if token == "" {
-		return errors.New("WorkOS gave no invitation token")
+// queueInvitationEmail queues Krith's email for an open invitation (docs/sign-in.md#invitations). Its Join link
+// (invitationLink) carries what accepts the invitation, so it is sealed while the email waits; the worker sends it only
+// while the invitation is open. It replaces one for the same invitation still waiting, so a resend is one email: one
+// never tried is cancelled, and one retried after an unanswered attempt is unknown, since it may have gone. One the
+// worker is sending now is left to it.
+func queueInvitationEmail(ctx context.Context, q execer, org, invitation, email, link, inviter string) error {
+	if link == "" {
+		return errors.New("WorkOS gave no way to accept the invitation")
 	}
-	sealed, err := secrets.Seal("platform-email:invitation", []byte(token))
+	sealed, err := secrets.Seal("platform-email:invitation-link", []byte(link))
 	if err != nil {
 		return err
 	}
@@ -307,8 +324,9 @@ func settleInvitations(ctx context.Context, db *sql.DB, org string) error {
 			}
 			continue
 		}
-		// The send is settled, and Krith's email for it queued, together; without the token, it waits for the next list.
-		if m.Token == "" && (workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(m.ID), nil, &m) != nil || m.Token == "") {
+		// The send is settled, and Krith's email for it queued, together; without its link, it waits for the next list.
+		// One the person has already accepted needs no email.
+		if m.State == "pending" && invitationLink(m) == "" && (workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(m.ID), nil, &m) != nil || invitationLink(m) == "") {
 			continue
 		}
 		if err = settleInvitation(ctx, db, org, u.id, u.email, m, inviterName(ctx, u.inviter)); err != nil {
@@ -318,7 +336,8 @@ func settleInvitations(ctx context.Context, db *sql.DB, org string) error {
 	return nil
 }
 
-// settleInvitation opens a send WorkOS completed but the app did not record, and queues Krith's email for it.
+// settleInvitation records a send WorkOS completed but the app did not, and queues Krith's email for it while it is
+// still pending in WorkOS; one the person already accepted is recorded only, and enrolls them as any accepted one does.
 func settleInvitation(ctx context.Context, db *sql.DB, org, id, email string, m workosInvitation, inviter string) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -332,8 +351,10 @@ func settleInvitation(ctx context.Context, db *sql.DB, org, id, email string, m 
 	if n, err := result.RowsAffected(); err != nil || n == 0 {
 		return err
 	}
-	if err = queueInvitationEmail(ctx, tx, org, id, email, m.Token, inviter); err != nil {
-		return err
+	if m.State == "pending" {
+		if err = queueInvitationEmail(ctx, tx, org, id, email, invitationLink(m), inviter); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -477,7 +498,7 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 				n, err = result.RowsAffected()
 			}
 			if err == nil && n == 1 {
-				if err = queueInvitationEmail(r.Context(), opened, org, id, email, sent.Token, inviter); err == nil {
+				if err = queueInvitationEmail(r.Context(), opened, org, id, email, invitationLink(sent), inviter); err == nil {
 					err = opened.Commit()
 				}
 			}

@@ -414,11 +414,11 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				}
 			}
 			sent = true
-			if current.Token == "" {
-				current.Token = before.Token
+			if current.Token == "" && current.AcceptURL == "" {
+				current.Token, current.AcceptURL = before.Token, before.AcceptURL
 			}
 			// WorkOS sends no invitation email of its own (docs/sign-in.md#invitations): Krith's goes with the renewal.
-			if err = queueInvitationEmail(ctx, tx, firm, invitation, email, current.Token, inviterName(ctx, invitedBy)); err != nil {
+			if err = queueInvitationEmail(ctx, tx, firm, invitation, email, invitationLink(current), inviterName(ctx, invitedBy)); err != nil {
 				return fmt.Errorf("WorkOS renewed it, but its email was not queued: %w", err)
 			}
 			if expires = current.ExpiresAt; expires.IsZero() {
