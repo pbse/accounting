@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 import { RowList } from "@close/ui/components/RowList";
 
@@ -9,29 +11,21 @@ const describe = (scope?: string | null) => (scope ? (scope === "prepare" ? "Rea
 
 // Members ask from their own session; firm administrators approve, narrow, decline or revoke.
 export function AgentAccess() {
-  const [access, setAccess] = useState<Access>();
-  const [local, setLocal] = useState("");
+  const read = useQuery(workspaceQuery<Access>("/agent-access"));
+  const access = read.data;
+  const local = read.error ? read.error.message || "Agent access is unavailable." : "";
   const [form, setForm] = useState({ scope: "read", reason: "" });
   const [decision, setDecision] = useState<Record<number, { scope: string; reason: string }>>({});
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [refresh, setRefresh] = useState(0);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/agent-access")
-      .then((data) => live && setAccess(data))
-      .catch((e) => live && setLocal(e instanceof Error ? e.message : "Agent access is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [refresh]);
+
   async function send(body: Record<string, unknown>) {
     setBusy(true);
     setMessage("");
     try {
       await workspaceRequest("/agent-access", { ...body, confirmed: true });
       setForm({ scope: "read", reason: "" });
-      setRefresh((n) => n + 1);
+      void read.refetch();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Agent access change failed.");
     } finally {

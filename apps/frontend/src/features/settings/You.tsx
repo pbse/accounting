@@ -1,3 +1,5 @@
+import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { authKitClientId, useSession } from "../auth/Auth";
@@ -11,19 +13,16 @@ type Profile = { email?: string; first_name?: string; last_name?: string; name_e
 type Drive = { configured: boolean; connected?: boolean; reason?: string };
 
 // One read of a settings route, kept until it is replaced; each provider-backed part loads on its own.
+// useRead is a settings section's read: a query, so the section renders with the page when its loader read it.
+// setValue records what a save returned, without reading again.
 export function useRead<T>(path: string, unavailable: string) {
-  const [value, setValue] = useState<T>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let live = true;
-    workspaceRequest(path)
-      .then((data) => live && setValue(data))
-      .catch((e) => live && setError(e instanceof Error ? e.message : unavailable));
-    return () => {
-      live = false;
-    };
-  }, [path, unavailable]);
-  return { value, setValue, error };
+  const queryClient = useQueryClient();
+  const read = useQuery(workspaceQuery<T>(path));
+  return {
+    value: read.data,
+    setValue: (value: T) => queryClient.setQueryData(workspaceKey(path), value),
+    error: read.error ? read.error.message || unavailable : "",
+  };
 }
 
 const deviceZone = () => {
