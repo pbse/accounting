@@ -53,7 +53,7 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	must(err)
 	must(raw.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
 	defer func() {
-		for _, q := range []string{`DELETE FROM auth_sessions WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM auth_sessions WHERE organization_id=$1`, `DELETE FROM member_invitations WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			raw.Exec(q, org)
 		}
 	}()
@@ -71,6 +71,9 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	// WorkOS: its signing keys, and the token exchange, answered by respond.
 	var calls []map[string]string
 	respond := func(map[string]string) (int, any) { return 500, nil }
+	// WorkOS's invitations by token, for an invitation's Join button.
+	invitations := map[string]any{}
+	invitationsDown := false
 	reply := func(status int, v any) *http.Response {
 		body, _ := json.Marshal(v)
 		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}
@@ -86,6 +89,15 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(&body)
 			calls = append(calls, body)
 			return reply(respond(body)), nil
+		}
+		if token, ok := strings.CutPrefix(r.URL.String(), "https://api.workos.com/user_management/invitations/by_token/"); ok {
+			if invitationsDown {
+				return reply(503, nil), nil
+			}
+			if found, ok := invitations[token]; ok {
+				return reply(200, found), nil
+			}
+			return reply(404, map[string]string{"code": "entity_not_found"}), nil
 		}
 		t.Fatalf("unexpected provider call %s", r.URL)
 		return nil, nil
@@ -211,6 +223,46 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		t.Fatalf("a refused staff code goes back to the console: %d %q calls=%d", w.Code, w.Header().Get("Location"), len(calls))
 	}
 	calls = nil
+
+	// An invitation's Join button signs in with Google as the invited address, and the sign-in accepts the invitation:
+	// its token goes with the code to WorkOS. Only an invitation the firm still holds open, at WorkOS's address, is used.
+	_, err = raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES
+ ($1,'inv@firm.test','member','Member','invitation_open','pending','user_a','Joining the close team',now()+interval '7 days'),
+ ($1,'gone@firm.test','member','Member','invitation_revoked','revoked','user_a','Joining the close team',now()+interval '7 days')`, org)
+	must(err)
+	invitations["tok_open"] = map[string]any{"id": "invitation_open", "state": "pending", "email": "Inv@firm.test", "organization_id": org}
+	invitations["tok_revoked"] = map[string]any{"id": "invitation_revoked", "state": "pending", "email": "gone@firm.test", "organization_id": org}
+	invitations["tok_accepted"] = map[string]any{"id": "invitation_open", "state": "accepted", "email": "inv@firm.test", "organization_id": org}
+	join := send(handler, "GET", "/v1/auth/login?invitation=tok_open&provider=authkit&return=%2Fdashboard%2Fx", "", "")
+	at, _ = url.Parse(join.Header().Get("Location"))
+	started := cookieOf(join, loginCookie)
+	if join.Code != 302 || at.Host != "api.workos.com" || at.Query().Get("provider") != "GoogleOAuth" || at.Query().Get("login_hint") != "inv@firm.test" || started == nil || strings.Count(started.Value, ".") != 2 {
+		t.Fatalf("the Join button goes to Google with the invited address suggested, and keeps the token for the callback: %d %s %+v", join.Code, at, started)
+	}
+	respond = func(map[string]string) (int, any) { return 400, map[string]string{"code": "invitation_invalid"} }
+	r = httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code=code-1&state="+url.QueryEscape(at.Query().Get("state")), nil)
+	r.AddCookie(started)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if len(calls) != 1 || calls[0]["invitation_token"] != "tok_open" || calls[0]["code"] != "code-1" || w.Code != 302 || w.Header().Get("Location") != "/login?error=invitation" || cookieOf(w, sessionCookie) != nil {
+		t.Fatalf("the callback sends the invitation's token with the code, and WorkOS turning it down is said as such: %v %d %q", calls, w.Code, w.Header().Get("Location"))
+	}
+	calls = nil
+	for token, to := range map[string]string{"tok_unknown": "/login?error=invitation", "tok_revoked": "/login?error=invitation", "tok_accepted": "/login?error=invitation"} {
+		if w := send(handler, "GET", "/v1/auth/login?invitation="+token, "", ""); w.Code != 302 || w.Header().Get("Location") != to || cookieOf(w, loginCookie) != nil {
+			t.Fatalf("an invitation %s is not used: %d %q", token, w.Code, w.Header().Get("Location"))
+		}
+	}
+	invitationsDown = true
+	if w := send(handler, "GET", "/v1/auth/login?invitation=tok_open", "", ""); w.Code != 302 || w.Header().Get("Location") != "/login?error=unavailable" {
+		t.Fatalf("WorkOS unavailable is said as such: %d %q", w.Code, w.Header().Get("Location"))
+	}
+	invitationsDown = false
+	// The staff console never takes an invitation.
+	staffJoin := send(handler, "GET", "/v1/auth/login?staff=1&invitation=tok_open", "", "")
+	if at, _ := url.Parse(staffJoin.Header().Get("Location")); at.Query().Get("login_hint") != "" || strings.Count(cookieOf(staffJoin, loginCookie).Value, ".") != 1 {
+		t.Fatalf("a staff sign-in ignores an invitation: %s", at)
+	}
 
 	back := "/dashboard/closes/" + alpha
 	done, cookie := signIn(back, "session_1", "refresh-1")

@@ -8,12 +8,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"close.local/backend/internal/secrets"
 )
 
 func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	db := adminDB(t)
 	t.Setenv("WORKOS_CLIENT_ID", "")
 	t.Setenv("WORKOS_API_KEY", "sk_test_people")
+	t.Setenv("SECRETS_KEY", strings.Repeat("ab", 32))
 	token := strings.Repeat("p", 32)
 	firm, other := "org_People"+rand.Text(), "org_Former"+rand.Text()
 	person := "user_person" + strings.ToLower(rand.Text())
@@ -59,7 +62,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		code, body := 200, `{}`
 		// Each resend moves WorkOS's expiry an hour on, so its copy tells one resend from the next.
 		copyOf := func() string {
-			return `{"id":"` + workosID + `","state":"pending","expires_at":"` + time.Now().Add(7*24*time.Hour+time.Duration(resent)*time.Hour).UTC().Format(time.RFC3339) + `"}`
+			return `{"id":"` + workosID + `","state":"pending","token":"tok_resent","accept_invitation_url":"https://auth.example.test/invite/tok_resent","expires_at":"` + time.Now().Add(7*24*time.Hour+time.Duration(resent)*time.Hour).UTC().Format(time.RFC3339) + `"}`
 		}
 		switch p := r.URL.Path; {
 		case workosDown:
@@ -204,11 +207,37 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		t.Fatalf("the new expiry is kept (%v) after one resend (%d)", later, resent)
 	}
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 200)
-	// When neither the answer nor WorkOS's copy can be read, the outcome is reported as unknown, not as nothing sent.
+	// WorkOS sends no invitation email: each resend queues Krith's, with the invitation's token, and replaces one still
+	// waiting, so the person gets one.
+	emailed := func() (states string) {
+		t.Helper()
+		var to string
+		var sealed []byte
+		if err := db.QueryRow(`SELECT string_agg(state,',' ORDER BY id),(array_agg(recipient ORDER BY id DESC))[1],(array_agg(link ORDER BY id DESC))[1] FROM platform_emails WHERE invitation=$1::bigint AND kind='invitation'`, invitation).Scan(&states, &to, &sealed); err != nil {
+			t.Fatal(err)
+		}
+		if opened, err := secrets.Open(firm+"/platform-email:invitation-link", sealed); err != nil || string(opened) != "https://auth.example.test/invite/tok_resent" || to != email {
+			t.Fatalf("a resend's email goes to the invitee with the invitation's Join link: %q %q %v", to, opened, err)
+		}
+		return states
+	}
+	if states := emailed(); states != "cancelled,queued" {
+		t.Fatalf("each resend queues Krith's email, replacing one still waiting: %s", states)
+	}
+	if found := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+email, "", 200)); !strings.Contains(found, `"email_state":"queued"`) {
+		t.Fatalf("the staff view shows the invitation's email state: %s", found)
+	}
+	// When neither the answer nor WorkOS's copy can be read, the outcome is reported as unknown, and no email is sent.
 	resendLost, loseCopyOnResend = true, true
 	must(`UPDATE member_invitations SET expires_at=now()+interval '1 hour' WHERE id::text=$1`, invitation)
-	if unknown := adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 502)["message"].(string); !strings.Contains(unknown, "did not confirm whether") {
-		t.Fatalf("an unknown outcome: %s", unknown)
+	if unknown := adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 502)["message"].(string); !strings.Contains(unknown, "did not confirm renewing") || !strings.Contains(unknown, "earlier email is still on its way") || emailed() != "cancelled,queued" {
+		t.Fatalf("an unknown outcome sends no email, and says the earlier one still waiting will go: %s", unknown)
+	}
+	// With no earlier email waiting, it says to resend. (WorkOS's copy reads again before the next attempt.)
+	copyLost = false
+	must(`UPDATE platform_emails SET state='sent',link=NULL,finished_at=now() WHERE invitation=$1::bigint AND state='queued'`, invitation)
+	if unknown := adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 502)["message"].(string); !strings.Contains(unknown, "Resend it again") {
+		t.Fatalf("with no email waiting, an unknown outcome says to resend: %s", unknown)
 	}
 	resendLost, loseCopyOnResend, copyLost = false, false, false
 	// The old date cannot expire an invitation WorkOS may have renewed; the audit says the outcome is unknown.
@@ -216,12 +245,12 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		t.Fatal("an unconfirmed resend keeps the invitation open as long as a resend would")
 	}
 	var unconfirmedAudit string
-	if err := db.QueryRow(`SELECT result||': '||error FROM platform_audit WHERE action='invitation.resend' AND target_id=$1 ORDER BY id DESC LIMIT 1`, invitation).Scan(&unconfirmedAudit); err != nil || !strings.Contains(unconfirmedAudit, "refused: WorkOS did not confirm whether") {
+	if err := db.QueryRow(`SELECT result||': '||error FROM platform_audit WHERE action='invitation.resend' AND target_id=$1 ORDER BY id DESC LIMIT 1`, invitation).Scan(&unconfirmedAudit); err != nil || !strings.Contains(unconfirmedAudit, "refused: WorkOS did not confirm whether it renewed") {
 		t.Fatalf("unconfirmed audit %q %v", unconfirmedAudit, err)
 	}
 	must(`UPDATE member_invitations SET state='revoked' WHERE id::text=$1`, invitation)
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 409)
-	if resent != 3 {
+	if resent != 4 {
 		t.Fatal("a revoked invitation must not reach WorkOS")
 	}
 

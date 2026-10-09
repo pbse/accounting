@@ -12,12 +12,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"close.local/backend/internal/secrets"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestPlatformEmailsSay(t *testing.T) {
-	welcome, err := platformEmail("welcome", "ana@acme.test", "Acme\nAdvisors\t LLP", "acme.test", "Krith <hello@mail.krith.test>", "https://app.example.test")
+	welcome, err := platformEmail("welcome", "ana@acme.test", "Acme\nAdvisors\t LLP", "acme.test", "Krith <hello@mail.krith.test>", "https://app.example.test", invitation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +31,7 @@ func TestPlatformEmailsSay(t *testing.T) {
 			t.Fatalf("the welcome says %q:\n%s", want, welcome.Text)
 		}
 	}
-	joined, err := platformEmail("joined", "ben@acme.test", "Acme Advisors", "", "Krith <hello@mail.krith.test>", "https://app.example.test")
+	joined, err := platformEmail("joined", "ben@acme.test", "Acme Advisors", "", "Krith <hello@mail.krith.test>", "https://app.example.test", invitation{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +39,47 @@ func TestPlatformEmailsSay(t *testing.T) {
 		t.Fatalf("the colleague's note names the firm and says they have no access yet: %+v", joined)
 	}
 	for _, bad := range [][2]string{{"welcome", "Ana <ana@acme.test>"}, {"welcome", "ana@acme.test\r\nBcc: x@y.test"}, {"invoice", "ana@acme.test"}} {
-		if _, err := platformEmail(bad[0], bad[1], "Acme", "acme.test", "Krith <hello@mail.krith.test>", "https://app.example.test"); err == nil {
+		if _, err := platformEmail(bad[0], bad[1], "Acme", "acme.test", "Krith <hello@mail.krith.test>", "https://app.example.test", invitation{}); err == nil {
 			t.Fatalf("refused: %q", bad)
+		}
+	}
+}
+
+func TestInvitationEmailsSay(t *testing.T) {
+	until := time.Date(2026, 10, 15, 18, 0, 0, 0, time.UTC)
+	invite := invitation{Inviter: "Prashant\nBansal", Role: "Firm admin", Link: "https://app.example.test/v1/auth/login?invitation=tok_1", Expires: until}
+	e, err := platformEmail("invitation", "nia@acme.test", "Acme <Advisors>", "acme.test", "Krith <hello@mail.krith.test>", "https://app.example.test", invite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Subject != "Prashant Bansal invited you to join Acme <Advisors> on Krith" || e.From != "Krith <hello@mail.krith.test>" || len(e.To) != 1 || e.To[0] != "nia@acme.test" {
+		t.Fatalf("the invitation names who sent it and the firm, from Krith's sender: %+v", e)
+	}
+	for _, want := range []string{"Prashant Bansal invited you to join Acme <Advisors> on Krith, as Firm admin.", "Krith’s agents prepare the month-end close", "Join Acme <Advisors>: https://app.example.test/v1/auth/login?invitation=tok_1", "Sign in with Google as nia@acme.test. The invitation is open until 15 October 2026.", "Nothing happens unless you join.", "Krith\nThe work, prepared."} {
+		if !strings.Contains(e.Text, want) {
+			t.Fatalf("the invitation says %q:\n%s", want, e.Text)
+		}
+	}
+	for _, want := range []string{`href="https://app.example.test/v1/auth/login?invitation=tok_1"`, "Join Acme &lt;Advisors&gt; on Krith</h1>", "Prashant Bansal invited you to join as <strong>Firm admin</strong>.", "<strong>nia@acme.test</strong>", "15 October 2026"} {
+		if !strings.Contains(e.HTML, want) {
+			t.Fatalf("the invitation's HTML has %q, with the firm's name escaped:\n%s", want, e.HTML)
+		}
+	}
+	if strings.Contains(e.HTML, "<Advisors>") {
+		t.Fatalf("the firm's name is escaped in HTML:\n%s", e.HTML)
+	}
+	invite.Inviter = ""
+	if e, err = platformEmail("invitation", "nia@acme.test", "Acme", "", "Krith <hello@mail.krith.test>", "https://app.example.test", invite); err != nil || e.Subject != "You’re invited to join Acme on Krith" {
+		t.Fatalf("without the inviter's name it still invites: %q %v", e.Subject, err)
+	}
+	// WorkOS's own acceptance page, with browser sessions, is a Join link too.
+	invite.Link = "https://auth.example.test/invite?token=tok_1"
+	if e, err = platformEmail("invitation", "nia@acme.test", "Acme", "", "Krith <hello@mail.krith.test>", "https://app.example.test", invite); err != nil || !strings.Contains(e.Text, "Join Acme: https://auth.example.test/invite?token=tok_1") {
+		t.Fatalf("WorkOS's acceptance page is the Join link with browser sessions: %v %s", err, e.Text)
+	}
+	for _, bad := range []invitation{{Role: "Member", Expires: until}, {Role: "Member", Link: "javascript:alert(1)", Expires: until}, {Role: "Member", Link: invite.Link}, {Link: invite.Link, Expires: until}} {
+		if _, err := platformEmail("invitation", "nia@acme.test", "Acme", "", "Krith <hello@mail.krith.test>", "https://app.example.test", bad); err == nil {
+			t.Fatalf("an invitation needs its link to Krith, its role and its expiry: %+v", bad)
 		}
 	}
 }
@@ -241,6 +282,58 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 	}
 	if s, _, _ := state(lee); s != "unknown" {
 		t.Fatalf("an email tried and unconfirmed within a day is unknown, not expired: %s", s)
+	}
+
+	// An invitation goes with its link while it is open; its sealed token is gone once it is sent. One the firm revoked
+	// before it went is cancelled unsent.
+	t.Setenv("SECRETS_KEY", strings.Repeat("ab", 32))
+	t.Cleanup(func() { db.Exec(`DELETE FROM member_invitations WHERE organization_id=$1`, org) })
+	invite := func(who, state string) (id string) {
+		t.Helper()
+		var invitation string
+		if err := db.QueryRow(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,$2,'member','Member',$3,$4,'user_ana','Joining the close team',now()+interval '7 days') RETURNING id::text`,
+			org, who+"@"+domain, "invitation_"+who+suffix, state).Scan(&invitation); err != nil {
+			t.Fatal(err)
+		}
+		sealed, err := secrets.Seal(org+"/platform-email:invitation-link", []byte("https://app.example.test/v1/auth/login?invitation=tok_"+who))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow(`INSERT INTO platform_emails(kind,organization_id,recipient,invitation,inviter,link) VALUES('invitation',$1,$2,$3::bigint,'Ana Diaz',$4) RETURNING id::text`, org, who+"@"+domain, invitation, sealed).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	nia, oz := invite("nia", "pending"), invite("oz", "revoked")
+	drain()
+	var kept int
+	if err := db.QueryRow(`SELECT count(*) FROM platform_emails WHERE id IN ($1,$2) AND link IS NOT NULL`, nia, oz).Scan(&kept); err != nil || kept != 0 {
+		t.Fatalf("an invitation's token is not kept once its email is done: %d %v", kept, err)
+	}
+	if s, n, p := state(nia); s != "sent" || n != 1 || p != "re_nia" {
+		t.Fatalf("an open invitation's email is sent: %s %d %q", s, n, p)
+	}
+	if e := bodies["nia"]; e.Subject != "Ana Diaz invited you to join Acme Advisors on Krith" || !strings.Contains(e.Text, "https://app.example.test/v1/auth/login?invitation=tok_nia") || !strings.Contains(e.Text, ", as Member.") || e.HTML == "" {
+		t.Fatalf("the invitation names its sender and role, and links to sign in with its token: %+v", e)
+	}
+	if s, n, _ := state(oz); s != "cancelled" || n != 0 || len(seen["oz"]) != 0 {
+		t.Fatalf("a revoked invitation's email is cancelled unsent: %s %d", s, n)
+	}
+	// A resend's email replaces one whose attempt went unanswered: the older is never tried again, and only the newer goes.
+	pia := invite("pia", "pending")
+	if _, err := db.Exec(`UPDATE platform_emails SET state='sending',attempts=1,claimed_at=now()-interval '5 minutes' WHERE id=$1`, pia); err != nil {
+		t.Fatal(err)
+	}
+	var resent string
+	if err := db.QueryRow(`INSERT INTO platform_emails(kind,organization_id,recipient,invitation,inviter,link) SELECT kind,organization_id,recipient,invitation,inviter,link FROM platform_emails WHERE id=$1 RETURNING id::text`, pia).Scan(&resent); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	if s, n, _ := state(pia); s != "unknown" || n != 1 {
+		t.Fatalf("an unconfirmed email a resend replaced is not tried again, and stays unknown: %s %d", s, n)
+	}
+	if s, _, _ := state(resent); s != "sent" || len(seen["pia"]) != 1 {
+		t.Fatalf("only the resend's email goes: %s %d", s, len(seen["pia"]))
 	}
 
 	// What waited more than a day is not sent; finished rows go after 30 days.

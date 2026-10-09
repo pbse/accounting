@@ -78,6 +78,8 @@ if (process.argv.includes('--check')) {
  const installed = secretNames(app, production);
  const required = app === 'scanner' ? ['UPLOAD_SCAN_KEY'] : ['DATABASE_URL','UPLOAD_SCAN_KEY'];
  if (app === 'edge' && process.env.EMAIL_INTAKE_ADDRESS) required.push('EMAIL_INTAKE_KEY');
+ // Krith's sender sends invitations, so a sender without its key would leave them unsent (docs/sign-in.md#invitations).
+ if (app === 'queue' && process.env.PLATFORM_EMAIL_FROM) required.push('PLATFORM_EMAIL_KEY');
  if (app !== 'scanner') {
   for (const [id,secret,redirect] of [['QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI'],['QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI'],['XERO_CLIENT_ID','XERO_CLIENT_SECRET','XERO_REDIRECT_URI']]) {
    if (!process.env[id] && !process.env[redirect]) continue;
