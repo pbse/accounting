@@ -154,6 +154,9 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     const asked = ++generation.current;
     setPicked(!!id);
     setRenaming(null);
+    // Nothing of the chat shown before stays while the selected one loads, and nothing is sent until it has.
+    setSession(null);
+    setMessages([]);
     setLoaded(false);
     setError("");
     setLive([]);
@@ -238,6 +241,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
   }, [text]);
   // Only the latest request may paint: an earlier read never overwrites a newer answer.
   async function send(body: Record<string, string>) {
+    if (busy || !loaded) return;
     const asked = ++generation.current;
     setBusy(true);
     setError("");
