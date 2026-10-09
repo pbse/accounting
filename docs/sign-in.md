@@ -101,7 +101,7 @@ The email:
 - **Format:** plain text and simple HTML, signed "Krith · The work, prepared."
 
 How it works:
-- **Queued with the invitation.** When WorkOS confirms the invitation, the app opens it and queues the email (`platform_emails`, kind `invitation`, migration 137) in one transaction. A send WorkOS confirmed but the app did not record is settled from WorkOS's list later, and its email is queued then. A staff resend renews the invitation in WorkOS and queues the email again.
+- **Queued with the invitation.** When WorkOS confirms the invitation, the app opens it and queues the email (`platform_emails`, kind `invitation`, migration 139) in one transaction. A send WorkOS confirmed but the app did not record is settled from WorkOS's list later, and its email is queued then. A staff resend renews the invitation in WorkOS and queues the email again.
 - **The Join link** is chosen when the email is queued:
   - with server sessions (production), it signs the person in with Google and the invitation token (below);
   - with WorkOS's browser session, whose sign-in the API doesn't run, it is WorkOS's own acceptance page (`accept_invitation_url`).

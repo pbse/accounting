@@ -3930,7 +3930,7 @@ Not verified: the rail's chats menu and the panel's list in a browser (no layout
 Request: an invitation arrived from `welcome@workos-mail.com`, under the WorkOS team's name ("Nivi"), with WorkOS's text. The user asked why it didn't come from getkrith.com, and for clearer, more agentic, simple and distinctive wording. WorkOS was sending its own invitation email.
 
 - **Change.**
-  - **Sending.** WorkOS still holds each invitation; Krith sends the email. It goes from `PLATFORM_EMAIL_FROM` through the platform email worker, as a new `platform_emails` kind, `invitation` (migration 137). The email:
+  - **Sending.** WorkOS still holds each invitation; Krith sends the email. It goes from `PLATFORM_EMAIL_FROM` through the platform email worker, as a new `platform_emails` kind, `invitation` (migration 139). The email:
     - subject "<Inviter> invited you to join <firm> on Krith";
     - says who invited them and the role;
     - one sentence on what Krith's agents prepare;
@@ -3959,5 +3959,6 @@ Not verified:
 - a real invitation accepted through Google in production;
 - WorkOS's resend endpoint with its invitation email turned off.
 
-WorkOS's invitation email still has to be turned off in production (`isInvitationEmailEnabled: false`), or invitees get both emails.
-
+Rollout (2026-10-09):
+- WorkOS's display name is now "Krith", not the team name "Nivi", on the screens and emails WorkOS still shows.
+- WorkOS's invitation email is turned off in production (`isInvitationEmailEnabled: false`) as this merges, before its deploy. Invitees then get only Krith's email. One sent in the minutes the deploy takes has no email until it is sent again.
