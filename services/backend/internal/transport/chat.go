@@ -835,7 +835,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	sessionJSON := func(r *http.Request, id string) (map[string]any, error) {
 		var title, closeID, label string
 		var last time.Time
-		err := db.QueryRowContext(r.Context(), `SELECT title,COALESCE(close_id::text,''),COALESCE((SELECT c.entity||' · '||c.period FROM client_closes c WHERE c.id=chat_sessions.close_id),''),last_at FROM chat_sessions WHERE `+scopeOf(r)+` AND id=$4::bigint`, organization(r), subject(r), r.PathValue("id"), id).Scan(&title, &closeID, &label, &last)
+		err := db.QueryRowContext(r.Context(), `SELECT title,COALESCE(close_id::text,''),COALESCE((SELECT c.entity||' · '||c.period FROM client_closes c WHERE c.id=chat_sessions.close_id),''),last_at FROM chat_sessions WHERE `+scopeOf(r)+` AND id=$4::bigint AND (close_id IS NOT NULL OR last_at>=now()-interval '30 days')`, organization(r), subject(r), r.PathValue("id"), id).Scan(&title, &closeID, &label, &last)
 		if err != nil {
 			return nil, err
 		}

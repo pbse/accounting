@@ -27,9 +27,16 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 			problem(w, 503, "Your chats are unavailable.")
 			return
 		}
-		if _, err := db.ExecContext(r.Context(), `DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, organization(r), subject(r)); err != nil {
-			problem(w, 503, "Your chats are unavailable.")
-			return
+		// Firm-wide turns older than 30 days, and firm-wide chats quiet that long, are gone before the hourly sweep too.
+		for _, q := range []string{
+			`DELETE FROM chat_messages WHERE organization_id=$1 AND author=$2 AND close_id IS NULL AND created_at<now()-interval '30 days'`,
+			`DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND close_id IS NULL AND last_at<now()-interval '30 days'`,
+			`DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`,
+		} {
+			if _, err := db.ExecContext(r.Context(), q, organization(r), subject(r)); err != nil {
+				problem(w, 503, "Your chats are unavailable.")
+				return
+			}
 		}
 		// Pages of up to 50, newest first; has_more says whether an older page follows at the next offset.
 		limit, offset := 50, 0

@@ -199,7 +199,7 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 		t.Fatalf("a title is cut by characters, the ellipsis within the limit: %q", long)
 	}
 	// Older chats are reached a page at a time.
-	_, err = db.Exec(`INSERT INTO chat_sessions(organization_id,author,title,last_at) SELECT $1,'user_a','Older chat '||n,now()-(n||' days')::interval FROM generate_series(1,60) n`, org)
+	_, err = db.Exec(`INSERT INTO chat_sessions(organization_id,author,title,last_at) SELECT $1,'user_a','Older chat '||n,now()-(n||' hours')::interval FROM generate_series(1,60) n`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id,created_at) SELECT $1,'user_a','user',title,id,last_at FROM chat_sessions WHERE organization_id=$1 AND title LIKE 'Older chat %'`, org)
 	must(err)
@@ -225,6 +225,16 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	must(err)
 	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id) SELECT $1,'user_a','user',title,id FROM chat_sessions WHERE organization_id=$1 AND title LIKE '100%'`, org)
 	must(err)
+	// A firm-wide chat quiet for 30 days is gone from the list and cannot be opened, before the sweep runs.
+	var expired string
+	must(db.QueryRow(`INSERT INTO chat_sessions(organization_id,author,title,last_at) VALUES($1,'user_a','Long ago',now()-interval '31 days') RETURNING id::text`, org).Scan(&expired))
+	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id,created_at) VALUES($1,'user_a','user','Long ago',$2::bigint,now()-interval '31 days')`, org, expired)
+	must(err)
+	call("user_a", "GET", "/v1/closes/chat?session="+expired, nil, 404)
+	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=long+ago", nil, 200), &page))
+	if len(page.Sessions) != 0 {
+		t.Fatalf("an expired firm-wide chat is not listed: %d", len(page.Sessions))
+	}
 	// A chat left with no turns is not listed.
 	_, err = db.Exec(`INSERT INTO chat_sessions(organization_id,author,title) VALUES($1,'user_a','Emptied by pruning')`, org)
 	must(err)
