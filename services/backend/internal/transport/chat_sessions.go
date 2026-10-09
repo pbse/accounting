@@ -21,6 +21,11 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 		Messages int       `json:"messages"`
 	}
 	mux.HandleFunc("GET /v1/closes/chat/sessions", func(w http.ResponseWriter, r *http.Request) {
+		// A chat left without turns (pruned once a close was lost, expired) is not listed: it is removed first.
+		if _, err := db.ExecContext(r.Context(), `DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, organization(r), subject(r)); err != nil {
+			problem(w, 503, "Your chats are unavailable.")
+			return
+		}
 		// Pages of up to 50, newest first; has_more says whether an older page follows at the next offset.
 		limit, offset := 50, 0
 		if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n < limit {

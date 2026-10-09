@@ -6,7 +6,7 @@ import { useUnlocked, workspaceRequest, type AgentEvent } from "../closes/worksp
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
 import { RequestCard } from "./RequestCard";
 import { ProposalCard } from "./ProposalCard";
-import { askAssistant, bumpSessions, loadSessions, nextReview, openSession, starterCommands, starters, takePending, useOpenRequests, usePending, useSessionRequest, useSessionsVersion, type ChatSession } from "./assistantStore";
+import { askAssistant, bumpSessions, clearSessionRequest, loadSessions, nextReview, openSession, starterCommands, starters, takePending, useOpenRequests, usePending, useSessionRequest, useSessionsVersion, type ChatSession } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand, type Ask } from "./commands";
 import { AgentMark } from "@close/ui/components/AgentMark";
@@ -206,7 +206,11 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
         if (!started.current) load();
         setView("chats");
       } else load(request.session);
-    } else if (!started.current) load();
+      started.current = true;
+      clearSessionRequest();
+      return;
+    }
+    if (!started.current) load();
     started.current = true;
   }, [request, closeId]);
   useEffect(() => {

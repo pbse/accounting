@@ -77,6 +77,12 @@ export function useSessionRequest() {
   return useSyncExternalStore(subscribe, () => requested, () => null);
 }
 
+// A request is consumed once a panel took it, so a later reopening shows the scope's current chat, not the old choice.
+export function clearSessionRequest() {
+  requested = null;
+  listeners.forEach((l) => l());
+}
+
 // Every list of chats (the rail's, the panel's) reloads when a chat is made, renamed or deleted.
 let sessionsVersion = 0;
 

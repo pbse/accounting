@@ -19,6 +19,10 @@ func closesLiteral(ids []string) string {
 // longer exists, before the conversation is shown or replayed; the question goes with its answer. A pair's closes are
 // written on both messages, so one statement finds both.
 func pruneConversation(ctx context.Context, db *sql.DB, org, author, closeID string, firmWide, executive bool) error {
+	defer func() {
+		// A chat whose every turn was removed is gone with them: nothing dead is listed or continued.
+		db.ExecContext(ctx, `DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, org, author)
+	}()
 	_, err := db.ExecContext(ctx, `DELETE FROM chat_messages m WHERE m.organization_id=$1 AND m.author=$2 AND m.close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND m.executive=`+strconv.FormatBool(executive)+` AND EXISTS(SELECT 1 FROM unnest(m.closes) AS touched(id) WHERE NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.id=touched.id AND c.organization_id=$1 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))))`, org, author, closeID, firmWide)
 	return err
 }

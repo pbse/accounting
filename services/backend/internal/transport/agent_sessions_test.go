@@ -182,6 +182,8 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	// Older chats are reached a page at a time.
 	_, err = db.Exec(`INSERT INTO chat_sessions(organization_id,author,title,last_at) SELECT $1,'user_a','Older chat '||n,now()-(n||' days')::interval FROM generate_series(1,60) n`, org)
 	must(err)
+	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id,created_at) SELECT $1,'user_a','user',title,id,last_at FROM chat_sessions WHERE organization_id=$1 AND title LIKE 'Older chat %'`, org)
+	must(err)
 	var page struct {
 		Sessions   []struct{ ID string } `json:"sessions"`
 		HasMore    bool                  `json:"has_more"`
@@ -202,6 +204,15 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	call("user_a", "GET", "/v1/closes/chat/sessions?q="+strings.Repeat("%E4%B8%AD", 120), nil, 200)
 	_, err = db.Exec(`INSERT INTO chat_sessions(organization_id,author,title) VALUES($1,'user_a','100% sure'),($1,'user_a','100 percent')`, org)
 	must(err)
+	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,session_id) SELECT $1,'user_a','user',title,id FROM chat_sessions WHERE organization_id=$1 AND title LIKE '100%'`, org)
+	must(err)
+	// A chat left with no turns is not listed.
+	_, err = db.Exec(`INSERT INTO chat_sessions(organization_id,author,title) VALUES($1,'user_a','Emptied by pruning')`, org)
+	must(err)
+	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=emptied", nil, 200), &page))
+	if len(page.Sessions) != 0 {
+		t.Fatalf("an empty chat is removed, not listed: %d", len(page.Sessions))
+	}
 	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=100%25", nil, 200), &page))
 	if len(page.Sessions) != 1 {
 		t.Fatalf("a filter is matched as typed, not as a pattern: %d", len(page.Sessions))
