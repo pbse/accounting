@@ -47,3 +47,12 @@ export async function prefetch(context: Readonly<RouterContextProvider>, ...path
 // linked job. Its loader and the list build it the same way, so the prefetched read is the one the list asks for.
 export const workPath = (closeId: string | undefined, view: string, client = "", offset = 0, job = "") =>
   `${closeId ? `/${closeId}/work` : "/work"}?view=${view}&client=${encodeURIComponent(client)}&offset=${offset}${job ? `&jobs=${encodeURIComponent(job)}` : ""}`;
+
+// prefetchLater starts reads that come from a slow outside provider (WorkOS, Google) without waiting for them: in the
+// browser they start as the page opens, so the page never waits on the provider; the server renders without them and
+// their sections load on their own.
+export function prefetchLater(context: Readonly<RouterContextProvider>, ...paths: string[]) {
+  if (typeof document === "undefined") return;
+  const { queryClient, read } = context.get(appData);
+  for (const path of paths) void queryClient.prefetchQuery(workspaceQuery(path, read));
+}

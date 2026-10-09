@@ -1,3 +1,5 @@
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
 import { useDates, useNow } from "../../data/time";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../../lib/api";
@@ -17,23 +19,25 @@ type Configuration = { connection: Sender | null; hosted: boolean };
 // The firm's verified sender: its state in view, and each change (connect or replace, tracking, disconnect) in a dialog.
 export function EmailSettings() {
   const dates = useDates();
-  const [data, setData] = useState<Configuration>();
+  // The firm's sender, read with the page (Settings' loader) and again after a change.
+  const read = useQuery(workspaceQuery<Configuration>("/email"));
+  const data = read.data;
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [actionError, setError] = useState("");
+  const error = actionError || (read.error ? read.error.message || "Sender unavailable." : "");
   const [dialog, setDialog] = useState<"sender" | "tracking" | "disconnect" | null>(null);
-  async function load() {
-    setBusy(true);
-    setError("");
+  // A save leaves the form busy until the sender has been read again.
+  const load = async () => {
     try {
-      setData(await workspaceRequest("/email"));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Sender unavailable.");
+      await read.refetch();
     } finally {
       setBusy(false);
     }
-  }
+  };
+  // The API's address: the configured one, or this page's own, known only in the browser.
+  const [origin, setOrigin] = useState(apiBaseUrl);
   useEffect(() => {
-    void load();
+    if (!apiBaseUrl) setOrigin(window.location.origin);
   }, []);
   const open = (which: typeof dialog) => (setError(""), setDialog(which));
   async function save(event: FormEvent<HTMLFormElement>, disable: boolean) {
@@ -155,7 +159,7 @@ export function EmailSettings() {
           <form onSubmit={(e) => void tracking(e)}>
             <fieldset disabled={busy}>
               <p>In Resend, create a webhook for email.sent, email.delivered, email.delivery_delayed, email.bounced, email.complained, email.failed and email.suppressed at:</p>
-              <code>{apiBaseUrl || window.location.origin}/v1/webhooks/resend/{connection.id}</code>
+              <code>{origin}/v1/webhooks/resend/{connection.id}</code>
               <label>
                 Webhook signing secret
                 <input name="secret" type="password" autoComplete="off" required />

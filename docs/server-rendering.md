@@ -66,9 +66,9 @@ and a read the cache already holds is not repeated.
 | Page | Rendered on the server with its data |
 | --- | --- |
 | Workspace layout (executive check, worked example, unread count, the person's settings) | Yes |
-| Settings: Profile, Notifications | Yes |
+| Settings: Profile, Notifications, Connections | Yes |
 | Settings: People (people and roles, invitations, client assignments, membership) | Yes |
-| Settings: Firm, Clients, Policies, Security | Layout only; the section reads in the browser |
+| Settings: Firm, Clients, Policies, Security | Yes; Security's usage snapshot reads when opened |
 | Home (counts, review queue, goals, get started, dependencies, new in the books, closes handed to the agent) | Yes; other decision views and filters read when chosen |
 | Clients (the roster, recent closes and a search's matches) | Yes |
 | A close's Overview (the close and its drafts, the agent's goal, where it stands, the coordinator and its coverage, the work from its evidence) | Yes |

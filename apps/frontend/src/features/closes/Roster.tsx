@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { useDates } from "../../data/time";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { forbidden } from "./requestError";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
@@ -22,30 +25,23 @@ const endedMonth = () => {
 // opened shows in Work until it is opened. Each month's close takes the template's due date and owner, unless the client's
 // own entry overrides them. Firm administrators change both.
 export function ClientRoster() {
-  const [roster, setRoster] = useState<Roster>();
-  const [error, setError] = useState("");
-  // A member reads only the clients assigned to them; a firm the server refuses hides the section.
-  const [hidden, setHidden] = useState(false);
+  const dates = useDates();
+  // The roster is the Clients page's read too; a member reads only the clients assigned to them, and a firm the server
+  // refuses hides the section.
+  const read = useQuery(workspaceQuery<Roster>("/roster"));
+  const roster = read.data;
+  const hidden = !!read.error && forbidden(read.error);
+  const error = read.error && !hidden ? read.error.message || "The client roster is unavailable." : "";
   // A save's refusal, kept while the roster is read again: a change made from an entry another administrator has since
   // changed resets to the newest entry, and this says why.
   const [notice, setNotice] = useState("");
-  const [refresh, setRefresh] = useState(0);
   const [editingTemplate, setEditingTemplate] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState("");
-  const saved = () => (setNotice(""), setRefresh((n) => n + 1));
+  const saved = () => (setNotice(""), void read.refetch());
   // A dialog left, with or without a refused save, reads the roster again, so the next attempt starts from the newest entry.
   // The dialog's own close follows Cancel, so an empty message keeps the refusal Cancel passed.
-  const left = (message = "") => (setNotice((kept) => message || kept), setAdding(false), setEditing(""), setEditingTemplate(false), setRefresh((n) => n + 1));
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/roster")
-      .then((data: Roster) => live && (setRoster(data), setError("")))
-      .catch((e) => live && (forbidden(e) ? setHidden(true) : setError(e instanceof Error ? e.message : "The client roster is unavailable.")));
-    return () => {
-      live = false;
-    };
-  }, [refresh]);
+  const left = (message = "") => (setNotice((kept) => message || kept), setAdding(false), setEditing(""), setEditingTemplate(false), void read.refetch());
   if (hidden) return null;
   if (!roster) return error ? <section aria-label="Clients and monthly closes"><h2>Clients and monthly closes</h2><p role="alert">{error}</p></section> : null;
   const people = roster.people ?? [];
@@ -98,7 +94,7 @@ export function ClientRoster() {
                 }
               >
                 <small>
-                  {c.reason} ({name(c.actor)}, {new Date(c.at).toLocaleDateString()})
+                  {c.reason} ({name(c.actor)}, {dates.date(c.at)})
                 </small>
               </EntityCell>
               <span>
@@ -123,7 +119,7 @@ export function ClientRoster() {
       {roster.can_manage && (
         <>
           <Dialog open={editingTemplate} onClose={() => left()} title="The monthly template" description="The due date and owner every client's new month takes, unless the client's own entry says otherwise.">
-            {t && <p className="note">Set by {name(t.actor)} on {new Date(t.at).toLocaleDateString()}: {t.reason}</p>}
+            {t && <p className="note">Set by {name(t.actor)} on {dates.date(t.at)}: {t.reason}</p>}
             <TemplateForm key={t?.rev ?? "none"} template={t} people={people.filter((p) => p.firm_wide)} onSaved={() => (setEditingTemplate(false), saved())} onCancel={left} />
           </Dialog>
           <Dialog open={adding} onClose={() => left()} title="Add a client" description="A client on the roster owes a close each month from its first month.">

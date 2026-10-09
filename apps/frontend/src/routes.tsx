@@ -6,7 +6,7 @@ import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
 import { closeTab } from "./data/closeTabs";
-import { appData, prefetch, workPath, workspaceKey } from "./data/queries";
+import { appData, prefetch, prefetchLater, workPath, workspaceKey } from "./data/queries";
 
 // The app's routes, as React Router data routes: the browser runs them (main.tsx) and so does the edge, which renders a
 // workspace page on the server with its data (entry-server.tsx, docs/server-rendering.md). A page's code loads with
@@ -84,11 +84,18 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
 
 // Settings reads what its open section shows. Sections not listed read as they render.
 const settingsReads: Record<string, string[]> = {
+  connections: ["/agent-access"],
+  firm: ["/email"],
   people: ["/members/people", "/members/roles", "/members/invitations", "/security/clients", "/access", "/members"],
+  clients: ["/roster"],
+  security: ["/security"],
 };
+const settingsLater: Record<string, string[]> = { profile: ["/me/profile"], connections: ["/me/drive"] };
 async function settingsLoader({ context, request }: LoaderFunctionArgs) {
   if (!prefetching) return null;
   const tab = new URL(request.url).searchParams.get("tab") ?? "profile";
+  // What the sign-in provider and Google hold loads on its own, so a slow provider never holds the page.
+  prefetchLater(context, ...(settingsLater[tab] ?? []));
   await prefetch(context, "/organization/policy", "/me", ...(settingsReads[tab] ?? []));
   return null;
 }

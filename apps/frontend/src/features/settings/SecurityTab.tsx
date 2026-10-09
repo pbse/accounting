@@ -1,4 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useDates } from "../../data/time";
+import { workspaceQuery } from "../../data/queries";
+import { useQuery } from "@tanstack/react-query";
+import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { RowList } from "@close/ui/components/RowList";
@@ -49,10 +52,10 @@ type Operation = {
   limitation: string;
 };
 
-const day = (at: string) => new Date(at).toLocaleDateString();
 const settings = (closeId: string) => `/dashboard/closes/${closeId}?tab=settings`;
 
 function OperationRecord({ operation, stage, onSaved }: { operation: Operation; stage: "sandbox_checked" | "accountant_accepted"; onSaved: () => void }) {
+  const day = useDates().date;
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState("");
@@ -175,21 +178,14 @@ const state = (s: string) => s.replaceAll("_", " ");
 // One place for which services and agents act for the firm, what they may write, what they receive, and what
 // changed; the operator's tables and the controls that stop things sit folded below.
 export function SecurityTab() {
-  const [security, setSecurity] = useState<Security>();
-  const [error, setError] = useState("");
-  const [version, setVersion] = useState(0);
+  const dates = useDates();
+  const day = dates.date;
+  const read = useQuery(workspaceQuery<Security>("/security"));
+  const security = read.data;
+  const error = read.error ? read.error.message || "Security is unavailable." : "";
   // The usage snapshot aggregates across the firm's work, so it is read only once someone opens it.
   const [usage, setUsage] = useState(false);
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/security")
-      .then((data) => live && (setSecurity(data), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Security is unavailable."));
-    return () => {
-      live = false;
-    };
-  }, [version]);
-  const refresh = () => setVersion((n) => n + 1);
+  const refresh = () => void read.refetch();
   // A failed read shows with a way to try again; a view already read stays in place under it.
   const failed = error && (
     <section aria-label="Security unavailable">
@@ -312,7 +308,7 @@ export function SecurityTab() {
           <ol>
             {security.activity.map((e, i) => (
               <li key={i}>
-                {new Date(e.at).toLocaleString()} · {e.actor}: {e.text}
+                {dates.dateTime(e.at)} · {e.actor}: {e.text}
               </li>
             ))}
           </ol>
