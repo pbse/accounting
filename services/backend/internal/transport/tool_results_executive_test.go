@@ -66,3 +66,31 @@ func TestProjectCashPlanKeepsEveryWeekAndCutsItsItems(t *testing.T) {
 		t.Fatalf("each week keeps eight items and counts the rest: %s", out)
 	}
 }
+
+func TestAListedReportIsCitedAsItsVersion(t *testing.T) {
+	var value any
+	d := json.NewDecoder(strings.NewReader(`{"publications":[{"id":"9","version":2},{"id":"8","version":1,"published_by":"pat"}]}`))
+	d.UseNumber()
+	d.Decode(&value)
+	reads := map[string]agentRead{"t1": {text: "{}", value: value, link: chatCitation{"Published reports", "/dashboard/executive/reports?close=7"}, title: "Published reports", tool: "list_publications", executive: true}}
+	cited, why := agentSupport("facts", "Version 1 was published by Pat.", []agentSupportEntry{{"t1", 0, "/publications/1/published_by", "pat", ""}, {"t1", 0, "/publications/1/version", "1", ""}}, reads, nil)
+	if why != "" || len(cited) == 0 || cited[0].Href != "/dashboard/executive/reports?close=7&publication=8" {
+		t.Fatalf("the cited row opens as its own version: %v %s", cited, why)
+	}
+	if rowField(value, "/publications/0/version", "id") != "9" || rowField(value, "/publications", "id") != "" {
+		t.Fatal("the row's id is read from the object the pointer passes through")
+	}
+}
+
+func TestProjectPublicationKeepsTheCashFlowStanding(t *testing.T) {
+	var value any
+	json.Unmarshal([]byte(`{"publication":{"id":"9"},"pack":{"cash_flow":{"reconciled":true,"disclosure":"Reconciled to the bank.","lines":[1,2,3]}}}`), &value)
+	summary, _ := json.Marshal(projectPublication(value, ""))
+	if !strings.Contains(string(summary), `"reconciled":true`) || strings.Contains(string(summary), `"lines"`) || !strings.Contains(string(summary), `"cash_flow","commentary"`) {
+		t.Fatalf("the summary keeps the statement's standing and names its section: %s", summary)
+	}
+	flow, _ := json.Marshal(projectPublication(value, "cash_flow"))
+	if !strings.Contains(string(flow), `"lines":[1,2,3]`) {
+		t.Fatalf("the cash-flow section is read in full: %s", flow)
+	}
+}

@@ -83,7 +83,7 @@ var agentWrites = map[string]string{"prepare_close": "prepare", "recheck_close":
 var agentExtra = []mcpTool{
 	{name: "executive_overview", title: "Your business overview", description: "The closes of the clients you are an executive of, and each close's newest published report with its headline figures (net income, book cash, working capital) and whether you acknowledged it.", method: "GET", path: "/v1/closes/executive", props: map[string]any{}, readOnly: true, cap: toolCap{array: "closes", limit: 40, arrays: []string{"published"}}, lineage: "closes[].id|truncated"},
 	{name: "list_publications", title: "Published reports", description: "A close's published management reports, newest first: version, who published it and when, commentary and acknowledgments.", method: "GET", path: "/v1/closes/{close_id}/management-pack/publications", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true, cap: toolCap{array: "publications", limit: 20}},
-	{name: "read_publication", title: "Read a published report", description: "One published management report as it was frozen. Without a section: its headline (the Profit and Loss measures, working capital, status). With section profit_and_loss, balance_sheet, working_capital or commentary: that part in full.", method: "GET", path: "/v1/closes/{close_id}/management-pack/publications/{publication_id}", props: map[string]any{"close_id": mcpCloseID, "publication_id": mcpText("The report's number from list_publications."), "section": map[string]any{"type": "string", "enum": []string{"summary", "profit_and_loss", "balance_sheet", "working_capital", "commentary"}, "description": "The part to read; summary when omitted."}}, required: []string{"close_id", "publication_id"}, readOnly: true},
+	{name: "read_publication", title: "Read a published report", description: "One published management report as it was frozen. Without a section: its headline (the Profit and Loss measures, working capital, status). With section profit_and_loss, balance_sheet, working_capital, cash_flow or commentary: that part in full.", method: "GET", path: "/v1/closes/{close_id}/management-pack/publications/{publication_id}", props: map[string]any{"close_id": mcpCloseID, "publication_id": mcpText("The report's number from list_publications."), "section": map[string]any{"type": "string", "enum": []string{"summary", "profit_and_loss", "balance_sheet", "working_capital", "cash_flow", "commentary"}, "description": "The part to read; summary when omitted."}}, required: []string{"close_id", "publication_id"}, readOnly: true},
 	{name: "search", title: "Search across your closes", description: "Literal search of documents, drafts, ledger transactions, procedures and review decisions across the closes you can open: up to 8 of each kind, every word must match.", method: "GET", path: "/v1/closes/search", query: map[string]string{"words": "q"}, props: map[string]any{"words": mcpText("One to six words of 3 to 100 characters.")}, required: []string{"words"}, readOnly: true, lineage: lineageNone},
 	{name: "search_close", title: "Search this close", description: "Literal search of this close's documents, drafts, ledger transactions, procedures and review decisions: up to 8 of each kind, every word must match.", method: "GET", path: "/v1/closes/{close_id}/search", query: map[string]string{"words": "q"}, props: map[string]any{"close_id": mcpCloseID, "words": mcpText("One to six words of 3 to 100 characters.")}, required: []string{"close_id", "words"}, readOnly: true},
 	{name: "delegated_closes", title: "Closes handed to the agent", description: "The closes handed to the agent that you can open: each goal's finish line, due date, state, who handed it over and what the agent last found.", method: "GET", path: "/v1/closes/goals", props: map[string]any{}, readOnly: true, cap: toolCap{array: "goals", limit: 60}, lineage: "goals[].close_id|more"},
@@ -245,6 +245,43 @@ func agentLink(t mcpTool, args map[string]any) chatCitation {
 	}
 	tabs := map[string]string{"list_evidence": "?tab=evidence", "get_readiness": "?tab=signoff", "request_candidates": "?tab=requests", "list_client_requests": "?tab=requests", "management_pack": "?tab=reports", "budget_comparison": "?tab=reports", "cash_plan": "?tab=cash", "open_items": "?tab=cash"}
 	return chatCitation{t.title, base + tabs[t.name]}
+}
+
+// rowField is the named field of the innermost object a pointer passes through that has it, as text.
+func rowField(value any, pointer, key string) string {
+	found := ""
+	for _, part := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+		if object, ok := value.(map[string]any); ok {
+			switch v := object[key].(type) {
+			case string:
+				found = v
+			case json.Number:
+				found = v.String()
+			}
+		}
+		part = strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")
+		switch t := value.(type) {
+		case map[string]any:
+			value = t[part]
+		case []any:
+			n, err := strconv.Atoi(part)
+			if err != nil || n < 0 || n >= len(t) {
+				return found
+			}
+			value = t[n]
+		default:
+			return found
+		}
+	}
+	if object, ok := value.(map[string]any); ok {
+		switch v := object[key].(type) {
+		case string:
+			found = v
+		case json.Number:
+			found = v.String()
+		}
+	}
+	return found
 }
 
 // executiveRowLink keeps a row's own page on the executive's side: a close a row names opens as its reports page.
@@ -640,6 +677,12 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 					own = executiveRowLink(own)
 				}
 				href = own
+			}
+			// A listed report is cited as its own version, which the executive's Reports page opens.
+			if read.executive && read.tool == "list_publications" {
+				if id := rowField(read.value, s.path, "id"); id != "" {
+					href = read.link.Href + "&publication=" + url.QueryEscape(id)
+				}
 			}
 		}
 		key := label + "|" + href

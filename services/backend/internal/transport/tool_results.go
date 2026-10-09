@@ -132,8 +132,8 @@ func projectPublications(value any) any {
 }
 
 // projectPublication is the part of a published report the model is sent: by default its headline (the publication,
-// the pack's entity, month, currency, basis and status, the Profit and Loss measures and working capital), or one
-// section in full, so a large frozen pack is read a section at a time rather than dropped whole.
+// the pack's entity, month, currency, basis and status, the Profit and Loss measures, working capital and the cash-flow
+// statement's standing), or one section in full, so a large frozen pack is read a section at a time rather than dropped whole.
 func projectPublication(value any, section string) any {
 	object, ok := value.(map[string]any)
 	if !ok {
@@ -142,7 +142,7 @@ func projectPublication(value any, section string) any {
 	pack, _ := object["pack"].(map[string]any)
 	publication, _ := object["publication"].(map[string]any)
 	switch section {
-	case "profit_and_loss", "balance_sheet", "working_capital":
+	case "profit_and_loss", "balance_sheet", "working_capital", "cash_flow":
 		return map[string]any{"publication": publication, "section": section, section: pack[section]}
 	case "commentary":
 		return map[string]any{"publication": publication, "section": section, "commentary": publication["commentary"]}
@@ -156,7 +156,17 @@ func projectPublication(value any, section string) any {
 	if pl, ok := pack["profit_and_loss"].(map[string]any); ok {
 		summary["profit_and_loss"] = map[string]any{"measures": pl["measures"]}
 	}
-	summary["sections"] = []string{"profit_and_loss", "balance_sheet", "working_capital", "commentary"}
+	// The cash-flow statement's standing (reconciled or not, and its disclosure) is part of the headline; its lines are a section.
+	if flow, ok := pack["cash_flow"].(map[string]any); ok {
+		standing := map[string]any{}
+		for _, key := range []string{"reconciled", "disclosure", "state"} {
+			if v, ok := flow[key]; ok {
+				standing[key] = v
+			}
+		}
+		summary["cash_flow"] = standing
+	}
+	summary["sections"] = []string{"profit_and_loss", "balance_sheet", "working_capital", "cash_flow", "commentary"}
 	return map[string]any{"publication": publication, "section": "summary", "pack": summary}
 }
 
