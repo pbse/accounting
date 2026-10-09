@@ -34,6 +34,8 @@ func registerChatSessions(mux *http.ServeMux, db *sql.DB, scopeOf func(*http.Req
 		if runes := []rune(q); len(runes) > 100 {
 			q = string(runes[:100])
 		}
+		// The text is matched as typed: a % or _ in it is not a wildcard.
+		q = strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(q)
 		rows, err := db.QueryContext(r.Context(), `SELECT s.id::text,s.title,COALESCE(s.close_id::text,''),COALESCE(c.entity||' · '||c.period,''),s.last_at,(SELECT count(*) FROM chat_messages m WHERE m.session_id=s.id)
  FROM chat_sessions s LEFT JOIN client_closes c ON c.id=s.close_id
  WHERE s.organization_id=$1 AND s.author=$2 AND s.executive=$3 AND (s.close_id IS NULL OR $4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted))

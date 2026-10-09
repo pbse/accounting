@@ -400,9 +400,11 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
               e.preventDefault();
               const title = renaming.trim();
               if (!title) return;
-              workspaceRequest(`/chat/sessions/${session.id}`, { action: "rename", title })
+              const renamed = session.id;
+              workspaceRequest(`/chat/sessions/${renamed}`, { action: "rename", title })
                 .then(() => {
-                  setSession({ ...session, title });
+                  // The chat shown may have changed meanwhile; only the renamed one takes the title.
+                  setSession((current) => (current && current.id === renamed ? { ...current, title } : current));
                   setRenaming(null);
                   bumpSessions();
                 })
@@ -677,14 +679,21 @@ function Chats({ closeId, current, onOpen, onNew }: { closeId: string; current: 
       clearTimeout(timer);
     };
   }, [version, filter]);
-  // Older chats come a page at a time, appended below, under the same filter.
+  // Older chats come a page at a time, appended below, under the same filter; a page that arrives after the filter
+  // or the list changed is dropped.
+  const listing = useRef(0);
+  useEffect(() => {
+    listing.current += 1;
+  }, [version, filter]);
   function showMore() {
+    const asked = listing.current;
     loadSessions(50, sessions?.length ?? 0, filter)
       .then((page) => {
+        if (asked !== listing.current) return;
         setSessions((current) => [...(current ?? []), ...page.sessions]);
         setMore(page.hasMore);
       })
-      .catch(() => setMore(false));
+      .catch(() => asked === listing.current && setMore(false));
   }
   const shown = sessions ?? [];
   const day = (iso: string) => {

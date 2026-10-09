@@ -200,6 +200,12 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 		t.Fatalf("a filter searches every page by title: %d", len(page.Sessions))
 	}
 	call("user_a", "GET", "/v1/closes/chat/sessions?q="+strings.Repeat("%E4%B8%AD", 120), nil, 200)
+	_, err = db.Exec(`INSERT INTO chat_sessions(organization_id,author,title) VALUES($1,'user_a','100% sure'),($1,'user_a','100 percent')`, org)
+	must(err)
+	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=100%25", nil, 200), &page))
+	if len(page.Sessions) != 1 {
+		t.Fatalf("a filter is matched as typed, not as a pattern: %d", len(page.Sessions))
+	}
 	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=alpha", nil, 200), &page))
 	if len(page.Sessions) != 1 {
 		t.Fatalf("a filter searches by the close's name: %d", len(page.Sessions))
