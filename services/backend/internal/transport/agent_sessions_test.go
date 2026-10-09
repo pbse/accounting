@@ -151,12 +151,19 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	if third.Session == nil || third.Session.ID == s1 || third.Session.Title != "Fresh question" {
 		t.Fatalf("a question after the quiet window opens a new chat: %+v", third)
 	}
+	// A panel left open on the quiet chat rolls over too, unless the chat was opened on purpose.
+	if rolled := parse(call("user_a", "POST", "/v1/closes/chat", map[string]any{"text": "Still there?", "session_id": s1}, 200)); rolled.Session == nil || rolled.Session.ID == s1 {
+		t.Fatalf("the quiet chat the panel showed as current is replaced: %+v", rolled)
+	}
+	if kept := parse(call("user_a", "POST", "/v1/closes/chat", map[string]any{"text": "Back to this one.", "session_id": s1, "picked": true}, 200)); kept.Session == nil || kept.Session.ID != s1 || len(kept.Messages) != 4 {
+		t.Fatalf("a chat opened on purpose is continued whatever its age: %+v", kept)
+	}
 	// A close's chat is its own and lists with its close; clearing deletes the chat.
 	inClose := parse(call("user_a", "POST", "/v1/closes/"+alpha+"/chat", map[string]any{"text": "Where does this close stand?"}, 200))
 	if inClose.Session == nil || inClose.Session.CloseID != alpha || inClose.Session.Close != "Alpha · 2026-09" {
 		t.Fatalf("a close's chat names its close: %+v", inClose)
 	}
-	if l := list("user_a"); len(l.Sessions) != 3 || l.Sessions[0].Close != "Alpha · 2026-09" {
+	if l := list("user_a"); len(l.Sessions) != 4 || l.Sessions[0].Close != "Alpha · 2026-09" {
 		t.Fatalf("the close's chat is listed first with its label: %+v", l)
 	}
 	// The model is replayed one chat's turns (a close's pairs replay; a firm-wide pair without lineage does not), and a
@@ -170,7 +177,7 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 	if cleared := parse(call("user_a", "POST", "/v1/closes/chat", map[string]any{"action": "clear", "session_id": third.Session.ID}, 200)); cleared.Session != nil {
 		t.Fatalf("clearing deletes the chat and starts fresh: %+v", cleared)
 	}
-	if l := list("user_a"); len(l.Sessions) != 2 {
+	if l := list("user_a"); len(l.Sessions) != 3 {
 		t.Fatalf("the cleared chat is gone: %+v", l)
 	}
 	if long := chatTitle(strings.Repeat("word ", 30)); len([]rune(long)) > 80 || !strings.HasSuffix(long, "…") {
@@ -194,7 +201,7 @@ func TestAgentChatSessionsAreManyAndKeptApart(t *testing.T) {
 		t.Fatalf("the first page is 50 with more to come: %d %v %d", len(page.Sessions), page.HasMore, page.NextOffset)
 	}
 	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?offset=50", nil, 200), &page))
-	if len(page.Sessions) != 12 || page.HasMore {
+	if len(page.Sessions) != 13 || page.HasMore {
 		t.Fatalf("the last page holds the rest: %d %v", len(page.Sessions), page.HasMore)
 	}
 	must(json.Unmarshal(call("user_a", "GET", "/v1/closes/chat/sessions?q=older+chat+5", nil, 200), &page))

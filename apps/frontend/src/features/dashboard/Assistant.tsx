@@ -265,7 +265,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
     };
     try {
       // The member's own date resolves day names such as "by Friday"; the agent's steps and text arrive as events.
-      const data = await workspaceRequest(path, { ...body, session_id: body.action === "clear" ? (session?.id ?? "") : session ? (picked ? session.id : "") : "new", today: localDate() }, false, onEvent);
+      const data = await workspaceRequest(path, { ...body, session_id: session?.id ?? "new", picked, today: localDate() } as Record<string, unknown>, false, onEvent);
       if (asked !== generation.current) return;
       setMessages(data.messages);
       if (data.session) setSession({ id: data.session.id, title: data.session.title });

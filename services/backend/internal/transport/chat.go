@@ -931,8 +931,11 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		var answerEmit agentEvent
 		var latency sql.NullInt64
 		var in struct {
-			Action      string `json:"action"`
-			SessionID   string `json:"session_id"`
+			Action    string `json:"action"`
+			SessionID string `json:"session_id"`
+			// Picked says the member opened the named chat on purpose; otherwise it is the chat the panel was given as
+			// current, which the quiet window may replace with a new one.
+			Picked      bool   `json:"picked"`
 			Text        string `json:"text"`
 			Command     string `json:"command"`
 			Argument    string `json:"argument"`
@@ -986,6 +989,17 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			if sessionID, err = currentSession(r); err != nil {
 				problem(w, 503, "Conversation unavailable.")
 				return
+			}
+		} else if sessionID != "" && !in.Picked && in.Action != "clear" {
+			// The chat the panel shows as current rolls over after 12 quiet hours, even with the panel left open; a
+			// chat opened on purpose is continued whatever its age.
+			var quiet bool
+			if err = db.QueryRowContext(r.Context(), `SELECT last_at<now()-interval '12 hours' FROM chat_sessions WHERE id=$1::bigint`, sessionID).Scan(&quiet); err != nil {
+				problem(w, 503, "Conversation unavailable.")
+				return
+			}
+			if quiet {
+				sessionID = ""
 			}
 		}
 		if in.Action == "clear" {
@@ -1328,6 +1342,18 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		// The answer names its question (question_id), so a card's confirmation reaches the question it was asked by
 		// however the author's requests interleaved.
 		questionID := ""
+		if sessionID != "" {
+			// The chat may have gone while the answer was made (its last turns pruned once a close was lost); the
+			// answer then opens a new chat rather than failing.
+			var still bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id=$1::bigint)`, sessionID).Scan(&still); err != nil {
+				problem(w, 503, "The message could not be saved.")
+				return
+			}
+			if !still {
+				sessionID = ""
+			}
+		}
 		if sessionID == "" {
 			// A new chat, titled by its first question.
 			if err = tx.QueryRowContext(r.Context(), `INSERT INTO chat_sessions(organization_id,author,close_id,executive,title) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5) RETURNING id::text`, org, author, closeID, exec, chatTitle(in.Text)).Scan(&sessionID); err != nil {
