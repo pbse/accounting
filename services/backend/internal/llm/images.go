@@ -70,7 +70,13 @@ func OCRConfiguration(ctx context.Context) map[string]string {
 	if Model(ctx, "ocr") != "" {
 		return map[string]string{"provider": Engine(ctx, "ocr"), "model": Model(ctx, "ocr")}
 	}
-	return OCRSetting()
+	status := OCRSetting()
+	// A usable Gemini key is not a route when OpenAI images were explicitly
+	// selected without usable API credentials. Never report an adapter we won't call.
+	if status["provider"] == "gemini" {
+		return map[string]string{"provider": "tesseract"}
+	}
+	return status
 }
 
 // Claude's direct endpoint caps each base64 image at 10 MB. Reject oversized

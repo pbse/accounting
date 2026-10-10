@@ -24,13 +24,19 @@ export async function check({ repository, sha, query, verify, pause = setTimeout
   throw new Error('Merged PR/CI evidence is still unavailable after three minutes; deployment was not started. Rerun after CI passes.');
 }
 
+export function hasProvenance(artifacts) {
+ if (artifacts.some(a=>a.name==='ci-provenance' && !a.expired)) return true;
+ if (artifacts.some(a=>a.name==='ci-provenance' && a.expired)) throw new Error('CI provenance expired; rerun CI before automatic deployment.');
+ return false;
+}
+
 if (process.argv[1]?.endsWith('/check-merged-ci.mjs')) {
   const gh = args => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
   const repository = process.env.GITHUB_REPOSITORY;
   const tree = execFileSync('git', ['rev-parse', `${process.env.GITHUB_SHA}^{tree}`], { encoding: 'utf8' }).trim();
   await check({ repository, sha: process.env.GITHUB_SHA, query: args => JSON.parse(gh(args)), verify: async (id, head) => {
     const artifacts = JSON.parse(gh(['api', `repos/${repository}/actions/runs/${id}/artifacts`])).artifacts;
-    if (!artifacts.some(a => a.name === 'ci-provenance' && !a.expired)) return false;
+    if (!hasProvenance(artifacts)) return false;
     const dir = mkdtempSync(join(tmpdir(), 'krith-ci-proof-'));
     try {
       gh(['run', 'download', String(id), '--repo', repository, '--name', 'ci-provenance', '--dir', dir]);

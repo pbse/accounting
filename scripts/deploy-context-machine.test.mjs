@@ -202,7 +202,7 @@ test('completion routing requires an enabled service and explicit subscription t
   assert.match(badEffort.stderr, /Invalid context-machine LLM_REASONING_EFFORTS/);
 });
 
-import {check as checkMergedCI} from './check-merged-ci.mjs';
+import {check as checkMergedCI,hasProvenance} from './check-merged-ci.mjs';
 const pr={merged_at:'now',merge_commit_sha:'merge',base:{ref:'main'},head:{sha:'head'}};
 function run(prs,states,attempts=3) {
  let n=0,waits=0;
@@ -237,4 +237,10 @@ test('API OCR requires explicit image consent before any deployment mutation',()
  assert.notEqual(check({LLM_API_IMAGE_ENABLED:'yes'}).status,0);
  for(const name of ['LLM_MODELS','LLM_REASONING_EFFORTS']) assert.notEqual(check({CONTEXT_MACHINE_ENABLED:'false',[name]:'{"ocr":"medium"}'}).status,0);
  assert.equal(check({CONTEXT_MACHINE_ENABLED:'false',LLM_API_IMAGE_ENABLED:'true',LLM_MODELS:'{"ocr":"gpt-6.1-sol"}'}).status,0);
+});
+
+test('expired provenance fails promptly with the right recovery instruction',()=>{
+ assert.throws(()=>hasProvenance([{name:'ci-provenance',expired:true}]),/expired; rerun CI/);
+ assert.equal(hasProvenance([]),false);
+ assert.equal(hasProvenance([{name:'ci-provenance',expired:false}]),true);
 });

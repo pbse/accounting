@@ -58,10 +58,11 @@ func command(ctx context.Context, name string, args ...string) (string, error) {
 // counts each Gemini call against the firm's daily model limit first. Tesseract reads a page without a text layer that
 // Gemini could not.
 type Reading struct {
-	Gemini   PageReader // nil: local PDF text/Tesseract only
-	Provider string     // label for the configured page reader
-	Reserve  func(context.Context) error
-	Timeout  time.Duration
+	Gemini      PageReader // nil: local PDF text/Tesseract only
+	Provider    string     // label for the configured page reader
+	Reserve     func(context.Context) error
+	Timeout     time.Duration
+	StopOnError bool
 	// local is the time the document's scanned pages from this one on need to be read locally, should Gemini fail
 	// them: Gemini is asked only while the time left covers its call and that.
 	local time.Duration
@@ -117,7 +118,7 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 				text, model, err := r.Gemini.ReadPage(ctx, png)
 				switch {
 				case err != nil:
-					if errors.Is(err, llm.ErrBusy) {
+					if errors.Is(err, llm.ErrBusy) || r.StopOnError {
 						r.off = true
 					}
 					log.Printf("Image model could not read a PDF page; using the local reading: %v", err)
@@ -281,7 +282,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	// Each Gemini page reading counts against the firm's daily model limit, as preparation's calls do, and as Gemini's.
 	ctx = llm.WithIdentity(ctx, org, subject)
-	reading := Reading{Provider: "Image model", Timeout: llm.PageReadTimeout(ctx), Reserve: func(ctx context.Context) error { return budget.ReserveGeminiCalls(ctx, db, org, 1) }}
+	reading := Reading{Provider: "Image model", Timeout: llm.PageReadTimeout(ctx), StopOnError: llm.Engine(ctx, "ocr") == string(llm.ContextMachine), Reserve: func(ctx context.Context) error { return budget.ReserveGeminiCalls(ctx, db, org, 1) }}
 	if g := llm.PageReaderFromContext(ctx); g != nil && pageReadingAllowed(ctx, db, org, entity) {
 		reading.Gemini = g
 	}

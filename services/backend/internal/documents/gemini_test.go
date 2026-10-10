@@ -246,3 +246,18 @@ func TestPageKnownLimitsAreRejectedBeforeBudgetReservation(t *testing.T) {
 		t.Fatal("known invalid image was charged or dispatched", reserved, text, err)
 	}
 }
+
+func TestContextMachineFailureStopsModelReadsForRemainingPages(t *testing.T) {
+	reserved := 0
+	reader := &fakeReader{err: errors.New("model service returned HTTP 503")}
+	reading := Reading{Gemini: reader, Provider: "Image model", StopOnError: true, Reserve: func(context.Context) error { reserved++; return nil }}
+	for i := 0; i < 3; i++ {
+		text, _, err := reading.page(t.Context(), "PDF text", func() ([]byte, error) { return []byte("page"), nil }, func([]byte) (string, error) { return "", nil })
+		if err != nil || text != "PDF text" {
+			t.Fatal(text, err)
+		}
+	}
+	if reserved != 1 || len(reader.sent) != 1 {
+		t.Fatal("failed context machine was retried", reserved, len(reader.sent))
+	}
+}

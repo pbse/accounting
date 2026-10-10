@@ -99,6 +99,9 @@ if (process.argv.includes('--check')) {
   if (process.env.AUTH_SESSION === 'server') required.push('WORKOS_API_KEY','SECRETS_KEY');
   if (process.env.LLM_PROVIDER === 'context_machine' || process.env.CONTEXT_MACHINE_ENABLED !== 'false') required.push('CONTEXT_MACHINE_TOKEN');
  }
+ if (app === 'queue' && process.env.LLM_PROVIDER !== 'context_machine' && process.env.LLM_API_IMAGE_ENABLED === 'true' && (!installed.has('OPENAI_API_KEY') || !process.env.OPENAI_MODEL)) {
+  console.warn('::warning::OpenAI image reading is selected but its key/model is unavailable. PDFs will use local reading; Gemini is bypassed by this explicit selection.');
+ }
  const missing = required.filter(name => !installed.has(name));
  if (missing.length) throw new Error(`Missing Cloudflare credentials for ${app}: ${missing.join(', ')}`);
  console.log(`Cloudflare credential metadata verified for ${app}`);

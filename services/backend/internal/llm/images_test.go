@@ -139,3 +139,16 @@ func TestOpenAITextKeyDoesNotOptPDFImagesIn(t *testing.T) {
 		t.Fatal("image reader enabled without consent")
 	}
 }
+
+func TestImageHeartbeatDoesNotAdvertiseGeminiAfterExplicitOpenAISwitchWithoutKey(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "configured-google-key")
+	t.Setenv("GEMINI_PAID_SERVICE", "confirmed")
+	client, err := New(Config{APIImages: true, Gemini: GeminiFromEnv()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := OCRConfiguration(WithClient(t.Context(), client))
+	if status["provider"] != "tesseract" {
+		t.Fatalf("unavailable route was advertised as active: %+v", status)
+	}
+}
