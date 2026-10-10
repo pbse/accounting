@@ -252,6 +252,9 @@ func SeedFirm(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) ([
 	if err := s.isolated(ctx); err != nil {
 		return nil, err
 	}
+	if err := s.members(ctx); err != nil {
+		return nil, err
+	}
 	if !s.createdFirm && s.o.Organization != "local-development" {
 		// The seed acts with the administrator's authority, so the firm's own records must say the person has it.
 		admin, err := s.administrator(ctx, s.o.Subject)
@@ -384,7 +387,9 @@ func (s *seeder) manifest(ctx context.Context) error {
 
 // people checks that the administrator and the members are current members of the firm (a firm the seed created
 // gets its memberships from the seed), and gives them their own settings.
-func (s *seeder) people(ctx context.Context) error {
+// members checks that the administrator and the members are current members of the firm; a firm the seed created
+// gets its memberships from the seed.
+func (s *seeder) members(ctx context.Context) error {
 	for _, subject := range append([]string{s.o.Subject}, s.o.Members...) {
 		var granted sql.NullBool
 		s.db.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, s.o.Organization, subject).Scan(&granted)
@@ -398,6 +403,12 @@ func (s *seeder) people(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// people gives the administrator their own settings where they have none, the invitations a growing firm has, and
+// the administrator's agent access.
+func (s *seeder) people(ctx context.Context) error {
 	// The administrator's own settings are set only where they have none, and taken out with the seed.
 	var hasZone, hasPreferences bool
 	s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM member_settings WHERE organization_id=$1 AND subject=$2),EXISTS(SELECT 1 FROM attention_preferences WHERE organization_id=$1 AND subject=$2)`, s.o.Organization, s.o.Subject).Scan(&hasZone, &hasPreferences)
@@ -1244,7 +1255,9 @@ func (s *seeder) reopen(ctx context.Context, closeID string, work []seed.Work) {
 		s.answers.Store(id, answerFor(w))
 		s.closeOf.Store(id, closeID)
 		s.must(ctx, "replace evidence", "POST", "/v1/closes/"+closeID+"/evidence/"+evidenceID+"/replace", map[string]any{"replacement_id": id, "reason": "ADP reissued the September summary with a corrected employer tax figure"})
-		s.settle(ctx)
+		if err := s.settle(ctx); err != nil {
+			s.problem("reopen: %v", err)
+		}
 		return
 	}
 }
