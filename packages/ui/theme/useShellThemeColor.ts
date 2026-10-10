@@ -8,7 +8,7 @@ export function useShellThemeColor() {
     const shell = document.querySelector(".app-shell");
     if (!meta || !shell) return;
     const previous = meta.content;
-    meta.content = getComputedStyle(shell).getPropertyValue("--bg").trim();
+    meta.content = getComputedStyle(shell).getPropertyValue("--surface").trim();
     return () => {
       meta.content = previous;
     };
