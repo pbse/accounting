@@ -48,7 +48,7 @@ type monthBooks struct {
 }
 
 // openRequest is a request to the client that it has not answered: who it is for, whether it reached them (sent, with
-// when; sending; failed; or not sent yet) and how many items of the month's work wait on it.
+// when; sending; failed; or not sent yet) and how many items of the month's work wait on it rather than on a newer one.
 type openRequest struct {
 	ID        string     `json:"id"`
 	CloseID   string     `json:"close_id"`
@@ -206,7 +206,8 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
  COALESCE(q.delivered_at,(SELECT min(COALESCE(m.finished_at,m.created_at)) FROM email_delivery m WHERE m.request_id=q.id AND m.state='accepted')),
  COALESCE((SELECT CASE WHEN m.state IN ('failed','unknown') OR m.delivery IN ('bounced','complained','failed','suppressed') THEN 'failed' WHEN m.state IN ('queued','sending') THEN 'sending' END
   FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
- (SELECT count(*) FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client')
+ (SELECT count(*) FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
+  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id))
  FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id
  WHERE d.close_id::text=ANY($1) AND EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
   AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id))

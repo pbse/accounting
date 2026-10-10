@@ -122,7 +122,8 @@ export default function ClientPage() {
   const name = client.entity;
   const months = client.months;
   const owed = [...client.owed].sort((a, b) => a.period.localeCompare(b.period));
-  const open = months.filter((m) => !m.signed_off && !m.unchecked);
+  // A month still open, or one whose sign-off could not be rechecked, wants the person; either is in hand.
+  const open = months.filter((m) => !m.signed_off);
   const signed = months.filter((m) => m.signed_off);
   const active = client.roster?.active ?? true;
   async function openMonth(period: string) {
@@ -138,8 +139,8 @@ export default function ClientPage() {
     }
   }
 
-  // The sentence, in the order the work comes: a former client; a month open (the oldest, overdue first); the months it
-  // owes that nobody opened; or how far it is signed off.
+  // The sentence, in the order the work comes: a former client; the oldest month in hand (its sign-off not rechecked,
+  // overdue, or open); the months it owes that nobody opened; or how far it is signed off.
   const oldest = [...open].sort((a, b) => a.period.localeCompare(b.period))[0];
   const overdue = oldest?.due_on && oldest.due_on < today;
   const sentence = !client.whole
@@ -147,11 +148,13 @@ export default function ClientPage() {
     : !active
       ? `${name} is no longer a client.`
       : oldest
-        ? overdue
-          ? `${name}’s ${monthName(oldest.period)} close is overdue.`
-          : open.length === 1
-            ? `${name}’s ${monthName(oldest.period)} close is open.`
-            : `${name} has ${open.length} months open, from ${monthName(oldest.period)}.`
+        ? oldest.unchecked
+          ? `${name}’s ${monthName(oldest.period)} sign-off could not be rechecked.`
+          : overdue
+            ? `${name}’s ${monthName(oldest.period)} close is overdue.`
+            : open.length === 1
+              ? `${name}’s ${monthName(oldest.period)} close is open.`
+              : `${name} has ${open.length} months open, from ${monthName(oldest.period)}.`
         : owed.length === 1
           ? `${name} owes ${monthName(owed[0].period)}.`
           : owed.length > 1

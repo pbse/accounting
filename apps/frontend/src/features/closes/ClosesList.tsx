@@ -17,10 +17,11 @@ export function isEnrollmentError(message: string) {
   return !!authKitClientId && message.includes("firm or membership");
 }
 
-type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; quickbooks?: string; xero?: string; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean }[] };
-type Roster = { clients: RosterClient[]; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
+type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean }[] };
+// connections are the states of each client's QuickBooks and Xero connections, by the name they are kept under (lower case).
+type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string }>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
 type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean };
-type ClientRow = { entity: string; active?: boolean; since?: string; owner?: string | null; quickbooks?: string; xero?: string; closes: ListedClose[]; owed: string[] };
+type ClientRow = { entity: string; active?: boolean; since?: string; owner?: string | null; closes: ListedClose[]; owed: string[] };
 
 const monthName = monthShort;
 
@@ -74,7 +75,7 @@ export default function ClosesList() {
   // The roster carries each client's whole history (every close under any of its names) and which months it can open:
   // every month from its first through this one that has no close and was not deleted as done. The recent and searched
   // closes add only clients the roster does not list.
-  for (const c of roster?.clients ?? []) Object.assign(row(c.entity), { active: c.active, since: c.since, owner: c.owner, quickbooks: c.quickbooks, xero: c.xero, owed: [...c.owed], closes: c.closes.map((cl) => ({ ...cl, client: c.entity.toLowerCase() })) });
+  for (const c of roster?.clients ?? []) Object.assign(row(c.entity), { active: c.active, since: c.since, owner: c.owner, owed: [...c.owed], closes: c.closes.map((cl) => ({ ...cl, client: c.entity.toLowerCase() })) });
   // The recent and searched closes carry each close's due date, priority and owner; a close the roster also lists
   // takes them from here.
   for (const c of closes) {
@@ -127,10 +128,11 @@ export default function ClosesList() {
   };
   // How the client's books arrive: each ledger connected, with a word when it is not working.
   const books = (r: ClientRow) => {
+    const states = roster?.connections?.[r.entity.toLowerCase()];
     const ledgers = (
       [
-        ["QuickBooks", r.quickbooks],
-        ["Xero", r.xero],
+        ["QuickBooks", states?.quickbooks],
+        ["Xero", states?.xero],
       ] as [string, string | undefined][]
     )
       .filter(([, state]) => state)
@@ -141,7 +143,8 @@ export default function ClosesList() {
   // date, the earliest month it owes, or nothing until this month ends.
   const upNext = (r: ClientRow) => {
     if (r.active === false) return "Nothing: no longer a client";
-    const open = r.closes.filter((c) => !c.signed_off && !c.unchecked).sort((a, b) => a.period.localeCompare(b.period))[0];
+    const open = r.closes.filter((c) => !c.signed_off).sort((a, b) => a.period.localeCompare(b.period))[0];
+    if (open?.unchecked) return `${monthName(open.period)}: recheck the sign-off`;
     if (open) return `${monthName(open.period)} close${open.due_on ? (open.due_on < today ? `, overdue since ${dates.calendarDay(open.due_on)}` : `, due ${dates.calendarDay(open.due_on)}`) : ""}`;
     const owed = [...r.owed].sort();
     if (owed.length) return `Open ${monthName(owed[0])}`;
