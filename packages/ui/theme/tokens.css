@@ -1,116 +1,188 @@
-/* Tray design tokens, light only. Names match the Tray design system (docs/design-system.md).
-   Scoped to the product shell, so marketing and client pages keep their own styles. */
+/* Krith design tokens, light only. Names and values match the Krith design system (docs/design-system.md).
+   Scoped to the product shell, so marketing and client pages keep their own styles. The Tray names at the end
+   alias to these until the last page has moved; delete each when its last use goes. */
+
+/* Geist (OFL, fonts/OFL-geist.txt): everything the person operates. */
 @font-face {
-  font-family: "Tray Inter";
+  font-family: "Geist";
   font-style: normal;
   font-display: swap;
   font-weight: 100 900;
-  src: url("./fonts/inter-latin-ext.woff2") format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  src: url("./fonts/geist-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 @font-face {
-  font-family: "Tray Inter";
+  font-family: "Geist";
   font-style: normal;
   font-display: swap;
   font-weight: 100 900;
-  src: url("./fonts/inter-latin.woff2") format("woff2");
+  src: url("./fonts/geist-latin.woff2") format("woff2");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* The word mark's serif (Newsreader, OFL), the public site's, for the brand alone. */
+/* Newsreader (OFL, fonts/OFL-newsreader.txt): the wordmark, the greeting, a page's lede, a records title. */
 @font-face {
-  font-family: "Krith Serif";
+  font-family: "Newsreader";
   font-style: normal;
   font-display: swap;
   font-weight: 300 600;
   src: url("./fonts/newsreader-latin.woff2") format("woff2");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
+@font-face {
+  font-family: "Newsreader";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url("./fonts/newsreader-italic-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Newsreader";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url("./fonts/newsreader-italic-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
-.app-shell {
-  /* Ground and surfaces: a light grey ground, white cards, quiet grey fills inside them. */
-  --bg: #f2f3f5;
+.app-shell,
+.k-app {
+  /* Ground: a white canvas, a faint grey sidebar, grey only as a fill inside controls. */
   --surface: #ffffff;
-  --tile: #f6f7f9;
-  --fill: #eceef2;
-  --hover: #f7f8fa;
-  --line: rgb(16 24 40 / 8%);
-  --line-strong: rgb(16 24 40 / 14%);
+  --surface-side: #f8f9fa;
+  --fill: #f4f4f5;
+  --hover: rgb(24 24 27 / 4%);
+  --line: rgb(24 24 27 / 8%);
+  --line-2: rgb(24 24 27 / 13%);
 
-  /* Ink */
-  --ink: #111827;
-  --ink-2: #5b6472;
-  /* Dots, dividers and icons only: too faint for text, which uses --ink-2. */
-  --ink-3: #9aa3b2;
-  --on-chip: #ffffff;
+  /* Ink: ink for what is read and acted on, ink-2 the second line, ink-3 muted words, ink-4 icons and dividers only. */
+  --ink: #18181b;
+  --ink-2: #52525b;
+  --ink-3: #6b6f78;
+  --ink-4: #8b8f98;
 
-  /* Brand and data hues. --blue is the brand, the current page, the primary button and the focus ring. */
-  --blue: #2563eb;
-  --blue-hover: #1d4ed8;
-  --orange: #f59e0b;
-  --teal: #0d9488;
-  --violet: #7c5cf5;
-  --pink: #ec4899;
-  --gray: #6b7280;
+  /* Graphite is the action; blue means alive. */
+  --primary: #18181b;
+  --on-primary: #ffffff;
+  --accent: #2563eb;
+  --accent-tint: #eef2ff;
+  --accent-text: #1d4ed8;
 
-  /* Status: the hues paint dots and bars; each -text shade carries words at AA on its -tint and on white. */
-  --green: #16a34a;
-  --red: #dc2626;
-  --positive-text: #15803d;
-  --positive-tint: #e7f6ec;
-  --negative-text: #b91c1c;
-  --negative-tint: #fdecec;
-  --attention-text: #92400e;
-  --attention-tint: #fef3dc;
-  --blue-text: #1d4ed8;
-  --blue-tint: #e8efff;
-  --teal-text: #0f766e;
-  --teal-tint: #e3f5f2;
-  --violet-text: #5b3fd6;
-  --violet-tint: #efeaff;
-  /* The one thing to do first: a yellow card with dark words (the home's top decision). */
-  --spotlight: #ffd43b;
-  --spotlight-text: #3b2f00;
+  /* Status: each -text carries words at AA on its -tint. Every status also has a word. */
+  --pos-text: #15803d;
+  --pos-tint: #ecfdf3;
+  --att-text: #92400e;
+  --att-tint: #fff7e6;
+  --neg-text: #b91c1c;
+  --neg-tint: #fef2f2;
+  --overlay: rgb(24 24 27 / 40%);
 
-  /* A source line a draft cites. */
-  --highlight: #fff3c9;
-  --highlight-edge: #e0a800;
+  /* A client's hue is identity, never status. */
+  --client-teal: #0d9488;
+  --client-violet: #7c5cf5;
+  --client-amber: #f59e0b;
+  --client-pink: #ec4899;
+  --client-blue: #2563eb;
+  --client-green: #16a34a;
+  --client-slate: #64748b;
+  --on-client: #ffffff;
 
-  /* Shape: a card has radius-md corners; anything nested inside it uses radius-sm; pills and buttons are full. */
-  --radius-sm: 10px;
-  --radius-md: 16px;
-  --radius-lg: 22px;
-  --radius-full: 999px;
+  /* Elevation: hairlines do the work; only the composer, the menu and a dialog float. */
+  --ring: 0 0 0 1px rgb(24 24 27 / 8%);
+  --ring-strong: 0 0 0 1px rgb(24 24 27 / 13%);
+  --raised: 0 0 0 1px rgb(24 24 27 / 13%), 0 3px 10px rgb(24 24 27 / 7%);
+  --lift: 0 0 0 1px rgb(24 24 27 / 13%), 0 6px 18px rgb(24 24 27 / 7%);
+  --float: 0 0 0 1px rgb(24 24 27 / 13%), 0 12px 32px rgb(24 24 27 / 10%);
+  --float-focus: 0 0 0 1px #18181b, 0 12px 32px rgb(24 24 27 / 12%);
+  --dialog: 0 24px 64px rgb(24 24 27 / 18%);
+  --focus: 0 0 0 2px #ffffff, 0 0 0 4px #2563eb;
 
   /* Spacing, named by pixel value. */
-  --space-1: 1px;
+  --space-2: 2px;
   --space-4: 4px;
+  --space-6: 6px;
   --space-8: 8px;
   --space-10: 10px;
   --space-12: 12px;
+  --space-14: 14px;
   --space-16: 16px;
   --space-20: 20px;
   --space-24: 24px;
   --space-32: 32px;
+  --space-40: 40px;
 
-  /* Sizes */
+  /* Corners are concentric: a control inside a container is one step smaller. */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 22px;
+  --radius-full: 999px;
+
+  /* Sizes the layout depends on. */
+  --side-width: 256px;
+  --side-collapsed: 56px;
+  --composer-width: 640px;
+  --lede-width: 720px;
+  --crumbs-height: 56px;
+  --records-head: 64px;
+  --control: 34px;
+  --control-sm: 28px;
+  --row: 44px;
+  --notice: 38px;
+  --icon: 16px;
+  --mark: 24px;
+
+  /* Type and motion. */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Tray names, aliased until the pages that use them move. Delete each with its last use. */
+  --bg: var(--surface);
+  --tile: var(--surface-side);
+  --line-strong: var(--line-2);
+  --on-chip: var(--on-primary);
+  --blue: var(--accent);
+  --blue-hover: var(--accent-text);
+  --blue-text: var(--accent-text);
+  --blue-tint: var(--accent-tint);
+  --orange: var(--client-amber);
+  --teal: var(--client-teal);
+  --violet: var(--client-violet);
+  --pink: var(--client-pink);
+  --gray: var(--client-slate);
+  --green: var(--client-green);
+  --red: var(--neg-text);
+  --positive-text: var(--pos-text);
+  --positive-tint: var(--pos-tint);
+  --negative-text: var(--neg-text);
+  --negative-tint: var(--neg-tint);
+  --attention-text: var(--att-text);
+  --attention-tint: var(--att-tint);
+  --teal-text: #0f766e;
+  --teal-tint: #e3f5f2;
+  --violet-text: #5b3fd6;
+  --violet-tint: #efeaff;
+  --spotlight: var(--att-tint);
+  --spotlight-text: var(--att-text);
+  --highlight: var(--fill);
+  --highlight-edge: var(--accent);
+  --space-1: 1px;
   --topbar-height: 64px;
   --rail-width: 56px;
   --page-width: 1288px;
   --nav-item-height: 36px;
   --icon-tile: 36px;
   --avatar: 36px;
-
-  /* Elevation: cards float on a soft shadow; tiles inside them sit on a hairline ring; menus pop. */
-  --shadow-card: 0 1px 2px rgb(16 24 40 / 4%), 0 2px 8px rgb(16 24 40 / 4%);
-  --shadow-raised: 0 0 0 1px rgb(16 24 40 / 6%), 0 1px 2px rgb(16 24 40 / 5%);
-  --shadow-tile: inset 0 0 0 1px rgb(16 24 40 / 7%);
-  --shadow-tile-hover: inset 0 0 0 1px rgb(16 24 40 / 12%);
-  --shadow-pop: 0 0 0 1px rgb(16 24 40 / 6%), 0 12px 32px rgb(16 24 40 / 12%);
-
-  /* Type: Inter at optical size 32 (Inter Display) at every size. */
-  --font-sans: "Tray Inter", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  /* The word mark's serif, the public site's. */
-  --font-brand: "Krith Serif", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --shadow-card: var(--ring);
+  --shadow-raised: var(--ring);
+  --shadow-tile: inset var(--ring);
+  --shadow-tile-hover: inset var(--ring-strong);
+  --shadow-pop: var(--float);
+  --font-brand: var(--font-serif);
 }
