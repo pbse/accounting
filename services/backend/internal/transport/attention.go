@@ -247,9 +247,10 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/attention/stream", func(w http.ResponseWriter, r *http.Request) {
 		// The server's write timeout is for answers; this response lives as long as the stream does.
 		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(attentionStreamFor + time.Minute))
+		// The headers go with the first line, so the stream begins, as the request log measures it, when its first
+		// reading is ready.
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
 		send := func(v map[string]any) bool {
 			line, _ := json.Marshal(v)
 			if _, err := w.Write(append(line, '\n')); err != nil {
