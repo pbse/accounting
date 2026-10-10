@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strconv"
 	"time"
 
 	"close.local/backend/internal/quickbooks"
@@ -102,12 +103,6 @@ func captureMonth(ctx context.Context, q rowReader, source, id string) (m *fluxM
 	return m, closeID, org, err
 }
 
-// pendingCaptures are month-end captures with no books version yet, oldest first.
-const pendingCaptures = `SELECT source,id FROM (
- SELECT 'quickbooks' AS source,s.id::text AS id,s.captured_at FROM quickbooks_snapshots s WHERE s.payload ? 'period' AND NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='quickbooks' AND v.source_id=s.id::text)
- UNION ALL SELECT 'xero',s.id::text,s.captured_at FROM xero_snapshots s WHERE NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='xero' AND v.source_id=s.id::text)) p
- ORDER BY captured_at,source,id LIMIT $1`
-
 // writeBooksVersion stores the books version of one capture, once: a capture the readers cannot read is stored with the
 // reason, so it is not tried again and a reader that would also refuse it agrees. Its ledger lines come with it, for a
 // QuickBooks capture's General Ledger, each with the report location it came from.
@@ -149,48 +144,97 @@ func writeBooksVersion(ctx context.Context, db *sql.DB, source, id string) error
 		return err
 	}
 	// The General Ledger's rows are kept whether or not the readers can read the month's financial reports.
-	if source == "quickbooks" && len(m.gl) > 0 && string(m.gl) != "null" {
-		lines, e := quickbooks.LedgerLinesOf(m.gl)
-		if e == nil {
-			raw, _ := json.Marshal(lines)
-			_, err = tx.ExecContext(ctx, `INSERT INTO books_lines(version_id,position,account_id,location,cells)
- SELECT $1::bigint,l.ordinality::integer,l.value->>'account_id',l.value->>'location',l.value->'cells' FROM jsonb_array_elements($2::jsonb) WITH ORDINALITY l`, versionID, string(raw))
-		} else {
-			_, err = tx.ExecContext(ctx, `UPDATE books_versions SET lines_unreadable=$2 WHERE id=$1::bigint`, versionID, e.Error())
+	if lines, kept, e := captureLines(m); e != nil {
+		_, err = tx.ExecContext(ctx, `UPDATE books_versions SET lines_unreadable=$2 WHERE id=$1::bigint`, versionID, e.Error())
+	} else if kept {
+		raw, _ := json.Marshal(lines)
+		if _, err = tx.ExecContext(ctx, `INSERT INTO books_lines(version_id,position,account_id,location,cells)
+ SELECT $1::bigint,l.ordinality::integer,l.value->>'account_id',l.value->>'location',l.value->'cells' FROM jsonb_array_elements($2::jsonb) WITH ORDINALITY l`, versionID, string(raw)); err == nil {
+			_, err = tx.ExecContext(ctx, `UPDATE books_versions SET lines_digest=$2 WHERE id=$1::bigint`, versionID, linesDigest(lines))
 		}
-		if err != nil {
-			return err
-		}
+	}
+	if err != nil {
+		return err
 	}
 	return tx.Commit()
 }
 
-// writeBooksVersions writes the versions of up to limit captures that have none, and says how many it wrote.
+// captureLines is a capture's ledger lines, and whether it has a General Ledger to keep them from (a QuickBooks
+// capture's; the General Ledger's rows are kept whether or not the readers can read the month's financial reports).
+func captureLines(m *fluxMonth) ([]quickbooks.LedgerLine, bool, error) {
+	if m.Source != "quickbooks" || len(m.gl) == 0 || string(m.gl) == "null" {
+		return nil, false, nil
+	}
+	lines, err := quickbooks.LedgerLinesOf(m.gl)
+	return lines, err == nil, err
+}
+
+// linesDigest is the digest of a version's ledger lines, in order: of each line's account, location and cells as the
+// database keeps JSON (its jsonb text), so lines read back from books_lines give the same digest.
+func linesDigest(lines []quickbooks.LedgerLine) string {
+	h := sha256.New()
+	for _, l := range lines {
+		var cells any
+		json.Unmarshal(l.Cells, &cells)
+		canonical, _ := json.Marshal(cells)
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00", l.AccountID, l.Location, canonical)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// writeBooksVersions writes the versions of up to limit captures after each source's cursor, oldest first (a capture
+// with no month-end reports needs no version), and says how many captures it went through. Captures only ever grow, so
+// each pass reads only those after the cursor. The cursor moves only past captures saved more than ten minutes ago: a
+// capture's own transaction can commit after a later one's, so a newer capture is written but left before the cursor
+// until no earlier one can still appear.
 func writeBooksVersions(ctx context.Context, db *sql.DB, limit int) (int, error) {
-	rows, err := db.QueryContext(ctx, pendingCaptures, limit)
-	if err != nil {
-		return 0, err
-	}
-	type capture struct{ source, id string }
-	var pending []capture
-	for rows.Next() {
-		var c capture
-		if err = rows.Scan(&c.source, &c.id); err != nil {
-			rows.Close()
-			return 0, err
+	done := 0
+	for _, source := range []string{"quickbooks", "xero"} {
+		var after int64
+		if err := db.QueryRowContext(ctx, `SELECT COALESCE((SELECT last_id FROM books_capture_cursor WHERE source=$1),0)`, source).Scan(&after); err != nil {
+			return done, err
 		}
-		pending = append(pending, c)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return 0, err
-	}
-	for i, c := range pending {
-		if err = writeBooksVersion(ctx, db, c.source, c.id); err != nil {
-			return i, fmt.Errorf("%s capture %s: %w", c.source, c.id, err)
+		query := `SELECT id,payload ? 'period',captured_at<now()-interval '10 minutes' FROM quickbooks_snapshots WHERE id>$1 ORDER BY id LIMIT $2`
+		if source == "xero" {
+			query = `SELECT id,true,captured_at<now()-interval '10 minutes' FROM xero_snapshots WHERE id>$1 ORDER BY id LIMIT $2`
+		}
+		rows, err := db.QueryContext(ctx, query, after, limit)
+		if err != nil {
+			return done, err
+		}
+		type capture struct {
+			id              int64
+			period, settled bool
+		}
+		var pending []capture
+		for rows.Next() {
+			var c capture
+			if err = rows.Scan(&c.id, &c.period, &c.settled); err != nil {
+				rows.Close()
+				return done, err
+			}
+			pending = append(pending, c)
+		}
+		rows.Close()
+		if err = rows.Err(); err != nil {
+			return done, err
+		}
+		advancing := true
+		for _, c := range pending {
+			if c.period {
+				if err = writeBooksVersion(ctx, db, source, strconv.FormatInt(c.id, 10)); err != nil {
+					return done, fmt.Errorf("%s capture %d: %w", source, c.id, err)
+				}
+			}
+			if advancing = advancing && c.settled; advancing {
+				if _, err = db.ExecContext(ctx, `INSERT INTO books_capture_cursor(source,last_id) VALUES($1,$2) ON CONFLICT (source) DO UPDATE SET last_id=GREATEST(books_capture_cursor.last_id,$2)`, source, c.id); err != nil {
+					return done, err
+				}
+				done++
+			}
 		}
 	}
-	return len(pending), nil
+	return done, nil
 }
 
 // RunBooksVersions keeps every month-end capture's books version written: the existing captures first, a batch at a
@@ -199,12 +243,12 @@ func writeBooksVersions(ctx context.Context, db *sql.DB, limit int) (int, error)
 func RunBooksVersions(ctx context.Context, db *sql.DB) {
 	var checked time.Time
 	for {
-		written, err := writeBooksVersions(ctx, db, 200)
+		written, err := writeBooksVersions(ctx, db, 100)
 		if err != nil && ctx.Err() == nil {
 			log.Print("Books versions could not be written: ", err)
 		}
 		// Once the versions are written, the readers are checked against every one of them, hourly.
-		if err == nil && written < 200 && time.Since(checked) > time.Hour {
+		if err == nil && written < 100 && time.Since(checked) > time.Hour {
 			if e := runBooksParity(ctx, db); e != nil && ctx.Err() == nil {
 				log.Print("The books parity check could not run: ", e)
 			} else {
@@ -212,7 +256,7 @@ func RunBooksVersions(ctx context.Context, db *sql.DB) {
 			}
 		}
 		wait := time.Minute
-		if err == nil && written == 200 {
+		if err == nil && written >= 100 {
 			wait = time.Second
 		}
 		select {
@@ -271,8 +315,13 @@ func storedVersions(ctx context.Context, q interface {
 	return versions, rows.Err()
 }
 
-// compareVersions recomputes each version from its capture and names those that disagree.
-func compareVersions(ctx context.Context, q rowReader, versions []storedVersion) (checked int, mismatched []string, err error) {
+// compareVersions recomputes each version from its capture and compares it with what is stored: the figures, read
+// back from the stored version, and its ledger lines, read back from books_lines. It names each that disagrees by its
+// capture and what disagrees, never by what the books hold, since staff read the result.
+func compareVersions(ctx context.Context, q interface {
+	rowReader
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, versions []storedVersion) (checked int, mismatched []string, err error) {
 	for _, v := range versions {
 		m, _, _, e := captureMonth(ctx, q, v.source, v.id)
 		if e == sql.ErrNoRows {
@@ -282,17 +331,71 @@ func compareVersions(ctx context.Context, q rowReader, versions []storedVersion)
 			return checked, mismatched, e
 		}
 		checked++
+		name := v.source + " capture " + v.id
 		computed, readErr := versionOf(m)
+		stored, storedLines, e := storedBooks(ctx, q, v.row)
+		if e != nil {
+			return checked, mismatched, e
+		}
 		switch {
 		case readErr != nil && v.unreadable == "":
-			mismatched = append(mismatched, v.source+" "+v.id+": the readers now refuse it: "+readErr.Error())
+			mismatched = append(mismatched, name+": the readers now refuse it")
+			continue
 		case readErr == nil && v.unreadable != "":
-			mismatched = append(mismatched, v.source+" "+v.id+": stored as unreadable, but the readers read it")
-		case readErr == nil && computed.digest() != v.digest:
-			mismatched = append(mismatched, v.source+" "+v.id+": the figures differ")
+			mismatched = append(mismatched, name+": stored as unreadable, but the readers read it")
+			continue
+		case readErr == nil && (computed.digest() != v.digest || stored.digest() != v.digest):
+			mismatched = append(mismatched, name+": the figures differ")
+			continue
+		}
+		lines, kept, lineErr := captureLines(m)
+		switch {
+		case lineErr == nil && kept && linesDigest(lines) != storedLines:
+			mismatched = append(mismatched, name+": the ledger lines differ")
+		case lineErr == nil && !kept && storedLines != "":
+			mismatched = append(mismatched, name+": the ledger lines differ")
 		}
 	}
 	return checked, mismatched, nil
+}
+
+// storedBooks reads a stored version's figures back, and the digest of its stored ledger lines ("" without any).
+func storedBooks(ctx context.Context, q interface {
+	rowReader
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, row int64) (booksVersion, string, error) {
+	var v booksVersion
+	var accounts, balances, activity, uncounted []byte
+	var cashFlow []byte
+	if err := q.QueryRowContext(ctx, `SELECT currency,typed,accounts,balances,activity,cash_flow,uncounted FROM books_versions WHERE id=$1`, row).Scan(&v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted); err != nil {
+		return v, "", err
+	}
+	json.Unmarshal(accounts, &v.Accounts)
+	json.Unmarshal(balances, &v.Balances)
+	json.Unmarshal(activity, &v.Activity)
+	json.Unmarshal(uncounted, &v.Uncounted)
+	if len(cashFlow) > 0 {
+		v.CashFlow = cashFlow
+	}
+	rows, err := q.QueryContext(ctx, `SELECT account_id,location,cells FROM books_lines WHERE version_id=$1 ORDER BY position`, row)
+	if err != nil {
+		return v, "", err
+	}
+	defer rows.Close()
+	var lines []quickbooks.LedgerLine
+	for rows.Next() {
+		var l quickbooks.LedgerLine
+		var cells []byte
+		if err = rows.Scan(&l.AccountID, &l.Location, &cells); err != nil {
+			return v, "", err
+		}
+		l.Cells = cells
+		lines = append(lines, l)
+	}
+	if err = rows.Err(); err != nil || len(lines) == 0 {
+		return v, "", err
+	}
+	return v, linesDigest(lines), nil
 }
 
 // adminBooks is the month-books record's state across firms, for staff deciding when a reader may switch to it

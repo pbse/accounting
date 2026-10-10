@@ -28,6 +28,8 @@ CREATE TABLE books_versions (
  cash_flow jsonb,
  uncounted jsonb NOT NULL DEFAULT '[]'::jsonb,
  digest text NOT NULL CHECK (length(digest)=64),
+ -- lines_digest is the digest of its ledger lines (empty without any), so the parity check compares them too.
+ lines_digest text NOT NULL DEFAULT '',
  -- unreadable is why the readers cannot read the capture (its figures are then empty); lines_unreadable why its ledger
  -- lines could not be kept. A version is written once, with either.
  unreadable text NOT NULL DEFAULT '',
@@ -45,6 +47,12 @@ CREATE TABLE books_lines (
  cells jsonb NOT NULL,
  PRIMARY KEY (version_id,position)
 );
+-- books_capture_cursor: the last capture of each source the worker has written a version for (captures only ever
+-- grow), so each pass reads only the captures after it.
+CREATE TABLE books_capture_cursor (
+ source text PRIMARY KEY CHECK (source IN ('quickbooks','xero')),
+ last_id bigint NOT NULL
+);
 -- books_parity: each run of the parity check over every version, by the worker: how many it checked, and the captures
 -- whose stored version no longer matches what the readers compute (identifiers only). A run in progress has no
 -- finished_at. Staff read the latest finished run.
@@ -60,5 +68,7 @@ CREATE POLICY tenant ON books_versions USING (current_setting('app.organization'
 ALTER TABLE books_lines ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON books_lines USING (current_setting('app.organization',true)='*' OR version_id IN (SELECT id FROM books_versions));
 ALTER TABLE books_parity ENABLE ROW LEVEL SECURITY;
+ALTER TABLE books_capture_cursor ENABLE ROW LEVEL SECURITY;
+CREATE POLICY platform ON books_capture_cursor USING (current_setting('app.organization',true)='*');
 CREATE POLICY platform ON books_parity USING (current_setting('app.organization',true)='*');
 COMMIT;

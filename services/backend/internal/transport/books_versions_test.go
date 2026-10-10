@@ -131,7 +131,24 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	must(err)
 	_, mismatched, err = booksParity(t.Context(), db, org)
 	must(err)
-	if len(mismatched) != 1 || !strings.Contains(mismatched[0], "quickbooks "+readable) {
-		t.Fatalf("a disagreement is named: %v", mismatched)
+	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": the figures differ" {
+		t.Fatalf("a disagreement is named by its capture and what differs: %v", mismatched)
+	}
+	_, err = db.Exec(`UPDATE quickbooks_snapshots SET payload=jsonb_set(payload,'{reports,TrialBalance,Rows,Row,0,ColData,1,value}','"1500.25"') WHERE id=$1`, readable)
+	must(err)
+	// So is a stored version whose content no longer matches its capture: its figures, or its ledger lines.
+	_, err = db.Exec(`UPDATE books_lines SET cells=jsonb_set(cells,'{ColData,2,value}','"999.00"') WHERE position=1 AND version_id=(SELECT id FROM books_versions WHERE source='quickbooks' AND source_id=$1)`, readable)
+	must(err)
+	_, mismatched, err = booksParity(t.Context(), db, org)
+	must(err)
+	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": the ledger lines differ" {
+		t.Fatalf("stored lines are compared: %v", mismatched)
+	}
+	_, err = db.Exec(`UPDATE books_versions SET balances=jsonb_set(balances,'{1}','"1"') WHERE source='quickbooks' AND source_id=$1`, readable)
+	must(err)
+	_, mismatched, err = booksParity(t.Context(), db, org)
+	must(err)
+	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": the figures differ" {
+		t.Fatalf("stored figures are compared: %v", mismatched)
 	}
 }
