@@ -1,11 +1,11 @@
 package transport
 
 import (
-	"fmt"
-	"crypto/sha256"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -275,6 +275,10 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 		sessions, _ := serverSessions()
 		verifier := workspaceVerifier()
 		still := func() bool {
+			// A bearer token that has run out ends the stream, as a new request with it would be refused.
+			if a := auth.Actor(r.Context()); a != nil && a.ExpiresAt != nil && time.Now().After(a.ExpiresAt.Time) {
+				return false
+			}
 			if allowed, err := organizationAccess(db, r); err != nil || !allowed {
 				return false
 			}

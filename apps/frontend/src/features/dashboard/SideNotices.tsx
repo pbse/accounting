@@ -23,14 +23,13 @@ export function SideNotices() {
   // Live: one long-lived request says when the person's unread items change, and the inbox is read again then. The
   // request ends on the server's schedule and is opened again; a failure waits a while before trying again. The
   // 60-second read above stands behind it.
-  // Each reading the stream sends carries a version; the one it opens with is a snapshot, read again only when it
-  // differs from what is held here, and a later one only when its version moved.
+  // Each reading the stream sends carries a version. The very first is a snapshot, read again only when it differs
+  // from what is held here; from then on, across reconnects too, a reading is followed only when its version moved.
   const seen = useRef("");
   useEffect(() => {
     const controller = new AbortController();
     let timer: number | undefined;
     const listen = async () => {
-      seen.current = "";
       try {
         await workspaceRequest(
           "/attention/stream",
