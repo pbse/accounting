@@ -759,8 +759,9 @@ func workspaceVerifier() *auth.Verifier {
 	return &auth.Verifier{ClientID: os.Getenv("WORKOS_CLIENT_ID"), Organization: os.Getenv("WORKOS_ORGANIZATION_ID"), Issuer: os.Getenv("WORKOS_ISSUER")}
 }
 
-// canSignOff says the reader's organization role holds close:signoff; local development, with no organization, may.
+// canSignOff says the reader may sign the close off as the sign-off route allows it: a reviewer (workpapers:review,
+// which reviewActor requires) whose role also holds close:signoff; local development, with no organization, may.
 func canSignOff(r *http.Request) bool {
 	a := auth.Actor(r.Context())
-	return a == nil || a.Organization == "" || slices.Contains(a.Permissions, "close:signoff")
+	return a != nil && (a.Organization == "" || (slices.Contains(a.Permissions, "workpapers:review") && slices.Contains(a.Permissions, "close:signoff")))
 }
