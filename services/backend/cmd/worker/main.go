@@ -52,6 +52,7 @@ func main() {
 		"forwarded":       forwarded.Run,
 		"quickbooks_sync": quickbooks.RunSync,
 		"platform_alerts": transport.RunPlatformAlerts,
+		"books_versions":  transport.RunBooksVersions,
 		"workflow_engine": wf.Run,
 		"heartbeat": func(ctx context.Context, db *sql.DB) {
 			transport.RunHeartbeat(ctx, db, "worker", map[string]any{"ocr": llm.OCRSetting()})

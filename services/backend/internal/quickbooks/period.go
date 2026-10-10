@@ -454,6 +454,42 @@ func selectLedger(accounts, report json.RawMessage, accountID string, offset int
 	return page, err
 }
 
+// LedgerLine is one General Ledger row with the account it sits under and where it is in the report: its cells as the
+// provider gave them, without any rows nested under it.
+type LedgerLine struct {
+	AccountID string          `json:"account_id"`
+	Location  string          `json:"location"`
+	Cells     json.RawMessage `json:"cells"`
+}
+
+// LedgerLinesOf is every data row of a captured General Ledger report, in report order, each with its account. A row
+// under no account is not a ledger line.
+func LedgerLinesOf(report json.RawMessage) ([]LedgerLine, error) {
+	var root struct {
+		Columns struct{ Column []struct{ ColTitle string } }
+		Rows    struct{ Row []json.RawMessage }
+	}
+	if json.Unmarshal(report, &root) != nil {
+		return nil, fmt.Errorf("General Ledger report is invalid")
+	}
+	accountColumn := len(root.Columns.Column) > 0 && strings.Contains(strings.ToLower(root.Columns.Column[0].ColTitle), "account")
+	lines := []LedgerLine{}
+	err := walkLedger(root.Rows.Row, "reports.GeneralLedger.Rows", "", accountColumn, func(location, account string, raw json.RawMessage, row ledgerRow) error {
+		if row.Type != "Data" || account == "" {
+			return nil
+		}
+		var cells map[string]json.RawMessage
+		if json.Unmarshal(raw, &cells) != nil {
+			return fmt.Errorf("General Ledger row is invalid")
+		}
+		delete(cells, "Rows")
+		body, _ := json.Marshal(cells)
+		lines = append(lines, LedgerLine{AccountID: account, Location: location, Cells: body})
+		return nil
+	})
+	return lines, err
+}
+
 type ledgerCell struct{ ID, Value string }
 
 type ledgerRow struct {
