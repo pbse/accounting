@@ -175,3 +175,45 @@ func mustRat(s string) *big.Rat {
 	r, _ := new(big.Rat).SetString(s)
 	return r
 }
+
+// A Trial Balance export is read with a proposed layout a person confirms: its header found, its columns' meanings
+// proposed, its totals checked against what they total and left out, its sides compared to the cent.
+func TestATrialBalanceIsReadWithItsLayout(t *testing.T) {
+	// QuickBooks Online's export: a title block, an empty header over the accounts, and a TOTAL row of each side.
+	qbo, _ := Read("tb.csv", []byte("Acme Co\nTrial Balance\nAs of September 30, 2026\n\n,Debit,Credit\nChecking,\"1,500.25\",\nOwner's Equity,,\"1,000.00\"\nSales,,800.25\nRent,300.00,\nTOTAL,\"$1,800.25\",\"$1,800.25\"\n"))
+	layout, questions := ProposeLayout(qbo.Tables[0])
+	if layout.HeaderRow != 5 || layout.Columns[0] != AccountName || layout.Columns[1] != Debit || layout.Columns[2] != Credit || layout.Style.DecimalComma || len(questions) == 0 {
+		t.Fatalf("the header, the account column and the sides are proposed, and asked about: %+v %v", layout, questions)
+	}
+	reading := layout.Read(qbo.Tables[0])
+	if !reading.Balanced || reading.Debits != "1800.25" || reading.Credits != "1800.25" || len(reading.Problems) != 0 {
+		t.Fatalf("balanced, with the TOTAL row checked side by side: %+v", reading)
+	}
+	kinds := map[string]RowKind{}
+	for _, l := range reading.Lines {
+		kinds[l.Name] = l.Kind
+	}
+	if kinds["Checking"] != Posting || kinds["TOTAL"] != Total || reading.Lines[0].Amount != "1500.25" || reading.Lines[1].Amount != "-1000" || reading.Lines[0].Ref != "R6C1" {
+		t.Fatalf("lines with their balances (debit minus credit) and locations: %+v", reading.Lines)
+	}
+	// A ledger with sections, nested totals and a parent account that has its own balance, and a signed balance column
+	// in which a credit is positive.
+	nested, _ := Read("tb.csv", []byte("Code;Account;Balance\n;Assets;\n;Current Assets;\n1000;Bank;-1.500,00\n1100;Debtors;-250,00\n;Total Current Assets;-1.750,00\n1200;Equipment;-400,00\n1210;Equipment: depreciation;100,00\n;Total Equipment;-300,00\n;Total Assets;-2.050,00\n3000;Capital;2.050,00\n;Total;0,00\n"))
+	layout, _ = ProposeLayout(nested.Tables[0])
+	layout.BalanceSign = "credit"
+	if layout.Columns[0] != AccountNumber || layout.Columns[1] != AccountName || layout.Columns[2] != Balance || !layout.Style.DecimalComma {
+		t.Fatalf("a semicolon file with decimal commas: %+v", layout)
+	}
+	reading = layout.Read(nested.Tables[0])
+	if !reading.Balanced || len(reading.Problems) != 0 || reading.Lines[2].Amount != "1500" || reading.Lines[2].Number != "1000" {
+		t.Fatalf("nested totals, a parent with its own balance, credit-positive signs: %+v", reading)
+	}
+	// What holds a reading: an amount that cannot be read, a total that does not match, sides that do not agree, and an
+	// amount rounded at its source.
+	broken, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,100.00,\nSales,,90.00\nOther,n/a,\nTotal Bank,99.00,\nFees,0.005,\n"))
+	layout, _ = ProposeLayout(broken.Tables[0])
+	reading = layout.Read(broken.Tables[0])
+	if reading.Balanced || len(reading.Problems) != 4 {
+		t.Fatalf("every problem is named with its place: %+v", reading.Problems)
+	}
+}
