@@ -8,8 +8,10 @@ import { monthName, useDates, useToday } from "../../data/time";
 import { PlanningControls, type Plan } from "./Planning";
 import type { Close } from "./WorkpaperView";
 
-// A close's page says where the close stands in one sentence (docs/design-system.md, Lede), then shows only what is
-// left for the person as numbered tasks (Task), with what the agent already did folded to a line beneath (DoneLine).
+// A close's page says where the close stands in one sentence (docs/design-system.md, Lede): the areas that need the
+// person, counted as the tasks beneath count them (an area's task names every action in it), or what the close waits
+// on, or that it is ready. Then only what is left for the person shows, as numbered tasks (Task), with what is done
+// folded to a line beneath (DoneLine).
 // Both read the close's brief: each area's state, the text that says why, and the tab that holds it.
 
 type Line = { area: string; state: "done" | "attention" | "waiting" | "info" | "unknown"; text: string; tab?: string };
@@ -60,7 +62,7 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
     : brief.headline.startsWith("Signed off.")
       ? `${close.entity} is signed off.`
       : count
-        ? `${close.entity} is ${count === 1 ? "one step" : `${n(count, "step")}`} from done.`
+        ? `${close.entity} needs you in ${count === 1 ? "one area" : n(count, "area")}.`
         : ready
           ? `${close.entity} is ready to sign off.`
           : waiting.length
