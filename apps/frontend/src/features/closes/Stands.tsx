@@ -18,6 +18,12 @@ type Brief = { headline: string; lines: Line[] };
 const area = (line: Line) => line.area[0].toUpperCase() + line.area.slice(1);
 // What the brief says needs the person: its headline counts the actions ("3 things need you: …"), which can outnumber
 // the areas they fall in; the areas are what the tasks show.
+// Sign-off is the page's one action: available when the brief's sign-off line says the close is ready (readiness
+// with no blockers), never while blockers wait or once it is signed off.
+export function signOffAvailable(brief: Brief | undefined) {
+  const line = brief?.lines.find((l) => l.area === "sign-off");
+  return !!line && line.state === "attention" && /ready/i.test(line.text);
+}
 export function needsOf(brief: Brief) {
   const needs = brief.lines.filter((l) => l.state === "attention" || l.state === "unknown");
   const counted = /^(\d+) things? needs? you/.exec(brief.headline);

@@ -8,7 +8,7 @@ import { Segmented } from "@close/ui/components/Segmented";
 import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { BillCorrection } from "./BillCorrection";
 import { CreditApplications } from "./CreditApplications";
-import { CloseLede, CloseTasks, needsOf, useBrief } from "./Stands";
+import { CloseLede, CloseTasks, signOffAvailable, useBrief } from "./Stands";
 import { CarryForward } from "./CarryForward";
 import { Coordinator } from "./Coordinator";
 import { GoalPanel } from "./Goal";
@@ -173,8 +173,8 @@ export default function ClientClose() {
   const shown = papers.filter(filters[filter][1]);
   const base = `/dashboard/closes/${close.id}`;
   const latest = more ? " among the latest 100" : "";
-  // Sign off is the page's one action, and waits while anything needs the person.
-  const signOffBlocked = !brief || needsOf(brief).count > 0;
+  // Sign off is the page's one action, and waits until readiness says the close is ready.
+  const signOffBlocked = !signOffAvailable(brief);
   return (
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
@@ -186,7 +186,7 @@ export default function ClientClose() {
         <b>{monthName(close.period)}</b>
         <div className="ks-tools">
           <PrepareActions close={close} />
-          <Link className="button primary" to={`${base}?tab=signoff`} aria-disabled={signOffBlocked || undefined} title={signOffBlocked ? "What is left comes first; the Sign-off tab shows the blockers" : undefined}>
+          <Link className="button primary" to={`${base}?tab=signoff`} aria-disabled={signOffBlocked || undefined} title={signOffBlocked ? "Not ready yet; the Sign-off tab shows what blocks it" : undefined}>
             Sign off
           </Link>
         </div>
