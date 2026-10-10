@@ -68,6 +68,15 @@ BEGIN
 END $$;
 CREATE TRIGGER quickbooks_capture_books AFTER INSERT ON quickbooks_snapshots FOR EACH ROW WHEN (NEW.payload ? 'period') EXECUTE FUNCTION books_pending_capture('quickbooks');
 CREATE TRIGGER xero_capture_books AFTER INSERT ON xero_snapshots FOR EACH ROW EXECUTE FUNCTION books_pending_capture('xero');
+-- A version holds its capture's books, so it goes with the capture (retention deletes a close's captures).
+CREATE FUNCTION books_capture_gone() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ DELETE FROM books_versions WHERE source=TG_ARGV[0] AND source_id=OLD.id::text;
+ DELETE FROM books_pending WHERE source=TG_ARGV[0] AND source_id=OLD.id;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER quickbooks_capture_gone AFTER DELETE ON quickbooks_snapshots FOR EACH ROW EXECUTE FUNCTION books_capture_gone('quickbooks');
+CREATE TRIGGER xero_capture_gone AFTER DELETE ON xero_snapshots FOR EACH ROW EXECUTE FUNCTION books_capture_gone('xero');
 INSERT INTO books_pending(source,source_id,organization_id,close_id,queued_at)
  SELECT 'quickbooks',s.id,c.organization_id,c.id,s.captured_at FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.payload ? 'period'
  UNION ALL SELECT 'xero',s.id,c.organization_id,c.id,s.captured_at FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id;

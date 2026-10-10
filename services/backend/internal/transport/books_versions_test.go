@@ -197,4 +197,19 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if !slices.Contains(mismatched, "quickbooks capture "+unreadable+": stored as unreadable, but it holds figures") {
 		t.Fatalf("an unreadable capture's version holds no figures: %v", mismatched)
 	}
+	// A version goes with its capture; one whose capture is somehow gone is a mismatch, never skipped.
+	_, err = db.Exec(`DELETE FROM quickbooks_snapshots WHERE id=$1::bigint`, unreadable)
+	must(err)
+	var stays int
+	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE source='quickbooks' AND source_id=$1`, unreadable).Scan(&stays))
+	if stays != 0 {
+		t.Fatal("a deleted capture's version stays")
+	}
+	_, err = db.Exec(`UPDATE books_versions SET source_id='999999999' WHERE source='quickbooks' AND source_id=$1`, readable)
+	must(err)
+	_, mismatched, err = booksParity(t.Context(), db, org, 0)
+	must(err)
+	if !slices.Contains(mismatched, "quickbooks capture 999999999: the capture is gone") {
+		t.Fatalf("a version without its capture: %v", mismatched)
+	}
 }

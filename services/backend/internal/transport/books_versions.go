@@ -312,14 +312,17 @@ func compareVersions(ctx context.Context, q interface {
 }, versions []storedVersion) (checked int, mismatched []string, err error) {
 	for _, v := range versions {
 		m, closeID, org, e := captureMonth(ctx, q, v.source, v.id)
+		name := v.source + " capture " + v.id
 		if e == sql.ErrNoRows {
+			// A version goes with its capture; one left without it has nothing to agree with.
+			checked++
+			mismatched = append(mismatched, name+": the capture is gone")
 			continue
 		}
 		if e != nil {
 			return checked, mismatched, e
 		}
 		checked++
-		name := v.source + " capture " + v.id
 		computed, readErr := versionOf(m)
 		stored, storedLines, recordedLines, linesRefused, e := storedBooks(ctx, q, v.row)
 		if e != nil {
