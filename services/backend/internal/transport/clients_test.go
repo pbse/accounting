@@ -177,9 +177,6 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["answer"] != "answered_in_part" {
 		t.Fatalf("a partial reply is shown: %v", requests)
 	}
-	if openCoverage == waitingCoverage {
-		t.Fatal("a request about accounts alone stays open after a partial reply")
-	}
 	// A Xero connection made from the September month, under the name later confirmed as Acme's alias, is Acme's too,
 	// and says which name it is held under.
 	_, err = db.Exec(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_name) VALUES($1,$2,'Acme Services LLC','fixture','active',$3,now(),'Acme Services')`, september, org, rand.Text())

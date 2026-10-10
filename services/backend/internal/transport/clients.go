@@ -47,9 +47,24 @@ type monthBooks struct {
 	Stale bool `json:"stale,omitempty"`
 }
 
-// openCoverage is waitingCoverage with a partial reply kept open: a request about accounts alone is finished only by a
-// complete reply.
-var openCoverage = strings.Replace(waitingCoverage, `NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id)`, `NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id AND complete)`, 1)
+// aboutAccounts is SQL for a request q about accounts alone, handled in its month's coverage: any work it covers came
+// from the client's own documents after it was approved.
+const aboutAccounts = `(q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND NOT ` + preparation.RequestReleased + `))`
+
+// unfinishedRequest is SQL for a request q of draft d that the client has not finished answering. Before any reply it is
+// waiting as attention counts it: work still waiting on it rather than on a newer request, or, about accounts alone,
+// coverage exactly as approved. After a reply short of complete it is open as its link counts it (requestOpen): no work
+// it was approved for is finished or taken over by a newer request, and its coverage has moved only by its own progress.
+var unfinishedRequest = `CASE WHEN ` + requestReplied("q.id") + ` THEN NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id AND complete)
+  AND NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND ((j.state IN ('completed','cancelled') AND NOT ` + preparation.RequestReleased + `)
+   OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))
+  AND ` + preparation.RequestCoverageFollowsReply + `
+ ELSE EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
+  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)) OR ` + waitingCoverage + ` END`
+
+// openJobs is SQL for the work request q covers that is not finished and not taken over by a newer request.
+const openJobs = `request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state NOT IN ('completed','cancelled')
+  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)`
 
 // openRequest is a request to the client that it has not finished answering: who it is for, whether it reached them
 // (sent, with when; sending; failed; or not sent yet), whether they answered it in part or in full, and how many items
@@ -63,8 +78,8 @@ type openRequest struct {
 	Sent      *time.Time `json:"sent_at,omitempty"`
 	// Answer is answered or answered_in_part when the client has replied, in full or in part, else "".
 	Answer string `json:"answer,omitempty"`
-	// Job is the first work item waiting on the request, where its delivery, reply and follow-up are handled; "" for
-	// a request about accounts alone, handled in its month's coverage.
+	// Job is the request's unfinished work, the first still waiting on the client first, where its delivery, reply and
+	// follow-up are handled; "" for a request about accounts alone, handled in its month's coverage.
 	Job   string `json:"job,omitempty"`
 	Items int    `json:"items"`
 }
@@ -221,14 +236,10 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
  COALESCE((SELECT CASE WHEN m.state IN ('failed','unknown') OR m.delivery IN ('bounced','complained','failed','suppressed') THEN 'failed' WHEN m.state IN ('queued','sending') THEN 'sending' END
   FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
  COALESCE((SELECT CASE WHEN s.complete THEN 'answered' ELSE 'answered_in_part' END FROM request_submissions s WHERE s.request_id=q.id ORDER BY s.id DESC LIMIT 1),''),
- COALESCE((SELECT min(j.id)::text FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
-  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)),''),
- CASE WHEN q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FROM request_jobs WHERE request_id=q.id) THEN jsonb_array_length(COALESCE(q.coverage_scope->'bindings','[]'::jsonb))
-  ELSE (SELECT count(*) FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
-   AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)) END
+ CASE WHEN `+aboutAccounts+` THEN '' ELSE COALESCE((SELECT j.id::text FROM `+openJobs+` ORDER BY j.state='waiting_client' DESC,j.id LIMIT 1),'') END,
+ CASE WHEN `+aboutAccounts+` THEN jsonb_array_length(COALESCE(q.coverage_scope->'bindings','[]'::jsonb)) ELSE (SELECT count(*) FROM `+openJobs+`) END
  FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id
- WHERE d.close_id::text=ANY($1) AND (EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
-  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)) OR `+openCoverage+`)
+ WHERE d.close_id::text=ANY($1) AND `+unfinishedRequest+`
  ORDER BY q.approved_at,q.id`, ids); err == nil {
 			for waiting.Next() {
 				var q openRequest

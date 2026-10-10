@@ -205,7 +205,11 @@ export default function ClientPage() {
   // neither).
   const latest = months.find((m) => m.entity.toLowerCase() === name.toLowerCase());
   const managedIn = months.find((m) => m.entity.toLowerCase() === (ledger.held ?? name).toLowerCase());
-  const otherIn = ledger.other && months.find((m) => m.entity.toLowerCase() === ledger.other!.held.toLowerCase());
+  // Each other connection needing attention, with the month that manages it.
+  const fixes = ledger.fix.flatMap((l) => {
+    const month = months.find((m) => m.entity.toLowerCase() === l.held.toLowerCase());
+    return month ? [{ ledger: l, month }] : [];
+  });
 
   // How each month is due and who holds it: the client's own terms, else the firm template's, said once.
   const people = client.people ?? [];
@@ -289,18 +293,18 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              client.can_connect && (managedIn || (ledger.other && otherIn)) ? (
+              client.can_connect && (managedIn || fixes.length) ? (
                 <>
                   {managedIn && (
                     <Link className="button" to={`/dashboard/closes/${managedIn.id}?tab=${ledger.tab}#${ledger.anchor}`}>
                       {ledger.connected ? "Manage" : "Connect"} in {monthShort(managedIn.period)}
                     </Link>
                   )}
-                  {ledger.other && otherIn && (
-                    <Link className="button" to={`/dashboard/closes/${otherIn.id}?tab=${ledger.other.tab}#${ledger.other.anchor}`}>
-                      Fix {ledger.other.name}
+                  {fixes.map((f) => (
+                    <Link key={`${f.ledger.source}:${f.ledger.name}:${f.month.id}`} className="button" to={`/dashboard/closes/${f.month.id}?tab=${f.ledger.tab}#${f.ledger.anchor}`}>
+                      Fix {f.ledger.name}
                     </Link>
-                  )}
+                  ))}
                 </>
               ) : undefined
             }
@@ -517,9 +521,6 @@ function monthState(m: Month, today: string) {
 // How the client's books arrive, from its connections (the QuickBooks one its books are read from first, then Xero),
 // and the newest month's books: one line, a chip, and where the connection is managed today.
 function books(client: ClientRead, day: (value: string) => string) {
-  // Under the client's own name first, then production first, as the API lists them.
-  const qbo = client.quickbooks[0];
-  const xero = client.xero[0];
   const heldUnder = (c: { client_entity: string }) =>
     c.client_entity.toLowerCase() === client.entity.toLowerCase() ? "" : ` It is held under ${c.client_entity}, the name of the month it was made from.`;
   const newest = client.months.find((m) => m.books);
@@ -536,46 +537,50 @@ function books(client: ClientRead, day: (value: string) => string) {
         : s === "pending_confirmation" || s === "choose_tenant"
           ? [confirm, "pill muted"]
           : ["Connecting", "pill neutral"];
-  // Each connection: how it reads, its state, and the month that manages it.
-  type Ledger = { name: string; short: string; line: string; held: string; chip: [string, string]; ok: boolean; tab: string; anchor: string };
-  const quickbooks: Ledger | undefined = qbo && {
-    name: "QuickBooks",
-    short: qbo.environment === "production" ? "QuickBooks Online" : "QuickBooks sandbox",
-    line: `Read from QuickBooks${qbo.environment === "production" ? "" : " (sandbox)"}${qbo.company_name ? `, ${qbo.company_name}` : ""}.${qbo.error ? ` ${qbo.error}` : ""}${heldUnder(qbo)}`,
-    held: qbo.client_entity,
-    chip: state(qbo.state, "Confirm the company"),
-    ok: live(qbo.state),
-    tab: qbo.environment === "production" ? "settings" : "evidence",
-    anchor: qbo.environment === "production" ? "quickbooks-production" : "quickbooks-ledger",
-  };
-  const xeroLedger: Ledger | undefined = xero && {
-    name: "Xero",
-    short: "Xero",
-    line: `Read from Xero${xero.tenant_name ? `, ${xero.tenant_name}` : ""}.${xero.error ? ` ${xero.error}` : ""}${heldUnder(xero)}`,
-    held: xero.client_entity,
-    chip: state(xero.state, "Choose the organisation"),
-    ok: live(xero.state),
-    tab: "evidence",
-    anchor: "xero",
-  };
-  // With both ledgers connected, the card leads with the one the newest month-end books came from (the month-end
-  // readers take the newer capture), else the one connected and working, else QuickBooks; the other is said after it,
-  // with its own state, and its own way in when it needs attention.
+  // Each connection, under the client's own name first, then production first, as the API lists them: how it reads,
+  // its state, and the month that manages it.
+  const ledgers: Ledger[] = [
+    ...client.quickbooks.map((q) => ({
+      source: "quickbooks",
+      short: q.environment === "production" ? "QuickBooks Online" : "QuickBooks sandbox",
+      name: `QuickBooks${q.environment === "production" ? "" : " sandbox"}${q.company_name ? ` (${q.company_name})` : ""}`,
+      line: `Read from QuickBooks${q.environment === "production" ? "" : " (sandbox)"}${q.company_name ? `, ${q.company_name}` : ""}.${q.error ? ` ${q.error}` : ""}${heldUnder(q)}`,
+      held: q.client_entity,
+      chip: state(q.state, "Confirm the company"),
+      ok: live(q.state),
+      tab: q.environment === "production" ? "settings" : "evidence",
+      anchor: q.environment === "production" ? "quickbooks-production" : "quickbooks-ledger",
+    })),
+    ...client.xero.map((x) => ({
+      source: "xero",
+      short: "Xero",
+      name: `Xero${x.tenant_name ? ` (${x.tenant_name})` : ""}`,
+      line: `Read from Xero${x.tenant_name ? `, ${x.tenant_name}` : ""}.${x.error ? ` ${x.error}` : ""}${heldUnder(x)}`,
+      held: x.client_entity,
+      chip: state(x.state, "Choose the organisation"),
+      ok: live(x.state),
+      tab: "evidence",
+      anchor: "xero",
+    })),
+  ];
+  // The card leads with the ledger the newest month-end books came from (the month-end readers take the newer
+  // capture), else one connected and working, else the first; every other connection is said after it with its own
+  // state, and each that needs attention gets its own way in.
   const captured = client.months.find((m) => m.books && m.books.source !== "exports")?.books?.source;
-  const leadXero = !!xero && (!qbo || captured === "xero" || (captured !== "quickbooks" && live(xero.state) && !live(qbo.state)));
-  const lead = leadXero ? xeroLedger : quickbooks;
-  const other = leadXero ? quickbooks : xeroLedger;
+  const lead = ledgers.find((l) => l.source === captured) ?? ledgers.find((l) => l.ok) ?? ledgers[0];
   if (lead) {
+    const others = ledgers.filter((l) => l !== lead);
+    const failing = others.filter((l) => !l.ok);
     return {
       short: lead.short,
-      line: `${lead.line}${other ? ` ${other.name} is connected too: ${other.chip[0].toLowerCase()}.` : ""}${latest}`,
+      line: `${lead.line}${others.map((o) => ` ${o.name} is connected too: ${o.chip[0].toLowerCase()}.`).join("")}${latest}`,
       held: lead.held as string | undefined,
-      chip: !lead.ok || !other || other.ok ? lead.chip : other.chip,
-      attention: !lead.ok || (!!other && !other.ok),
+      chip: lead.ok && failing.length ? failing[0].chip : lead.chip,
+      attention: !lead.ok || failing.length > 0,
       connected: true,
       tab: lead.tab,
       anchor: lead.anchor,
-      other: other && !other.ok ? other : undefined,
+      fix: failing,
     };
   }
   return {
@@ -587,9 +592,11 @@ function books(client: ClientRead, day: (value: string) => string) {
     held: undefined as string | undefined,
     tab: "evidence",
     anchor: "quickbooks-ledger",
-    other: undefined as { name: string; held: string; tab: string; anchor: string } | undefined,
+    fix: [] as Ledger[],
   };
 }
+
+type Ledger = { source: string; short: string; name: string; line: string; held: string; chip: [string, string]; ok: boolean; tab: string; anchor: string };
 
 // Names joined as a sentence lists them: "Ann", "Ann and Cy", "Ann, Bea and Cy".
 function listed(names: string[]) {
