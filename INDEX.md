@@ -26,7 +26,7 @@ Start here to find the governing plan, implementation details and acceptance evi
 | [Acceptance corpus](docs/acceptance-corpus.md) | The release corpus's case format, how to run it through the real pipeline and how a run is scored (phase A). The real corpus holds client data and stays outside the repository. |
 | [Demonstration seed](docs/seed-data.md) | `cmd/seed`: one firm with ten clients and four months of books, documents, agent work and decisions, written through the real routes, for seeing the workspace alive; how to run it against a local or the hosted firm and remove it again. |
 | [Provider capability inventory](docs/provider-capabilities.md) | Per integration-contract row, what each provider path does on main and how far it is proven (live, synthetic, untested or missing), with the gaps that remain (phase A). As of 2026-10-06, nothing is proven against a live provider. |
-| [Books sources](docs/books-sources.md) | Proposed 2026-10-10, not yet adopted: books from Trial Balance and ledger files for any ledger, one month-books record every source writes, connections and uploads moved to the client (including client-provided books), the ledger market and the PR sequence. Takes effect only when the build plan is amended. |
+| [Books sources](docs/books-sources.md) | Adopted 2026-10-10 as a track that does not gate launch: books from Trial Balance and ledger files for any ledger, one month-books record every source writes, the client page that holds the connection, the client's ledger recorded at onboarding with a configured ledger catalog (proposed details), client-provided books, the ledger market and the PR sequence. |
 | [Validation history](docs/validation.md) | Dated commands/results, exercised behavior and explicit unverified areas. Consult before claiming a feature is validated. |
 
 ## Find documents by build package
@@ -35,7 +35,7 @@ These are pointers into the existing implementation, not evidence that a package
 
 | Package | Primary supporting documents |
 | --- | --- |
-| **B01 Takeover** | [Onboarding](docs/onboarding.md), [QBO](docs/quickbooks-onboarding.md), [books sources (proposed)](docs/books-sources.md), [firm procedures](docs/firm-procedures.md), [carry-forward](docs/carry-forward.md) |
+| **B01 Takeover** | [Onboarding](docs/onboarding.md), [QBO](docs/quickbooks-onboarding.md), [books sources](docs/books-sources.md), [firm procedures](docs/firm-procedures.md), [carry-forward](docs/carry-forward.md) |
 | **B02 Portfolio and decisions** | [Work inbox](docs/work-inbox.md), [coordinator](docs/close-coordinator.md), [maturity dashboard specification](docs/maturity.md#implementation-re-review-and-dashboard-specification-2026-10-02) |
 | **B03 Daily books and account reconciliation** | [Saved closes/reconciliation](docs/saved-closes-and-reconciliation.md), [source sync](docs/source-sync-and-forwarding.md), [coverage](docs/coverage-requests.md), [posting](docs/production-posting.md) |
 | **B04 Recurring preparation and investigation** | [Accounting methods](docs/accounting-methods.md), [evidence/preparation](docs/evidence-and-preparation.md), [assistant](docs/chat.md), [agentic chat plan](docs/agent-chat.md), [firm procedures](docs/firm-procedures.md) |
