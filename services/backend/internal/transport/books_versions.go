@@ -312,7 +312,7 @@ func compareVersions(ctx context.Context, q interface {
 		checked++
 		name := v.source + " capture " + v.id
 		computed, readErr := versionOf(m)
-		stored, storedLines, recordedLines, e := storedBooks(ctx, q, v.row)
+		stored, storedLines, recordedLines, linesRefused, e := storedBooks(ctx, q, v.row)
 		if e != nil {
 			return checked, mismatched, e
 		}
@@ -330,8 +330,10 @@ func compareVersions(ctx context.Context, q interface {
 		// The lines must match the capture's General Ledger, both as recorded with the version and as stored row by row.
 		lines, kept, lineErr := captureLines(m)
 		switch {
-		case lineErr != nil:
+		case lineErr != nil && lineErr.Error() != linesRefused:
 			mismatched = append(mismatched, name+": its ledger lines cannot be read")
+		case lineErr != nil:
+			// The General Ledger is refused now as it was when the version was written: the record agrees.
 		case kept && (recordedLines != linesDigest(lines) || storedLines != linesDigest(lines)):
 			mismatched = append(mismatched, name+": the ledger lines differ")
 		case !kept && (recordedLines != "" || storedLines != linesDigest(nil)):
@@ -341,18 +343,18 @@ func compareVersions(ctx context.Context, q interface {
 	return checked, mismatched, nil
 }
 
-// storedBooks reads a stored version's figures back, the digest of its stored ledger lines, and the lines' digest
-// recorded with the version ("" when it kept none).
+// storedBooks reads a stored version's figures back, the digest of its stored ledger lines, the lines' digest recorded
+// with the version ("" when it kept none), and why its General Ledger could not be read, if it could not.
 func storedBooks(ctx context.Context, q interface {
 	rowReader
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, row int64) (booksVersion, string, string, error) {
+}, row int64) (booksVersion, string, string, string, error) {
 	var v booksVersion
 	var accounts, balances, activity, uncounted []byte
 	var cashFlow []byte
-	var recorded string
-	if err := q.QueryRowContext(ctx, `SELECT currency,typed,accounts,balances,activity,cash_flow,uncounted,lines_digest FROM books_versions WHERE id=$1`, row).Scan(&v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &recorded); err != nil {
-		return v, "", "", err
+	var recorded, refused string
+	if err := q.QueryRowContext(ctx, `SELECT currency,typed,accounts,balances,activity,cash_flow,uncounted,lines_digest,lines_unreadable FROM books_versions WHERE id=$1`, row).Scan(&v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &recorded, &refused); err != nil {
+		return v, "", "", "", err
 	}
 	json.Unmarshal(accounts, &v.Accounts)
 	json.Unmarshal(balances, &v.Balances)
@@ -363,7 +365,7 @@ func storedBooks(ctx context.Context, q interface {
 	}
 	rows, err := q.QueryContext(ctx, `SELECT account_id,location,cells FROM books_lines WHERE version_id=$1 ORDER BY position`, row)
 	if err != nil {
-		return v, "", "", err
+		return v, "", "", "", err
 	}
 	defer rows.Close()
 	var lines []quickbooks.LedgerLine
@@ -371,25 +373,26 @@ func storedBooks(ctx context.Context, q interface {
 		var l quickbooks.LedgerLine
 		var cells []byte
 		if err = rows.Scan(&l.AccountID, &l.Location, &cells); err != nil {
-			return v, "", "", err
+			return v, "", "", "", err
 		}
 		l.Cells = cells
 		lines = append(lines, l)
 	}
-	return v, linesDigest(lines), recorded, rows.Err()
+	return v, linesDigest(lines), recorded, refused, rows.Err()
 }
 
 // adminBooks is the month-books record's state across firms, for staff deciding when a reader may switch to it
 // (delivery step 5): how many month-end captures there are, how many have a version and how many are unreadable, and
 // the worker's latest finished parity run, with the captures where it disagrees (identifiers only), how many captures
-// were still waiting when it began and how many versions were written since: it is the gate only when both are none.
+// were still waiting when it began, how many versions were written since and how many captures wait now: it is the
+// gate only when all three are none.
 func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var captures, versions, unreadable int
 	var parity json.RawMessage
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM books_pending)+(SELECT count(*) FROM books_versions),
  (SELECT count(*) FROM books_versions),(SELECT count(*) FROM books_versions WHERE unreadable<>''),
- COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &versions, &unreadable, &parity)
+ COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through),'waiting',(SELECT count(*) FROM books_pending)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &versions, &unreadable, &parity)
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "books read")

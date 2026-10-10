@@ -60,6 +60,9 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 		return id
 	}
 	readable, unreadable := capture(tb), capture(`{"Header":{"Currency":"USD"},"Rows":{"Row":[{"type":"Data","ColData":[{"id":"1","value":"Checking"},{"value":"not a number"}]}]}}`)
+	// A capture whose General Ledger cannot be read keeps the reason with its version.
+	gl = `{"Rows":{"Row":["not a row"]}}`
+	brokenLedger := capture(tb)
 	// A Xero capture the readers cannot read is kept as unreadable too.
 	var xeroConnection, xeroCapture string
 	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,'Books client','fixture','active',$3,now(),'t-1') RETURNING id::text`, closeID, org, rand.Text()).Scan(&xeroConnection))
@@ -100,6 +103,11 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 			t.Fatalf("%s capture %s is kept as unreadable, with the reason", c[0], c[1])
 		}
 	}
+	var refused string
+	must(db.QueryRow(`SELECT lines_unreadable FROM books_versions WHERE source='quickbooks' AND source_id=$1`, brokenLedger).Scan(&refused))
+	if refused == "" {
+		t.Fatal("a General Ledger that cannot be read is recorded as such")
+	}
 	// Written once: another pass writes nothing for these captures.
 	var before int
 	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1`, org).Scan(&before))
@@ -107,20 +115,20 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	must(err)
 	var after int
 	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1`, org).Scan(&after))
-	if before != 3 || after != 3 {
+	if before != 4 || after != 4 {
 		t.Fatalf("one version per capture: %d then %d", before, after)
 	}
 	checked, mismatched, err := booksParity(t.Context(), db, org, 0)
 	must(err)
-	if checked != 3 || len(mismatched) != 0 {
-		t.Fatalf("the readers agree with every version: %d %v", checked, mismatched)
+	if checked != 4 || len(mismatched) != 0 {
+		t.Fatalf("the readers agree with every version, a General Ledger refused as it was recorded included: %d %v", checked, mismatched)
 	}
 	// The worker's run checks every version and records what it found.
 	must(runBooksParity(t.Context(), db))
 	var finished bool
 	var recorded, pending int
 	must(db.QueryRow(`SELECT finished_at IS NOT NULL,checked,pending FROM books_parity ORDER BY id DESC LIMIT 1`).Scan(&finished, &recorded, &pending))
-	if !finished || recorded < 3 || pending != 0 {
+	if !finished || recorded < 4 || pending != 0 {
 		t.Fatalf("a parity run is recorded, with every capture's version written: %v %d %d", finished, recorded, pending)
 	}
 	// Once the readers would read a capture differently, the parity check names it.
