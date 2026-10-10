@@ -6,7 +6,7 @@ import { Link } from "react-router";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { workspaceRequest } from "../closes/workspace";
-import { ClientFilter } from "./Home";
+import { ClientFilter } from "./Decisions";
 
 type Daily = { close_id: string; entity: string; period: string; source: "quickbooks" | "xero"; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[]; unchecked?: string };
 

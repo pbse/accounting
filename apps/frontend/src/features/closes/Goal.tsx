@@ -3,8 +3,7 @@ import { workspaceKey, workspaceQuery } from "../../data/queries";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useId, useState } from "react";
 import { Link } from "react-router";
-import { askAssistant, starters } from "../dashboard/assistantStore";
-import { AskAgent } from "../dashboard/AskAgent";
+import { askAssistant } from "../dashboard/assistantStore";
 import { Icon } from "@close/ui/components/Icon";
 import { workspaceRequest } from "./workspace";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
@@ -623,18 +622,20 @@ export function GoalPanel({ closeId }: { closeId: string }) {
   const { status, error, refresh } = useGoal(closeId, true, 10000);
   if (!status) return error ? <p role="alert">{error}</p> : null;
   if (!status.goal && status.signed_off && !status.routine) return null;
-  // Not handed over yet: the close leads with the agent, as Work does; handing over still waits for a confirmation.
+  // Not handed over yet: the routine line stands alone; the page's composer asks the agent, and handing over still
+  // waits for a confirmation.
   if (!status.goal && !status.signed_off)
     return (
-      <AskAgent
-        closeId={closeId}
-        description="Ask about this close, or hand it over: the agent keeps preparation moving and tells you only what needs you. Nothing runs until you confirm."
-        placeholder="Ask about this close, such as “what blocks sign-off?”"
-        suggestions={[handOver, ...starters.close]}
-      >
+      <section className="panel hand-over" aria-label="Hand-over">
+        <p>
+          <strong>Hand this close to the agent.</strong> It keeps preparation moving and tells you only what needs you; nothing runs until you confirm.
+        </p>
+        <button type="button" className="primary" onClick={() => askAssistant(handOver, closeId)}>
+          {handOver}
+        </button>
         <RoutineLine closeId={closeId} status={status} refresh={refresh} />
         {error && <p role="alert">{error}</p>}
-      </AskAgent>
+      </section>
     );
   return (
     <section className="panel" aria-labelledby="goal-title">

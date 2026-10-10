@@ -61,5 +61,16 @@ export function useToday(): string {
   }
 }
 
+// useHour is the hour of the person's day (0–23) in their own time zone, by the render's clock: the greeting's.
+export function useHour(): number {
+  const now = useNow();
+  const zone = useQuery(workspaceQuery<{ time_zone?: string }>("/me")).data?.time_zone || "UTC";
+  try {
+    return Number(new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", hourCycle: "h23" }).format(now));
+  } catch {
+    return new Date(now).getUTCHours();
+  }
+}
+
 // daysBetween counts calendar days from one YYYY-MM-DD date to another.
 export const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to.slice(0, 10)}T00:00:00Z`) - Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) / 86_400_000);

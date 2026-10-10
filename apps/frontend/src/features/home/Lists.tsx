@@ -4,7 +4,7 @@ import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { useDates } from "../../data/time";
 import { NotOpened } from "../closes/Morning";
-import type { HomeCounts } from "./Home";
+import type { HomeCounts } from "./Decisions";
 
 // The lists Home's and Closes' counts open: the closes due or undated, the ended months without month-end books,
 // and the closes owed through this month. Each shows only when it has rows, under the id its count scrolls to.

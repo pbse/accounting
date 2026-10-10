@@ -2,7 +2,6 @@ import { cashPlanQuery } from "../../data/cashPlan";
 import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
-import { AskAgent } from "../dashboard/AskAgent";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
@@ -103,14 +102,6 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
   const active = obligations.filter((o) => !o.retired_at);
   return (
     <section aria-label="Cash plan">
-      {!readOnly && (
-        <AskAgent
-          closeId={closeId}
-          description="Ask about the next 13 weeks. The agent reads the same plan, open items and approved schedules."
-          placeholder="Which week is tightest, and why?"
-          suggestions={["When does book cash run lowest, and what causes it?", "Which overdue invoices would cover the shortfall?", "Which payments could move without missing a due date?"]}
-        />
-      )}
       <p>
         <strong>{plan.entity}</strong> · 13 weeks from {plan.start} · {plan.currency} · opening book cash {show(plan.opening.amount)} at{" "}
         {dates.dateTime(plan.opening.as_of)}

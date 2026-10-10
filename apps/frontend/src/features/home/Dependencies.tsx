@@ -7,7 +7,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { kindLabels } from "../closes/Work";
-import { ClientFilter } from "./Home";
+import { ClientFilter } from "./Decisions";
 
 type Dependency = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; upstream_workpaper_id: string };
 type Predicted = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; transaction: string; account: string; updated_at: string; approved_at: string; count: number };

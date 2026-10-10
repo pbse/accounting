@@ -58,11 +58,14 @@ export async function workspaceRequest(
   body?: unknown,
   download = false,
   onEvent?: (event: AgentEvent) => void,
+  // A request the caller may stop (an answer under way): aborting it ends it on the server too, where the handler's
+  // context is cancelled, so nothing of a stopped answer is saved.
+  signal?: AbortSignal,
 ) {
   if (body === undefined && !download && !onEvent) return sharedRead(path) as Promise<any>;
   reads.clear();
   try {
-    return await send(path, body, download, onEvent);
+    return await send(path, body, download, onEvent, signal);
   } finally {
     reads.clear();
     // A change made anywhere (a month opened, a client saved, the agent acting) may change what any page shows, so
@@ -84,9 +87,11 @@ async function send(
   body?: unknown,
   download = false,
   onEvent?: (event: AgentEvent) => void,
+  signal?: AbortSignal,
 ): Promise<any> {
   const response = await fetch(`${apiBaseUrl}/v1/closes${path}`, {
     method: body === undefined ? "GET" : "POST",
+    signal,
     headers: {
       ...(authKitClientId
         ? await authenticationHeaders()

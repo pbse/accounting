@@ -46,7 +46,7 @@ export function AttentionBadge() {
       const note = new Notification("Close", { body: `${fresh.length} new ${fresh.length === 1 ? "item needs" : "items need"} your attention` });
       note.onclick = () => {
         window.focus();
-        go.current("/dashboard");
+        go.current("/dashboard/closes#decisions");
       };
     }
   }, [inbox.data]);

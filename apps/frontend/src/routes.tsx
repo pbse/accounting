@@ -60,7 +60,11 @@ async function workspaceLoader({ context, request }: LoaderFunctionArgs) {
 
 // Home reads its counts and every section under them; the filters start empty.
 async function homeLoader({ context }: LoaderFunctionArgs) {
-  if (prefetching) await prefetch(context, "/home", "/review-queue?client=", "/portfolio", "/setup", "/dependencies?client=", "/daily?client=", "/goals?client=");
+  if (prefetching) {
+    // The name in the greeting comes from the sign-in provider: it never holds the page, which greets without it.
+    prefetchLater(context, "/me/profile");
+    await prefetch(context, "/home", "/portfolio", "/setup", "/goals?client=");
+  }
   return null;
 }
 

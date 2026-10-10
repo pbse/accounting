@@ -63,6 +63,8 @@ const apps = [
   {
     name: "firm app",
     start: `${frontend}/dashboard/clients`,
+    // Every workspace page has the composer: Home's stage, or the box at the page's foot.
+    composer: true,
     unlock: "Unlock workspace",
     prefix: "",
     // Matched against the end of Vite's data-vite-dev-id, which is the stylesheet's absolute file path.
@@ -192,7 +194,7 @@ for (const app of apps) {
       if (!app.standalone) await page.evaluate((path) => {
         const target = new URL(path, location.href);
         const same = target.pathname + target.search === location.pathname + location.search;
-        const previous = same ? null : document.querySelector(".page-header h1");
+        const previous = same ? null : document.querySelector(".page-header h1, .ks-hello h2, .ks-lede h2");
         window.__layoutPrevious = previous && { element: previous, title: previous.textContent };
         history.pushState({}, "", path);
         dispatchEvent(new PopStateEvent("popstate"));
@@ -201,7 +203,7 @@ for (const app of apps) {
         const header = () =>
           page.waitForFunction(
             () => {
-              const h1 = document.querySelector(".page-header h1");
+              const h1 = document.querySelector(".page-header h1, .ks-hello h2, .ks-lede h2");
               const previous = window.__layoutPrevious;
               return h1?.textContent?.trim() && (!previous || h1 !== previous.element || h1.textContent !== previous.title);
             },
@@ -238,13 +240,16 @@ for (const app of apps) {
       const box = await page.evaluate(() => {
         const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect().toJSON();
         const order = [...document.querySelectorAll(".ks-side > *")].map((e) => e.className.split(" ")[0]);
-        return { side: rect(".ks-side"), phonebar: rect(".ks-phonebar"), main: rect(".app-main"), order, scrollWidth: document.documentElement.scrollWidth };
+        return { side: rect(".ks-side"), phonebar: rect(".ks-phonebar"), main: rect(".app-main"), composer: rect(".ks-composer textarea"), order, scrollWidth: document.documentElement.scrollWidth };
       });
       if (box.scrollWidth > width.viewport.width) fail(`the page is ${box.scrollWidth}px wide, wider than the ${width.viewport.width}px screen`);
       // The agent panel opens beside the page on a desktop and as a sheet on a phone, with its composer in view, and
       // widens nothing: empty on the dashboard, and with a card (the close's prepare card, answered without a model)
       // on a close. A running step list needs a model, so it is covered by the agent's event tests, not here.
-      const panelRoute = route === "/dashboard" ? "empty" : route === `/dashboard/closes/${close}` ? "card" : "";
+      if (app.composer && !(box.composer?.bottom <= width.viewport.height && box.composer?.top >= 0 && box.composer?.width > 0)) fail("the composer is not in view at the page's foot");
+      // Home's conversation is the stage, not the drawer: its composer stands at the stage's centre.
+      if (route === "/dashboard" && !(await page.locator(".ks-stage .ks-box textarea").count())) fail("Home does not show the stage's composer");
+      const panelRoute = route === `/dashboard/closes/${close}` ? "card" : "";
       if (panelRoute && !app.standalone) {
         try {
           await page.click(width.name === "phone" ? ".ks-phonebar-new" : ".ks-new-chat", { timeout: 5000 });
@@ -262,7 +267,7 @@ for (const app of apps) {
           const panel = await page.evaluate(() => {
             const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect().toJSON();
             const cards = [...document.querySelectorAll("aside.assistant .assistant-card")].map((c) => c.getBoundingClientRect().toJSON());
-            return { aside: rect("aside.assistant"), field: rect(".assistant-field"), cards, scrollWidth: document.documentElement.scrollWidth };
+            return { aside: rect("aside.assistant"), field: rect("aside.assistant .ks-box"), cards, scrollWidth: document.documentElement.scrollWidth };
           });
           if (panel.scrollWidth > width.viewport.width) fail(`with the agent open the page is ${panel.scrollWidth}px wide`);
           if (!(panel.aside?.right <= width.viewport.width + 1 && panel.aside?.left >= 0)) fail("the agent panel runs off the screen");
