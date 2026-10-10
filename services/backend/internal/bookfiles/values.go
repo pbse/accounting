@@ -69,21 +69,18 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 		}
 		changed = s != before && s != ""
 	}
-	decimal, group := ".", ","
+	// The digits must be grouped as the style groups them, in threes from the decimal mark, or not at all: a value written
+	// in the other style (1,2 with a decimal point) or grouped wrongly (1,234,56) is not read as some other amount.
+	grouped := pointGrouped
 	if style.DecimalComma {
-		decimal, group = ",", "."
+		grouped = commaGrouped
 	}
-	if strings.Count(s, decimal) > 1 {
+	m := grouped.FindStringSubmatch(s)
+	if m == nil || (m[1] == "" && m[2] == "") {
 		return Amount{}, ErrNotAmount
 	}
-	digits := strings.NewReplacer(group, "", " ", "", "'", "").Replace(s)
-	if decimal == "," {
-		digits = strings.Replace(digits, ",", ".", 1)
-	}
-	if !plainNumber.MatchString(digits) {
-		return Amount{}, ErrNotAmount
-	}
-	value, ok := new(big.Rat).SetString(digits)
+	whole, fraction := strings.NewReplacer(",", "", ".", "", " ", "", "'", "").Replace(m[1]), m[2]
+	value, ok := new(big.Rat).SetString(whole + "." + fraction + "0")
 	if !ok {
 		return Amount{}, ErrNotAmount
 	}
@@ -95,11 +92,22 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 	if negative {
 		value.Neg(value)
 	}
+	// Exact to the cent: the amount is a whole number of cents and, when it is stated in thousands or millions, written
+	// with enough decimals to say each cent (1.23456 thousand does; 1.2 thousand was rounded at its source).
 	cents := new(big.Rat).Mul(value, big.NewRat(100, 1)).IsInt()
+	if scale > 1 {
+		resolution := new(big.Rat).SetFrac(big.NewInt(scale), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(len(fraction))), nil))
+		cents = cents && resolution.Cmp(big.NewRat(1, 100)) <= 0
+	}
 	return Amount{Value: value, Cents: cents}, nil
 }
 
-var plainNumber = regexp.MustCompile(`^(\d+(\.\d*)?|\.\d+)$`)
+// pointGrouped and commaGrouped are a number with a decimal point or a decimal comma: its whole part, either plain or
+// grouped in threes by commas (points), spaces or apostrophes, and its decimals.
+var (
+	pointGrouped = regexp.MustCompile(`^(\d+|\d{1,3}(?:,\d{3})+|\d{1,3}(?: \d{3})+|\d{1,3}(?:'\d{3})+|)(?:\.(\d+))?$`)
+	commaGrouped = regexp.MustCompile(`^(\d+|\d{1,3}(?:\.\d{3})+|\d{1,3}(?: \d{3})+|\d{1,3}(?:'\d{3})+|)(?:,(\d+))?$`)
+)
 
 // GuessNumberStyle proposes how amounts are written from a sample of them: a decimal comma when the values that show a
 // decimal mark end in a comma and one or two digits, or group with points; else a decimal point. It also says whether

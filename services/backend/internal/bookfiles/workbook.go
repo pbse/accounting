@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -210,8 +211,13 @@ func ReadWorkbook(body []byte) (File, error) {
 			table.HiddenColumns = append(table.HiddenColumns, column)
 		}
 		sort.Ints(table.HiddenColumns)
-		// A shared formula's text is stored once, on its first cell; the others name it by its index.
-		sharedText := map[string]string{}
+		// A shared formula's text is stored once, on its first cell; the others name it by its index, and its relative
+		// references move with each cell as a copied formula's do.
+		type anchor struct {
+			text        string
+			column, row int
+		}
+		sharedText := map[string]anchor{}
 		previous := 0
 		for _, r := range data.Rows {
 			number := r.Number
@@ -263,9 +269,9 @@ func ReadWorkbook(body []byte) (File, error) {
 					text := strings.TrimSpace(c.Formula.Text)
 					if c.Formula.Type == "shared" {
 						if text != "" {
-							sharedText[c.Formula.Si] = text
-						} else {
-							text, cell.Shared = sharedText[c.Formula.Si], true
+							sharedText[c.Formula.Si] = anchor{text, column, number}
+						} else if a, ok := sharedText[c.Formula.Si]; ok {
+							text, cell.Shared = shiftFormula(a.text, number-a.row, column-a.column), true
 						}
 					}
 					if text == "" {
@@ -286,4 +292,81 @@ func ReadWorkbook(body []byte) (File, error) {
 		file.Tables = append(file.Tables, table)
 	}
 	return file, nil
+}
+
+// cellReference is an A1 reference in a formula: its column and row, each with the $ that fixes it.
+var cellReference = regexp.MustCompile(`(\$?)([A-Z]{1,3})(\$?)([0-9]{1,7})`)
+
+// shiftFormula is formula as copied rows and columns away: each relative reference moves by as much, a fixed ($) part
+// stays, and one moved off the sheet becomes #REF!. Text in quotes and quoted sheet names are left as they are, and a
+// function's name is not a reference.
+func shiftFormula(formula string, rows, columns int) string {
+	var out strings.Builder
+	for i := 0; i < len(formula); {
+		switch formula[i] {
+		case '"', '\'':
+			// A quoted string or sheet name runs to its closing quote; a doubled quote inside is one quote.
+			quote, j := formula[i], i+1
+			for j < len(formula) {
+				if formula[j] == quote {
+					if j+1 < len(formula) && formula[j+1] == quote {
+						j += 2
+						continue
+					}
+					break
+				}
+				j++
+			}
+			end := min(j+1, len(formula))
+			out.WriteString(formula[i:end])
+			i = end
+			continue
+		}
+		loc := cellReference.FindStringSubmatchIndex(formula[i:])
+		next := len(formula)
+		for _, q := range []byte{'"', '\''} {
+			if k := strings.IndexByte(formula[i:], q); k >= 0 && i+k < next {
+				next = i + k
+			}
+		}
+		if loc == nil || i+loc[0] >= next {
+			out.WriteString(formula[i:next])
+			i = next
+			continue
+		}
+		start, end := i+loc[0], i+loc[1]
+		before := byte(0)
+		if start > 0 {
+			before = formula[start-1]
+		}
+		after := byte(0)
+		if end < len(formula) {
+			after = formula[end]
+		}
+		word := func(b byte) bool {
+			return b == '_' || b == '.' || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+		}
+		out.WriteString(formula[i:start])
+		if word(before) || word(after) || after == '(' {
+			out.WriteString(formula[start:end])
+			i = end
+			continue
+		}
+		m := formula[start:end]
+		groups := cellReference.FindStringSubmatch(m)
+		column, row := columnOf(groups[2]+"1"), rowOf("A"+groups[4])
+		if groups[1] == "" {
+			column += columns
+		}
+		if groups[3] == "" {
+			row += rows
+		}
+		if column < 0 || column >= 16384 || row < 1 || row > 1048576 {
+			out.WriteString("#REF!")
+		} else {
+			out.WriteString(groups[1] + strings.TrimRight(cellRef(column, 1), "1") + groups[3] + strconv.Itoa(row))
+		}
+		i = end
+	}
+	return out.String()
 }

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"math/big"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -116,7 +117,7 @@ func TestAWorkbookIsReadWhole(t *testing.T) {
 	if !slices.Equal(tb.HiddenColumns, []int{2}) || tb.Rows[2].Number != 4 || !tb.Rows[2].Hidden || got["A4"].Value != "Suspense" {
 		t.Fatalf("hidden rows and columns are read and marked: %+v", tb)
 	}
-	if got["B4"].Formula != "A4*2" || got["B4"].Shared || got["B5"].Formula != "A4*2" || !got["B5"].Shared || got["B5"].Value != "0.2" || got["C5"].Formula != "[1]Sheet1!A1" {
+	if got["B4"].Formula != "A4*2" || got["B4"].Shared || got["B5"].Formula != "A5*2" || !got["B5"].Shared || got["B5"].Value != "0.2" || got["C5"].Formula != "[1]Sheet1!A1" {
 		t.Fatalf("formulas beside their stored results, shared ones named: %+v", got)
 	}
 	if cells(file.Tables[1])["A1"].Value != "TRUE" {
@@ -146,7 +147,11 @@ func TestAmountsAreReadExactly(t *testing.T) {
 		{"(1.234,56)", comma, "-1234.56", true},
 		{"EUR 12,5", comma, "12.5", true},
 		{"1.23456", thousands, "1234.56", true},
-		{"1.2", thousands, "1200", true},
+		{"1.2", thousands, "1200", false},
+		{"1.20000", thousands, "1200", true},
+		{"12,345,678.90", point, "12345678.9", true},
+		{"1500", point, "1500", true},
+		{".5", point, "0.5", true},
 		{"0.0001", point, "0.0001", false},
 		{"−5.00", point, "-5", true},
 	} {
@@ -155,7 +160,7 @@ func TestAmountsAreReadExactly(t *testing.T) {
 			t.Fatalf("%q in %+v: %v %v %v", c.text, c.style, got.Value, got.Cents, err)
 		}
 	}
-	for _, text := range []string{"", "n/a", "1.2.3", "12abc", "--"} {
+	for _, text := range []string{"", "n/a", "1.2.3", "12abc", "--", "-", "1,2", "1,234,56", "12,34.00", "1.234,56"} {
 		if _, err := ParseAmount(text, point); err == nil {
 			t.Fatalf("%q is not an amount", text)
 		}
@@ -208,6 +213,18 @@ func TestATrialBalanceIsReadWithItsLayout(t *testing.T) {
 	if !reading.Balanced || len(reading.Problems) != 0 || reading.Lines[2].Amount != "1500" || reading.Lines[2].Number != "1000" {
 		t.Fatalf("nested totals, a parent with its own balance, credit-positive signs: %+v", reading)
 	}
+	// A subtotal written as two columns is checked side by side, and an account left blank is a zero balance, said so
+	// when it has no number.
+	sides, _ := Read("tb.csv", []byte("No,Account,Debit,Credit\n,Current Assets,,\n1000,Bank,100.00,\n1010,Petty cash,,\n,Total Current Assets,110.00,10.00\n,Suspense,,\n3000,Capital,,100.00\n"))
+	layout, _ = ProposeLayout(sides.Tables[0])
+	reading = layout.Read(sides.Tables[0])
+	if len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Total Current Assets") || len(reading.Notes) != 1 || !strings.Contains(reading.Notes[0], "Suspense") || reading.Lines[2].Kind != Posting || reading.Lines[2].Amount != "0" || reading.Lines[0].Kind != Heading {
+		t.Fatalf("both sides of a subtotal, and blank accounts: %+v", reading)
+	}
+	layout.Headings = []int{6}
+	if reading = layout.Read(sides.Tables[0]); len(reading.Notes) != 0 || reading.Lines[4].Kind != Heading {
+		t.Fatalf("a row a person marked a heading: %+v", reading)
+	}
 	// What holds a reading: an amount that cannot be read, a total that does not match, sides that do not agree, and an
 	// amount rounded at its source.
 	broken, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,100.00,\nSales,,90.00\nOther,n/a,\nTotal Bank,99.00,\nFees,0.005,\n"))
@@ -215,5 +232,23 @@ func TestATrialBalanceIsReadWithItsLayout(t *testing.T) {
 	reading = layout.Read(broken.Tables[0])
 	if reading.Balanced || len(reading.Problems) != 4 {
 		t.Fatalf("every problem is named with its place: %+v", reading.Problems)
+	}
+}
+
+// A copied formula's relative references move with it; fixed parts, text, sheet names and function names do not.
+func TestSharedFormulasMoveWithTheirCells(t *testing.T) {
+	for _, c := range []struct{ formula, want string }{
+		{"A4*2", "B6*2"},
+		{"$A$4+A$4+$A4", "$A$4+B$4+$A6"},
+		{"SUM(A1:A3)+LOG10(B2)", "SUM(B3:B5)+LOG10(C4)"},
+		{"'Sheet 1'!A1&\"A1\"", "'Sheet 1'!B3&\"A1\""},
+		{"Sheet2!C3", "Sheet2!D5"},
+	} {
+		if got := shiftFormula(c.formula, 2, 1); got != c.want {
+			t.Fatalf("%s moved two rows and a column: %s, not %s", c.formula, got, c.want)
+		}
+	}
+	if got := shiftFormula("A1", -1, 0); got != "#REF!" {
+		t.Fatalf("a reference moved off the sheet: %s", got)
 	}
 }

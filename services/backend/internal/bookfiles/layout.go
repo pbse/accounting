@@ -39,6 +39,9 @@ type Layout struct {
 	BalanceSign string `json:"balance_sign,omitempty"`
 	AsOf        string `json:"as_of"`
 	Currency    string `json:"currency"`
+	// Headings are rows a person confirmed are headings though nothing totals them; any other row with an account and
+	// no amounts is an account with a zero balance.
+	Headings []int `json:"headings,omitempty"`
 }
 
 // headerWords names what each column header usually says, for a proposal.
@@ -181,6 +184,8 @@ type Reading struct {
 	Balanced bool   `json:"balanced"`
 	// Problems are what holds the reading from use as the month's books, said plainly with where each is.
 	Problems []string `json:"problems"`
+	// Notes are how the reader read what it could have read another way, for a person to confirm.
+	Notes []string `json:"notes"`
 }
 
 var totalName = regexp.MustCompile(`(?i)^(grand\s+)?total\b|\btotals?$`)
@@ -241,6 +246,21 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 			}
 		}
 	}
+	if debit != nil && credit != nil {
+		// Written as two columns, each column must equal its side of the rows it totals.
+		debits, credits := new(big.Rat), new(big.Rat)
+		for _, l := range lines[from:i] {
+			if l.Kind == Posting && l.Balance.Sign() > 0 {
+				debits.Add(debits, l.Balance)
+			} else if l.Kind == Posting {
+				credits.Sub(credits, l.Balance)
+			}
+		}
+		if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
+			return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows it totals come to %s and %s", t.Row, t.Name, exact(debit), exact(credit), exact(debits), exact(credits))}
+		}
+		return nil
+	}
 	if covered := sum(from); covered.Cmp(t.Balance) != 0 {
 		return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows it totals come to %s", t.Row, t.Name, exact(t.Balance), exact(covered))}
 	}
@@ -252,7 +272,17 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 // then left out of the balances, and every amount is read exactly in the layout's style. Nothing is dropped: a value
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
-	reading := Reading{Lines: []Line{}, Problems: []string{}}
+	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}}
+	// The names a total row totals ("Total Current Assets" totals "Current Assets"): a row by such a name with no amounts
+	// heads what the total covers.
+	totalled := map[string]bool{}
+	for _, r := range t.Rows {
+		for _, c := range r.Cells {
+			if l.Columns[c.Column] == AccountName && totalName.MatchString(strings.TrimSpace(c.Value)) {
+				totalled[strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(strings.TrimSpace(c.Value), "")))] = true
+			}
+		}
+	}
 	debits, credits := new(big.Rat), new(big.Rat)
 	var columns []int
 	for c := range l.Columns {
@@ -318,6 +348,14 @@ func (l Layout) Read(t Table) Reading {
 			}
 			if credit != nil {
 				line.Balance.Sub(line.Balance, credit)
+			}
+		}
+		// A row with no amounts heads a section when a total names it or a person said it does; otherwise it is an
+		// account with a zero balance (an export leaves a zero blank), said so when it has no number to show it is one.
+		if line.Balance == nil && !totalName.MatchString(line.Name) && !totalled[strings.ToLower(line.Name)] && !slices.Contains(l.Headings, r.Number) {
+			line.Balance = new(big.Rat)
+			if line.Number == "" {
+				reading.Notes = append(reading.Notes, fmt.Sprintf("Row %d (%s) has no amounts: read as an account with a zero balance; mark it a heading if it is one", r.Number, line.Name))
 			}
 		}
 		switch {
