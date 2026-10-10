@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -178,5 +179,22 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	must(err)
 	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": the figures differ" {
 		t.Fatalf("stored figures are compared: %v", mismatched)
+	}
+	// An unreadable capture's version is checked too: the reason the readers refuse it, and that it holds no figures.
+	var reason string
+	must(db.QueryRow(`SELECT unreadable FROM books_versions WHERE source='quickbooks' AND source_id=$1`, unreadable).Scan(&reason))
+	_, err = db.Exec(`UPDATE books_versions SET unreadable='another reason' WHERE source='quickbooks' AND source_id=$1`, unreadable)
+	must(err)
+	_, mismatched, err = booksParity(t.Context(), db, org, 0)
+	must(err)
+	if !slices.Contains(mismatched, "quickbooks capture "+unreadable+": the readers refuse it for another reason") {
+		t.Fatalf("an unreadable capture's reason is compared: %v", mismatched)
+	}
+	_, err = db.Exec(`UPDATE books_versions SET unreadable=$2,balances=jsonb_build_object('1','1') WHERE source='quickbooks' AND source_id=$1`, unreadable, reason)
+	must(err)
+	_, mismatched, err = booksParity(t.Context(), db, org, 0)
+	must(err)
+	if !slices.Contains(mismatched, "quickbooks capture "+unreadable+": stored as unreadable, but it holds figures") {
+		t.Fatalf("an unreadable capture's version holds no figures: %v", mismatched)
 	}
 }

@@ -79,6 +79,11 @@ func versionOf(m *fluxMonth) (booksVersion, error) {
 	return v, nil
 }
 
+// unreadVersion is what an unreadable capture's version holds: no figures, only why the readers refuse it.
+func unreadVersion() booksVersion {
+	return booksVersion{Accounts: map[string]booksAccount{}, Balances: map[string]string{}, Activity: map[string]string{}, Uncounted: []string{}}
+}
+
 // digest is the version's figures' digest: of its JSON, whose maps encode in key order, so the same books always give
 // the same digest.
 func (v booksVersion) digest() string {
@@ -125,8 +130,7 @@ func writeBooksVersion(ctx context.Context, db *sql.DB, source, id string) error
 	v, readErr := versionOf(m)
 	unreadable := ""
 	if readErr != nil {
-		unreadable = readErr.Error()
-		v = booksVersion{Accounts: map[string]booksAccount{}, Balances: map[string]string{}, Activity: map[string]string{}, Uncounted: []string{}}
+		unreadable, v = readErr.Error(), unreadVersion()
 	}
 	accounts, _ := json.Marshal(v.Accounts)
 	balances, _ := json.Marshal(v.Balances)
@@ -336,6 +340,12 @@ func compareVersions(ctx context.Context, q interface {
 			continue
 		case readErr == nil && (computed.digest() != v.digest || stored.digest() != v.digest):
 			mismatched = append(mismatched, name+": the figures differ")
+			continue
+		case readErr != nil && readErr.Error() != v.unreadable:
+			mismatched = append(mismatched, name+": the readers refuse it for another reason")
+			continue
+		case readErr != nil && (stored.digest() != unreadVersion().digest() || v.digest != unreadVersion().digest()):
+			mismatched = append(mismatched, name+": stored as unreadable, but it holds figures")
 			continue
 		}
 		// The lines must match the capture's General Ledger, both as recorded with the version and as stored row by row.
