@@ -458,15 +458,7 @@ func (s *seeder) members(ctx context.Context) error {
 			continue // local development shares one identity, so everyone is in
 		}
 		if granted.Valid && granted.Bool {
-			// A teammate who will own closes must be able to work them: an administrator by the firm's own records.
-			if subject != s.o.Subject {
-				if admin, err := s.administrator(ctx, subject); err != nil {
-					return err
-				} else if !admin {
-					return fmt.Errorf("%s is not recorded as an administrator of this firm, so the seed cannot give them closes to work", subject)
-				}
-			}
-			continue
+			continue // a current member; they are assigned the clients they own, and every decision stays the administrator's
 		}
 		if !s.createdFirm {
 			return fmt.Errorf("%s is not a current member of the firm; the seed does not change who may enter it", subject)
@@ -1937,6 +1929,58 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	if dependents > 0 {
 		return fmt.Errorf("%d budget(s) or goal(s) outside the demonstration build on its rows; remove those first", dependents)
 	}
+	// The firm's policy as the seed found it, recorded as a change by the person who ran the seed; the review rules
+	// were never changed, and the local firm cannot take them.
+	if before != nil {
+		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
+		// Only what the seed set, and only where the firm has left it as the seed set it: a later decision stands.
+		var now map[string]any
+		var raw []byte
+		if db.QueryRowContext(ctx, `SELECT to_jsonb(o) FROM (SELECT require_link_passcode,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat FROM organizations WHERE id=$1) o`, o.Organization).Scan(&raw) == nil {
+			json.Unmarshal(raw, &now)
+		}
+		restore := map[string]any{"reason": "The demonstration was removed; the firm's policy is as it was before it"}
+		changed := map[string]bool{}
+		if list, ok := before["changed"].([]any); ok {
+			for _, field := range list {
+				changed[fmt.Sprint(field)] = true
+			}
+		}
+		for field, set := range seedPolicy {
+			if changed[field] && fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
+				restore[policyInputs[field]] = before[field]
+			}
+		}
+		if len(restore) == 1 {
+			restore = nil
+		}
+		if restore != nil {
+			s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
+		}
+		if stopped, ok := before["agent_chat_stopped"].(bool); ok && changed["agent_chat"] && fmt.Sprint(now["agent_chat"]) == fmt.Sprint(seedPolicy["agent_chat"]) {
+			// The notice that the agent was stopped by a migration is not a policy the route sets; it is put back as found,
+			// unless the firm has since chosen an agent level of its own.
+			db.ExecContext(ctx, `UPDATE organizations SET agent_chat_stopped=$2 WHERE id=$1`, o.Organization, stopped)
+		}
+		// A monthly template, once set, has a due date of 1–60 days: a firm that had none keeps the demonstration's
+		// 15 days until it chooses its own (docs/seed-data.md says so).
+		// The settings the seed made for the administrator go only while they still hold the seed's values.
+		if set, _ := before["set_time_zone"].(bool); set {
+			db.ExecContext(ctx, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2 AND time_zone='America/New_York'`, o.Organization, subject)
+		}
+		if set, _ := before["set_preferences"].(bool); set {
+			db.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2 AND NOT browser AND kinds <@ $3::text[] AND kinds @> $3::text[]`, o.Organization, subject, seedKinds)
+		}
+		if len(s.problems) > 0 {
+			return errors.New(s.problems[0])
+		}
+	}
+	var seedMessages []int64
+	for _, id := range recorded["chat_messages"] {
+		if n, err := strconv.ParseInt(id, 10, 64); err == nil {
+			seedMessages = append(seedMessages, n)
+		}
+	}
 	// Everything goes in one transaction, so a refusal partway leaves the demonstration whole.
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1944,7 +1988,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	}
 	defer tx.Rollback()
 	for _, id := range ordered {
-		if err := removeClose(ctx, tx, id, chats, subject); err != nil {
+		if err := removeClose(ctx, tx, id, chats, seedMessages, subject); err != nil {
 			return fmt.Errorf("close %s: %w", id, err)
 		}
 	}
@@ -1996,57 +2040,11 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	// The firm's policy as the seed found it, recorded as a change by the person who ran the seed; the review rules
-	// were never changed, and the local firm cannot take them.
-	if before != nil {
-		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
-		// Only what the seed set, and only where the firm has left it as the seed set it: a later decision stands.
-		var now map[string]any
-		var raw []byte
-		if db.QueryRowContext(ctx, `SELECT to_jsonb(o) FROM (SELECT require_link_passcode,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat FROM organizations WHERE id=$1) o`, o.Organization).Scan(&raw) == nil {
-			json.Unmarshal(raw, &now)
-		}
-		restore := map[string]any{"reason": "The demonstration was removed; the firm's policy is as it was before it"}
-		changed := map[string]bool{}
-		if list, ok := before["changed"].([]any); ok {
-			for _, field := range list {
-				changed[fmt.Sprint(field)] = true
-			}
-		}
-		for field, set := range seedPolicy {
-			if changed[field] && fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
-				restore[policyInputs[field]] = before[field]
-			}
-		}
-		if len(restore) == 1 {
-			restore = nil
-		}
-		if restore != nil {
-			s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
-		}
-		if stopped, ok := before["agent_chat_stopped"].(bool); ok && changed["agent_chat"] && fmt.Sprint(now["agent_chat"]) == fmt.Sprint(seedPolicy["agent_chat"]) {
-			// The notice that the agent was stopped by a migration is not a policy the route sets; it is put back as found,
-			// unless the firm has since chosen an agent level of its own.
-			db.ExecContext(ctx, `UPDATE organizations SET agent_chat_stopped=$2 WHERE id=$1`, o.Organization, stopped)
-		}
-		// A monthly template, once set, has a due date of 1–60 days: a firm that had none keeps the demonstration's
-		// 15 days until it chooses its own (docs/seed-data.md says so).
-		// The settings the seed made for the administrator go only while they still hold the seed's values.
-		if set, _ := before["set_time_zone"].(bool); set {
-			db.ExecContext(ctx, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2 AND time_zone='America/New_York'`, o.Organization, subject)
-		}
-		if set, _ := before["set_preferences"].(bool); set {
-			db.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2 AND NOT browser AND kinds <@ $3::text[] AND kinds @> $3::text[]`, o.Organization, subject, seedKinds)
-		}
-		if len(s.problems) > 0 {
-			return errors.New(s.problems[0])
-		}
-	}
 	return nil
 }
 
 // removeClose deletes one close and everything that hangs off it, in the order the deletion route uses.
-func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions []int64, actor string) error {
+func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions, seedMessages []int64, actor string) error {
 	// The close is locked and its hold checked again here, under the deletion's own transaction, before anything goes.
 	var org, entity, period, client, plainClient string
 	var postings int
@@ -2062,14 +2060,22 @@ func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions [
 		org, closeID, preparation.Digest([]byte(org+"\x00"+strings.ToLower(entity)+"\x00"+period)), period, postings, actor, preparation.Digest([]byte(org+"\x00"+client+"\x00"+period)), preparation.Digest([]byte(org+"\x00"+plainClient+"\x00"+period))); err != nil {
 		return fmt.Errorf("receipt: %w", err)
 	}
-	// A member's own conversation that mentions the close keeps its messages, detached from it; only the seed's chats
-	// and the chats held inside the close go with it.
+	// The seed's own messages in the close's chats go first; a seeded chat the administrator continued is kept as a
+	// firm-wide one, its later turns detached from the close.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_messages WHERE id=ANY($2::bigint[]) AND session_id IN (SELECT id FROM chat_sessions WHERE close_id=$1::bigint)`, closeID, seedMessages); err != nil {
+		return fmt.Errorf("seed chat messages: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_sessions s SET close_id=NULL WHERE s.close_id=$1::bigint AND s.id=ANY($2::bigint[]) AND EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=s.id)`, closeID, seedSessions); err != nil {
+		return fmt.Errorf("seed chat sessions: %w", err)
+	}
+	// A member's own conversation that mentions the close keeps its messages, detached from it; only the chats held
+	// inside the close go with it.
 	// An action card the agent offered on the close cannot stand without it (chat_action_scope), so it goes with the close.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_messages m USING chat_sessions s WHERE s.id=m.session_id AND s.close_id IS NULL AND NOT s.id=ANY($2::bigint[]) AND m.action IS NOT NULL AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint)`, closeID, seedSessions); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_messages m USING chat_sessions s WHERE s.id=m.session_id AND s.close_id IS NULL AND m.action IS NOT NULL AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint)`, closeID); err != nil {
 		return fmt.Errorf("detach chat actions: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE chat_messages m SET close_id=NULLIF(m.close_id,$1::bigint),target_close_id=NULLIF(m.target_close_id,$1::bigint),closes=array_remove(m.closes,$1::bigint) FROM chat_sessions s
- WHERE s.id=m.session_id AND s.close_id IS NULL AND NOT s.id=ANY($2::bigint[]) AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint OR $1::bigint=ANY(m.closes))`, closeID, seedSessions); err != nil {
+ WHERE s.id=m.session_id AND s.close_id IS NULL AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint OR $1::bigint=ANY(m.closes))`, closeID); err != nil {
 		return fmt.Errorf("detach chats: %w", err)
 	}
 	for _, statement := range []string{

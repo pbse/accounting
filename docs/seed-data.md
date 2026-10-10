@@ -32,7 +32,7 @@ cd services/backend
 go run ./cmd/seed -database "$DATABASE_URL" -organization local-development -subject local-development -members user_demo_rosa
 ```
 
-`-members` names other members, who may work closes, to own some clients; without it every close is the administrator's (the seed cannot tell which members may work a close, so it names none itself).
+`-members` names other current members to own some clients: they are assigned those clients, and whether they can review their work depends on their own role. Without it every close is the administrator's.
 
 The hosted firm, from your own terminal with the owner connection string (the one Deploy production migrates with). The seed refuses a database that is not on this machine unless `-hosted` is given, and then needs `-yes`:
 
