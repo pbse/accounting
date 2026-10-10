@@ -43,7 +43,7 @@ func TestMemberSettingsArePersonalAndLeaveWithTheMembership(t *testing.T) {
 	}()
 	mux := http.NewServeMux()
 	registerMe(mux, db)
-	registerAttention(mux, db)
+	registerAttention(mux, db, db)
 	call := func(subject, method, path string, body any) (int, map[string]any) {
 		t.Helper()
 		var reader *bytes.Reader
