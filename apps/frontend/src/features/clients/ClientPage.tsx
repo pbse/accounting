@@ -75,7 +75,7 @@ type ClientRead = {
   people?: Person[];
   people_unavailable?: string;
 };
-// A request sent to the client that it has not answered, from any month the reader can open.
+// A request to the client that it has not finished answering, from any month the reader can open.
 type AskedOfClient = {
   id: string;
   close_id: string;
@@ -83,7 +83,7 @@ type AskedOfClient = {
   recipient: string;
   state: "sent" | "sending" | "failed" | "not_sent";
   sent_at?: string;
-  answered_in_part: boolean;
+  answer?: "answered" | "answered_in_part";
   job?: string;
   items: number;
 };
@@ -432,7 +432,9 @@ export default function ClientPage() {
                   {monthName(item.period)} · {n(item.items, "item")}
                 </span>
                 <span role="cell">
-                  {item.answered_in_part ? (
+                  {item.answer === "answered" ? (
+                    <span className="pill">Answered</span>
+                  ) : item.answer === "answered_in_part" ? (
                     <span className="pill muted">Answered in part</span>
                   ) : item.state === "sent" && item.sent_at ? (
                     <span className="pill muted">Sent {dates.dayMonth(item.sent_at)}</span>

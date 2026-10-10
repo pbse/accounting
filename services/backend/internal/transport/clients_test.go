@@ -168,14 +168,17 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	}
 	_, err = db.Exec(`UPDATE work_requests SET delivered_by='fixture',delivered_at=now(),delivery_reference='Handed over' WHERE id=$1`, request)
 	must(err)
-	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["state"] != "sent" || requests[0].(map[string]any)["sent_at"] == nil || requests[0].(map[string]any)["answered_in_part"] != false {
+	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["state"] != "sent" || requests[0].(map[string]any)["sent_at"] == nil || requests[0].(map[string]any)["answer"] != nil {
 		t.Fatalf("a recorded delivery sends the request: %v", requests)
 	}
 	// The client answers part of it: the request stays, answered in part, for the firm to decide on.
 	_, err = db.Exec(`INSERT INTO request_submissions(request_id,receipt,complete) VALUES($1,'r1',false)`, request)
 	must(err)
-	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["answered_in_part"] != true {
+	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["answer"] != "answered_in_part" {
 		t.Fatalf("a partial reply is shown: %v", requests)
+	}
+	if openCoverage == waitingCoverage {
+		t.Fatal("a request about accounts alone stays open after a partial reply")
 	}
 	// A Xero connection made from the September month, under the name later confirmed as Acme's alias, is Acme's too,
 	// and says which name it is held under.

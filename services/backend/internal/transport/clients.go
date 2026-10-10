@@ -47,8 +47,13 @@ type monthBooks struct {
 	Stale bool `json:"stale,omitempty"`
 }
 
-// openRequest is a request to the client that it has not answered: who it is for, whether it reached them (sent, with
-// when; sending; failed; or not sent yet), whether they answered part of it, and how many items wait on it.
+// openCoverage is waitingCoverage with a partial reply kept open: a request about accounts alone is finished only by a
+// complete reply.
+var openCoverage = strings.Replace(waitingCoverage, `NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id)`, `NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id AND complete)`, 1)
+
+// openRequest is a request to the client that it has not finished answering: who it is for, whether it reached them
+// (sent, with when; sending; failed; or not sent yet), whether they answered it in part or in full, and how many items
+// wait on it.
 type openRequest struct {
 	ID        string     `json:"id"`
 	CloseID   string     `json:"close_id"`
@@ -56,7 +61,8 @@ type openRequest struct {
 	Recipient string     `json:"recipient"`
 	State     string     `json:"state"`
 	Sent      *time.Time `json:"sent_at,omitempty"`
-	Answered  bool       `json:"answered_in_part"`
+	// Answer is answered or answered_in_part when the client has replied, in full or in part, else "".
+	Answer string `json:"answer,omitempty"`
 	// Job is the first work item waiting on the request, where its delivery, reply and follow-up are handled; "" for
 	// a request about accounts alone, handled in its month's coverage.
 	Job   string `json:"job,omitempty"`
@@ -197,12 +203,13 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["months"], out["owed"] = months, owed
-		// What the client was asked and has not answered, across the months the reader can open, as Work and the
-		// attention list find it: the newest request of work still waiting on the client, and a request about accounts
-		// alone still current (waitingCoverage). Each says whether it reached the client (its delivery recorded, or its
-		// email accepted by the provider; sending; or failed or bounced; else not sent yet), whether the client has
-		// answered part of it (a reply that is not complete, which the firm decides on), and how many items wait on it:
-		// the work still waiting on it rather than on a newer request, or the accounts it asks about.
+		// What the client was asked and has not finished answering, across the months the reader can open, as Work and
+		// the attention list find it: the newest request of work still waiting on the client, and a request about
+		// accounts alone still current that has no complete reply (waitingCoverage, a partial reply kept). Each says
+		// whether it reached the client: its delivery recorded by a person, or an email the provider accepted that did not
+		// then bounce, fail or get suppressed; else whether its latest email is on its way or failed, or it is not sent
+		// yet. It says whether the client has answered it in part or in full, and how many items wait on it: the work
+		// still waiting on it rather than on a newer request, or the accounts it asks about.
 		ids := make([]string, len(months))
 		for i, m := range months {
 			ids[i] = m.ID
@@ -210,10 +217,10 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		requests := []openRequest{}
 		var waiting *sql.Rows
 		if waiting, err = tx.QueryContext(ctx, `SELECT q.id::text,d.close_id::text,c.period,q.recipient,
- COALESCE(q.delivered_at,(SELECT min(COALESCE(m.finished_at,m.created_at)) FROM email_delivery m WHERE m.request_id=q.id AND m.state='accepted')),
+ COALESCE(q.delivered_at,(SELECT min(COALESCE(m.finished_at,m.created_at)) FROM email_delivery m WHERE m.request_id=q.id AND m.state='accepted' AND m.delivery NOT IN ('bounced','complained','failed','suppressed'))),
  COALESCE((SELECT CASE WHEN m.state IN ('failed','unknown') OR m.delivery IN ('bounced','complained','failed','suppressed') THEN 'failed' WHEN m.state IN ('queued','sending') THEN 'sending' END
   FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
- EXISTS(SELECT 1 FROM request_submissions s WHERE s.request_id=q.id),
+ COALESCE((SELECT CASE WHEN s.complete THEN 'answered' ELSE 'answered_in_part' END FROM request_submissions s WHERE s.request_id=q.id ORDER BY s.id DESC LIMIT 1),''),
  COALESCE((SELECT min(j.id)::text FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
   AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)),''),
  CASE WHEN q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FROM request_jobs WHERE request_id=q.id) THEN jsonb_array_length(COALESCE(q.coverage_scope->'bindings','[]'::jsonb))
@@ -221,16 +228,17 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
    AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)) END
  FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id
  WHERE d.close_id::text=ANY($1) AND (EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
-  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)) OR `+waitingCoverage+`)
+  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)) OR `+openCoverage+`)
  ORDER BY q.approved_at,q.id`, ids); err == nil {
 			for waiting.Next() {
 				var q openRequest
 				var sent sql.NullTime
 				var email string
-				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &sent, &email, &q.Answered, &q.Job, &q.Items); err != nil {
+				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &sent, &email, &q.Answer, &q.Job, &q.Items); err != nil {
 					break
 				}
-				// A request that reached the client stays sent, whatever became of a later reminder.
+				// A request that reached the client stays sent, whatever became of a later reminder; one whose every email
+				// bounced or failed has not reached it.
 				switch {
 				case sent.Valid:
 					q.State, q.Sent = "sent", &sent.Time
