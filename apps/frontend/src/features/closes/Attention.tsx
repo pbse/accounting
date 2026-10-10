@@ -22,7 +22,7 @@ export const kindLabels: Record<string, string> = {
   handoff: "Work handed to you",
 };
 
-// The top bar's unread count on Home. With the member's consent, newly seen items also raise a browser notification
+// The sidebar's unread count on Home. With the member's consent, newly seen items also raise a browser notification
 // that names no client.
 export function AttentionBadge() {
   // Read with the page (the layout's loader), then every minute, in a background tab too (that is when a
@@ -46,5 +46,5 @@ export function AttentionBadge() {
       };
     }
   }, [inbox.data]);
-  return unread > 0 ? <span className="pill" aria-label={`${unread} unread`}>{unread}</span> : null;
+  return unread > 0 ? <span className="ks-count" aria-label={`${unread} unread`}>{unread}</span> : null;
 }
