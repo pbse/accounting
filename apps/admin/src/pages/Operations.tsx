@@ -141,6 +141,42 @@ type Connection = { provider: string; organization: string; firm_name: string; c
 const providers = ["", "quickbooks", "xero", "stripe", "email"];
 const tone: Record<string, string> = { active: "ok", reconnect_required: "danger", disconnected: "", unconfirmed: "warn" };
 
+// The month-books record (docs/books-sources.md, Migration): how many month-end captures have their books version, and
+// whether the readers still agree with every version written. A reader moves to the record only while this agrees.
+type BooksRecord = { captures: number; versions: number; pending: number; unreadable: number; parity: { checked: number; mismatched: string[] } };
+
+function MonthBooks() {
+  const books = useResource<BooksRecord>("/v1/admin/books");
+  return (
+    <section>
+      <h2>Month-books record</h2>
+      {books.error && <p role="alert">{books.error}</p>}
+      {!books.data && !books.error && <p role="status">Loading…</p>}
+      {books.data && (
+        <>
+          <p>
+            {books.data.versions} of {books.data.captures} month-end captures have their books version{books.data.pending ? `; ${books.data.pending} are waiting for the worker` : ""}. {books.data.unreadable} are kept as unreadable, as the readers find
+            them.
+          </p>
+          <p>
+            <span className={`status ${books.data.parity.mismatched.length ? "danger" : "ok"}`}>
+              {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : "The readers agree"}
+            </span>{" "}
+            with {books.data.parity.checked} versions checked.
+          </p>
+          {books.data.parity.mismatched.length > 0 && (
+            <ul>
+              {books.data.parity.mismatched.map((m) => (
+                <li key={m}>{m}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 export function Connections() {
   const f = useFilters(["provider", "state", "firm"]);
   const connections = useResource<{ counts: Count[]; connections: Connection[]; has_more: boolean; next_offset: number }>(`/v1/admin/connections${f.query}`);
@@ -206,6 +242,7 @@ export function Connections() {
           </section>
         </>
       )}
+      <MonthBooks />
     </>
   );
 }
