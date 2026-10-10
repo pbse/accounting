@@ -1539,7 +1539,7 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 		}
 	}
 	if c.Loan != nil {
-		obligations = append(obligations, map[string]any{"action": "add", "name": c.Loan.Lender + " note payment", "category": "debt", "direction": "out", "amount": fmt.Sprintf("%.2f", mustFloat(c.Loan.Principal)+mustFloat(c.Loan.Interest)), "first_on": fmt.Sprintf("2026-10-%02d", c.Loan.PayDay), "every": "month", "vendor": c.Loan.Lender, "basis": c.Loan.Agreement + ": fixed monthly payment on the " + fmt.Sprint(c.Loan.PayDay) + "th.", "reason": "Standing obligation"})
+		obligations = append(obligations, map[string]any{"action": "add", "name": c.Loan.Lender + " note payment", "category": "debt", "direction": "out", "amount": c.LoanPayment("2026-10"), "first_on": fmt.Sprintf("2026-10-%02d", c.Loan.PayDay), "every": "month", "vendor": c.Loan.Lender, "basis": c.Loan.Agreement + ": principal plus interest at the note's rate, paid on the " + fmt.Sprint(c.Loan.PayDay) + "th.", "reason": "Standing obligation"})
 	}
 	obligations = append(obligations, map[string]any{"action": "add", "name": "Quarterly estimated tax", "category": "tax", "direction": "out", "amount": "11500.00", "first_on": "2027-01-15", "every": "once", "vendor": "", "basis": "Safe-harbor estimate from the 2025 return, per the owner's tax preparer.", "reason": "Standing obligation"})
 	for _, o := range obligations {

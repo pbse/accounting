@@ -3,8 +3,11 @@ package seed
 import (
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/loans"
 )
 
 func monthName(period string) string {
@@ -19,14 +22,47 @@ type PrepaidSpec struct {
 	Expense, What                          string
 }
 
-// LoanSpec is a term loan paid monthly from the lender's statement.
+// LoanSpec is a term loan paid monthly from the lender's statement: a fixed principal each month, and interest at
+// the note's rate on an actual/360 count from the last payment, as the lender charges it.
 type LoanSpec struct {
 	Lender, Agreement, Account string
 	OpeningPrincipal           string // at the start of June
 	Rate                       string // annual, e.g. "7.250"
-	Principal, Interest        string // each month's payment split, as the statement shows it
+	Principal                  string // each month's principal, as the statement shows it
 	PayDay                     int
 	AccrueInterest             bool
+}
+
+// LoanPayment is the principal and interest the note takes in a month, as the statement will state it.
+func (c *Client) LoanPayment(period string) string {
+	month := c.loanFor(period)
+	return show(add(Money(c.Loan.Principal), month.interest))
+}
+
+// loanMonth is the month's loan figures as the lender's statement states them.
+type loanMonth struct {
+	opening, closing, interest *big.Rat
+	paidThrough, payDate       string
+}
+
+// loanFor works out the month's statement from the note's terms: the opening principal after the earlier payments,
+// the interest from the last payment date to this one, and the closing principal.
+func (c *Client) loanFor(period string) loanMonth {
+	l := c.Loan
+	opening := Money(l.OpeningPrincipal)
+	for _, m := range Months {
+		if m == period {
+			break
+		}
+		opening = sub(opening, Money(l.Principal))
+	}
+	payDate, paidThrough := day(period, l.PayDay), day(previousMonthOf(period), l.PayDay)
+	from, _ := time.Parse("2006-01-02", paidThrough)
+	to, _ := time.Parse("2006-01-02", payDate)
+	rate, _ := strconv.ParseInt(strings.ReplaceAll(l.Rate, ".", ""), 10, 64)
+	cents := new(big.Rat).Mul(opening, big.NewRat(100, 1))
+	interest := big.NewRat(loans.Interest(cents.Num().Int64()/cents.Denom().Int64(), rate, loans.Days("actual_360", from, to), "actual_360"), 100)
+	return loanMonth{opening: opening, closing: sub(opening, Money(l.Principal)), interest: interest, paidThrough: paidThrough, payDate: payDate}
 }
 
 // PayrollSpec is a provider's monthly payroll, debited from the bank and cleared by the agent's entry.
@@ -64,9 +100,10 @@ func (c *Client) TxnsFor(g *ids, period string, n int) []Txn {
 		}
 	}
 	if l := c.Loan; l != nil {
-		principal, interest := Money(l.Principal), Money(l.Interest)
-		txns = append(txns, Txn{Kind: "Purchase", ID: g.id(), Date: day(period, l.PayDay), Party: l.Lender, PartyID: "L1", Memo: "Loan payment " + l.Agreement, Amount: add(principal, interest),
-			Lines: []Posting{{Account: "30", Debit: principal}, {Account: "76", Debit: interest}, {Account: "10", Credit: add(principal, interest)}}})
+		month := c.loanFor(period)
+		principal := Money(l.Principal)
+		txns = append(txns, Txn{Kind: "Purchase", ID: g.id(), Date: month.payDate, Party: l.Lender, PartyID: "L1", Memo: "Loan payment " + l.Agreement, Amount: add(principal, month.interest),
+			Lines: []Posting{{Account: "30", Debit: principal}, {Account: "76", Debit: month.interest}, {Account: "10", Credit: add(principal, month.interest)}}})
 	}
 	if p := c.Payroll; p != nil {
 		total := add(Money(p.Gross), Money(p.EmployerTaxes))
@@ -144,19 +181,6 @@ func (c *Client) AdjustFor(g *ids, period string) []Txn {
 	return txns
 }
 
-// loanState is the loan's principal before and after the month's payment.
-func (c *Client) loanState(period string) (opening, closing *big.Rat) {
-	l := c.Loan
-	opening = Money(l.OpeningPrincipal)
-	for _, m := range Months {
-		if m == period {
-			break
-		}
-		opening = sub(opening, Money(l.Principal))
-	}
-	return opening, sub(opening, Money(l.Principal))
-}
-
 // WorkFor is the month's documents and what is done with them.
 func (c *Client) WorkFor(period string, books Books) []Work {
 	var work []Work
@@ -166,9 +190,9 @@ func (c *Client) WorkFor(period string, books Books) []Work {
 		}
 	}
 	if l := c.Loan; l != nil {
-		opening, closing := c.loanState(period)
-		payDate := day(period, l.PayDay)
-		paidThrough := day(previousMonthOf(period), l.PayDay)
+		month := c.loanFor(period)
+		payDate, paidThrough := month.payDate, month.paidThrough
+		interest := show(month.interest)
 		text := fmt.Sprintf(`%s
 Commercial Lending · Loan statement
 
@@ -178,28 +202,28 @@ Statement period: %s to %s
 Annual rate: %s%% fixed · Day count: actual/360
 
 Opening principal: USD %s
+Interest paid through at the start of the period: %s
 Payment received %s: principal USD %s, interest USD %s
 Closing principal: USD %s
-Interest paid through: %s
 
 Next payment due %s.
-`, l.Lender, c.Name, l.Agreement, l.Account, monthStart(period), monthEnd(period), l.Rate, show(opening), payDate, l.Principal, l.Interest, show(closing), payDate, day(nextMonth(period), l.PayDay))
+`, l.Lender, c.Name, l.Agreement, l.Account, monthStart(period), monthEnd(period), l.Rate, show(month.opening), paidThrough, payDate, l.Principal, interest, show(month.closing), day(nextMonth(period), l.PayDay))
 		answer := map[string]any{"kind": "loan", "summary": "Loan statement from " + l.Lender, "questions": []string{},
 			"facts": cited([]map[string]string{
 				{"field": "lender", "value": l.Lender, "quote": l.Lender + "\nCommercial Lending"},
 				{"field": "agreement_reference", "value": l.Agreement, "quote": "Loan: " + l.Agreement},
 				{"field": "annual_rate", "value": l.Rate, "quote": "Annual rate: " + l.Rate + "% fixed"},
-				{"field": "opening_principal", "value": show(opening), "quote": "Opening principal: USD " + show(opening)},
-				{"field": "interest_paid_through", "value": payDate, "quote": "Interest paid through: " + payDate},
+				{"field": "opening_principal", "value": show(month.opening), "quote": "Opening principal: USD " + show(month.opening)},
+				{"field": "interest_paid_through", "value": paidThrough, "quote": "Interest paid through at the start of the period: " + paidThrough},
 				{"field": "interest_account", "value": "Interest Expense", "quote": "Payment received " + payDate},
-				{"field": "closing_principal", "value": show(closing), "quote": "Closing principal: USD " + show(closing)},
-				{"field": "book_balance", "value": show(closing), "quote": "Closing principal: USD " + show(closing)},
+				{"field": "closing_principal", "value": show(month.closing), "quote": "Closing principal: USD " + show(month.closing)},
+				{"field": "book_balance", "value": show(month.closing), "quote": "Closing principal: USD " + show(month.closing)},
 				{"field": "loan_account", "value": "Equipment Loan", "quote": "(" + l.Account + ")"},
 			})}
 		input := map[string]any{"lender": l.Lender, "source_reference": "Loan statement " + period, "agreement_reference": l.Agreement, "currency": "USD",
-			"annual_rate": l.Rate, "day_count": "actual_360", "opening_principal": show(opening), "interest_paid_through": paidThrough,
-			"payments":          []map[string]string{{"date": payDate, "principal": l.Principal, "interest": l.Interest}},
-			"closing_principal": show(closing), "book_balance": show(closing), "loan_account": "Equipment Loan", "interest_account": "Interest Expense",
+			"annual_rate": l.Rate, "day_count": "actual_360", "opening_principal": show(month.opening), "interest_paid_through": paidThrough,
+			"payments":          []map[string]string{{"date": payDate, "principal": l.Principal, "interest": interest}},
+			"closing_principal": show(month.closing), "book_balance": show(month.closing), "loan_account": "Equipment Loan", "interest_account": "Interest Expense",
 			"accrue_interest": l.AccrueInterest, "method": "lender_statement_v1", "method_confirmed": true, "rate_confirmed": true, "booking_confirmed": true}
 		if l.AccrueInterest {
 			input["accrued_interest_account"] = "Accrued Interest"
@@ -209,7 +233,7 @@ Next payment due %s.
 		if c.Scenario == WaitingClient && period == Months[len(Months)-1] {
 			// Only the payment confirmation came; the statement with the closing balance has to be asked for.
 			item.File = fmt.Sprintf("%s-payment-confirmation-%s.txt", slug(l.Lender), period)
-			item.Text = fmt.Sprintf("%s\nPayment confirmation\n\nBorrower: %s\nLoan: %s\nPayment received %s: principal USD %s, interest USD %s\n\nYour statement will be available in online banking after month-end.\n", l.Lender, c.Name, l.Agreement, payDate, l.Principal, l.Interest)
+			item.Text = fmt.Sprintf("%s\nPayment confirmation\n\nBorrower: %s\nLoan: %s\nPayment received %s: principal USD %s, interest USD %s\n\nYour statement will be available in online banking after month-end.\n", l.Lender, c.Name, l.Agreement, payDate, l.Principal, interest)
 			item.Answer = map[string]any{"kind": "loan", "summary": "Payment confirmation from " + l.Lender + ", without the statement", "questions": []string{"The confirmation shows the " + payDate + " payment but not the closing principal or the interest paid through date. The " + period + " statement from " + l.Lender + " is needed."},
 				"facts": cited([]map[string]string{{"field": "lender", "value": l.Lender, "quote": l.Lender + "\nPayment confirmation"}, {"field": "agreement_reference", "value": l.Agreement, "quote": "Loan: " + l.Agreement}})}
 			item.Request = &Request{Recipient: c.ContactEmail, Body: "Hi " + strings.Split(c.Contact, " ")[len(strings.Split(c.Contact, " "))-1] + ",\n\nFor the " + monthName(period) + " close we need the " + l.Lender + " loan statement for " + l.Agreement + " showing the closing principal after the " + payDate + " payment. The payment confirmation alone does not give the balance.\n\nCould you download it from online banking and reply with it attached? Thank you."}
@@ -390,7 +414,7 @@ func bluegrass() Client {
 		Opening:   map[string]string{"10": "71880.40", "12": "9800.00", "15": "142000.00", "20": "-8120.00", "30": "-48000.00", "42": "-167560.40"},
 		Customers: []Party{{"C1", "Delta Dental of Kentucky", "claims@deltaky.example"}, {"C2", "Anthem Blue Cross", "provider@anthem.example"}, {"C3", "Patient receipts", ""}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Curve Dental Software", "1 Curve Way, Orem, UT 84057", "CD-30981", "3588.00", 12, "73", "Curve Hero practice management, annual subscription"}},
-		Loan:      &LoanSpec{Lender: "Riverbend Bank", Agreement: "Note 4471-EQ", Account: "Equipment Loan", OpeningPrincipal: "48000.00", Rate: "7.250", Principal: "830.00", Interest: "290.00", PayDay: 15},
+		Loan:      &LoanSpec{Lender: "Riverbend Bank", Agreement: "Note 4471-EQ", Account: "Equipment Loan", OpeningPrincipal: "48000.00", Rate: "7.250", Principal: "830.00", PayDay: 15},
 		Payroll:   &PayrollSpec{Provider: "Gusto", Gross: "24000.00", EmployeeTaxes: "3600.00", Deductions: "800.00", Net: "19600.00", EmployerTaxes: "1836.00", Contributions: "0.00", PayDays: []int{15, 30}},
 		Notes:     []string{"Payroll runs on the 15th and the last day of the month through Gusto.", "The equipment note with Riverbend Bank is paid on the 15th."}}
 	c.Monthly = func(c *Client, g *ids, period string, n int) []Txn {
@@ -433,7 +457,7 @@ func larkspur() Client {
 		Opening:   map[string]string{"10": "19880.72", "12": "41200.00", "15": "188000.00", "20": "-12640.00", "30": "-96000.00", "42": "-140440.72"},
 		Customers: []Party{{"C1", "Meadowbrook HOA", "treasurer@meadowbrook.example"}, {"C2", "City of Fairview Parks", "ap@fairview.example"}, {"C3", "Ridgeline Office Park", "pm@ridgeline.example"}, {"C4", "Sunset Plaza Retail", "ap@sunsetplaza.example"}, {"C5", "Greenway Apartments", "office@greenway.example"}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Northstar Mutual Insurance", "P.O. Box 4410, Hartford, CT 06101", "NM-1877-26", "2940.00", 12, "72", "Commercial auto and equipment policy, annual premium"}},
-		Loan:      &LoanSpec{Lender: "Deere Financial", Agreement: "Contract 77-2201", Account: "Equipment Loan", OpeningPrincipal: "96000.00", Rate: "5.900", Principal: "1950.00", Interest: "472.00", PayDay: 20},
+		Loan:      &LoanSpec{Lender: "Deere Financial", Agreement: "Contract 77-2201", Account: "Equipment Loan", OpeningPrincipal: "96000.00", Rate: "5.900", Principal: "1950.00", PayDay: 20},
 		Accruals:  map[string]AccrualSpec{"2026-09": {Vendor: "Stonegate Hardscapes", What: "Subcontracted paver installation, Ridgeline Office Park", Amount: "8400.00", Expense: "79", ExpenseName: "Professional Fees"}},
 		Extra: map[string][]Work{"2026-09": {{Kind: "unsupported", File: "fairview-parks-contract-amendment.txt", Text: "CITY OF FAIRVIEW\nParks and Recreation Department\n\nAmendment No. 2 to Landscaping Services Agreement 2025-114\nContractor: Larkspur Landscaping Inc.\n\nEffective 2026-09-01 the monthly service fee is amended from $6,200.00 to $6,850.00 to include the Riverside Trail extension. Retainage of 5% applies to each invoice until final acceptance of the trail planting, expected 2026-11-30.\n\nAuthorized by the Director of Parks.\n",
 			Answer: map[string]any{"kind": "unsupported", "summary": "Contract amendment with a 5% retainage clause", "questions": []string{"The amendment holds back 5% of each Fairview Parks invoice until trail planting is accepted. Should the retainage be recorded as a separate receivable, and is the 2026-09 invoice already net of it?"}, "facts": []map[string]string{}}}}},
@@ -518,7 +542,7 @@ func tidewater() Client {
 		Opening:   map[string]string{"10": "16720.44", "12": "18900.00", "15": "240000.00", "20": "-21110.00", "30": "-156000.00", "42": "-98510.44"},
 		Customers: []Party{{"C1", "Bayview Yacht Club", "manager@bayviewyc.example"}, {"C2", "Harbor Charters LLC", "ops@harborcharters.example"}, {"C3", "Private owners", ""}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Northstar Mutual Insurance", "P.O. Box 4410, Hartford, CT 06101", "NM-0912-26", "9600.00", 12, "72", "Marina operators policy, annual premium"}},
-		Loan:      &LoanSpec{Lender: "Riverbend Bank", Agreement: "Note 8820-TL", Account: "Equipment Loan", OpeningPrincipal: "156000.00", Rate: "6.750", Principal: "2100.00", Interest: "877.50", PayDay: 10, AccrueInterest: true},
+		Loan:      &LoanSpec{Lender: "Riverbend Bank", Agreement: "Note 8820-TL", Account: "Equipment Loan", OpeningPrincipal: "156000.00", Rate: "6.750", Principal: "2100.00", PayDay: 10, AccrueInterest: true},
 		Extra:     map[string][]Work{"2026-09": {{Kind: "unsupported", File: "travelift-invoice-scan.txt", Text: "[Scanned image, 2 pages, 300 dpi. No text layer. File: travelift-invoice-scan.pdf]\n", NoAnswer: true}}},
 		Notes:     []string{"Gus sends scans from the yard's copier; ask for the PDF export when the scan has no text."}}
 	c.Monthly = func(c *Client, g *ids, period string, n int) []Txn {
