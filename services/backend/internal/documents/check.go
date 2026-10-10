@@ -173,7 +173,7 @@ func Check(name, content string) CheckResult {
 				}
 			}
 			slices.Sort(unchecked)
-			if unchecked := unchecked; len(unchecked) > 0 {
+			if len(unchecked) > 0 {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("The image model could not compare %s with the page image; the PDF text is used as it is, so inspect the original for anything only the image shows.", pageList(unchecked)))
 			}
 			if pagesWithPrinted == 0 {

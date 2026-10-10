@@ -38,6 +38,7 @@ type route struct {
 // Configure once before sharing it. No automatic retries or provider fallbacks:
 // either would bypass the caller's budget reservation or data consent boundary.
 type Client struct {
+	apiImages        bool
 	gemini           *Gemini
 	http             *http.Client
 	routes           map[string]route

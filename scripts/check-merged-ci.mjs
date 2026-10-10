@@ -21,7 +21,7 @@ export async function check({ repository, sha, query, verify, pause = setTimeout
     if (!pending) throw new Error('The merged pull request did not pass CI');
     if (attempt + 1 < attempts) await pause(15000);
   }
-  throw new Error('Merged PR/CI evidence is still unavailable after three minutes; deployment was not started. Rerun after CI passes.');
+  throw new Error('Merged PR/CI evidence is still unavailable after three minutes; deployment was not started. For incomplete CI or uploads, rerun the merged PR CI and then retry this deployment. An older workflow without provenance or a direct main push requires a manually validated Deploy production dispatch.');
 }
 
 export function hasProvenance(artifacts) {
@@ -41,7 +41,7 @@ if (process.argv[1]?.endsWith('/check-merged-ci.mjs')) {
     try {
       gh(['run', 'download', String(id), '--repo', repository, '--name', 'ci-provenance', '--dir', dir]);
       const proof = JSON.parse(readFileSync(join(dir, 'provenance.json'), 'utf8'));
-      if (proof.head !== head || proof.tree !== tree) throw new Error('The merged file tree differs from the tree CI tested. Update the PR against main and rerun CI before deploying.');
+      if (proof.head !== head || proof.tree !== tree) throw new Error('The merged file tree differs from the tree CI tested. Validate current main and dispatch Deploy production manually, or merge a new PR based on current main with passing exact-tree CI.');
       return true;
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }});

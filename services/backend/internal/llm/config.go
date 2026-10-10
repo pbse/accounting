@@ -72,7 +72,7 @@ func New(cfg Config) (*Client, error) {
 		}
 		seenProfiles[key] = true
 	}
-	c := &Client{http: cfg.HTTP, routes: make(map[string]route), profiles: slices.Clone(cfg.Profiles)}
+	c := &Client{apiImages: cfg.APIImages, http: cfg.HTTP, routes: make(map[string]route), profiles: slices.Clone(cfg.Profiles)}
 	for _, purpose := range purposes {
 		if cfg.Provider == "api" && cfg.Model != "" && (purpose != "ocr" || cfg.APIImages) {
 			c.routes[purpose] = route{Provider: OpenAI, Token: cfg.APIKey, Model: cfg.Model, Effort: cfg.ReasoningEffort}

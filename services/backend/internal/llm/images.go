@@ -70,9 +70,13 @@ func OCRConfiguration(ctx context.Context) map[string]string {
 	if Model(ctx, "ocr") != "" {
 		return map[string]string{"provider": Engine(ctx, "ocr"), "model": Model(ctx, "ocr")}
 	}
+	// Explicit OpenAI selection bypasses Gemini, including unused-key warnings.
+	c, _ := ctx.Value(clientKey{}).(*Client)
+	if c != nil && c.apiImages {
+		return map[string]string{"provider": "tesseract"}
+	}
 	status := OCRSetting()
-	// A usable Gemini key is not a route when OpenAI images were explicitly
-	// selected without usable API credentials. Never report an adapter we won't call.
+	// Never report a usable adapter without a corresponding gateway route.
 	if status["provider"] == "gemini" {
 		return map[string]string{"provider": "tesseract"}
 	}
