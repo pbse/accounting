@@ -284,9 +284,12 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 				// The session rows are the system's, not a firm's: the lookup runs without this request's actor, as it
 				// does when a request enters, on a context of its own.
 				lookup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_, _, status := sessions.accessToken(lookup, sessionDB, firmSession, verifier, cookie.Value)
+				token, _, status := sessions.accessToken(lookup, sessionDB, firmSession, verifier, cookie.Value)
 				cancel()
-				if status != 0 {
+				// A session refreshed to another token may carry other claims (a role narrowed, a client taken away): the
+				// stream ends rather than read on with the claims it entered with, and the sidebar opens it again, which
+				// signs in afresh.
+				if status != 0 || "Bearer "+token != r.Header.Get("Authorization") {
 					return false
 				}
 			}
