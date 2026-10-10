@@ -52,10 +52,11 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   const [restore, setRestore] = useState(false);
   useEffect(() => {
     if (!open) return;
-    // Focus moves into the sheet; the phone bar and the page behind it leave the tab order while it is open.
+    // Focus moves into the sheet; everything beside it in the shell (the skip link, the phone bar, the page, an open
+    // assistant) leaves the tab order while it is open.
     sheet.current?.focus();
-    const page = document.getElementById("main");
-    page?.setAttribute("inert", "");
+    const others = [...(sheet.current?.parentElement?.children ?? [])].filter((e) => e !== sheet.current && !e.classList.contains("ks-backdrop") && !e.hasAttribute("inert"));
+    others.forEach((e) => e.setAttribute("inert", ""));
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setOpen(false);
@@ -64,7 +65,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
     window.addEventListener("keydown", key);
     return () => {
       window.removeEventListener("keydown", key);
-      page?.removeAttribute("inert");
+      others.forEach((e) => e.removeAttribute("inert"));
     };
   }, [open]);
   // Escape hands focus back to the menu button once the bar is no longer inert.
@@ -84,7 +85,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   };
   return (
     <>
-      <div className="ks-phonebar" inert={open || undefined}>
+      <div className="ks-phonebar">
         <button type="button" className="ks-phonebar-brand" aria-label="Open the menu" aria-expanded={open} onClick={() => setOpen(!open)} ref={menuButton}>
           <span className="ks-wordmark">krith</span>
         </button>
@@ -138,7 +139,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
 
 function Page({ item }: { item: SidebarPage }) {
   return (
-    <NavLink className="ks-nav" end={item.end} to={item.to} title={item.label} aria-label={item.label}>
+    <NavLink className="ks-nav" end={item.end} to={item.to} title={item.label}>
       <Icon name={item.icon} />
       <span className="ks-label">{item.label}</span>
       {item.count}
@@ -162,7 +163,7 @@ function Group({ group, path, collapsed, expand }: { group: SidebarGroup; path: 
   };
   return (
     <>
-      <button type="button" className={`ks-nav ks-group${inside ? " has-current" : ""}`} aria-expanded={open && !collapsed} onClick={toggle} title={group.label} aria-label={group.label}>
+      <button type="button" className={`ks-nav ks-group${inside ? " has-current" : ""}`} aria-expanded={open && !collapsed} onClick={toggle} title={group.label}>
         <Icon name={group.icon} />
         <span className="ks-label">{group.label}</span>
         <Icon name="chevron" className="ks-chev" />
@@ -191,7 +192,7 @@ export function SidebarCategory({ children, aside }: { children: ReactNode; asid
 // A quiet link at the foot: Settings, Help.
 export function SidebarFootLink({ to, icon, children }: { to: string; icon: IconName; children: ReactNode }) {
   return (
-    <NavLink className="ks-nav" to={to} title={typeof children === "string" ? children : undefined} aria-label={typeof children === "string" ? children : undefined}>
+    <NavLink className="ks-nav" to={to} title={typeof children === "string" ? children : undefined}>
       <Icon name={icon} />
       <span className="ks-label">{children}</span>
     </NavLink>

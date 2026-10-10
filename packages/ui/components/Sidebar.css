@@ -462,7 +462,15 @@
   padding-left: var(--space-8);
   padding-right: var(--space-8);
 }
-.ks-side.collapsed .ks-label,
+/* Labels stay in the accessible name when collapsed; only the eye loses them. */
+.ks-side.collapsed .ks-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 .ks-side.collapsed .ks-kbd,
 .ks-side.collapsed .ks-firm,
 .ks-side.collapsed .ks-count,
@@ -570,7 +578,14 @@
     transition-delay: 0s;
     box-shadow: var(--float);
   }
-  .ks-side.collapsed .ks-label,
+  .ks-side.collapsed .ks-label {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
+    white-space: nowrap;
+  }
   .ks-side.collapsed .ks-kbd,
   .ks-side.collapsed .ks-firm,
   .ks-side.collapsed .ks-count,
