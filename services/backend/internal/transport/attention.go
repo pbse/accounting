@@ -221,7 +221,7 @@ func attentionPreferences(ctx context.Context, db reader, r *http.Request) ([]st
 // attentionStreamEvery is how often the stream reads the inbox again; attentionStreamFor is how long one request
 // lives before the sidebar opens another. Tests shorten both.
 var attentionStreamEvery = 10 * time.Second
-var attentionStreamFor = 10 * time.Minute
+var attentionStreamFor = 2 * time.Minute
 
 func registerAttention(mux *http.ServeMux, db *sql.DB) {
 	// One list per person of what needs them, grouped by close; marks and preferences are theirs alone.
@@ -240,8 +240,9 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 		jsonReply(w, 200, attentionInbox(events, kinds, browser, r.URL.Query().Get("view"), page, r.URL.Query().Get("order") == "priority"))
 	})
 	// The inbox as it changes: one long-lived request that says, as NDJSON, when the person's unread items change
-	// (their count and keys), read again every attentionStreamEvery; a line every tick keeps the connection alive.
-	// It ends after attentionStreamFor, and the sidebar opens it again (features/dashboard/SideNotices.tsx).
+	// (their count and keys, or the order and state of what the sidebar shows), read again every attentionStreamEvery;
+	// a line every tick keeps the connection alive. It ends after attentionStreamFor, and the sidebar opens it again
+	// (features/dashboard/SideNotices.tsx), signing in afresh as any request does.
 	mux.HandleFunc("GET /v1/closes/attention/stream", func(w http.ResponseWriter, r *http.Request) {
 		// The server's write timeout is for answers; this response lives as long as the stream does.
 		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(attentionStreamFor + time.Minute))
@@ -264,13 +265,29 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 		first := true
 		// The stream ends with a final document, as a chat's stream does, so the sidebar reads a normal ending.
 		defer send(map[string]any{"ended": true})
-		for {
-			// Access is checked again on every read, as it is when a request enters: a membership revoked or a firm
-			// suspended while the stream is open ends it with nothing more said.
-			if !first {
-				if allowed, err := organizationAccess(db, r); err != nil || !allowed {
-					return
+		// Access is checked again on every read, as it is when a request enters: a membership revoked, a firm
+		// suspended, or a server-held sign-in session (AUTH_SESSION=server) revoked while the stream is open ends it
+		// with nothing more said.
+		sessions, _ := serverSessions()
+		verifier := workspaceVerifier()
+		still := func() bool {
+			if allowed, err := organizationAccess(db, r); err != nil || !allowed {
+				return false
+			}
+			if sessions != nil && r.Context().Value(signedInKey{}) != nil {
+				cookie, err := r.Cookie(firmSession.cookie)
+				if err != nil {
+					return false
 				}
+				if _, _, status := sessions.accessToken(r.Context(), db, firmSession, verifier, cookie.Value); status != 0 {
+					return false
+				}
+			}
+			return true
+		}
+		for {
+			if !first && !still() {
+				return
 			}
 			events, err := attentionEvents(r.Context(), db, r)
 			var kinds []string
@@ -284,7 +301,10 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 			}
 			inbox := attentionInbox(events, kinds, browser, "unread", 0, true)
 			keys, _ := inbox["unread_keys"].([]string)
-			fingerprint := strings.Join(keys, "\n")
+			// What the sidebar shows is the first page of groups in priority order: a change of order, due date or
+			// text is a change, not only a key arriving or leaving.
+			shown, _ := json.Marshal(inbox["groups"])
+			fingerprint := strings.Join(keys, "\n") + "\n" + string(shown)
 			if first || fingerprint != last {
 				if !send(map[string]any{"type": "attention", "unread": len(keys), "unread_keys": keys}) {
 					return

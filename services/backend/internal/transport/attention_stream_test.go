@@ -33,8 +33,12 @@ func TestAttentionStreamFollowsTheInbox(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Stream fixture')`, org); err != nil {
 		t.Fatal(err)
 	}
+	// The stream checks firm access on every read, as a request does on entry: the member is enabled.
+	if _, err := db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`, org); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
-		for _, q := range []string{`DELETE FROM attention_marks WHERE organization_id=$1`, `DELETE FROM attention_preferences WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM attention_marks WHERE organization_id=$1`, `DELETE FROM attention_preferences WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
