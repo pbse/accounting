@@ -65,12 +65,9 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,'Books client','fixture','active',$3,now(),'t-1') RETURNING id::text`, closeID, org, rand.Text()).Scan(&xeroConnection))
 	must(db.QueryRow(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,'t-1','2026-09','d','{}','fixture') RETURNING id::text`, closeID, xeroConnection).Scan(&xeroCapture))
 
-	for {
-		written, err := writeBooksVersions(t.Context(), db, 500)
+	for more := true; more; {
+		more, err = writeBooksVersions(t.Context(), db, 500)
 		must(err)
-		if written < 500 {
-			break
-		}
 	}
 	var currency, balances, activity, accountsKept, problem, company, asOf string
 	var typed bool
@@ -121,10 +118,10 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	// The worker's run checks every version and records what it found.
 	must(runBooksParity(t.Context(), db))
 	var finished bool
-	var recorded int
-	must(db.QueryRow(`SELECT finished_at IS NOT NULL,checked FROM books_parity ORDER BY id DESC LIMIT 1`).Scan(&finished, &recorded))
-	if !finished || recorded < 3 {
-		t.Fatalf("a parity run is recorded: %v %d", finished, recorded)
+	var recorded, pending int
+	must(db.QueryRow(`SELECT finished_at IS NOT NULL,checked,pending FROM books_parity ORDER BY id DESC LIMIT 1`).Scan(&finished, &recorded, &pending))
+	if !finished || recorded < 3 || pending != 0 {
+		t.Fatalf("a parity run is recorded, with every capture's version written: %v %d %d", finished, recorded, pending)
 	}
 	// Once the readers would read a capture differently, the parity check names it.
 	_, err = db.Exec(`UPDATE quickbooks_snapshots SET payload=jsonb_set(payload,'{reports,TrialBalance,Rows,Row,0,ColData,1,value}','"1500.26"') WHERE id=$1`, readable)

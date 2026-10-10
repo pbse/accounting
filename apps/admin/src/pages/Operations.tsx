@@ -143,7 +143,7 @@ const tone: Record<string, string> = { active: "ok", reconnect_required: "danger
 
 // The month-books record (docs/books-sources.md, Migration): how many month-end captures have their books version, and
 // whether the readers still agree with every version written. A reader moves to the record only while this agrees.
-type BooksRecord = { captures: number; versions: number; pending: number; unreadable: number; parity: { checked: number; mismatched: string[]; finished_at: string } | null };
+type BooksRecord = { captures: number; versions: number; pending: number; unreadable: number; parity: { checked: number; pending: number; mismatched: string[]; finished_at: string } | null };
 
 function MonthBooks() {
   const books = useResource<BooksRecord>("/v1/admin/books");
@@ -168,6 +168,11 @@ function MonthBooks() {
                 </span>{" "}
                 with all {books.data.parity.checked} versions, checked {when(books.data.parity.finished_at)}.
               </p>
+              {books.data.parity.pending > 0 && (
+                <p className="note">
+                  {books.data.parity.pending} captures had no version yet when it ran, so it covers only those written; it gates a reader’s switch once a run finds none pending.
+                </p>
+              )}
               {books.data.parity.mismatched.length > 0 && (
                 <ul>
                   {books.data.parity.mismatched.map((m) => (

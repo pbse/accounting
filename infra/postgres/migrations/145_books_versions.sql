@@ -61,6 +61,8 @@ CREATE TABLE books_parity (
  started_at timestamptz NOT NULL DEFAULT now(),
  finished_at timestamptz,
  checked integer NOT NULL DEFAULT 0,
+ -- pending is how many month-end captures had no version yet when the run began: a run is the gate only when none had.
+ pending integer NOT NULL DEFAULT 0,
  mismatched jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 ALTER TABLE books_versions ENABLE ROW LEVEL SECURITY;
