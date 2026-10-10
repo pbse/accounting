@@ -169,7 +169,7 @@ func apiWithStores(db, sessions *sql.DB, token string) http.Handler {
 		}
 		jsonReply(w, 200, paper)
 	}))
-	store := savedCloses(db, token)
+	store := savedCloses(db, token, sessions)
 	mux.Handle("/mcp", mcpHandler(store, token, db))
 	if oauth := mcpOAuth(); oauth != nil {
 		metadata := func(w http.ResponseWriter, r *http.Request) {

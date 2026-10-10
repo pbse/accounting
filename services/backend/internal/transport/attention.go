@@ -2,8 +2,10 @@ package transport
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -218,7 +220,13 @@ func attentionPreferences(ctx context.Context, db reader, r *http.Request) ([]st
 	return kinds, browser, err
 }
 
-func registerAttention(mux *http.ServeMux, db *sql.DB) {
+// attentionStreamEvery is how often the stream reads the inbox again; attentionStreamFor is how long one request
+// lives before the sidebar opens another. Tests shorten both.
+var attentionStreamEvery = 10 * time.Second
+var attentionStreamFor = 2 * time.Minute
+
+// sessionDB holds the sign-in sessions (the firm pool itself when there is no separate one), for the stream's recheck.
+func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 	// One list per person of what needs them, grouped by close; marks and preferences are theirs alone.
 	mux.HandleFunc("GET /v1/closes/attention", func(w http.ResponseWriter, r *http.Request) {
 		events, err := attentionEvents(r.Context(), db, r)
@@ -233,6 +241,100 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 		}
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 		jsonReply(w, 200, attentionInbox(events, kinds, browser, r.URL.Query().Get("view"), page, r.URL.Query().Get("order") == "priority"))
+	})
+	// The inbox as it changes: one long-lived request that says, as NDJSON, when the person's unread items change
+	// (their count and keys, or the order and state of what the sidebar shows), read again every attentionStreamEvery;
+	// a line every tick keeps the connection alive. It ends after attentionStreamFor, and the sidebar opens it again
+	// (features/dashboard/SideNotices.tsx), signing in afresh as any request does.
+	mux.HandleFunc("GET /v1/closes/attention/stream", func(w http.ResponseWriter, r *http.Request) {
+		// The server's write timeout is for answers; this response lives as long as the stream does.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(attentionStreamFor + time.Minute))
+		// The headers go with the first line, so the stream begins, as the request log measures it, when its first
+		// reading is ready.
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-store")
+		send := func(v map[string]any) bool {
+			line, _ := json.Marshal(v)
+			if _, err := w.Write(append(line, '\n')); err != nil {
+				return false
+			}
+			_ = http.NewResponseController(w).Flush()
+			return true
+		}
+		ticker := time.NewTicker(attentionStreamEvery)
+		defer ticker.Stop()
+		deadline := time.NewTimer(attentionStreamFor)
+		defer deadline.Stop()
+		last := ""
+		first := true
+		// The stream ends with a final document, as a chat's stream does, so the sidebar reads a normal ending.
+		defer send(map[string]any{"ended": true})
+		// Access is checked again on every read, as it is when a request enters: a membership revoked, a firm
+		// suspended, or a server-held sign-in session (AUTH_SESSION=server) revoked while the stream is open ends it
+		// with nothing more said.
+		sessions, _ := serverSessions()
+		verifier := workspaceVerifier()
+		still := func() bool {
+			// A bearer token that has run out ends the stream, as a new request with it would be refused.
+			if a := auth.Actor(r.Context()); a != nil && a.ExpiresAt != nil && time.Now().After(a.ExpiresAt.Time) {
+				return false
+			}
+			if allowed, err := organizationAccess(db, r); err != nil || !allowed {
+				return false
+			}
+			if sessions != nil && r.Context().Value(signedInKey{}) != nil {
+				cookie, err := r.Cookie(firmSession.cookie)
+				if err != nil {
+					return false
+				}
+				// The session rows are the system's, not a firm's: the lookup runs without this request's actor, as it
+				// does when a request enters, on a context of its own.
+				lookup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				token, _, status := sessions.accessToken(lookup, sessionDB, firmSession, verifier, cookie.Value)
+				cancel()
+				// A session refreshed to another token may carry other claims (a role narrowed, a client taken away): the
+				// stream ends rather than read on with the claims it entered with, and the sidebar opens it again, which
+				// signs in afresh.
+				if status != 0 || "Bearer "+token != r.Header.Get("Authorization") {
+					return false
+				}
+			}
+			return true
+		}
+		for {
+			if !first && !still() {
+				return
+			}
+			events, err := attentionEvents(r.Context(), db, r)
+			var kinds []string
+			var browser bool
+			if err == nil {
+				kinds, browser, err = attentionPreferences(r.Context(), db, r)
+			}
+			if err != nil {
+				send(map[string]any{"type": "error", "message": "Attention inbox unavailable."})
+				return
+			}
+			inbox := attentionInbox(events, kinds, browser, "unread", 0, true)
+			keys, _ := inbox["unread_keys"].([]string)
+			fingerprint := inbox["version"].(string)
+			if first || fingerprint != last {
+				if !send(map[string]any{"type": "attention", "unread": len(keys), "unread_keys": keys, "version": fingerprint}) {
+					return
+				}
+				last = fingerprint
+				first = false
+			} else if !send(map[string]any{"type": "tick"}) {
+				return
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-deadline.C:
+				return
+			case <-ticker.C:
+			}
+		}
 	})
 	mux.HandleFunc("POST /v1/closes/attention", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -379,5 +481,10 @@ func attentionInbox(events []attentionEvent, kinds []string, browser bool, view 
 		}
 		groups[i].Events = append(groups[i].Events, e)
 	}
-	return map[string]any{"groups": groups, "unread": len(unread), "unread_keys": unread, "page": page, "has_more": end < len(shown), "kinds": attentionKinds, "preferences": map[string]any{"kinds": kinds, "browser": browser}}
+	// The version names this reading: the unread keys, and the groups shown in their order with their state, so a
+	// change of order, due date or text counts, not only a key arriving or leaving. The stream and the read share it,
+	// so the sidebar can tell a reading it holds from a change.
+	listed, _ := json.Marshal(groups)
+	version := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(unread, "\n")+"\n"+string(listed))))[:16]
+	return map[string]any{"groups": groups, "unread": len(unread), "unread_keys": unread, "page": page, "has_more": end < len(shown), "kinds": attentionKinds, "preferences": map[string]any{"kinds": kinds, "browser": browser}, "version": version}
 }

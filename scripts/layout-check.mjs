@@ -179,6 +179,9 @@ for (const app of apps) {
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     for (const [pattern, json] of Object.entries(app.fixtures ?? {})) await page.route(pattern, (route) => route.fulfill({ json }));
+    // The sidebar's notices stay open on a long-lived request; the check waits for the network to go idle, so that
+    // request is refused here (the notices still read with the page).
+    await page.route("**/v1/closes/attention/stream", (route) => route.abort());
     // The token lives in the tab's memory, so a reload (the dev server's first dependency optimisation) asks again.
     const unlock = async () => {
       await page.fill('input[name="token"]', token);

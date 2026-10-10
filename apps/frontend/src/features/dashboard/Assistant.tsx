@@ -285,6 +285,8 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
       // The member's own date resolves day names such as "by Friday"; the agent's steps and text arrive as events.
       const data = await workspaceRequest(path, { ...body, session_id: session?.id ?? "new", picked, today: localDate() } as Record<string, unknown>, false, onEvent, controller.signal);
       if (asked !== generation.current) return;
+      // The answer's final document carries the conversation; anything else means it was cut off.
+      if (!data.messages) throw new Error(data.message ?? "The answer was interrupted. Your conversation shows what was saved.");
       setMessages(data.messages);
       if (data.session) setSession({ id: data.session.id, title: data.session.title });
       else setSession(null);

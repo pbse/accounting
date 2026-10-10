@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Icon, type IconName } from "@close/ui/components/Icon";
@@ -20,6 +20,48 @@ export function SideNotices() {
   const navigate = useNavigate();
   const location = useLocation();
   const queries = useQueryClient();
+  // Live: one long-lived request says when the person's unread items change, and the inbox is read again then. The
+  // request ends on the server's schedule and is opened again; a failure waits a while before trying again. The
+  // 60-second read above stands behind it.
+  // Each reading the stream sends carries a version, the same the inbox read carries. The very first is a snapshot,
+  // followed only when its version is not the one held here; from then on, across reconnects too, a reading is
+  // followed only when its version moved.
+  const seen = useRef("");
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const listen = async () => {
+      try {
+        await workspaceRequest(
+          "/attention/stream",
+          undefined,
+          false,
+          (event) => {
+            const change = event as { type: string; version?: string; unread_keys?: string[] };
+            if (change.type !== "attention") return;
+            const version = change.version ?? "";
+            if (seen.current === "") {
+              seen.current = version;
+              if (queries.getQueryData<AttentionInbox>(workspaceQuery(attentionPath).queryKey)?.version === version) return;
+            } else if (version === seen.current) return;
+            else seen.current = version;
+            // A change reaches the inbox and Home's and Closes' counts and decisions alike, which read /home.
+            void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && /^\/(attention|home)\b/.test(String(q.queryKey[1])) });
+          },
+          controller.signal,
+        );
+        // A normal ending (the server's final document) is followed at once; a failure waits.
+        if (!controller.signal.aborted) timer = window.setTimeout(listen, 1000);
+      } catch {
+        if (!controller.signal.aborted) timer = window.setTimeout(listen, 30_000);
+      }
+    };
+    void listen();
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [queries]);
   const [leaving, setLeaving] = useState<string[]>([]);
   const [failed, setFailed] = useState("");
   // The reader's own unread decisions, as the badge counts them; what waits on a teammate stays on Home.

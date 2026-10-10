@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -35,6 +36,8 @@ func roundTrip(ctx context.Context) func() {
 }
 
 type timedWriter struct {
+	// first is when the response began: for a stream, the delay that counts.
+	first time.Time
 	http.ResponseWriter
 	start  time.Time
 	stats  *requestStats
@@ -44,6 +47,7 @@ type timedWriter struct {
 func (w *timedWriter) WriteHeader(status int) {
 	if w.status == 0 {
 		w.status = status
+		w.first = time.Now()
 		w.Header().Add("Server-Timing", fmt.Sprintf(`app;desc="until the response began";dur=%.1f, db;desc="%d round trips";dur=%.1f`, ms(time.Since(w.start)), w.stats.trips.Load(), ms(time.Duration(w.stats.db.Load()))))
 	}
 	w.ResponseWriter.WriteHeader(status)
@@ -78,7 +82,13 @@ func timed(next http.Handler) http.Handler {
 		stats := &requestStats{}
 		tw := &timedWriter{ResponseWriter: w, start: time.Now(), stats: stats}
 		next.ServeHTTP(tw, r.WithContext(context.WithValue(r.Context(), statsKey{}, stats)))
-		if took := time.Since(tw.start); took > slowRequest {
+		// A stream (an answer's events, the attention stream) lives as long as it is listened to: what counts for it is
+		// how long it took to begin.
+		took := time.Since(tw.start)
+		if strings.HasPrefix(tw.Header().Get("Content-Type"), "application/x-ndjson") && !tw.first.IsZero() {
+			took = tw.first.Sub(tw.start)
+		}
+		if took > slowRequest {
 			route := pathIdentifier.ReplaceAllString(r.URL.Path, "/:id$2")
 			route = pathIdentifier.ReplaceAllString(route, "/:id$2")
 			log.Printf("slow request: %s %s %d in %.0f ms, %d database round trips (%.0f ms)", r.Method, route, tw.status, ms(took), stats.trips.Load(), ms(time.Duration(stats.db.Load())))
