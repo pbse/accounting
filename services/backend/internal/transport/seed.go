@@ -425,6 +425,21 @@ func (s *seeder) record(ctx context.Context, column string, value any) {
 	s.db.ExecContext(ctx, fmt.Sprintf(`UPDATE demonstration_seeds SET %s=array_append(%s,$2) WHERE organization_id=$1`, column, column), s.o.Organization, value)
 }
 
+// recordRow records a client-scoped row the seed made, by its table and ID, for removal.
+func (s *seeder) recordRow(ctx context.Context, table string, id string) {
+	if id == "" {
+		return
+	}
+	s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||jsonb_build_object('rows',COALESCE(policy->'rows','{}'::jsonb)||jsonb_build_object($2::text,COALESCE(policy->'rows'->$2::text,'[]'::jsonb)||to_jsonb($3::text))) WHERE organization_id=$1`, s.o.Organization, table, id)
+}
+
+// recordNewest records the row a route just made for a client: the newest of that client's in the table.
+func (s *seeder) recordNewest(ctx context.Context, table, entity string) {
+	var id string
+	s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT max(id)::text FROM %s WHERE organization_id=$1 AND lower(client_entity)=lower($2)`, table), s.o.Organization, entity).Scan(&id)
+	s.recordRow(ctx, table, id)
+}
+
 // manifest marks the run finished; everything removal needs was recorded as it was made.
 func (s *seeder) manifest(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET finished_at=now() WHERE organization_id=$1`, s.o.Organization)
@@ -573,10 +588,17 @@ func (s *seeder) roster(ctx context.Context) {
 		if code != 200 && !strings.Contains(string(out), "already on the roster") {
 			s.problem("roster %s: %d %s", c.Name, code, out)
 		}
+		if code == 200 {
+			s.recordNewest(ctx, "client_roster", c.Name)
+		}
 	}
 	// Names clients are also known by on their documents.
 	for _, alias := range [][2]string{{"Harbor Fixture LLC", "harbor fixture"}, {"Cedar & Pine Coffee Co.", "cedar pine coffee"}, {"Meridian Physical Therapy PC", "meridian pt"}, {"Bluegrass Dental PLLC", "bluegrass dental"}} {
-		s.db.ExecContext(ctx, `INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, s.o.Organization, alias[0], alias[1], s.o.Subject)
+		if result, err := s.db.ExecContext(ctx, `INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, s.o.Organization, alias[0], alias[1], s.o.Subject); err == nil {
+			if n, _ := result.RowsAffected(); n == 1 {
+				s.recordRow(ctx, "client_aliases", alias[0]+" | "+alias[1])
+			}
+		}
 	}
 }
 
@@ -739,7 +761,9 @@ func (s *seeder) leave(ctx context.Context, c *seed.Client) {
 	json.Unmarshal(out, &roster)
 	for _, r := range roster.Clients {
 		if r.Entity == c.Name {
-			s.must(ctx, "roster leave", "POST", "/v1/closes/roster", map[string]any{"entity": c.Name, "active": false, "since": c.Since, "reason": "Hired an in-house bookkeeper; July was the last month we closed", "rev": r.Rev})
+			if _, ok := s.must(ctx, "roster leave", "POST", "/v1/closes/roster", map[string]any{"entity": c.Name, "active": false, "since": c.Since, "reason": "Hired an in-house bookkeeper; July was the last month we closed", "rev": r.Rev}); ok {
+				s.recordNewest(ctx, "client_roster", c.Name)
+			}
 		}
 	}
 }
@@ -770,7 +794,9 @@ func (s *seeder) openClose(ctx context.Context, c *seed.Client, period string) (
 		s.clientProcedures(ctx, c)
 		// A named teammate who will own the client is assigned it, so its work is theirs to open.
 		if owner := s.owner(c); owner != s.o.Subject {
-			s.must(ctx, "assign "+c.Name, "POST", "/v1/closes/access", map[string]any{"subject": owner, "entity": c.Name, "granted": true, "reason": "Assigned " + c.Name + " at onboarding", "confirmed": true})
+			if _, ok := s.must(ctx, "assign "+c.Name, "POST", "/v1/closes/access", map[string]any{"subject": owner, "entity": c.Name, "granted": true, "reason": "Assigned " + c.Name + " at onboarding", "confirmed": true}); ok {
+				s.recordNewest(ctx, "client_access", c.Name)
+			}
 		}
 	}
 	// The client's approved prepaid procedure is applied to the close as evidence, so the agent can prepare
@@ -845,6 +871,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 		if err != nil {
 			return "", err
 		}
+		s.recordRow(ctx, "quickbooks_connections", connection)
 	}
 	evidence := func(name, body string, at time.Time) (string, error) {
 		var id string
@@ -1431,7 +1458,9 @@ func (s *seeder) september(ctx context.Context, c *seed.Client, closeID string, 
 		s.must(ctx, "goal", "POST", "/v1/closes/"+closeID+"/goal", map[string]any{"confirmed": true, "due_on": s.today.AddDate(0, 0, 6).Format("2006-01-02"), "finish": "review"})
 	}
 	if c.Routine {
-		s.must(ctx, "routine", "POST", "/v1/closes/"+closeID+"/goal", map[string]any{"confirmed": true, "due_on": s.today.AddDate(0, 0, 9).Format("2006-01-02"), "finish": "signoff", "every_month": true})
+		if _, ok := s.must(ctx, "routine", "POST", "/v1/closes/"+closeID+"/goal", map[string]any{"confirmed": true, "due_on": s.today.AddDate(0, 0, 9).Format("2006-01-02"), "finish": "signoff", "every_month": true}); ok {
+			s.recordNewest(ctx, "close_routines", c.Name)
+		}
 	}
 }
 
@@ -1475,6 +1504,7 @@ func (s *seeder) budget(ctx context.Context, c *seed.Client, books []seed.Books)
 		s.problem("%s budget: %v", c.Name, problems)
 		return
 	}
+	s.recordRow(ctx, "budget_versions", str(field(out, "id")))
 	s.must(ctx, "approve budget", "POST", "/v1/closes/"+closeID+"/budget", map[string]any{"action": "approve", "id": str(field(out, "id"))})
 }
 
@@ -1506,6 +1536,7 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 		if _, ok := s.must(ctx, "obligation "+str(o["name"]), "POST", path+"/cash-obligations", o); ok {
 			var id string
 			s.db.QueryRowContext(ctx, `SELECT id::text FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND name=$3 AND approved_at IS NULL ORDER BY id DESC LIMIT 1`, s.o.Organization, c.Name, str(o["name"])).Scan(&id)
+			s.recordRow(ctx, "cash_obligations", id)
 			s.must(ctx, "approve obligation "+str(o["name"]), "POST", path+"/cash-obligations", map[string]any{"action": "approve", "id": id})
 		}
 	}
@@ -1534,7 +1565,9 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 			name, changes = "Replace the cardio equipment in November", []map[string]any{{"kind": "add", "label": "Treadmills and rowers, Rogue Fitness quote", "direction": "out", "amount": "18400.00", "first_on": "2026-11-12", "every": "once"}}
 		}
 		if len(changes) > 0 {
-			s.must(ctx, "scenario", "POST", path+"/cash-scenarios", map[string]any{"action": "add", "name": name, "changes": changes})
+			if _, ok := s.must(ctx, "scenario", "POST", path+"/cash-scenarios", map[string]any{"action": "add", "name": name, "changes": changes}); ok {
+				s.recordNewest(ctx, "cash_scenarios", c.Name)
+			}
 		}
 	}
 	if out, ok := s.must(ctx, "cash plan", "GET", path+"/cash-plan", nil); ok {
@@ -1572,12 +1605,16 @@ func (s *seeder) afterwards(ctx context.Context) {
 					if expected != "" {
 						body["expected_on"] = expected
 					}
-					s.call(ctx, "POST", "/v1/closes/"+closeID+"/open-items", body)
+					if code, _ := s.call(ctx, "POST", "/v1/closes/"+closeID+"/open-items", body); code == 200 {
+						s.recordNewest(ctx, "open_item_actions", "Larkspur Landscaping Inc.")
+					}
 					break
 				}
 			}
 		}
-		s.must(ctx, "contact preference", "POST", "/v1/closes/"+closeID+"/collections", map[string]any{"action": "preference", "recipient": "ap@fairview.example", "do_not_contact": true, "reason": "Tom handles the city himself; the contract forbids vendor contact with Parks staff about invoices.", "confirmed": true})
+		if _, ok := s.must(ctx, "contact preference", "POST", "/v1/closes/"+closeID+"/collections", map[string]any{"action": "preference", "recipient": "ap@fairview.example", "do_not_contact": true, "reason": "Tom handles the city himself; the contract forbids vendor contact with Parks staff about invoices.", "confirmed": true}); ok {
+			s.recordNewest(ctx, "collection_contact_preferences", "Larkspur Landscaping Inc.")
+		}
 	}
 	// Daily book reviews: the September captures with exceptions were looked at.
 	for _, name := range []string{"Harbor Fixture LLC", "Cedar & Pine Coffee Co.", "Summit Peak Fitness LLC"} {
@@ -1780,10 +1817,18 @@ func (s *seeder) chats(ctx context.Context) {
 			if t.role == "assistant" && session.closeID != "" {
 				citations = fmt.Sprintf(`[{"label":"Close overview","href":"/dashboard/closes/%s"}]`, session.closeID)
 			}
-			s.db.ExecContext(ctx, `INSERT INTO chat_messages(organization_id,author,close_id,role,body,citations,every_month,closes,replayable,executive,session_id,created_at) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,$6::jsonb,false,'{}',false,false,$7::bigint,$8)`,
-				s.o.Organization, s.o.Subject, str(closeID), t.role, t.body, citations, sessionID, session.at.Add(time.Duration(i)*time.Minute))
+			var messageID string
+			if err := s.db.QueryRowContext(ctx, `INSERT INTO chat_messages(organization_id,author,close_id,role,body,citations,every_month,closes,replayable,executive,session_id,created_at) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,$6::jsonb,false,'{}',false,false,$7::bigint,$8) RETURNING id::text`,
+				s.o.Organization, s.o.Subject, str(closeID), t.role, t.body, citations, sessionID, session.at.Add(time.Duration(i)*time.Minute)).Scan(&messageID); err == nil {
+				s.recordRow(ctx, "chat_messages", messageID)
+			}
 		}
 	}
+}
+
+type seedStatement struct {
+	sql  string
+	args []any
 }
 
 // RemoveSeed takes the demonstration out of the firm by its record: the closes it made with what hangs off them, the
@@ -1811,13 +1856,6 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	// stopped before it recorded them is still taken out whole. Newest first, so a connection's later months go before
 	// the month that holds it.
 	// Only the recorded closes: a close someone opened under a demonstration name, during the run or after, is theirs.
-	var started, finished time.Time
-	var finishedAt sql.NullTime
-	db.QueryRowContext(ctx, `SELECT started_at,finished_at FROM demonstration_seeds WHERE organization_id=$1`, o.Organization).Scan(&started, &finishedAt)
-	finished = time.Now()
-	if finishedAt.Valid {
-		finished = finishedAt.Time
-	}
 	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND id=ANY($2) ORDER BY period DESC,id DESC`, o.Organization, closes)
 	if err != nil {
 		return err
@@ -1858,32 +1896,45 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 			return fmt.Errorf("close %s: %w", id, err)
 		}
 	}
-	type statement struct {
-		sql  string
-		args []any
+	// The client-scoped rows the run recorded as it made them; anything else under those names is someone else's.
+	recorded := map[string][]string{}
+	var before map[string]any
+	json.Unmarshal(policy, &before)
+	if rowsByTable, ok := before["rows"].(map[string]any); ok {
+		for table, list := range rowsByTable {
+			if ids, ok := list.([]any); ok {
+				for _, id := range ids {
+					recorded[table] = append(recorded[table], fmt.Sprint(id))
+				}
+			}
+		}
 	}
-	// The demonstration clients' own rows, made while the run ran; what someone added under those names afterwards stays.
-	byClient := func(sql string) statement { return statement{sql, []any{o.Organization, names, started, finished}} }
-	statements := []statement{
-		byClient(`DELETE FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND confirmed_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM client_access WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM budget_versions WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM open_item_actions WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM collection_contact_preferences WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND recorded_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND recorded_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM close_routines WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4 AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs WHERE connection_id=quickbooks_connections.id)`),
-		{`DELETE FROM procedure_versions WHERE organization_id=$1 AND id=ANY($2) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.procedure_id=procedure_versions.id)`, []any{o.Organization, procedures}},
-		{`DELETE FROM chat_messages WHERE session_id=ANY($1)`, []any{chats}},
-		{`DELETE FROM chat_sessions WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, chats}},
-		{`DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2 AND key=ANY($3)`, []any{o.Organization, subject, keys}},
-		{`DELETE FROM member_invitations WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, invitations}},
-		{`DELETE FROM member_role_changes WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, roleChanges}},
-		{`DELETE FROM agent_access WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, agentAccess}},
+	statements := []seedStatement{}
+	for _, table := range []string{"client_roster", "client_access", "budget_versions", "cash_obligations", "cash_scenarios", "open_item_actions", "collection_contact_preferences", "close_routines"} {
+		if ids := recorded[table]; len(ids) > 0 {
+			statements = append(statements, seedStatement{fmt.Sprintf(`DELETE FROM %s WHERE organization_id=$1 AND id::text=ANY($2)`, table), []any{o.Organization, ids}})
+		}
 	}
+	for _, pair := range recorded["client_aliases"] {
+		if entity, alias, ok := strings.Cut(pair, " | "); ok {
+			statements = append(statements, seedStatement{`DELETE FROM client_aliases WHERE organization_id=$1 AND client_entity=$2 AND alias=$3`, []any{o.Organization, entity, alias}})
+		}
+	}
+	if ids := recorded["quickbooks_connections"]; len(ids) > 0 {
+		statements = append(statements, seedStatement{`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND id::text=ANY($2) AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs WHERE connection_id=quickbooks_connections.id)`, []any{o.Organization, ids}})
+	}
+	// The seed's own chat messages go; a session that still holds the administrator's later turns stays with them.
+	statements = append(statements,
+		seedStatement{`DELETE FROM chat_messages WHERE organization_id=$1 AND id::text=ANY($2)`, []any{o.Organization, recorded["chat_messages"]}},
+		seedStatement{`DELETE FROM chat_sessions WHERE organization_id=$1 AND id=ANY($2) AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, []any{o.Organization, chats}},
+	)
+	statements = append(statements,
+		seedStatement{`DELETE FROM procedure_versions WHERE organization_id=$1 AND id=ANY($2) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.procedure_id=procedure_versions.id)`, []any{o.Organization, procedures}},
+		seedStatement{`DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2 AND key=ANY($3)`, []any{o.Organization, subject, keys}},
+		seedStatement{`DELETE FROM member_invitations WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, invitations}},
+		seedStatement{`DELETE FROM member_role_changes WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, roleChanges}},
+		seedStatement{`DELETE FROM agent_access WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, agentAccess}},
+	)
 	for _, st := range statements {
 		if _, err := db.ExecContext(ctx, st.sql, st.args...); err != nil {
 			return fmt.Errorf("%s: %w", st.sql[:40], err)
@@ -1891,8 +1942,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	}
 	// The firm's policy as the seed found it, recorded as a change by the person who ran the seed; the review rules
 	// were never changed, and the local firm cannot take them.
-	var before map[string]any
-	if json.Unmarshal(policy, &before) == nil {
+	if before != nil {
 		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
 		// Only what the seed set, and only where the firm has left it as the seed set it: a later decision stands.
 		var now map[string]any
