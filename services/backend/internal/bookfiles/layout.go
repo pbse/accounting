@@ -197,9 +197,9 @@ type Reading struct {
 
 var totalName = regexp.MustCompile(`(?i)^(grand\s+)?total\b|\btotals?$`)
 
-// totalLabel is what a total row totals: "Total Current Assets" totals "Current Assets"; "Total", "TOTAL" and
-// "Grand total" total everything.
-var totalLabel = regexp.MustCompile(`(?i)^(grand\s+)?totals?\b[\s:-]*|[\s:-]*\btotals?$`)
+// totalLabel is what a total row totals: "Total Current Assets" and "Total for Current Assets" total "Current Assets";
+// "Total", "TOTAL" and "Grand total" total everything.
+var totalLabel = regexp.MustCompile(`(?i)^(grand\s+)?totals?\b(\s+for\b)?[\s:-]*|[\s:-]*\btotals?$`)
 
 // checkTotal checks the total at lines[i] against what it covers, and says how it differs. A total named for a heading
 // or a parent account above it ("Total Current Assets" under "Current Assets") covers the posting rows from there,
@@ -400,6 +400,19 @@ func (l Layout) Read(t Table) Reading {
 			if l.BalanceSign == "credit" && !signed {
 				line.Balance.Neg(line.Balance)
 			}
+			// A row with its debit and credit beside its balance must agree with them.
+			if debit != nil || credit != nil {
+				net := new(big.Rat)
+				if debit != nil {
+					net.Add(net, debit)
+				}
+				if credit != nil {
+					net.Sub(net, credit)
+				}
+				if net.Cmp(line.Balance) != 0 {
+					reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d's balance (%s) is not its debit less its credit (%s)", r.Number, exact(line.Balance), exact(net)))
+				}
+			}
 		case debit != nil || credit != nil:
 			line.Balance, line.Debit, line.Credit = new(big.Rat), new(big.Rat), new(big.Rat)
 			if debit != nil {
@@ -420,6 +433,10 @@ func (l Layout) Read(t Table) Reading {
 			}
 		}
 		switch {
+		case line.Balance == nil && (totalName.MatchString(line.Name) || slices.Contains(l.Totals, r.Number)):
+			// A total with no amount says the export was cut short, or the layout misses its column.
+			line.Kind = Total
+			reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d (%s) is a total with no amount", r.Number, line.Name))
 		case line.Balance == nil:
 			line.Kind = Heading
 		case totalName.MatchString(line.Name) || slices.Contains(l.Totals, r.Number):
@@ -451,7 +468,9 @@ func (l Layout) Read(t Table) Reading {
 				credits.Sub(credits, line.Balance)
 			}
 		case Total:
-			reading.Problems = append(reading.Problems, checkTotal(reading.Lines, i, debit, credit)...)
+			if line.Balance != nil {
+				reading.Problems = append(reading.Problems, checkTotal(reading.Lines, i, debit, credit)...)
+			}
 		}
 	}
 	reading.Debits, reading.Credits = exact(debits), exact(credits)

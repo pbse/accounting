@@ -337,3 +337,23 @@ func TestTheReaderHoldsWhatDoesNotAddUp(t *testing.T) {
 		t.Fatalf("lower-case references move and keep their case: %s", got)
 	}
 }
+
+// A balance beside its debit and credit must agree with them; a total with no amount is a problem, not a heading; and
+// "Total for Assets" totals the Assets section.
+func TestTotalsAndBalancesAgree(t *testing.T) {
+	three, _ := Read("tb.csv", []byte("Account,Debit,Credit,Balance\nBank,90.00,,100.00\nCapital,,100.00,-100.00\n"))
+	layout := Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountName, 1: Debit, 2: Credit, 3: Balance}, Style: NumberStyle{Scale: 1}}
+	if reading := layout.Read(three.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Row 2") {
+		t.Fatalf("a balance that is not its debit less its credit: %+v", reading)
+	}
+	cut, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00\nTotal Assets,\nCapital,-100.00\n"))
+	layout, _ = ProposeLayout(cut.Tables[0])
+	if reading := layout.Read(cut.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "total with no amount") {
+		t.Fatalf("a total with no amount: %+v", reading)
+	}
+	sections, _ := Read("tb.csv", []byte("Account,Balance\nAssets,\nCurrent Assets,\nBank,100.00\nTotal Current Assets,100.00\nVan,50.00\nTotal for Assets,150.00\nCapital,-150.00\n"))
+	layout, _ = ProposeLayout(sections.Tables[0])
+	if reading := layout.Read(sections.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {
+		t.Fatalf("Total for Assets covers the Assets section: %+v", reading)
+	}
+}
