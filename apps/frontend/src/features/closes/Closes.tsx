@@ -52,6 +52,7 @@ export default function Closes() {
         `Books captured for ${counts.books.captured} of ${counts.books.of}${counts.books.exported ? ` · ${counts.books.exported} from exports` : ""}`,
         counts.books.exceptions ? n(counts.books.exceptions, "new exception") + " in the books" : "",
         counts.books.unchecked ? n(counts.books.unchecked, "capture") + " not fully checked" : "",
+        n(counts.prepared.running, "document") + " in preparation",
         `counted at ${dates.time(counts.as_of)}`,
       ]
         .filter(Boolean)
