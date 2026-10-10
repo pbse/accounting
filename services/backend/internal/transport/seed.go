@@ -407,7 +407,7 @@ func (s *seeder) people(ctx context.Context) error {
 		}
 	}
 	if !hasPreferences {
-		if _, ok := s.must(ctx, "notification preferences", "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"answered", "confirm", "failed", "approve", "changed", "fix", "send", "unanswered", "goal", "handoff"}, "browser": false}); ok {
+		if _, ok := s.must(ctx, "notification preferences", "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": seedKinds, "browser": false}); ok {
 			s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||'{"set_preferences":true}'::jsonb WHERE organization_id=$1`, s.o.Organization)
 		}
 	}
@@ -442,6 +442,9 @@ func (s *seeder) people(ctx context.Context) error {
 }
 
 // policies are the firm's rules as a careful small firm sets them, each change recorded with its reason.
+// seedKinds are the notification kinds the seed chooses for an administrator who had chosen none.
+var seedKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "send", "unanswered", "goal", "handoff"}
+
 // seedPolicy is what the seed sets, by the firm's column, and policyInputs the route's name for each.
 var seedPolicy = map[string]any{"agent_chat": "firm", "materiality_amount": "250.00", "require_link_passcode": true, "reminder_after_days": 3, "reminder_max": 2}
 var policyInputs = map[string]string{"agent_chat": "agent_chat", "materiality_amount": "materiality_amount", "require_link_passcode": "link_passcode", "reminder_after_days": "reminder_after_days", "reminder_max": "reminder_max"}
@@ -1640,11 +1643,12 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		}
 		// A monthly template, once set, has a due date of 1–60 days: a firm that had none keeps the demonstration's
 		// 15 days until it chooses its own (docs/seed-data.md says so).
+		// The settings the seed made for the administrator go only while they still hold the seed's values.
 		if set, _ := before["set_time_zone"].(bool); set {
-			db.ExecContext(ctx, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2`, o.Organization, subject)
+			db.ExecContext(ctx, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2 AND time_zone='America/New_York'`, o.Organization, subject)
 		}
 		if set, _ := before["set_preferences"].(bool); set {
-			db.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2`, o.Organization, subject)
+			db.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2 AND NOT browser AND kinds=$3::text[]`, o.Organization, subject, seedKinds)
 		}
 		if len(s.problems) > 0 {
 			return errors.New(s.problems[0])
@@ -1694,6 +1698,11 @@ func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions [
 		`DELETE FROM production_postings WHERE close_id=$1`,
 		`DELETE FROM workpapers WHERE close_id=$1`,
 		`DELETE FROM daily_reviews WHERE close_id=$1`,
+		`DELETE FROM bill_corrections WHERE close_id=$1`,
+		`DELETE FROM credit_applications WHERE close_id=$1`,
+		`DELETE FROM vendor_credit_postings WHERE close_id=$1`,
+		`DELETE FROM xero_corrections WHERE close_id=$1`,
+		`DELETE FROM xero_postings WHERE close_id=$1`,
 		`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`,
 		`DELETE FROM quickbooks_snapshots WHERE close_id=$1`,
 		`DELETE FROM forwarded_files WHERE close_id=$1`,
