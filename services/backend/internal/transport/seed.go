@@ -2042,7 +2042,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	if before != nil {
 		var raw []byte
 		var now map[string]any
-		if err := tx.QueryRowContext(ctx, `SELECT to_jsonb(o) FROM (SELECT require_link_passcode,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat FROM organizations WHERE id=$1 FOR UPDATE) o`, o.Organization).Scan(&raw); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT to_jsonb(o) FROM (SELECT require_link_passcode,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat,agent_chat_stopped FROM organizations WHERE id=$1 FOR UPDATE) o`, o.Organization).Scan(&raw); err != nil {
 			return err
 		}
 		json.Unmarshal(raw, &now)
@@ -2061,6 +2061,9 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 				restore[field] = before[field]
 			}
 		}
+		if v, ok := before["agent_chat_stopped"].(bool); ok && changed["agent_chat"] && later == 0 && v != now["agent_chat_stopped"] {
+			restore["agent_chat_stopped"] = v
+		}
 		if len(restore) > 0 {
 			value := func(field string) any {
 				if v, ok := restore[field]; ok {
@@ -2068,8 +2071,10 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 				}
 				return now[field]
 			}
-			stopped := false
-			if v, ok := before["agent_chat_stopped"].(bool); ok && changed["agent_chat"] && restore["agent_chat"] != nil {
+			// The agent's stop notice: as it stands now, or as it was before the seed's agent setting cleared it, when the
+			// firm has not decided on the agent since.
+			stopped, _ := now["agent_chat_stopped"].(bool)
+			if v, ok := before["agent_chat_stopped"].(bool); ok && changed["agent_chat"] && later == 0 {
 				stopped = v
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE organizations SET require_link_passcode=$2,materiality_amount=NULLIF($3,'')::numeric,reminder_after_days=$4,reminder_max=$5,agent_chat=$6,agent_chat_stopped=$7 WHERE id=$1`,
@@ -2120,8 +2125,10 @@ func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions, 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_messages WHERE id=ANY($2::bigint[]) AND session_id IN (SELECT id FROM chat_sessions WHERE close_id=$1::bigint)`, closeID, seedMessages); err != nil {
 		return fmt.Errorf("seed chat messages: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE chat_sessions s SET close_id=NULL WHERE s.close_id=$1::bigint AND s.id=ANY($2::bigint[]) AND EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=s.id)`, closeID, seedSessions); err != nil {
-		return fmt.Errorf("seed chat sessions: %w", err)
+	// Any conversation held inside the close that still has turns (a seeded one continued, or one a member started
+	// since) is kept as a firm-wide one, detached from the close.
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_sessions s SET close_id=NULL WHERE s.close_id=$1::bigint AND EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=s.id)`, closeID); err != nil {
+		return fmt.Errorf("chat sessions: %w", err)
 	}
 	// A member's own conversation that mentions the close keeps its messages, detached from it; only the chats held
 	// inside the close go with it.
