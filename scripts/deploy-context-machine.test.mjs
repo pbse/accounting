@@ -206,19 +206,35 @@ import {check as checkMergedCI} from './check-merged-ci.mjs';
 const pr={merged_at:'now',merge_commit_sha:'merge',base:{ref:'main'},head:{sha:'head'}};
 function run(prs,states,attempts=3) {
  let n=0,waits=0;
- return { promise:checkMergedCI({repository:'owner/repo',sha:'merge',attempts,query:args=>args[0]==='api'?prs:states[Math.min(n++,states.length-1)],pause:async()=>{waits++}}), waits:()=>waits };
+ return { promise:checkMergedCI({repository:'owner/repo',sha:'merge',attempts,query:args=>args[0]==='api'?prs:states[Math.min(n++,states.length-1)],verify:async()=>true,pause:async()=>{waits++}}), waits:()=>waits };
 }
 test('a just-merged PR waits for its already-running CI, without rerunning checks',async()=>{
  const r=run([pr],[[{status:'in_progress',conclusion:''}],[{status:'completed',conclusion:'success'}]]);
  await r.promise; assert.equal(r.waits(),1);
 });
 test('failed, unrelated or absent CI cannot authorize deployment',async()=>{
- for(const prs of [[pr],[{...pr,merge_commit_sha:'other'}],[]]) {
+ for(const prs of [[pr]]) {
   const r=run(prs,[[{status:'completed',conclusion:'failure'}]]);
   await assert.rejects(r.promise); assert.equal(r.waits(),0);
  }
 });
 test('pending CI has a bounded wait',async()=>{
  const r=run([pr],[[{status:'in_progress'}]]);
- await assert.rejects(r.promise,/still running/); assert.equal(r.waits(),2);
+ await assert.rejects(r.promise,/still unavailable/); assert.equal(r.waits(),2);
+});
+
+test('merge association and CI artifact metadata can lag without losing a green deployment',async()=>{
+ let associations=0,checks=0,waits=0;
+ await checkMergedCI({repository:'owner/repo',sha:'merge',attempts:4,
+  query:args=>args[0]==='api'?(++associations===1?[]:[pr]):[{status:'completed',conclusion:'success',databaseId:7}],
+  verify:async(id,head)=>{assert.equal(id,7);assert.equal(head,'head');return ++checks>1},pause:async()=>{waits++}});
+ assert.equal(waits,2);
+});
+test('green CI for a different merge tree cannot authorize deployment',async()=>{
+ await assert.rejects(checkMergedCI({repository:'owner/repo',sha:'merge',query:args=>args[0]==='api'?[pr]:[{status:'completed',conclusion:'success'}],verify:async()=>{throw new Error('merged tree differs')},pause:async()=>{}}),/merged tree differs/);
+});
+test('API OCR requires explicit image consent before any deployment mutation',()=>{
+ assert.notEqual(check({LLM_API_IMAGE_ENABLED:'yes'}).status,0);
+ for(const name of ['LLM_MODELS','LLM_REASONING_EFFORTS']) assert.notEqual(check({CONTEXT_MACHINE_ENABLED:'false',[name]:'{"ocr":"medium"}'}).status,0);
+ assert.equal(check({CONTEXT_MACHINE_ENABLED:'false',LLM_API_IMAGE_ENABLED:'true',LLM_MODELS:'{"ocr":"gpt-6.1-sol"}'}).status,0);
 });

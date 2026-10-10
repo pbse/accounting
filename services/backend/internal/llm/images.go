@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"image/png"
+	"time"
 )
 
 const ImageRequestBytes = 18 << 20
@@ -52,7 +53,7 @@ func OpenAIImage(image Image) map[string]string {
 type PageReader struct{}
 
 func (PageReader) ReadPage(ctx context.Context, image []byte) (string, string, error) {
-	ctx, cancel := context.WithTimeout(ctx, GeminiTimeout)
+	ctx, cancel := context.WithTimeout(ctx, PageReadTimeout(ctx))
 	defer cancel()
 	out, err := Generate(ctx, Request{Purpose: "ocr", Instructions: geminiPrompt, Data: "Transcribe the attached page.", Images: []Image{{PNG: image}}, MaxOutputTokens: 16384, MaxResponseBytes: 2 << 20})
 	return out.Text, string(out.Provider) + "/" + out.Model, err
@@ -83,4 +84,25 @@ func ValidateAgentImages(agent string, images []Image) error {
 		}
 	}
 	return nil
+}
+
+// Context-machine image inference includes CLI startup. Admission is idle-only,
+// so this budget never includes waiting behind another model run.
+func PageReadTimeout(ctx context.Context) time.Duration {
+	if Engine(ctx, "ocr") == string(ContextMachine) {
+		return 45 * time.Second
+	}
+	return GeminiTimeout
+}
+
+// ValidatePage lets extraction reject known limits before reserving a model call.
+func (PageReader) ValidatePage(ctx context.Context, image []byte) error {
+	if err := ValidateImages(Request{Purpose: "ocr", Images: []Image{{PNG: image}}}); err != nil {
+		return err
+	}
+	c, _ := ctx.Value(clientKey{}).(*Client)
+	if c == nil {
+		return ErrUnavailable
+	}
+	return ValidateAgentImages(c.routes["ocr"].Agent, []Image{{PNG: image}})
 }

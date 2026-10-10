@@ -14,7 +14,7 @@ func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
 	scope := Scope{Organization: "owner-org", Subject: "owner", AccessProfile: "own-read"}
 	for _, provider := range []string{"api", "context_machine"} {
 		calls := 0
-		cfg := Config{Provider: provider, APIKey: "api-key", Model: "api-model", ContextMachineToken: "service-token", ContextMachineModel: "codex", CodexModel: "cli-model", Profiles: []Scope{scope}, AllowUncappedOutputTokens: true}
+		cfg := Config{APIImages: true, Provider: provider, APIKey: "api-key", Model: "api-model", ContextMachineToken: "service-token", ContextMachineModel: "codex", CodexModel: "cli-model", Profiles: []Scope{scope}, AllowUncappedOutputTokens: true}
 		cfg.HTTP = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			calls++
 			if provider == "api" {

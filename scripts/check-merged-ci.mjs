@@ -1,27 +1,43 @@
 import { execFileSync } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-export function ciDecision(runs) {
-  if (runs.some(r => r.status === 'completed' && r.conclusion === 'success')) return 'passed';
-  return runs.some(r => r.status !== 'completed') ? 'pending' : 'failed';
-}
-
-export async function check({ repository, sha, query, pause = setTimeout, attempts = 13 }) {
-  // Use only merged PRs associated with this exact main commit, not any passing ancestor.
-  const prs = query(['api', `repos/${repository}/commits/${sha}/pulls`]);
-  const heads = [...new Set(prs.filter(p => p.merged_at && p.merge_commit_sha === sha && p.base.ref === 'main').map(p => p.head.sha))];
-  if (!heads.length) throw new Error('The main commit has no merged pull request with CI evidence');
+export async function check({ repository, sha, query, verify, pause = setTimeout, attempts = 13 }) {
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const decisions = heads.map(head => ciDecision(query(['run', 'list', '--repo', repository, '--workflow', 'ci.yml', '--commit', head, '--event', 'pull_request', '--limit', '1', '--json', 'status,conclusion'])));
-    if (decisions.includes('passed')) return;
-    if (!decisions.includes('pending')) throw new Error('The merged pull request did not pass CI');
+    // Association can lag the merge webhook; retry metadata without rerunning CI.
+    const prs = query(['api', `repos/${repository}/commits/${sha}/pulls`]);
+    const heads = [...new Set(prs.filter(p => p.merged_at && p.merge_commit_sha === sha && p.base.ref === 'main').map(p => p.head.sha))];
+    let pending = heads.length === 0;
+    for (const head of heads) {
+      const runs = query(['run', 'list', '--repo', repository, '--workflow', 'ci.yml', '--commit', head, '--event', 'pull_request', '--limit', '1', '--json', 'databaseId,status,conclusion']);
+      if (!runs.length || runs.some(r => r.status !== 'completed')) pending = true;
+      for (const run of runs.filter(r => r.status === 'completed' && r.conclusion === 'success')) {
+        if (await verify(run.databaseId, head)) return;
+        pending = true; // Artifact metadata can also lag run completion.
+      }
+    }
+    if (!pending) throw new Error('The merged pull request did not pass CI');
     if (attempt + 1 < attempts) await pause(15000);
   }
-  throw new Error('CI is still running after three minutes; deployment was not started. Rerun after CI passes.');
+  throw new Error('Merged PR/CI evidence is still unavailable after three minutes; deployment was not started. Rerun after CI passes.');
 }
 
 if (process.argv[1]?.endsWith('/check-merged-ci.mjs')) {
-  await check({ repository: process.env.GITHUB_REPOSITORY, sha: process.env.GITHUB_SHA,
-    query: args => JSON.parse(execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })) });
-  console.log('The merged pull request passed CI; reusing that run.');
+  const gh = args => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  const repository = process.env.GITHUB_REPOSITORY;
+  const tree = execFileSync('git', ['rev-parse', `${process.env.GITHUB_SHA}^{tree}`], { encoding: 'utf8' }).trim();
+  await check({ repository, sha: process.env.GITHUB_SHA, query: args => JSON.parse(gh(args)), verify: async (id, head) => {
+    const artifacts = JSON.parse(gh(['api', `repos/${repository}/actions/runs/${id}/artifacts`])).artifacts;
+    if (!artifacts.some(a => a.name === 'ci-provenance' && !a.expired)) return false;
+    const dir = mkdtempSync(join(tmpdir(), 'krith-ci-proof-'));
+    try {
+      gh(['run', 'download', String(id), '--repo', repository, '--name', 'ci-provenance', '--dir', dir]);
+      const proof = JSON.parse(readFileSync(join(dir, 'provenance.json'), 'utf8'));
+      if (proof.head !== head || proof.tree !== tree) throw new Error('The merged file tree differs from the tree CI tested. Update the PR against main and rerun CI before deploying.');
+      return true;
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }});
+  console.log('The exact merged file tree passed CI; reusing that run.');
 }

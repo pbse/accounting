@@ -218,3 +218,31 @@ func TestLegacyGeminiUncheckedLabelsStillWarn(t *testing.T) {
 		t.Fatal(old)
 	}
 }
+
+func TestBusyImageServiceFallsBackForRemainingPagesWithoutMoreReservations(t *testing.T) {
+	reserved := 0
+	reader := &fakeReader{err: llm.ErrBusy}
+	reading := Reading{Gemini: reader, Provider: "Image model", Reserve: func(context.Context) error { reserved++; return nil }}
+	for i := 0; i < 3; i++ {
+		text, method, err := reading.page(t.Context(), "PDF text", func() ([]byte, error) { return []byte("synthetic"), nil }, func([]byte) (string, error) { t.Fatal("text layer needs no Tesseract"); return "", nil })
+		if err != nil || text != "PDF text" || method != "PDF text"+imageUnchecked {
+			t.Fatal(text, method, err)
+		}
+	}
+	if reserved != 1 || len(reader.sent) != 1 {
+		t.Fatal("busy service was retried", reserved, len(reader.sent))
+	}
+}
+
+type validatedReader struct{ fakeReader }
+
+func (*validatedReader) ValidatePage(context.Context, []byte) error { return llm.ErrLimit }
+func TestPageKnownLimitsAreRejectedBeforeBudgetReservation(t *testing.T) {
+	reserved := 0
+	reader := &validatedReader{}
+	reading := Reading{Gemini: reader, Provider: "Image model", Reserve: func(context.Context) error { reserved++; return nil }}
+	text, _, err := reading.page(t.Context(), "PDF text", func() ([]byte, error) { return []byte("page"), nil }, func([]byte) (string, error) { t.Fatal("text layer needs no Tesseract"); return "", nil })
+	if err != nil || text != "PDF text" || reserved != 0 || len(reader.sent) != 0 {
+		t.Fatal("known invalid image was charged or dispatched", reserved, text, err)
+	}
+}

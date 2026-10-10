@@ -66,7 +66,7 @@ func TestPageReadingFollowsProviderSwitchAndModelPolicy(t *testing.T) {
 				}
 			}))
 			defer front.Close()
-			c, err := New(Config{Provider: provider, APIKey: "key", Model: "gpt-6.1-sol", ReasoningEffort: "medium", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "gpt-6.1-sol", CodexEffort: "medium", ContextMachineEndpoint: front.URL + "/v1/run", Profiles: []Scope{scope}, AllowUncappedOutputTokens: true})
+			c, err := New(Config{APIImages: true, Provider: provider, APIKey: "key", Model: "gpt-6.1-sol", ReasoningEffort: "medium", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "gpt-6.1-sol", CodexEffort: "medium", ContextMachineEndpoint: front.URL + "/v1/run", Profiles: []Scope{scope}, AllowUncappedOutputTokens: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -124,5 +124,18 @@ func TestClaudeImageLimitIsCheckedBeforeDispatch(t *testing.T) {
 	}
 	if err := ValidateAgentImages("codex", []Image{{PNG: make([]byte, 7500001)}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenAITextKeyDoesNotOptPDFImagesIn(t *testing.T) {
+	c, err := New(Config{APIKey: "key", Model: "gpt-6.1-sol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.routes["ocr"].Token != "" || c.routes["chat"].Token == "" {
+		t.Fatal("text credentials enabled image upload")
+	}
+	if PageReaderFromContext(WithClient(t.Context(), c)) != nil {
+		t.Fatal("image reader enabled without consent")
 	}
 }

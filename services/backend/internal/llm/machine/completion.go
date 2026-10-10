@@ -61,13 +61,25 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	ctx, stop := context.WithDeadline(ctx, in.Deadline)
 	defer stop()
-	// A bounded wait handles concurrent completion/replay calls without retrying inference.
-	select {
-	case s.busy <- struct{}{}:
-		defer func() { <-s.busy }()
-	case <-ctx.Done():
-		http.Error(w, "completion deadline expired", 504)
-		return
+	if in.Request.Purpose == "ocr" {
+		// Background images never queue ahead of interactive completions. On busy,
+		// the document uses local reading for its remaining pages, without retries.
+		select {
+		case s.busy <- struct{}{}:
+			defer func() { <-s.busy }()
+		default:
+			http.Error(w, "image reading is busy", 429)
+			return
+		}
+	} else {
+		// Interactive callers wait only within their established deadline.
+		select {
+		case s.busy <- struct{}{}:
+			defer func() { <-s.busy }()
+		case <-ctx.Done():
+			http.Error(w, "completion deadline expired", 504)
+			return
+		}
 	}
 	if checkDatabase(ctx, s.db) != nil {
 		http.Error(w, "read-only database unavailable", 503)

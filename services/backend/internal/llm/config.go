@@ -28,6 +28,7 @@ type Config struct {
 	CodexModel, ClaudeModel, CodexEffort, ClaudeEffort string
 	Profiles                                           []Scope
 	AllowUncappedOutputTokens                          bool
+	APIImages                                          bool
 	Gemini                                             *Gemini
 	HTTP                                               *http.Client
 }
@@ -73,7 +74,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	c := &Client{http: cfg.HTTP, routes: make(map[string]route), profiles: slices.Clone(cfg.Profiles)}
 	for _, purpose := range purposes {
-		if cfg.Provider == "api" && cfg.Model != "" {
+		if cfg.Provider == "api" && cfg.Model != "" && (purpose != "ocr" || cfg.APIImages) {
 			c.routes[purpose] = route{Provider: OpenAI, Token: cfg.APIKey, Model: cfg.Model, Effort: cfg.ReasoningEffort}
 		}
 	}
@@ -92,7 +93,7 @@ func New(cfg Config) (*Client, error) {
 			c.routes[purpose] = route{Provider: ContextMachine, Model: model, Agent: cfg.ContextMachineModel, Effort: effort, Token: cfg.ContextMachineToken, Uncapped: cfg.AllowUncappedOutputTokens}
 		}
 	}
-	if cfg.Provider == "api" && cfg.Gemini != nil {
+	if cfg.Provider == "api" && cfg.Gemini != nil && !cfg.APIImages {
 		c.gemini = cfg.Gemini
 		c.routes["ocr"] = route{Provider: Google, Token: cfg.Gemini.key, Model: cfg.Gemini.model}
 	}
@@ -140,6 +141,12 @@ func New(cfg Config) (*Client, error) {
 func FromEnv() (*Client, error) {
 	cfg := Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: os.Getenv("OPENAI_MODEL"), ContextMachineToken: os.Getenv("CONTEXT_MACHINE_TOKEN"), ContextMachineModel: os.Getenv("CONTEXT_MACHINE_MODEL"), ContextMachineEndpoint: os.Getenv("CONTEXT_MACHINE_ENDPOINT"), Gemini: GeminiFromEnv()}
 	cfg.Provider = os.Getenv("LLM_PROVIDER")
+	if raw := os.Getenv("LLM_API_IMAGE_ENABLED"); raw != "" {
+		if raw != "true" && raw != "false" {
+			return nil, errors.New("LLM_API_IMAGE_ENABLED must be true or false")
+		}
+		cfg.APIImages = raw == "true"
+	}
 	cfg.CodexModel, cfg.ClaudeModel = os.Getenv("CODEX_MODEL"), os.Getenv("CLAUDE_MODEL")
 	cfg.CodexEffort, cfg.ClaudeEffort = os.Getenv("CODEX_REASONING_EFFORT"), os.Getenv("CLAUDE_REASONING_EFFORT")
 	if raw := os.Getenv("LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS"); raw != "" {
@@ -331,6 +338,9 @@ func ProviderLabel(ctx context.Context, purpose string) string {
 		return "the configured model provider"
 	}
 	r := c.routes[purpose]
+	if r.Provider == Google {
+		return "Google Gemini"
+	}
 	if r.Provider == ContextMachine {
 		if r.Agent == "claude" {
 			return "Claude (Anthropic) through the private context machine"

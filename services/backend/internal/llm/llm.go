@@ -140,6 +140,7 @@ type Response struct {
 var (
 	ErrRefused    = errors.New("model refused the request")
 	ErrIncomplete = errors.New("model response was incomplete or invalid")
+	ErrBusy       = errors.New("model service is busy")
 	ErrLimit      = errors.New("model response exceeded its limit")
 )
 
@@ -233,6 +234,9 @@ func (c *Client) post(ctx context.Context, endpoint, token string, body any, req
 	}
 	if res.StatusCode != http.StatusOK {
 		res.Body.Close()
+		if res.StatusCode == http.StatusTooManyRequests {
+			return nil, ErrBusy
+		}
 		return nil, fmt.Errorf("model service returned HTTP %d", res.StatusCode)
 	}
 	return res, nil

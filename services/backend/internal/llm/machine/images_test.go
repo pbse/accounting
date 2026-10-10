@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testPageImage(t *testing.T) []byte {
@@ -69,5 +70,19 @@ func TestProxyAttachesPageForBothCLIsWithNoExecutableTools(t *testing.T) {
 				t.Fatal(w.Code, w.Body.String(), calls)
 			}
 		})
+	}
+}
+
+func TestBusyImageAdmissionDoesNotQueueOrTouchDatabase(t *testing.T) {
+	scope := llm.Scope{Organization: "org", Subject: "owner", AccessProfile: "own"}
+	s := &server{cfg: Config{Profiles: []llm.Scope{scope}}, agents: map[string]agentSettings{"codex": {model: "fixed", effort: "medium", mode: "api_key"}}, busy: make(chan struct{}, 1)}
+	s.busy <- struct{}{}
+	in := llm.CompletionRequest{Version: 1, Agent: "codex", Model: "fixed", Effort: "medium", Scope: scope, Deadline: time.Now().Add(time.Minute), Request: llm.Request{Purpose: "ocr", Instructions: "Transcribe", Images: []llm.Image{{PNG: testPageImage(t)}}, MaxOutputTokens: 16384, MaxResponseBytes: 4096}}
+	raw, _ := json.Marshal(in)
+	req := httptest.NewRequest("POST", "/v1/complete", bytes.NewReader(raw))
+	out := httptest.NewRecorder()
+	s.complete(out, req)
+	if out.Code != 429 || len(s.busy) != 1 {
+		t.Fatal(out.Code, out.Body.String())
 	}
 }

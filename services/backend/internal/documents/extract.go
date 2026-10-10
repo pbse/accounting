@@ -61,6 +61,7 @@ type Reading struct {
 	Gemini   PageReader // nil: local PDF text/Tesseract only
 	Provider string     // label for the configured page reader
 	Reserve  func(context.Context) error
+	Timeout  time.Duration
 	// local is the time the document's scanned pages from this one on need to be read locally, should Gemini fail
 	// them: Gemini is asked only while the time left covers its call and that.
 	local time.Duration
@@ -92,13 +93,22 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 		return image, renderErr
 	}
 	hasLayer := strings.TrimSpace(layer) != ""
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < llm.GeminiTimeout+r.local+geminiMargin {
+	timeout := r.Timeout
+	if timeout == 0 {
+		timeout = llm.GeminiTimeout
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout+r.local+geminiMargin {
 		r.off = true
 	}
 	if r.Gemini != nil && !r.off {
 		// A page Gemini would refuse unsent (an empty or oversized image) is never charged to the firm's limit.
 		if png, err := rendered(); err == nil && len(png) > 0 && len(png) <= llm.GeminiMaxImage {
-			if r.Reserve != nil {
+			if validator, ok := r.Gemini.(interface {
+				ValidatePage(context.Context, []byte) error
+			}); ok {
+				err = validator.ValidatePage(ctx, png)
+			}
+			if err == nil && r.Reserve != nil {
 				if err = r.Reserve(ctx); err != nil {
 					r.off = true
 				}
@@ -107,6 +117,9 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 				text, model, err := r.Gemini.ReadPage(ctx, png)
 				switch {
 				case err != nil:
+					if errors.Is(err, llm.ErrBusy) {
+						r.off = true
+					}
 					log.Printf("Image model could not read a PDF page; using the local reading: %v", err)
 				case strings.TrimSpace(text) == "":
 				case !hasLayer:
@@ -268,18 +281,9 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	// Each Gemini page reading counts against the firm's daily model limit, as preparation's calls do, and as Gemini's.
 	ctx = llm.WithIdentity(ctx, org, subject)
-	reading := Reading{Provider: "Image model", Reserve: func(ctx context.Context) error { return budget.ReserveGeminiCalls(ctx, db, org, 1) }}
-	if g := llm.PageReaderFromContext(ctx); g != nil && llm.Allows(ctx, org) {
-		allowed := true
-		if llm.Engine(ctx, "ocr") == string(llm.ContextMachine) {
-			// Image bytes are supplied by this worker, so enforce the uploader's
-			// current client grant here as well as membership at the service.
-			err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) AND EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, subject, entity).Scan(&allowed)
-			allowed = allowed && err == nil
-		}
-		if allowed {
-			reading.Gemini = g
-		}
+	reading := Reading{Provider: "Image model", Timeout: llm.PageReadTimeout(ctx), Reserve: func(ctx context.Context) error { return budget.ReserveGeminiCalls(ctx, db, org, 1) }}
+	if g := llm.PageReaderFromContext(ctx); g != nil && pageReadingAllowed(ctx, db, org, entity) {
+		reading.Gemini = g
 	}
 	text, extractErr := Extract(ctx, original, reading)
 	state, message := "ready", ""
@@ -327,4 +331,18 @@ func CloseScope(ctx context.Context) any {
 		return nil
 	}
 	return closes
+}
+
+// The worker supplies image bytes, so it checks the uploader's current client
+// authority before reserving or rendering model input, as the service does for reads.
+func pageReadingAllowed(ctx context.Context, db *sql.DB, org, entity string) bool {
+	if !llm.Allows(ctx, org) {
+		return false
+	}
+	if llm.Engine(ctx, "ocr") != string(llm.ContextMachine) {
+		return true
+	}
+	var allowed bool
+	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) AND EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted) AND EXISTS(SELECT 1 FROM organizations WHERE id=$1 AND enabled AND disabled_at IS NULL)`, org, llm.Subject(ctx), entity).Scan(&allowed)
+	return err == nil && allowed
 }
