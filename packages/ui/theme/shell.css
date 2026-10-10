@@ -797,10 +797,6 @@ body {
 .app-shell .ks-crumbs a:not(.button):hover {
   color: var(--ink);
 }
-.app-shell .ks-crumbs .button[aria-disabled="true"] {
-  opacity: 0.5;
-  pointer-events: none;
-}
 .ks-crumbs b {
   color: var(--ink);
   font-weight: 500;

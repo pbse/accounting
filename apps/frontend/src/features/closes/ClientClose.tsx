@@ -186,9 +186,15 @@ export default function ClientClose() {
         <b>{monthName(close.period)}</b>
         <div className="ks-tools">
           <PrepareActions close={close} />
-          <Link className="button primary" to={`${base}?tab=signoff`} aria-disabled={signOffBlocked || undefined} title={signOffBlocked ? "Not ready yet; the Sign-off tab shows what blocks it" : undefined}>
-            Sign off
-          </Link>
+          {signOffBlocked ? (
+            <button type="button" className="primary" disabled title="Not ready yet; the Sign-off tab shows what blocks it">
+              Sign off
+            </button>
+          ) : (
+            <Link className="button primary" to={`${base}?tab=signoff`}>
+              Sign off
+            </Link>
+          )}
         </div>
       </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
