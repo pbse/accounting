@@ -215,22 +215,12 @@ func writeBooksVersions(ctx context.Context, db *sql.DB, limit int) (bool, error
 }
 
 // RunBooksVersions keeps every month-end capture's books version written: the existing captures first, a batch at a
-// time, then each new one within a minute of its capture; and once they are, checks the readers against every version
-// each hour.
+// time, then each new one within a minute of its capture.
 func RunBooksVersions(ctx context.Context, db *sql.DB) {
-	var checked time.Time
 	for {
 		more, err := writeBooksVersions(ctx, db, 500)
 		if err != nil && ctx.Err() == nil {
 			log.Print("Books versions could not be written: ", err)
-		}
-		// Once the versions are written, the readers are checked against every one of them, hourly.
-		if err == nil && !more && time.Since(checked) > time.Hour {
-			if e := runBooksParity(ctx, db); e != nil && ctx.Err() == nil {
-				log.Print("The books parity check could not run: ", e)
-			} else {
-				checked = time.Now()
-			}
 		}
 		wait := time.Minute
 		if err == nil && more {
@@ -240,6 +230,21 @@ func RunBooksVersions(ctx context.Context, db *sql.DB) {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
+		}
+	}
+}
+
+// RunBooksParity checks the readers against every books version each hour, apart from the loop that writes them, so a
+// long check never holds a new capture's version back.
+func RunBooksParity(ctx context.Context, db *sql.DB) {
+	for {
+		if err := runBooksParity(ctx, db); err != nil && ctx.Err() == nil {
+			log.Print("The books parity check could not run: ", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Hour):
 		}
 	}
 }
@@ -302,7 +307,7 @@ func compareVersions(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, versions []storedVersion) (checked int, mismatched []string, err error) {
 	for _, v := range versions {
-		m, _, _, e := captureMonth(ctx, q, v.source, v.id)
+		m, closeID, _, e := captureMonth(ctx, q, v.source, v.id)
 		if e == sql.ErrNoRows {
 			continue
 		}
@@ -315,6 +320,11 @@ func compareVersions(ctx context.Context, q interface {
 		stored, storedLines, recordedLines, linesRefused, e := storedBooks(ctx, q, v.row)
 		if e != nil {
 			return checked, mismatched, e
+		}
+		// What identifies the books: the close, the month, its end and the company they are of, and when they were read.
+		if stored.close != closeID || stored.period != m.Period || stored.asOf != monthEnd(m.Period).Format("2006-01-02") || stored.company != m.realm || !stored.captured.Equal(m.CapturedAt) {
+			mismatched = append(mismatched, name+": what identifies the books differs")
+			continue
 		}
 		switch {
 		case readErr != nil && v.unreadable == "":
@@ -343,18 +353,27 @@ func compareVersions(ctx context.Context, q interface {
 	return checked, mismatched, nil
 }
 
-// storedBooks reads a stored version's figures back, the digest of its stored ledger lines, the lines' digest recorded
-// with the version ("" when it kept none), and why its General Ledger could not be read, if it could not.
+// storedVersionOf is a stored version: its figures, and what identifies them.
+type storedVersionOf struct {
+	booksVersion
+	close, period, asOf, company string
+	captured                     time.Time
+}
+
+// storedBooks reads a stored version's figures back with what identifies them, the digest of its stored ledger lines,
+// the lines' digest recorded with the version ("" when it kept none), and why its General Ledger could not be read, if
+// it could not.
 func storedBooks(ctx context.Context, q interface {
 	rowReader
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, row int64) (booksVersion, string, string, string, error) {
-	var v booksVersion
+}, row int64) (storedVersionOf, string, string, string, error) {
+	var stored storedVersionOf
+	v := &stored.booksVersion
 	var accounts, balances, activity, uncounted []byte
 	var cashFlow []byte
 	var recorded, refused string
-	if err := q.QueryRowContext(ctx, `SELECT currency,typed,accounts,balances,activity,cash_flow,uncounted,lines_digest,lines_unreadable FROM books_versions WHERE id=$1`, row).Scan(&v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &recorded, &refused); err != nil {
-		return v, "", "", "", err
+	if err := q.QueryRowContext(ctx, `SELECT currency,typed,accounts,balances,activity,cash_flow,uncounted,lines_digest,lines_unreadable,close_id::text,period,as_of::text,company,captured_at FROM books_versions WHERE id=$1`, row).Scan(&v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &recorded, &refused, &stored.close, &stored.period, &stored.asOf, &stored.company, &stored.captured); err != nil {
+		return stored, "", "", "", err
 	}
 	json.Unmarshal(accounts, &v.Accounts)
 	json.Unmarshal(balances, &v.Balances)
@@ -365,7 +384,7 @@ func storedBooks(ctx context.Context, q interface {
 	}
 	rows, err := q.QueryContext(ctx, `SELECT account_id,location,cells FROM books_lines WHERE version_id=$1 ORDER BY position`, row)
 	if err != nil {
-		return v, "", "", "", err
+		return stored, "", "", "", err
 	}
 	defer rows.Close()
 	var lines []quickbooks.LedgerLine
@@ -373,12 +392,12 @@ func storedBooks(ctx context.Context, q interface {
 		var l quickbooks.LedgerLine
 		var cells []byte
 		if err = rows.Scan(&l.AccountID, &l.Location, &cells); err != nil {
-			return v, "", "", "", err
+			return stored, "", "", "", err
 		}
 		l.Cells = cells
 		lines = append(lines, l)
 	}
-	return v, linesDigest(lines), recorded, refused, rows.Err()
+	return stored, linesDigest(lines), recorded, refused, rows.Err()
 }
 
 // adminBooks is the month-books record's state across firms, for staff deciding when a reader may switch to it

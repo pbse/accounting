@@ -163,6 +163,15 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": the ledger lines differ" {
 		t.Fatalf("stored lines are compared: %v", mismatched)
 	}
+	_, err = db.Exec(`UPDATE books_versions SET company='999' WHERE source='quickbooks' AND source_id=$1`, readable)
+	must(err)
+	_, mismatched, err = booksParity(t.Context(), db, org, 0)
+	must(err)
+	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": what identifies the books differs" {
+		t.Fatalf("what identifies the books is compared: %v", mismatched)
+	}
+	_, err = db.Exec(`UPDATE books_versions SET company='123' WHERE source='quickbooks' AND source_id=$1`, readable)
+	must(err)
 	_, err = db.Exec(`UPDATE books_versions SET balances=jsonb_set(balances,'{1}','"1"') WHERE source='quickbooks' AND source_id=$1`, readable)
 	must(err)
 	_, mismatched, err = booksParity(t.Context(), db, org, 0)
