@@ -720,14 +720,15 @@ func (s *seeder) plan(ctx context.Context, c *seed.Client, closeID, period strin
 // client), the month-end snapshot with its evidence, and the transaction capture with its rows, open items and
 // exceptions.
 func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connection string, b seed.Books, earlier []seed.Books, n int) (string, error) {
-	realm := fmt.Sprintf("913%07d", 1000000+seedIndex(c.Name))
+	// The connection is labeled as the demonstration's: its company name says so and its realm is no QuickBooks realm.
+	realm := fmt.Sprintf("demonstration-%07d", 1000000+seedIndex(c.Name))
 	captured := monthEndTime(b.Period).Add(time.Duration(26+n) * time.Hour)
 	if captured.After(s.today) {
 		captured = s.today.Add(-2 * time.Hour)
 	}
 	if connection == "" {
 		err := s.db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,company_name,home_currency,fiscal_year_start,environment,confirmed_by,confirmed_at,created_at,updated_at,access_expires_at)
- VALUES($1,$2,$3,$4,'active',$5,$6,$7,$3,'USD',1,'production',$4,$6,$6,$6,$6) RETURNING id::text`, closeID, s.o.Organization, c.Name, s.o.Subject, rand.Text(), monthEndTime(seed.Months[0]).AddDate(0, 0, -20), realm).Scan(&connection)
+ VALUES($1,$2,$3,$4,'active',$5,$6,$7,$3||' (demonstration books)','USD',1,'production',$4,$6,$6,$6,$6) RETURNING id::text`, closeID, s.o.Organization, c.Name, s.o.Subject, rand.Text(), monthEndTime(seed.Months[0]).AddDate(0, 0, -20), realm).Scan(&connection)
 		if err != nil {
 			return "", err
 		}
@@ -774,7 +775,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 		}
 	}
 	// The month-end snapshot, assembled by the code a real capture uses.
-	snapshot, body, err := quickbooks.PeriodSnapshot("production", realm, c.Name, b.Period, b.Directory(), b.Reports(), captured.Add(-2*time.Minute))
+	snapshot, body, err := quickbooks.PeriodSnapshot("production", realm, c.Name+" (demonstration books)", b.Period, b.Directory(), b.Reports(), captured.Add(-2*time.Minute))
 	if err != nil {
 		return "", err
 	}
@@ -1318,25 +1319,52 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 		return
 	}
 	path := "/v1/closes/" + closeID
+	// Amounts are decimal, as the route takes them; each is approved so the plan counts it.
 	obligations := []map[string]any{
-		{"action": "add", "name": "Rent, " + c.Name, "category": "rent", "direction": "out", "amount": "240000", "first_on": "2026-10-01", "every": "month", "vendor": "Lakeside Property Management", "basis": "Lease dated 2024-03-01, section 4: due on the first of each month.", "reason": "Standing obligation"},
+		{"action": "add", "name": "Rent, " + c.Name, "category": "rent", "direction": "out", "amount": "2400.00", "first_on": "2026-10-01", "every": "month", "vendor": "Lakeside Property Management", "basis": "Lease dated 2024-03-01, section 4: due on the first of each month.", "reason": "Standing obligation"},
 	}
 	if c.Payroll != nil {
-		obligations = append(obligations, map[string]any{"action": "add", "name": c.Payroll.Provider + " payroll", "category": "payroll", "direction": "out", "amount": strings.ReplaceAll(c.Payroll.Net, ".", ""), "first_on": "2026-10-15", "every": "two_weeks", "vendor": c.Payroll.Provider, "basis": "Payroll runs every two weeks; the provider debits net pay and taxes together.", "reason": "Standing obligation"})
+		obligations = append(obligations, map[string]any{"action": "add", "name": c.Payroll.Provider + " payroll", "category": "payroll", "direction": "out", "amount": c.Payroll.Net, "first_on": "2026-10-15", "every": "two_weeks", "vendor": c.Payroll.Provider, "basis": "Payroll runs every two weeks; the provider debits net pay and taxes together.", "reason": "Standing obligation"})
 	}
 	if c.Loan != nil {
-		obligations = append(obligations, map[string]any{"action": "add", "name": c.Loan.Lender + " note payment", "category": "debt", "direction": "out", "amount": strings.ReplaceAll(fmt.Sprintf("%.2f", mustFloat(c.Loan.Principal)+mustFloat(c.Loan.Interest)), ".", ""), "first_on": fmt.Sprintf("2026-10-%02d", c.Loan.PayDay), "every": "month", "vendor": c.Loan.Lender, "basis": c.Loan.Agreement + ": fixed monthly payment on the " + fmt.Sprint(c.Loan.PayDay) + "th.", "reason": "Standing obligation"})
+		obligations = append(obligations, map[string]any{"action": "add", "name": c.Loan.Lender + " note payment", "category": "debt", "direction": "out", "amount": fmt.Sprintf("%.2f", mustFloat(c.Loan.Principal)+mustFloat(c.Loan.Interest)), "first_on": fmt.Sprintf("2026-10-%02d", c.Loan.PayDay), "every": "month", "vendor": c.Loan.Lender, "basis": c.Loan.Agreement + ": fixed monthly payment on the " + fmt.Sprint(c.Loan.PayDay) + "th.", "reason": "Standing obligation"})
 	}
-	obligations = append(obligations, map[string]any{"action": "add", "name": "Quarterly estimated tax", "category": "tax", "direction": "out", "amount": "1150000", "first_on": "2027-01-15", "every": "once", "vendor": "", "basis": "Safe-harbor estimate from the 2025 return, per the owner's tax preparer.", "reason": "Standing obligation"})
+	obligations = append(obligations, map[string]any{"action": "add", "name": "Quarterly estimated tax", "category": "tax", "direction": "out", "amount": "11500.00", "first_on": "2027-01-15", "every": "once", "vendor": "", "basis": "Safe-harbor estimate from the 2025 return, per the owner's tax preparer.", "reason": "Standing obligation"})
 	for _, o := range obligations {
 		if _, ok := s.must(ctx, "obligation "+str(o["name"]), "POST", path+"/cash-obligations", o); ok {
-			// The plan counts approved obligations only.
 			var id string
 			s.db.QueryRowContext(ctx, `SELECT id::text FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND name=$3 AND approved_at IS NULL ORDER BY id DESC LIMIT 1`, s.o.Organization, c.Name, str(o["name"])).Scan(&id)
 			s.must(ctx, "approve obligation "+str(o["name"]), "POST", path+"/cash-obligations", map[string]any{"action": "approve", "id": id})
 		}
 	}
-	s.must(ctx, "scenario", "POST", path+"/cash-scenarios", map[string]any{"action": "add", "name": "Fairview pays 30 days late", "changes": []map[string]any{{"kind": "add", "label": "Fairview Parks invoice slips a month", "direction": "in", "amount": "685000", "first_on": "2026-11-20", "every": "once"}}})
+	// A scenario: the landscaping client's slowest customer pays a month late (its open invoice moved); the studio
+	// plans an equipment purchase.
+	if out, ok := s.must(ctx, "cash plan", "GET", path+"/cash-plan", nil); ok {
+		var plan struct {
+			Weeks []struct {
+				Items []struct {
+					Key, On, Label string
+				} `json:"items"`
+			} `json:"weeks"`
+		}
+		json.Unmarshal(out, &plan)
+		var changes []map[string]any
+		for _, w := range plan.Weeks {
+			for _, item := range w.Items {
+				if strings.HasPrefix(item.Key, "invoice:") && len(changes) == 0 {
+					on, _ := time.Parse("2006-01-02", item.On)
+					changes = append(changes, map[string]any{"kind": "move", "item": item.Key, "on": on.AddDate(0, 0, 30).Format("2006-01-02")})
+				}
+			}
+		}
+		name := "Slowest customer pays a month late"
+		if c.Loan == nil {
+			name, changes = "Replace the cardio equipment in November", []map[string]any{{"kind": "add", "label": "Treadmills and rowers, Rogue Fitness quote", "direction": "out", "amount": "18400.00", "first_on": "2026-11-12", "every": "once"}}
+		}
+		if len(changes) > 0 {
+			s.must(ctx, "scenario", "POST", path+"/cash-scenarios", map[string]any{"action": "add", "name": name, "changes": changes})
+		}
+	}
 	if out, ok := s.must(ctx, "cash plan", "GET", path+"/cash-plan", nil); ok {
 		s.must(ctx, "cash plan review", "POST", path+"/cash-plan/reviews", map[string]any{"scenario": "", "digest": str(field(out, "digest")), "assumptions": "Open invoices collected on their due dates except Fairview Parks (net 45, historically 10 days late); bills paid on due dates; payroll and the note as scheduled.", "confirmed": true})
 	}

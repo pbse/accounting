@@ -62,7 +62,7 @@ The seed records what it did in `demonstration_seeds` (migration 140): who ran i
 ## What to know before seeding the hosted firm
 
 - **The worker is running there.** The seed works the queue itself, with recorded answers, and the production worker may claim some of the same intake jobs and read them with the live model instead. The seed reports any document whose reading did not land where the story expects; rerunning the seed after `-remove` is the fix.
-- **Nothing reaches a provider.** The QuickBooks connections hold no credential, so no refresh is scheduled; nothing is posted; no email is sent (the firm has no sender connected); invitations are rows, not WorkOS invitations. People are shown by their WorkOS profile, so other members' closes read as "held by a colleague" when their subject is not a WorkOS user of the firm.
+- **Nothing reaches a provider.** The QuickBooks connections are labeled as the demonstration's (their company name says "demonstration books" and their realm is none QuickBooks issues) and hold no credential, so no refresh is scheduled; nothing is posted; no email is sent (the firm has no sender connected); invitations are rows, not WorkOS invitations. People are shown by their WorkOS profile, so other members' closes read as "held by a colleague" when their subject is not a WorkOS user of the firm.
 - **It is one story.** The seed runs once per firm; a second run is refused until the first is removed.
 - **The goals are live.** Harbor's hand-over and Bluegrass's monthly routine are real goals the worker will look at and report on.
 
