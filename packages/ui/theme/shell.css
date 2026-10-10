@@ -712,9 +712,24 @@ body {
   height: 18px;
   padding: 0 var(--space-6);
 }
-/* The clients table: the months take the room, and the last column holds the month-opening control. */
+/* The clients table: the months take the room, and the last column holds the month-opening control. The table stacks
+   its rows when its own width, not the screen's, runs short. */
 .ks-clients {
   --ks-columns: minmax(180px, 2fr) 3fr 150px 150px;
+  container-type: inline-size;
+}
+@container (max-width: 720px) {
+  .ks-clients .ks-tr {
+    grid-template-columns: 1fr;
+    gap: var(--space-6);
+  }
+  .ks-clients .ks-tr.head,
+  .ks-clients .ks-tr .ks-go {
+    display: none;
+  }
+  .ks-clients .ks-tr details.ks-another {
+    justify-self: start;
+  }
 }
 .ks-tr details.ks-another {
   justify-self: end;

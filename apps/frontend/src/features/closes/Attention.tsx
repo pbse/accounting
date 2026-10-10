@@ -50,5 +50,5 @@ export function AttentionBadge() {
       };
     }
   }, [inbox.data]);
-  return unread > 0 ? <span className="ks-count" aria-label={`${unread} unread`}>{unread}</span> : null;
+  return unread > 0 ? <span className="ks-count" aria-label={`${unread} new`} title={`${unread} new ${unread === 1 ? "decision" : "decisions"}`}>{unread}</span> : null;
 }

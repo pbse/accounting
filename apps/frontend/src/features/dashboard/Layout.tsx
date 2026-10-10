@@ -93,7 +93,7 @@ export default function WorkspaceLayout() {
   // An executive's line names the client whose results the links open: the one they chose, else the first.
   const executiveCloses = executiveRead.data?.closes ?? [];
   const client = (executiveCloses.find((c) => c.id === chosen) ?? executiveCloses[0])?.entity ?? "Your business";
-  // Closes carries the count of what needs the person.
+  // Closes carries the count of new decisions, as Home's badge did; the page itself says how many are waiting.
   const withCount = items.map((item) => ("to" in item && item.to === "/dashboard/closes" && !executive && signedIn ? { ...item, count: <AttentionBadge /> } : item));
   // The firm is known by its sign-in domain until the firm's own name is kept; local development has none.
   const firm = session?.user ? session.user.email.split("@")[1] : signedIn ? "Local development" : "";

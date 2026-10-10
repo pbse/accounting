@@ -64,9 +64,10 @@ async function homeLoader({ context }: LoaderFunctionArgs) {
   return null;
 }
 
-// Closes reads the counts and the decisions in their snapshot, as Home does.
+// Closes reads what its sections show (the counts and decisions in their snapshot, the review queue, the dependency
+// lists, the daily exceptions, the delegated closes), so the page arrives with its data.
 async function closesLoader({ context }: LoaderFunctionArgs) {
-  await prefetch(context, "/home");
+  if (prefetching) await prefetch(context, "/home", "/review-queue?client=", "/dependencies?client=", "/daily?client=", "/goals?client=");
   return null;
 }
 
