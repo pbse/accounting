@@ -60,10 +60,10 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
       ? `${close.entity} is signed off.`
       : count
         ? `${close.entity} is ${count === 1 ? "one step" : `${n(count, "step")}`} from done.`
-        : waiting.length
-          ? `${close.entity} is waiting on ${waiting.map((l) => l.area).join(" and ")}.`
-          : ready
-            ? `${close.entity} is ready to sign off.`
+        : ready
+          ? `${close.entity} is ready to sign off.`
+          : waiting.length
+            ? `${close.entity} is waiting on ${waiting.map((l) => l.area).join(" and ")}.`
             : `${close.entity} could not be fully checked.`;
   const context = [
     close.due_on ? (close.due_on < today ? `Overdue since ${dates.calendarDay(close.due_on)}` : `Due ${dates.calendarDay(close.due_on)}`) : "No due date",
