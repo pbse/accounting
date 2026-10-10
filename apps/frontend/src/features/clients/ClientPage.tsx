@@ -71,7 +71,7 @@ type ClientRead = {
   people_unavailable?: string;
 };
 // A request sent to the client that it has not answered, from any month the reader can open.
-type AskedOfClient = { id: string; close_id: string; period: string; recipient: string; sent_at: string; items: number };
+type AskedOfClient = { id: string; close_id: string; period: string; recipient: string; state: "sent" | "sending" | "failed" | "not_sent"; sent_at?: string; items: number };
 
 const basisLabels = {
   cash: "cash basis",
@@ -204,7 +204,13 @@ export default function ClientPage() {
     ? `Kept on the ${basisLabels[client.basis.method]}, by ${client.basis.scope === "client" ? `${name}’s own procedure` : "the firm’s procedure"}.`
     : "No accounting basis is approved yet.";
   const workers = people.length;
-  const asks = client.requests;
+  // The requests the client has not answered: those that reached it first, then those the firm has still to send.
+  const asks = [...client.requests].sort((a, b) => Number(a.state !== "sent") - Number(b.state !== "sent"));
+  // Every month newest first: the months opened, and the months owed that nobody opened, in one history.
+  const rows: ({ kind: "owed"; period: string; owed: Owed } | { kind: "month"; period: string; month: Month })[] = [
+    ...(active ? owed.map((o) => ({ kind: "owed" as const, period: o.period, owed: o })) : []),
+    ...months.map((m) => ({ kind: "month" as const, period: m.period, month: m })),
+  ].sort((a, b) => b.period.localeCompare(a.period));
 
   return (
     <>
@@ -326,17 +332,17 @@ export default function ClientPage() {
             <span className="visually-hidden">Open</span>
           </span>
         </div>
-        {months.length === 0 && owed.length === 0 && (
+        {rows.length === 0 && (
           <div className="ks-tr" role="row">
             <p className="ks-empty-row" role="cell">
               No month yet. {active ? "Open its first month; the agent takes it from there." : ""}
             </p>
           </div>
         )}
-        {active &&
-          [...owed].reverse().map((o) => (
-            <div className="ks-tr" role="row" key={o.period}>
-              <span role="cell">{monthName(o.period)}</span>
+        {rows.map((row) =>
+          row.kind === "owed" ? (
+            <div className="ks-tr" role="row" key={`owed-${row.owed.period}`}>
+              <span role="cell">{monthName(row.owed.period)}</span>
               <span role="cell">
                 <span className="pill muted">Not opened</span>
               </span>
@@ -344,39 +350,39 @@ export default function ClientPage() {
                 —
               </span>
               <span role="cell" className="ks-mut">
-                {o.due_on ? dates.calendarDate(o.due_on) : "—"}
+                {row.owed.due_on ? dates.calendarDate(row.owed.due_on) : "—"}
               </span>
               <span role="cell">
-                <button type="button" className="sm" disabled={busy !== ""} onClick={() => void openMonth(o.period)}>
-                  {busy === o.period ? "Opening…" : "Open"}
+                <button type="button" className="sm" disabled={busy !== ""} onClick={() => void openMonth(row.owed.period)}>
+                  {busy === row.owed.period ? "Opening…" : "Open"}
                 </button>
               </span>
             </div>
-          ))}
-        {months.map((m) => (
-          <div className="ks-tr linked" role="row" key={m.id}>
-            <span role="cell">
-              <Link className="ks-rowlink" to={`/dashboard/closes/${m.id}`}>
-                {monthName(m.period)}
-              </Link>
-              {m.entity.toLowerCase() !== name.toLowerCase() && <small className="ks-mut"> · opened as {m.entity}</small>}
-            </span>
-            <span role="cell">{monthState(m, today)}</span>
-            <span role="cell" className="ks-mut">
-              {m.books ? `${sources[m.books.source]} · ${dates.dayMonth(m.books.at)}${m.books.stale ? " · out of date" : ""}` : "—"}
-            </span>
-            <span role="cell" className="ks-mut">
-              {m.due_on ? dates.calendarDate(m.due_on) : "—"}
-            </span>
-            <Icon name="arrow" className="ks-go" />
-          </div>
-        ))}
+          ) : (
+            <div className="ks-tr linked" role="row" key={row.month.id}>
+              <span role="cell">
+                <Link className="ks-rowlink" to={`/dashboard/closes/${row.month.id}`}>
+                  {monthName(row.month.period)}
+                </Link>
+                {row.month.entity.toLowerCase() !== name.toLowerCase() && <small className="ks-mut"> · opened as {row.month.entity}</small>}
+              </span>
+              <span role="cell">{monthState(row.month, today)}</span>
+              <span role="cell" className="ks-mut">
+                {row.month.books ? `${sources[row.month.books.source]} · ${dates.dayMonth(row.month.books.at)}${row.month.books.stale ? " · out of date" : ""}` : "—"}
+              </span>
+              <span role="cell" className="ks-mut">
+                {row.month.due_on ? dates.calendarDate(row.month.due_on) : "—"}
+              </span>
+              <Icon name="arrow" className="ks-go" />
+            </div>
+          ),
+        )}
       </div>
 
       {asks.length > 0 && (
         <>
-          <h2 className="ks-heading">Waiting on {name}</h2>
-          <div className="ks-table ks-client-asks" role="table" aria-label={`Requests waiting on ${name}`}>
+          <h2 className="ks-heading">Asked of {name}</h2>
+          <div className="ks-table ks-client-asks" role="table" aria-label={`Requests to ${name} not yet answered`}>
             {asks.map((item) => (
               <div className="ks-tr linked" role="row" key={item.id}>
                 <span role="cell">
@@ -385,7 +391,18 @@ export default function ClientPage() {
                   </Link>
                 </span>
                 <span role="cell" className="ks-mut">
-                  {monthName(item.period)} · {n(item.items, "item")} · sent {dates.dayMonth(item.sent_at)}
+                  {monthName(item.period)} · {n(item.items, "item")}
+                </span>
+                <span role="cell">
+                  {item.state === "sent" && item.sent_at ? (
+                    <span className="pill muted">Sent {dates.dayMonth(item.sent_at)}</span>
+                  ) : item.state === "failed" ? (
+                    <span className="pill danger">Not delivered</span>
+                  ) : item.state === "sending" ? (
+                    <span className="pill neutral">Sending</span>
+                  ) : (
+                    <span className="pill neutral">Not sent yet</span>
+                  )}
                 </span>
                 <Icon name="arrow" className="ks-go" />
               </div>
@@ -454,7 +471,7 @@ function books(client: ClientRead, day: (value: string) => string) {
   const latest = newest?.books
     ? newest.books.source === "exports"
       ? ` ${monthName(newest.period)}’s exports were labeled ${day(newest.books.at)}, as reported.`
-      : ` ${monthName(newest.period)}’s books were captured ${day(newest.books.at)}${newest.books.stale ? " and are out of date" : ""}.`
+      : ` ${monthName(newest.period)}’s books were captured from ${sources[newest.books.source]} ${day(newest.books.at)}${newest.books.stale ? " and are out of date" : ""}.`
     : "";
   const state = (s: string, confirm: string): [string, string] =>
     live(s)
@@ -464,11 +481,17 @@ function books(client: ClientRead, day: (value: string) => string) {
         : s === "pending_confirmation" || s === "choose_tenant"
           ? [confirm, "pill muted"]
           : ["Connecting", "pill neutral"];
-  if (qbo) {
+  // With both ledgers connected, the card leads with the one the newest month-end books came from (the month-end
+  // readers take the newer capture), else the one connected and working, else QuickBooks; the other is named after it.
+  const captured = client.months.find((m) => m.books && m.books.source !== "exports")?.books?.source;
+  const leadXero = !!xero && (!qbo || captured === "xero" || (captured !== "quickbooks" && live(xero.state) && !live(qbo.state)));
+  const quickbooksLine = qbo && `Read from QuickBooks${qbo.environment === "production" ? "" : " (sandbox)"}${qbo.company_name ? `, ${qbo.company_name}` : ""}.${qbo.error ? ` ${qbo.error}` : ""}`;
+  const xeroLine = xero && `Read from Xero${xero.tenant_name ? `, ${xero.tenant_name}` : ""}.${xero.error ? ` ${xero.error}` : ""}`;
+  if (qbo && !leadXero) {
     const production = qbo.environment === "production";
     return {
       short: production ? "QuickBooks Online" : "QuickBooks sandbox",
-      line: `Read from QuickBooks${production ? "" : " (sandbox)"}${qbo.company_name ? `, ${qbo.company_name}` : ""}.${qbo.error ? ` ${qbo.error}` : ""}${latest}`,
+      line: `${quickbooksLine}${xero ? " Xero is connected too." : ""}${latest}`,
       chip: state(qbo.state, "Confirm the company"),
       attention: !live(qbo.state),
       connected: true,
@@ -479,7 +502,7 @@ function books(client: ClientRead, day: (value: string) => string) {
   if (xero) {
     return {
       short: "Xero",
-      line: `Read from Xero${xero.tenant_name ? `, ${xero.tenant_name}` : ""}.${xero.error ? ` ${xero.error}` : ""}${latest}`,
+      line: `${xeroLine}${qbo ? " QuickBooks is connected too." : ""}${latest}`,
       chip: state(xero.state, "Choose the organisation"),
       attention: !live(xero.state),
       connected: true,

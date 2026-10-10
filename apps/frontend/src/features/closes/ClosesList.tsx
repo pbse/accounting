@@ -125,12 +125,17 @@ export default function ClosesList() {
     if (r.closes.length) return <span className="pill">Signed off</span>;
     return <span className="pill neutral">New</span>;
   };
-  // How the client's books arrive, from its connections (the QuickBooks one its books are read from first).
+  // How the client's books arrive: each ledger connected, with a word when it is not working.
   const books = (r: ClientRow) => {
-    const state = r.quickbooks || r.xero;
-    if (!state) return "—";
-    const ledger = r.quickbooks ? "QuickBooks" : "Xero";
-    return state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`;
+    const ledgers = (
+      [
+        ["QuickBooks", r.quickbooks],
+        ["Xero", r.xero],
+      ] as [string, string | undefined][]
+    )
+      .filter(([, state]) => state)
+      .map(([ledger, state]) => (state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`));
+    return ledgers.length ? ledgers.join(", ") : "—";
   };
   // What is up next, in the order the work comes (as the client's page says it): the oldest month open with its due
   // date, the earliest month it owes, or nothing until this month ends.

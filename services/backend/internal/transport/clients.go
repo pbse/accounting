@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
@@ -46,15 +47,16 @@ type monthBooks struct {
 	Stale bool `json:"stale,omitempty"`
 }
 
-// openRequest is a request sent to the client that it has not answered: who it went to, when, and how many items of
-// the month's work wait on it.
+// openRequest is a request to the client that it has not answered: who it is for, whether it reached them (sent, with
+// when; sending; failed; or not sent yet) and how many items of the month's work wait on it.
 type openRequest struct {
-	ID        string    `json:"id"`
-	CloseID   string    `json:"close_id"`
-	Period    string    `json:"period"`
-	Recipient string    `json:"recipient"`
-	Sent      time.Time `json:"sent_at"`
-	Items     int       `json:"items"`
+	ID        string     `json:"id"`
+	CloseID   string     `json:"close_id"`
+	Period    string     `json:"period"`
+	Recipient string     `json:"recipient"`
+	State     string     `json:"state"`
+	Sent      *time.Time `json:"sent_at,omitempty"`
+	Items     int        `json:"items"`
 }
 
 type owedClientMonth struct {
@@ -65,7 +67,7 @@ type owedClientMonth struct {
 func registerClients(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/client", func(w http.ResponseWriter, r *http.Request) {
 		asked := strings.TrimSpace(r.URL.Query().Get("name"))
-		if asked == "" || len(asked) > 200 {
+		if asked == "" || utf8.RuneCountInString(asked) > 200 {
 			problem(w, 404, "Client not found.")
 			return
 		}
@@ -191,23 +193,40 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		out["months"], out["owed"] = months, owed
 		// What the client was asked and has not yet answered, across the months the reader can open: each request still
-		// waiting on the client, as Work shows it (the newest request of a job waiting on the client).
+		// waiting on the client, as Work shows it (the newest request of a job waiting on the client), with whether it
+		// reached the client. A request counts as sent once its delivery is recorded or the provider accepted its email,
+		// and as failed when its latest email failed or bounced; an approved request with neither is not sent yet.
 		ids := make([]string, len(months))
 		for i, m := range months {
 			ids[i] = m.ID
 		}
 		requests := []openRequest{}
 		var waiting *sql.Rows
-		if waiting, err = tx.QueryContext(ctx, `SELECT q.id::text,d.close_id::text,c.period,q.recipient,COALESCE(q.delivered_at,q.approved_at),
+		if waiting, err = tx.QueryContext(ctx, `SELECT q.id::text,d.close_id::text,c.period,q.recipient,
+ COALESCE(q.delivered_at,(SELECT min(COALESCE(m.finished_at,m.created_at)) FROM email_delivery m WHERE m.request_id=q.id AND m.state='accepted')),
+ COALESCE((SELECT CASE WHEN m.state IN ('failed','unknown') OR m.delivery IN ('bounced','complained','failed','suppressed') THEN 'failed' WHEN m.state IN ('queued','sending') THEN 'sending' END
+  FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
  (SELECT count(*) FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client')
  FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id
  WHERE d.close_id::text=ANY($1) AND EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
   AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id))
- ORDER BY COALESCE(q.delivered_at,q.approved_at),q.id`, ids); err == nil {
+ ORDER BY q.approved_at,q.id`, ids); err == nil {
 			for waiting.Next() {
 				var q openRequest
-				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &q.Sent, &q.Items); err != nil {
+				var sent sql.NullTime
+				var email string
+				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &sent, &email, &q.Items); err != nil {
 					break
+				}
+				switch {
+				case email == "failed":
+					q.State = "failed"
+				case sent.Valid:
+					q.State, q.Sent = "sent", &sent.Time
+				case email == "sending":
+					q.State = "sending"
+				default:
+					q.State = "not_sent"
 				}
 				requests = append(requests, q)
 			}

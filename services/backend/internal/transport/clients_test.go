@@ -152,9 +152,16 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if basis := read["basis"].(map[string]any); basis["method"] != "cash" || basis["scope"] != "client" {
 		t.Fatalf("basis: %v", basis)
 	}
-	// The request waiting on the client, from the month opened under its alias.
-	if requests := read["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["id"] != request || requests[0].(map[string]any)["close_id"] != september || requests[0].(map[string]any)["items"] != float64(1) {
+	// The request waiting on the client, from the month opened under its alias: approved, not sent yet; then sent,
+	// once its delivery is recorded.
+	if requests := read["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["id"] != request || requests[0].(map[string]any)["close_id"] != september ||
+		requests[0].(map[string]any)["items"] != float64(1) || requests[0].(map[string]any)["state"] != "not_sent" || requests[0].(map[string]any)["sent_at"] != nil {
 		t.Fatalf("requests: %v", requests)
+	}
+	_, err = db.Exec(`UPDATE work_requests SET delivered_by='fixture',delivered_at=now(),delivery_reference='Handed over' WHERE id=$1`, request)
+	must(err)
+	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["state"] != "sent" || requests[0].(map[string]any)["sent_at"] == nil {
+		t.Fatalf("a recorded delivery sends the request: %v", requests)
 	}
 	// Who can hold Acme's closes, as the roster offers owners: Ann, who reviews every client. Cy is assigned to its
 	// alias' name only, which gives him its September close to work on but not the client's months to hold.
@@ -190,6 +197,11 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	call("user_a", admin, page("Birch Dental"), 200)
 	call("user_c", []string{"workpapers:review"}, page("Birch Dental"), 404)
 	call("user_a", admin, page(strings.Repeat("x", 201)), 404)
+	// A name is up to 200 characters, however many bytes they take.
+	call("user_a", admin, page(strings.Repeat("é", 200)), 404)
+	_, err = db.Exec(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,$2,$3)`, org, strings.Repeat("é", 200), last)
+	must(err)
+	call("user_a", admin, page(strings.Repeat("é", 200)), 200)
 	// An executive reads no client.
 	call("user_a", []string{"executive:read", "clients:all"}, page("Acme Co"), 403)
 }
