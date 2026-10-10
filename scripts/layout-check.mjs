@@ -181,7 +181,7 @@ for (const app of apps) {
     const unlock = async () => {
       await page.fill('input[name="token"]', token);
       await page.click(`button:has-text("${app.unlock}")`);
-      await page.waitForSelector(".app-shell .topbar");
+      await page.waitForSelector(".app-shell .ks-side", { state: "attached" });
     };
     await page.goto(app.start);
     if (app.unlock) await unlock();
@@ -237,7 +237,8 @@ for (const app of apps) {
       await page.mouse.move(0, width.viewport.height - 1);
       const box = await page.evaluate(() => {
         const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect().toJSON();
-        return { topbar: rect(".topbar"), rail: rect(".rail"), main: rect(".app-main"), scrollWidth: document.documentElement.scrollWidth };
+        const order = [...document.querySelectorAll(".ks-side > *")].map((e) => e.className.split(" ")[0]);
+        return { side: rect(".ks-side"), phonebar: rect(".ks-phonebar"), main: rect(".app-main"), order, scrollWidth: document.documentElement.scrollWidth };
       });
       if (box.scrollWidth > width.viewport.width) fail(`the page is ${box.scrollWidth}px wide, wider than the ${width.viewport.width}px screen`);
       // The agent panel opens beside the page on a desktop and as a sheet on a phone, with its composer in view, and
@@ -246,7 +247,7 @@ for (const app of apps) {
       const panelRoute = route === "/dashboard" ? "empty" : route === `/dashboard/closes/${close}` ? "card" : "";
       if (panelRoute && !app.standalone) {
         try {
-          await page.click(".topbar .ask-agent", { timeout: 5000 });
+          await page.click(width.name === "phone" ? ".ks-phonebar-new" : ".ks-new-chat", { timeout: 5000 });
           await page.waitForSelector("aside.assistant", { timeout: 5000 });
           // The drawer slides in over 180ms; it is measured once it has settled.
           await page.waitForTimeout(400);
@@ -279,18 +280,22 @@ for (const app of apps) {
         }
       }
       if (app.standalone) {
-        if (box.topbar) fail("a standalone page shows the top bar");
+        if (box.side) fail("a standalone page shows the sidebar");
+      } else if (width.name === "desktop") {
+        // The sidebar is one full-height column at the left of the page, in its fixed order: the brand, then the
+        // firm line and New chat where the app has them, the pages, the app's sections, and the foot last.
+        if (!(box.side?.width >= 48 && box.side?.width <= 272)) fail(`the sidebar is ${box.side?.width}px wide`);
+        if (!(box.side?.left === 0 && box.main?.left >= box.side?.right - 1)) fail("the page column does not start after the sidebar");
+        if (!(box.side?.height >= width.viewport.height - 1)) fail("the sidebar is not the full height of the screen");
+        if (box.phonebar?.height) fail("the phone bar shows on a desktop");
+        const rank = { "ks-brand": 0, "ks-firm": 1, "ks-new-chat": 2, "ks-pages": 3, "ks-section": 4, "ks-foot": 5 };
+        const ranks = box.order.map((c) => rank[c]);
+        if (ranks.some((r) => r === undefined) || ranks.some((r, i) => i > 0 && r < ranks[i - 1]) || ranks[0] !== 0 || ranks.at(-1) !== 5 || !ranks.includes(3)) fail(`the sidebar's sections are out of order: ${box.order.join(", ")}`);
       } else {
-        // The top bar is one row on a desktop and at most two (the brand and tools, then the navigation) on a phone.
-        const rows = width.name === "desktop" ? 1 : 2;
-        if (!(box.topbar?.height <= 72 * rows)) fail(`the top bar is ${box.topbar?.height}px tall, more than ${rows === 1 ? "one row" : "two rows"}`);
-        if (box.topbar?.width !== width.viewport.width) fail(`the top bar is ${box.topbar?.width}px wide, not the ${width.viewport.width}px screen`);
-        if (!(box.main?.top >= box.topbar?.bottom)) fail("the page column does not start below the top bar");
-        // The rail stands at the left of the page column on a desktop and gives way on a phone.
-        if (width.name === "desktop") {
-          if (!(box.rail?.width >= 48 && box.rail?.width <= 72)) fail(`the rail is ${box.rail?.width}px wide, not a narrow pill`);
-          if (!(box.main?.left >= box.rail?.right)) fail("the page column does not start after the rail");
-        } else if (box.rail?.width) fail(`the rail shows on a phone, ${box.rail.width}px wide`);
+        // On a phone the sidebar is a sheet off the screen until the phone bar's brand button opens it.
+        if (box.side && !(box.side.right <= 0)) fail(`the sidebar shows on a phone, ${box.side.width}px wide`);
+        if (!(box.phonebar?.height > 0 && box.phonebar?.width === width.viewport.width)) fail("the phone bar is missing or not the width of the screen");
+        if (!(box.main?.top >= box.phonebar?.bottom)) fail("the page does not start below the phone bar");
       }
       // The shell stands alone: emptying the public site's stylesheet changes nothing inside it. Styles are read with
       // the sheet, without it and with it again; only what both readings with it agree on counts, so a page still

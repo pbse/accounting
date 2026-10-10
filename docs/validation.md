@@ -3963,6 +3963,11 @@ Rollout (2026-10-09):
 - WorkOS's display name is now "Krith", not the team name "Nivi", on the screens and emails WorkOS still shows.
 - Krith's sender is set in production (since 2026-10-07) and mail.getkrith.com is verified in Resend, but Resend's log had no email yet, so the sender is unproven.
 - WorkOS's invitation email therefore stays on through this deploy. One test invitation afterwards should bring both emails; once Krith's is in Resend's log, WorkOS's is turned off (`isInvitationEmailEnabled: false`), as [sign-in](sign-in.md#setup-once-per-environment) sets out.
+- Done 2026-10-10:
+  - The user's test invitation brought both emails.
+  - Krith's ("Prashant Bansal invited you to join getkrith.com on Krith", from hello@mail.getkrith.com) shows as delivered in Resend's log. It is the first email Krith's sender has sent.
+  - WorkOS's invitation email was then turned off in production, and WorkOS's email settings confirm `isInvitationEmailEnabled: false`, with every other email unchanged.
+  - Still not verified: an invitation accepted through the Join button.
 
 ## 2026-10-09: the demonstration seed
 
