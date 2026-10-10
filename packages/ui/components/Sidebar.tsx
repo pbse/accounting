@@ -114,7 +114,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
       </div>
       {open && <div className="ks-backdrop" onClick={() => setOpen(false)} />}
       <nav
-        className={`ks-side${collapsed ? " collapsed" : ""}${open ? " open" : ""}`}
+        className={`ks-side${iconsOnly ? " collapsed" : ""}${open ? " open" : ""}`}
         aria-label={navLabel}
         ref={sheet}
         tabIndex={-1}
