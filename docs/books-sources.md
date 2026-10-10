@@ -1,6 +1,6 @@
 # Books sources: files, more ledgers and connections
 
-Written 2026-10-10. **Proposed, not yet adopted.** The [agent-first build plan](agent-first-build-plan.md) governs launch scope; its proposed acceptance group is US, single-entity, USD service businesses on QuickBooks Online. This document proposes widening where a client's books can come from, and moving connections to the client. It takes effect only when the plan is amended to adopt it (see [Effect on the build plan](#effect-on-the-build-plan)).
+Written 2026-10-10. **Adopted 2026-10-10 as a track that does not gate launch** (see [decisions](#decisions-2026-10-10)). The [agent-first build plan](agent-first-build-plan.md) governs launch scope; its proposed acceptance group stays US, single-entity, USD service businesses on QuickBooks Online. This document widens where a client's books can come from, gives each client a page that holds its connection, and makes the client's ledger a choice made at onboarding. Each part ships when it is ready, before or after launch; launch never waits for it (see [effect on the build plan](#effect-on-the-build-plan)).
 
 ## The problem
 
@@ -229,11 +229,33 @@ File imports stay behind a firm setting until every feature a month on files nee
 - **Who:** a member whose session carries `integrations:manage`, signing in with their own QuickBooks or Xero login.
 - **Where:** only inside a month. The month's Evidence tab has the QuickBooks, Xero, historical exports and Stripe panels; the production QuickBooks authorization is on the month's Settings tab. There is no client page: Clients leads straight to a month.
 
-### Proposed
+### What changes
 
-- **The client's Books card** holds the default source, its state, the last capture or upload and its date, reconnect, upload, the saved layouts, the account map and the client profile. It lives with the client, not in a month. Until a client page exists it opens from the client's row in Clients; each month's header shows the month's books version and its freshness and links to it. The QuickBooks, Xero and historical-exports panels leave the month's Evidence tab, and the production authorization leaves the month's Settings tab.
-- **Firm Settings does not hold connections**, as already decided for Settings. Home's attention lists clients whose connection needs reconnecting and months still waiting for their books.
+- **The client's Books card** holds the default source, its state, the last capture or upload and its date, reconnect, upload, the saved layouts, the account map and the client profile. It lives on the [client page](#client-page), not in a month; each month's header shows the month's books version and its freshness and links to it. The QuickBooks, Xero and historical-exports panels leave the month's Evidence tab, and the production authorization leaves the month's Settings tab.
+- **Firm Settings does not hold connections**, as already decided for Settings. Home's attention lists clients whose connection needs reconnecting and months still waiting for their books. The firm's setup checklist step "Connect the books or label historical exports" (`transport/setup.go`), which opens a month's Evidence tab today, opens the client's Books card instead.
 - **Many clients at once:** a Xero sign-in can authorise several organisations, each assigned to a client in one step; a folder of files for many clients and months can be dropped at once, sorted by the agent and confirmed by a person. QuickBooks always authorises one company at a time, by Intuit's design.
+
+### Client page
+
+Each client gets a page at `/dashboard/clients/<client>`, on the Krith design system, reached from its row in Clients (the records page from #343). It holds:
+
+- the client's name, owner, monthly due day and active state, editable as in the Add client dialog;
+- the **Books card**: the client's ledger and how its books arrive, the connection or the latest upload with its freshness, reconnect, upload, the saved layouts and the account map;
+- the client profile (currency, fiscal-year start) and a link to the approved basis procedure;
+- the client's months, newest first, each with its state and books version;
+- open client requests, and the members with access.
+
+It follows the rollout's rules in [design system](design-system.md#rollout): it is drawn as a Krith board first, from the artifact's components, and built only after the board is chosen. It does not wait for the files work: on its own it moves today's QuickBooks and Xero connection panels out of the month. Until it ships, connections stay where they are today.
+
+### Ledger catalog and onboarding
+
+The client's ledger is a choice made when the client is added, not a guess the product makes later:
+
+- **At onboarding.** The Add client dialog asks which ledger the client keeps (QuickBooks Online, Xero, QuickBooks Desktop, Sage Intacct, NetSuite, Business Central, Sage 50, MYOB, Zoho Books, FreshBooks, Wave, Tally, or another). The Books card shows it and can change it; a change is the source switch described under [one authoritative books version](#one-authoritative-books-version-per-month), so earlier months keep theirs.
+- **The ledger catalog is configuration, not code per ledger.** For each ledger it records: its name; its native connector, if one exists; the export steps and the recognised layouts for its Trial Balance, General Ledger and open items; its journal import format; and the operations it cannot do natively.
+- **Connectors are switched on by configuration**, per environment and, for a pilot, per firm. A connector reaches firms when it passes its own acceptance, with no other change.
+- **No dead ends.** Choosing a ledger whose connector is not switched on gives the files route with that ledger's export steps. "Another ledger" gives the files route with any layout.
+- **Demand decides the next connector.** The admin console counts clients by ledger and by whether they have a connector. The next native connector is the most-chosen ledger without one, weighed against its access terms under [more ledgers](#more-ledgers).
 
 ### Who does what
 
@@ -265,7 +287,7 @@ From vendor pages and third-party reports gathered 2026-10-10 (sources below); e
 
 ## More ledgers
 
-Files cover every ledger from the first release. Native connectors add refresh and writing back where enough clients need them; which comes first depends on the clients the first firms bring.
+Files cover every ledger from the first release. Native connectors add refresh and writing back where enough clients need them; which comes first is decided by the ledgers firms choose at onboarding (see [ledger catalog](#ledger-catalog-and-onboarding)).
 
 | Ledger | Where it matters | Programmatic access | Recommendation |
 | --- | --- | --- | --- |
@@ -283,20 +305,22 @@ Reliable US market-share figures for these ledgers were not found; the counts ab
 
 ## Delivery
 
-Each PR leaves the product working, and is reviewed and validated as usual. File imports stay behind a firm setting. Step 7 turns it on for internal validation and the demonstration firm only; partner firms get it after step 11, once the acceptance below passes, so the plan's complete-service gate holds.
+Each PR leaves the product working, and is reviewed and validated as usual. None of it gates launch, and launch work does not wait for it. File imports stay behind a firm setting: step 9 turns it on for internal validation and the demonstration firm only; partner firms get it after step 13, once the acceptance below passes.
 
-1. **Month-books record.** `books_versions` and `books_lines`; backfill and dual-write for QuickBooks and Xero; parity checks. No visible change.
-2. **Client profile and source selection.** The confirmed profile and its readers; each client's default source and month overrides, set from today's behaviour.
-3. **Readers move.** Feature by feature as under [migration](#migration), each with its readiness, status, exports and invalidation.
-4. **The client's Books card.** Connections and uploads move out of the month.
-5. **Reading files.** Formats, values, hierarchy, dimensions, entities, parts; layouts and account maps with versions; scope and basis; the checks; acceptance.
-6. **Activity, roll-forward and history.** Monthly activity, roll-forward and changed prior months, reviewed comparatives and cross-source identity.
-7. **Months on files.** Activation, supplements and overrides; the opening baseline, tie-out, exceptions, coverage, sign-off and the pack (with an imported cash-flow statement) on files. Internal validation only; work that later steps supply is shown as unavailable, not attempted.
+1. **Client page.** A Krith board first, chosen by the user; then the page, with the Books card holding today's QuickBooks and Xero connections, moved out of the month, and the setup checklist pointing to it. Independent of everything below.
+2. **Ledger catalog and onboarding.** The catalog as configuration, the ledger choice in Add client and on the Books card, connector switches, and the admin console's counts. Ledgers without a connector show their export steps; file upload arrives with step 9.
+3. **Month-books record.** `books_versions` and `books_lines`; backfill and dual-write for QuickBooks and Xero; parity checks. No visible change.
+4. **Client profile and source selection.** The confirmed profile and its readers; each client's default source and month overrides, set from today's behaviour.
+5. **Readers move.** Feature by feature as under [migration](#migration), each with its readiness, status, exports and invalidation. A reader switches only when parity holds and the switch puts no launch work at risk; otherwise it waits, and the provider path keeps working unchanged.
+6. **Reading files.** Formats, values, hierarchy, dimensions, entities, parts; layouts and account maps with versions; scope and basis; the checks; acceptance.
+7. **Activity, roll-forward and history.** Monthly activity, roll-forward and changed prior months, reviewed comparatives and cross-source identity.
 8. **Ledger detail.** Ledger-line imports; derived Trial Balances; reconciliation fill, schedule discovery, drill-down and Daily Books on files.
-9. **Writing back by file.** Journal import batches, the journal states and source-record correction instructions.
-10. **Cash and open items.** Current-cash and open-item observations with their cutoffs; a dated bank-to-book bridge (extending the reconciliation to a mid-month cutoff, or a reviewed external reconciliation with its outstanding items), pinned to its cutoff, accounts and evidence and never counted as a completed month-end reconciliation; reconciliation to control accounts for accrual books and operational lists for cash-basis books; the cash plan on files.
-11. **Client-provided books.** Connect and upload requests, workbook scanning, larger limits. Then partner firms can turn files on.
-12. **Native connectors,** in the order the first firms' clients call for.
+9. **Months on files.** Activation, supplements and overrides; the opening baseline, tie-out, exceptions, coverage, sign-off and the pack (with an imported cash-flow statement) on files. Internal validation only; work that later steps supply is shown as unavailable, not attempted.
+10. **Writing back by file.** Journal import batches, the journal states and source-record correction instructions.
+11. **Cash and open items.** Current-cash and open-item observations with their cutoffs; a dated bank-to-book bridge (extending the reconciliation to a mid-month cutoff, or a reviewed external reconciliation with its outstanding items), pinned to its cutoff, accounts and evidence and never counted as a completed month-end reconciliation; reconciliation to control accounts for accrual books and operational lists for cash-basis books; the cash plan on files.
+12. **Client-provided books.** Connect and upload requests, workbook scanning, larger limits. Part of the first release of files to partner firms.
+13. **Partner release of files,** once the acceptance below passes.
+14. **Native connectors,** in the order the catalog's counts call for, each switched on by configuration after its own acceptance.
 
 ## Acceptance
 
@@ -309,21 +333,18 @@ Each PR leaves the product working, and is reviewed and validated as usual. File
 
 ## Effect on the build plan
 
-Adopting this amends the plan:
+- **Launch is unchanged and never waits for this.** The launch acceptance group stays US, single-entity, USD service businesses on QuickBooks Online. Nothing here is a launch gate, and no launch work is held for it. The plan records this track in its scope section.
+- **Each part ships when ready**, before or after launch. Files reach partner firms only after their own acceptance above; native connectors only after theirs.
+- **Launch is protected.** The month-books record is written beside today's captures, and readers switch only under the parity rule in [delivery](#delivery) step 5.
+- **When files reach partner firms,** the group of clients a firm can bring widens to any ledger whose month-end books it can export; single entity and USD are unchanged.
+- **Where each part belongs** once it lands: takeover history and the client page with B01 and B02; months on files, writing back by file and carry-forward across sources with B03–B06 and B11; publication on files with B07 and B08; cash and open items on files with B09 and B10; the files row in the provider capability inventory with B12.
 
-- **Proposed acceptance group:** US, single-entity, USD service businesses on QuickBooks Online **or any ledger whose month-end books the firm can export**. Only the source widens.
-- **Phase A (B01, B02, B12):** the month-books record, the client profile and source selection; the provider capability inventory gains a row for files; takeover history as reviewed comparatives; the client's Books card.
-- **Phase B (B03–B06, B11):** months on files through every recurring job; writing back by journal batch with journal-level readback and source-record instructions; carry-forward across sources.
-- **Phase C (B07, B08):** a month on files publishes like any other, with its source and basis named; reviewed comparatives in comparisons and budgets.
-- **Phase D (B09, B10):** current-cash and open-item observations with aligned cutoffs; open items reconciled to control accounts for accrual books, operational lists for cash-basis books.
-- **Phase E:** the acceptance above, including the hard cases, with real exports.
+## Decisions (2026-10-10)
 
-## Open decisions
-
-1. Adopt files as a first-class books source for launch, or after it.
-2. Whether clients may connect or upload their own books through a request from the first release, or later.
-3. A client page, or a Books card opened from the Clients list until one exists.
-4. Which native connector to evaluate first, once the first firms' clients are known.
+1. **Files can land at any time; launch must not be blocked.** Files are a track beside the launch, not part of it (see [effect on the build plan](#effect-on-the-build-plan)).
+2. **Clients may connect or upload their own books through a request** in the first release of files to partner firms ([delivery](#delivery) step 12).
+3. **A client page on the Krith design system**, drawn as a board first ([client page](#client-page)).
+4. **The ledger is configuration, chosen at onboarding.** Rather than choosing a connector up front, each client's ledger is picked when it is added. Connectors are switched on by configuration, and the onboarding counts decide which connector to build next ([ledger catalog](#ledger-catalog-and-onboarding)).
 
 ## Sources
 
