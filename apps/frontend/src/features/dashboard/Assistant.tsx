@@ -303,6 +303,21 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
       }
     }
   }
+  // Stop abandons the answer under way: its request is left to end unheard, and the composer is free again. What
+  // was saved before the stop is read back, with the chat it was saved in.
+  function stop() {
+    const asked = ++generation.current;
+    setBusy(false);
+    setPending("");
+    setSteps([]);
+    setAsking("");
+    setError("Stopped.");
+    workspaceRequest(session ? `${path}?session=${encodeURIComponent(session.id)}` : path).then((data) => {
+      if (asked !== generation.current) return;
+      setMessages(data.messages);
+      if (data.session) setSession({ id: data.session.id, title: data.session.title });
+    }, () => undefined);
+  }
   // A confirmation holds the composer, so no other answer can replace the card's result while it runs.
   async function confirm(id: string, body: Record<string, string | boolean>) {
     if (busy) throw new Error("Wait for the current answer, then confirm.");
@@ -372,7 +387,7 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
   const empty = messages.length === 0 && !busy;
   const drawer = mode === "drawer";
   // The stage is idle only with nothing shown: no messages, no answer coming, and not the list of chats.
-  const idle = empty && view !== "chats";
+  const idle = empty && view !== "chats" && !error;
   useEffect(() => onEmpty?.(idle), [idle]);
   // The parts of a conversation, arranged as the drawer or as Home's stage.
   const head = (
@@ -638,9 +653,15 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
             </span>
             <span className="ks-scope">{closeId ? label || `Close #${closeId}` : executive ? "Your business" : "Firm-wide"}{paperId ? ` · Draft #${paperId}` : ""}</span>
             <span className="ks-spacer" />
-            <button className="ks-send" disabled={busy || !loaded || !text.trim()} aria-label={busy ? "Answering" : !loaded ? "Opening the chat" : "Send"}>
-              <Icon name="up" />
-            </button>
+            {busy ? (
+              <button type="button" className="ks-send stop" aria-label="Stop" onClick={stop}>
+                <Icon name="stop" />
+              </button>
+            ) : (
+              <button className="ks-send" disabled={!loaded || !text.trim()} aria-label={!loaded ? "Opening the chat" : "Send"}>
+                <Icon name="up" />
+              </button>
+            )}
           </div>
         </div>
         {empty && (

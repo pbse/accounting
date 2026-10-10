@@ -1274,6 +1274,9 @@ body.assistant-open .ks-composer.foot {
   background: var(--primary);
   transform: scale(1.06);
 }
+.app-shell .ks-send.stop {
+  background: var(--ink);
+}
 .app-shell .ks-send:disabled {
   background: var(--fill);
   color: var(--ink-4);
