@@ -73,3 +73,5 @@ Saved closes, exact-cent full-month prepaids, conservative CSV reconciliation, T
 For actual checks and their limits see [validation](validation.md). For the source requirements see [PRD](product-requirements.md).
 
 - 2026-09-22: Client attachments require automated malware scanning now (confirmed). Cloudflare WAF scans PDFs; an isolated on-demand ClamAV service scans TXT/CSV; clean scan plus firm release gates preparation. See [coverage requests](coverage-requests.md).
+
+B04/B12 LLM hardening, October 10: PDF images now use the purpose gateway, context-machine evaluation keeps caller identity and supports one synthetic local owner, and automatic deploy verifies the exact CI-tested file tree. OpenAI image reading needs a separate opt-in; current owner/client grants and known image limits precede dispatch/budget use. The requested `gpt-6.1-sol`/medium policy is staged. A live Codex subscription smoke rejected that model; the user deferred subscription activation until supported. Hosted provider accuracy/concurrency and partner acceptance remain open launch gates; see [validation](validation.md) and [context-machine deployment](context-machine-deployment.md).

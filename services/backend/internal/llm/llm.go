@@ -20,6 +20,7 @@ type Provider string
 const (
 	OpenAI         Provider = "openai"
 	ContextMachine Provider = "context_machine"
+	Google         Provider = "gemini"
 )
 
 // route is trusted server configuration, never a value supplied by a prompt.
@@ -37,6 +38,8 @@ type route struct {
 // Configure once before sharing it. No automatic retries or provider fallbacks:
 // either would bypass the caller's budget reservation or data consent boundary.
 type Client struct {
+	apiImages        bool
+	gemini           *Gemini
 	http             *http.Client
 	routes           map[string]route
 	profiles         []Scope
@@ -49,6 +52,8 @@ type Request struct {
 	Purpose      string
 	Instructions string
 	Data         any
+	// Images are bounded inline PNG pages, never URLs or filesystem paths.
+	Images []Image
 	// Messages is used for conversations, including tool results. With it set,
 	// Instructions and Data must be empty.
 	Messages          []Message
@@ -136,6 +141,7 @@ type Response struct {
 var (
 	ErrRefused    = errors.New("model refused the request")
 	ErrIncomplete = errors.New("model response was incomplete or invalid")
+	ErrBusy       = errors.New("model service is busy")
 	ErrLimit      = errors.New("model response exceeded its limit")
 )
 
@@ -150,6 +156,9 @@ func (c *Client) Generate(ctx context.Context, in Request) (Response, error) {
 	}
 	if in.Messages == nil && in.Instructions == "" {
 		return Response{}, errors.New("model instructions or messages are required")
+	}
+	if err := ValidateImages(in); err != nil {
+		return Response{}, err
 	}
 	if in.OnText != nil && in.Tools != nil {
 		return Response{}, errors.New("streaming tool calls are not supported")
@@ -166,6 +175,12 @@ func (c *Client) Generate(ctx context.Context, in Request) (Response, error) {
 	var result Response
 	var err error
 	switch route.Provider {
+	case Google:
+		if in.Purpose != "ocr" || len(in.Images) != 1 || in.Schema != nil || in.Tools != nil || in.Scope != nil || in.OnText != nil || in.OnProgress != nil {
+			return Response{}, ErrIncomplete
+		}
+		text, model, e := c.gemini.ReadPage(ctx, in.Images[0].PNG)
+		result, err = Response{ID: "ocr", Provider: Google, Model: model, Text: text, ModelCalls: 1}, e
 	case OpenAI:
 		result, err = c.openAI(ctx, route, in)
 	case ContextMachine:
@@ -183,7 +198,7 @@ func (c *Client) Generate(ctx context.Context, in Request) (Response, error) {
 	return result, err
 }
 
-func (c *Client) post(ctx context.Context, endpoint, token string, body any) (*http.Response, error) {
+func (c *Client) post(ctx context.Context, endpoint, token string, body any, requestLimit ...int) (*http.Response, error) {
 	if !validEndpoint(endpoint) {
 		return nil, errors.New("model endpoint must use HTTPS (HTTP is allowed only on loopback)")
 	}
@@ -191,7 +206,11 @@ func (c *Client) post(ctx context.Context, endpoint, token string, body any) (*h
 	if err != nil {
 		return nil, errors.New("model request is not JSON encodable")
 	}
-	if len(raw) > 2<<20 {
+	limit := 2 << 20
+	if len(requestLimit) > 0 {
+		limit = requestLimit[0]
+	}
+	if len(raw) > limit {
 		return nil, errors.New("model request exceeded its limit")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
@@ -216,6 +235,9 @@ func (c *Client) post(ctx context.Context, endpoint, token string, body any) (*h
 	}
 	if res.StatusCode != http.StatusOK {
 		res.Body.Close()
+		if res.StatusCode == http.StatusTooManyRequests {
+			return nil, ErrBusy
+		}
 		return nil, fmt.Errorf("model service returned HTTP %d", res.StatusCode)
 	}
 	return res, nil

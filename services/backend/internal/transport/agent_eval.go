@@ -27,7 +27,7 @@ import (
 var agentEvalPermissions = []string{"workpapers:review"}
 
 func agentEvalActor(ctx context.Context, firm AcceptanceFirm) context.Context {
-	return auth.WithActor(ctx, &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: firm.Subject}, Organization: firm.Organization, Permissions: agentEvalPermissions})
+	return auth.WithActor(llm.WithIdentity(ctx, firm.Organization, firm.Subject), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: firm.Subject}, Organization: firm.Organization, Permissions: agentEvalPermissions})
 }
 
 // PrepareAgentEvalCase gives one acceptance case a firm of its own at the firm-wide agent level, with one member
@@ -194,5 +194,9 @@ func RunAgentEvalQuestion(ctx context.Context, db *sql.DB, q agenteval.Question,
 // EnsureAgentEvalFirm keeps the recorded firm present for a replay: the loop reserves its model calls against it.
 func EnsureAgentEvalFirm(ctx context.Context, db *sql.DB, record agenteval.Record) error {
 	_, err := db.ExecContext(ctx, `INSERT INTO organizations(id,name,max_model_calls_per_day,agent_chat) VALUES($1,$2,100000,'firm') ON CONFLICT (id) DO NOTHING`, record.Organization, "Agent golden set "+record.Case)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) SELECT $1,$2,true,'Local agent evaluation','agent-eval' WHERE NOT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, record.Organization, record.Subject)
 	return err
 }
