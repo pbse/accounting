@@ -131,6 +131,8 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
   const [renaming, setRenaming] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
   const generation = useRef(0);
+  // The request of the answer under way, so Stop can end it.
+  const inFlight = useRef<AbortController | null>(null);
   const list = useRef<HTMLOListElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
@@ -269,9 +271,11 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
         });
       } else if (event.type === "text") setPending(event.body);
     };
+    const controller = new AbortController();
+    inFlight.current = controller;
     try {
       // The member's own date resolves day names such as "by Friday"; the agent's steps and text arrive as events.
-      const data = await workspaceRequest(path, { ...body, session_id: session?.id ?? "new", picked, today: localDate() } as Record<string, unknown>, false, onEvent);
+      const data = await workspaceRequest(path, { ...body, session_id: session?.id ?? "new", picked, today: localDate() } as Record<string, unknown>, false, onEvent, controller.signal);
       if (asked !== generation.current) return;
       setMessages(data.messages);
       if (data.session) setSession({ id: data.session.id, title: data.session.title });
@@ -301,12 +305,15 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
         setAsking("");
         setBusy(false);
       }
+      if (inFlight.current === controller) inFlight.current = null;
     }
   }
-  // Stop abandons the answer under way: its request is left to end unheard, and the composer is free again. What
-  // was saved before the stop is read back, with the chat it was saved in.
+  // Stop ends the answer under way: its request is aborted, which cancels it on the server too, and the composer is
+  // free again. What was saved before the stop is read back, with the chat it was saved in.
   function stop() {
     const asked = ++generation.current;
+    inFlight.current?.abort();
+    inFlight.current = null;
     setBusy(false);
     setPending("");
     setSteps([]);
