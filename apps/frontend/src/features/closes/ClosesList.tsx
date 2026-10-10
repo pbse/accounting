@@ -121,7 +121,8 @@ export default function ClosesList() {
   // Empty only when the roster was read: a failed read says nothing about whether there are clients.
   const empty = !loading && !!roster && rows.size === 0 && !query;
   const open_ = (r: ClientRow) => r.closes.filter((c) => !c.signed_off && !c.unchecked).length;
-  const waiting = shown.filter((r) => r.owed.length > 0 || open_(r) > 0).length;
+  // The title row counts the whole roster, whatever the search shows.
+  const waiting = [...rows.values()].filter((r) => r.owed.length > 0 || open_(r) > 0).length;
   const context = loading ? "Reading your clients…" : roster ? `${n(rows.size, "client")}${waiting ? ` · ${waiting} with a month open or owed` : ""}` : "";
   // A client's state in a word: former, owing a month, a month open, or all signed off.
   const state = (r: ClientRow) => {

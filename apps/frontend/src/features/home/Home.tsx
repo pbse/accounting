@@ -207,7 +207,7 @@ export default function Home() {
       ) : (
         <>
           <Setup onEnrolled={bump} />
-          <DeadlinesSection counts={counts!} today={today} />
+          {counts && <DeadlinesSection counts={counts} today={today} />}
           <Decisions today={today} tick={tick} snapshot={counts?.inbox} reopened={reopened} canReview={counts?.can_review ?? false} teamTotal={counts?.decisions.team ?? 0} view={view} onView={setView} onChange={bump} />
           <UncapturedSection counts={counts} today={today} />
           <Dependencies />
