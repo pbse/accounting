@@ -60,6 +60,12 @@ type seeder struct {
 	// problems collects every refused step, so one client's trouble does not stop the others.
 	problems []string
 	today    time.Time
+	// The manifest: what the seed added that no client name identifies, recorded for removal.
+	createdFirm                                                       bool
+	policyBefore                                                      []byte
+	chatSessions, invitations, roleChanges, agentAccess, procedureIDs []int64
+	attentionKeys                                                     []string
+	modelCallDays                                                     []string
 }
 
 func (s *seeder) log(format string, args ...any) {
@@ -239,7 +245,18 @@ func SeedFirm(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) ([
 	if err := s.firmRow(ctx); err != nil {
 		return nil, err
 	}
-	s.people(ctx)
+	if err := s.isolated(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT to_jsonb(o)-'id'-'name'-'created_at' FROM (SELECT id,name,created_at,require_independent_review,require_link_passcode,COALESCE(independent_review_min_amount::text,'') AS independent_review_min_amount,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat,assistant_model_answers,allow_ledger_writes FROM organizations WHERE id=$1) o`, s.o.Organization).Scan(&s.policyBefore); err != nil {
+		return nil, fmt.Errorf("the firm's policy could not be read: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO demonstration_seeds(organization_id,subject,members,created_firm,policy) VALUES($1,$2,COALESCE($3::text[],'{}'),$4,$5)`, s.o.Organization, s.o.Subject, s.o.Members, s.createdFirm, string(s.policyBefore)); err != nil {
+		return nil, fmt.Errorf("the seed's record could not be written (is migration 140 applied?): %w", err)
+	}
+	if err := s.people(ctx); err != nil {
+		return nil, err
+	}
 	s.policies(ctx)
 	s.roster(ctx)
 	s.procedures(ctx)
@@ -253,6 +270,9 @@ func SeedFirm(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) ([
 		}
 	}
 	s.afterwards(ctx)
+	if err := s.manifest(ctx); err != nil {
+		return s.problems, err
+	}
 	return s.problems, nil
 }
 
@@ -261,39 +281,111 @@ func (s *seeder) firmRow(ctx context.Context) error {
 	if name == "" {
 		name = s.firm.Name
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO organizations(id,name) VALUES($1,$2) ON CONFLICT (id) DO NOTHING`, s.o.Organization, name)
+	result, err := s.db.ExecContext(ctx, `INSERT INTO organizations(id,name) VALUES($1,$2) ON CONFLICT (id) DO NOTHING`, s.o.Organization, name)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	s.createdFirm = n == 1
+	return nil
+}
+
+// isolated refuses a firm that already holds the demonstration, or any client the demonstration would add: the seed
+// is one story, told once, and removal must not touch work that was there before it.
+func (s *seeder) isolated(ctx context.Context) error {
+	var seeded bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM demonstration_seeds WHERE organization_id=$1)`, s.o.Organization).Scan(&seeded); err != nil {
+		return fmt.Errorf("the seed's record could not be read (is migration 140 applied?): %w", err)
+	}
+	if seeded {
+		return errors.New("this firm already holds the demonstration; remove it first (-remove)")
+	}
+	names := s.clientNames()
+	var taken []string
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT entity FROM (SELECT entity FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2) UNION SELECT client_entity FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2) UNION SELECT client_entity FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=ANY($2)) t ORDER BY 1`, s.o.Organization, names)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		rows.Scan(&name)
+		taken = append(taken, name)
+	}
+	if len(taken) > 0 {
+		return fmt.Errorf("the firm already has clients named %s; the demonstration's clients cannot share a name with real ones", strings.Join(taken, ", "))
+	}
+	return nil
+}
+
+func (s *seeder) clientNames() []string {
+	names := []string{}
+	for _, c := range s.firm.Clients {
+		names = append(names, strings.ToLower(c.Name))
+	}
+	return names
+}
+
+// manifest records what removal needs: the closes (every close of the demonstration's clients, which had none
+// before), the chats, marks and rows no client name identifies.
+func (s *seeder) manifest(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=(SELECT COALESCE(array_agg(id),'{}') FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2)),
+ chat_session_ids=COALESCE($3::bigint[],'{}'),invitation_ids=COALESCE($4::bigint[],'{}'),role_change_ids=COALESCE($5::bigint[],'{}'),agent_access_ids=COALESCE($6::bigint[],'{}'),procedure_ids=COALESCE($7::bigint[],'{}'),attention_keys=COALESCE($8::text[],'{}'),model_call_days=COALESCE($9::date[],'{}'),finished_at=now() WHERE organization_id=$1`,
+		s.o.Organization, s.clientNames(), s.chatSessions, s.invitations, s.roleChanges, s.agentAccess, s.procedureIDs, s.attentionKeys, s.modelCallDays)
 	return err
 }
 
-// people makes sure the administrator and the members are current members and have their own settings.
-func (s *seeder) people(ctx context.Context) {
+// people checks that the administrator and the members are current members of the firm (a firm the seed created
+// gets its memberships from the seed), and gives them their own settings.
+func (s *seeder) people(ctx context.Context) error {
 	for _, subject := range append([]string{s.o.Subject}, s.o.Members...) {
 		var granted sql.NullBool
 		s.db.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, s.o.Organization, subject).Scan(&granted)
-		if !granted.Valid || !granted.Bool {
-			s.db.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,'Joined the firm (demonstration seed)',$3)`, s.o.Organization, subject, s.o.Subject)
+		if granted.Valid && granted.Bool {
+			continue
+		}
+		if !s.createdFirm {
+			return fmt.Errorf("%s is not a current member of the firm; the seed does not change who may enter it", subject)
+		}
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,'Joined the firm (demonstration seed)',$3)`, s.o.Organization, subject, s.o.Subject); err != nil {
+			return err
 		}
 	}
 	s.must(ctx, "time zone", "POST", "/v1/closes/me", map[string]any{"time_zone": "America/New_York"})
 	s.must(ctx, "notification preferences", "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"answered", "confirm", "failed", "approve", "changed", "fix", "send", "unanswered", "goal", "handoff"}, "browser": false})
 	// Invitations: one accepted in July, one still pending; and the role history a growing firm has.
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at,decided_at)
- VALUES($1,'r.castillo@example.com','member','Member','invitation_01SEEDACCEPTED'||right($1,8),'accepted',$2,'Joins as a staff accountant for the dental and landscaping clients',$3,$4,$5)
- ON CONFLICT DO NOTHING`, s.o.Organization, s.o.Subject, s.today.AddDate(0, 0, -80), s.today.AddDate(0, 0, -87), s.today.AddDate(0, 0, -86)); err != nil {
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at,decided_at)
+ VALUES($1,'r.castillo@example.com','member','Member','invitation_01SEEDACCEPTED'||right($1,8),'accepted',$2,'Joins as a staff accountant for the dental and landscaping clients',$3,$4,$5) RETURNING id`, s.o.Organization, s.o.Subject, s.today.AddDate(0, 0, -80), s.today.AddDate(0, 0, -87), s.today.AddDate(0, 0, -86)).Scan(&id); err != nil {
 		s.problem("invitation: %v", err)
+	} else {
+		s.invitations = append(s.invitations, id)
 	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at)
- VALUES($1,'j.okonkwo@example.com','member','Member','invitation_01SEEDPENDING'||right($1,8),'pending',$2,'Seasonal help for the September and October closes',$3,$4)
- ON CONFLICT DO NOTHING`, s.o.Organization, s.o.Subject, s.today.AddDate(0, 0, 5), s.today.AddDate(0, 0, -2)); err != nil {
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at)
+ VALUES($1,'j.okonkwo@example.com','member','Member','invitation_01SEEDPENDING'||right($1,8),'pending',$2,'Seasonal help for the September and October closes',$3,$4) RETURNING id`, s.o.Organization, s.o.Subject, s.today.AddDate(0, 0, 5), s.today.AddDate(0, 0, -2)).Scan(&id); err != nil {
 		s.problem("invitation: %v", err)
+	} else {
+		s.invitations = append(s.invitations, id)
 	}
 	for _, m := range s.o.Members {
-		s.db.ExecContext(ctx, `INSERT INTO member_role_changes(organization_id,subject,from_role,to_role,reason,actor,created_at) VALUES($1,$2,'member','firm-admin','Second administrator so sign-offs do not wait on one person',$3,$4)`, s.o.Organization, m, s.o.Subject, s.today.AddDate(0, 0, -60))
+		if err := s.db.QueryRowContext(ctx, `INSERT INTO member_role_changes(organization_id,subject,from_role,to_role,reason,actor,created_at) VALUES($1,$2,'member','firm-admin','Second administrator so sign-offs do not wait on one person',$3,$4) RETURNING id`, s.o.Organization, m, s.o.Subject, s.today.AddDate(0, 0, -60)).Scan(&id); err == nil {
+			s.roleChanges = append(s.roleChanges, id)
+		}
 	}
 	// The administrator's own agent connection, approved when the firm turned the agent on.
 	if code, out := s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "request", "scope": "prepare", "reason": "Use the agent from my editor for the monthly preparation work", "confirmed": true}); code == 200 {
 		s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "approve", "subject": s.o.Subject, "scope": "prepare", "previous_id": str(field(out, "id")), "reason": "Approved for the firm's administrator", "confirmed": true})
+		rows, err := s.db.QueryContext(ctx, `SELECT id FROM agent_access WHERE organization_id=$1 AND subject=$2 AND created_at>=(SELECT started_at FROM demonstration_seeds WHERE organization_id=$1)`, s.o.Organization, s.o.Subject)
+		if err == nil {
+			for rows.Next() {
+				if rows.Scan(&id) == nil {
+					s.agentAccess = append(s.agentAccess, id)
+				}
+			}
+			rows.Close()
+		}
 	}
+	return nil
 }
 
 // policies are the firm's rules as a careful small firm sets them, each change recorded with its reason.
@@ -384,7 +476,11 @@ func (s *seeder) publishProcedure(ctx context.Context) func(client, kind, method
 		if expense != "" {
 			body["expense_account"], body["prepaid_account"] = expense, prepaid
 		}
-		s.must(ctx, "procedure "+kind+" "+client, "POST", "/v1/closes/procedures", body)
+		if out, ok := s.must(ctx, "procedure "+kind+" "+client, "POST", "/v1/closes/procedures", body); ok {
+			if id, err := strconv.ParseInt(str(field(out, "id")), 10, 64); err == nil {
+				s.procedureIDs = append(s.procedureIDs, id)
+			}
+		}
 	}
 }
 
@@ -1252,13 +1348,22 @@ func (s *seeder) afterwards(ctx context.Context) {
 			}
 		}
 		if len(keys) > 3 {
-			s.call(ctx, "POST", "/v1/closes/attention", map[string]any{"action": "read", "keys": keys[len(keys)/2:]})
-			s.call(ctx, "POST", "/v1/closes/attention", map[string]any{"action": "snooze", "keys": keys[:1], "until": s.today.AddDate(0, 0, 5).Format(time.RFC3339)})
+			if code, _ := s.call(ctx, "POST", "/v1/closes/attention", map[string]any{"action": "read", "keys": keys[len(keys)/2:]}); code == 200 {
+				s.attentionKeys = append(s.attentionKeys, keys[len(keys)/2:]...)
+			}
+			if code, _ := s.call(ctx, "POST", "/v1/closes/attention", map[string]any{"action": "snooze", "keys": keys[:1], "until": s.today.AddDate(0, 0, 5).Format(time.RFC3339)}); code == 200 {
+				s.attentionKeys = append(s.attentionKeys, keys[0])
+			}
 		}
 	}
 	// Model usage for the month so far, as the operations view counts it.
 	for d := 0; d < 9; d++ {
-		s.db.ExecContext(ctx, `INSERT INTO model_calls(organization_id,day,calls) VALUES($1,$2,$3) ON CONFLICT (organization_id,day) DO UPDATE SET calls=model_calls.calls+EXCLUDED.calls`, s.o.Organization, s.today.AddDate(0, 0, -d).Format("2006-01-02"), 14+(d*7)%23)
+		day := s.today.AddDate(0, 0, -d).Format("2006-01-02")
+		if result, err := s.db.ExecContext(ctx, `INSERT INTO model_calls(organization_id,day,calls) VALUES($1,$2,$3) ON CONFLICT (organization_id,day) DO NOTHING`, s.o.Organization, day, 14+(d*7)%23); err == nil {
+			if n, _ := result.RowsAffected(); n == 1 {
+				s.modelCallDays = append(s.modelCallDays, day)
+			}
+		}
 	}
 }
 
@@ -1298,6 +1403,9 @@ func (s *seeder) chats(ctx context.Context) {
 			s.problem("chat session: %v", err)
 			continue
 		}
+		if id, err := strconv.ParseInt(sessionID, 10, 64); err == nil {
+			s.chatSessions = append(s.chatSessions, id)
+		}
 		for i, t := range session.turns {
 			citations := "[]"
 			if t.role == "assistant" && session.closeID != "" {
@@ -1309,26 +1417,40 @@ func (s *seeder) chats(ctx context.Context) {
 	}
 }
 
-// RemoveSeed takes the demonstration firm's clients out of the database: every close of a seeded client with what
-// hangs off it, the roster entries, procedures, plans and chats the seed made. The firm, its members and its policies
-// stay.
+// RemoveSeed takes the demonstration out of the firm by its record: the closes it made with what hangs off them, the
+// demonstration clients' roster entries, aliases, procedures, plans and decisions, the chats, marks and rows it
+// added, and the firm's policy as it was. The firm and its members stay.
 func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) error {
+	var subject string
+	var members []string
+	var createdFirm bool
+	var policy []byte
+	var closes, chats, invitations, roleChanges, agentAccess, procedures []int64
+	var keys, days []string
+	err := db.QueryRowContext(ctx, `SELECT subject,members,created_firm,policy,close_ids,chat_session_ids,invitation_ids,role_change_ids,agent_access_ids,procedure_ids,attention_keys,model_call_days::text[] FROM demonstration_seeds WHERE organization_id=$1`, o.Organization).Scan(&subject, &members, &createdFirm, &policy, &closes, &chats, &invitations, &roleChanges, &agentAccess, &procedures, &keys, &days)
+	if err == sql.ErrNoRows {
+		return errors.New("this firm holds no demonstration to remove")
+	}
+	if err != nil {
+		return fmt.Errorf("the seed's record could not be read: %w", err)
+	}
 	names := []string{}
 	for _, c := range firm.Clients {
 		names = append(names, strings.ToLower(c.Name))
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2) ORDER BY period DESC,id DESC`, o.Organization, names)
+	// Closes newest first, so a connection's later months go before the month that holds it.
+	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND id=ANY($2) ORDER BY period DESC,id DESC`, o.Organization, closes)
 	if err != nil {
 		return err
 	}
-	var closes []string
+	var ordered []string
 	for rows.Next() {
 		var id string
 		rows.Scan(&id)
-		closes = append(closes, id)
+		ordered = append(ordered, id)
 	}
 	rows.Close()
-	for _, id := range closes {
+	for _, id := range ordered {
 		if err := removeClose(ctx, db, id); err != nil {
 			return fmt.Errorf("close %s: %w", id, err)
 		}
@@ -1338,13 +1460,10 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		args []any
 	}
 	byClient := func(sql string) statement { return statement{sql, []any{o.Organization, names}} }
-	byPerson := func(sql string) statement { return statement{sql, []any{o.Organization, o.Subject}} }
-	byFirm := func(sql string) statement { return statement{sql, []any{o.Organization}} }
 	statements := []statement{
 		byClient(`DELETE FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
 		byClient(`DELETE FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
 		byClient(`DELETE FROM client_access WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM procedure_versions WHERE organization_id=$1 AND (client_entity='' OR lower(client_entity)=ANY($2)) AND reason='Firm procedure adopted at onboarding'`),
 		byClient(`DELETE FROM budget_versions WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
 		byClient(`DELETE FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
 		byClient(`DELETE FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
@@ -1353,19 +1472,34 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		byClient(`DELETE FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
 		byClient(`DELETE FROM close_routines WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
 		byClient(`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byPerson(`DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND close_id IS NULL)`),
-		byPerson(`DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`),
-		byPerson(`DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2`),
-		byFirm(`DELETE FROM member_invitations WHERE organization_id=$1 AND email IN ('r.castillo@example.com','j.okonkwo@example.com')`),
-		byFirm(`DELETE FROM member_role_changes WHERE organization_id=$1 AND reason='Second administrator so sign-offs do not wait on one person'`),
-		byFirm(`DELETE FROM model_calls WHERE organization_id=$1`),
+		{`DELETE FROM procedure_versions WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, procedures}},
+		{`DELETE FROM chat_messages WHERE session_id=ANY($1)`, []any{chats}},
+		{`DELETE FROM chat_sessions WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, chats}},
+		{`DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2 AND key=ANY($3)`, []any{o.Organization, subject, keys}},
+		{`DELETE FROM member_invitations WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, invitations}},
+		{`DELETE FROM member_role_changes WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, roleChanges}},
+		{`DELETE FROM agent_access WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, agentAccess}},
+		{`DELETE FROM model_calls WHERE organization_id=$1 AND day=ANY($2::date[])`, []any{o.Organization, days}},
 	}
 	for _, st := range statements {
 		if _, err := db.ExecContext(ctx, st.sql, st.args...); err != nil {
 			return fmt.Errorf("%s: %w", st.sql[:40], err)
 		}
 	}
-	return nil
+	// The firm's policy as the seed found it, recorded as a change by the person who ran the seed.
+	var before map[string]any
+	if json.Unmarshal(policy, &before) == nil && o.Organization != "local-development" {
+		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
+		s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", map[string]any{
+			"independent_review": before["require_independent_review"], "independent_review_min_amount": before["independent_review_min_amount"], "materiality_amount": before["materiality_amount"],
+			"link_passcode": before["require_link_passcode"], "reminder_after_days": before["reminder_after_days"], "reminder_max": before["reminder_max"], "agent_chat": before["agent_chat"],
+			"staff_planning": before["assistant_model_answers"], "ledger_writes": before["allow_ledger_writes"], "reason": "The demonstration was removed; the firm's policy is as it was before it"})
+		if len(s.problems) > 0 {
+			return errors.New(s.problems[0])
+		}
+	}
+	_, err = db.ExecContext(ctx, `DELETE FROM demonstration_seeds WHERE organization_id=$1`, o.Organization)
+	return err
 }
 
 // removeClose deletes one close and everything that hangs off it, in the order the deletion route uses.

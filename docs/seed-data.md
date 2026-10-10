@@ -42,19 +42,26 @@ go run ./cmd/seed -database "$MIGRATION_DATABASE_URL" -domain getkrith.com -emai
 
 `-domain` finds the firm registered under the address domain; `-email` finds your subject from your sign-ins (or pass `-subject`). The run takes well under a minute and prints each refused step as a problem; a clean run ends with `Done with 0 problems`.
 
-To take it out again, keeping the firm, its members and its policies:
+To take it out again, keeping the firm and its members:
 
 ```sh
 go run ./cmd/seed -database "$MIGRATION_DATABASE_URL" -domain getkrith.com -hosted -yes -remove
 ```
 
-Removal deletes the seeded clients' closes with everything that hangs off them, their roster entries, aliases, procedures, budgets, obligations, scenarios, open-item decisions, connections, the chats and inbox marks it made, the two invitations and the role change. Seeding again afterwards works.
+The seed records what it did in `demonstration_seeds` (migration 140): who ran it, the firm's policy as it found it, and the IDs of the closes, chats, inbox marks, invitations, role change, agent access, procedures and usage rows it added. Removal deletes exactly those, with the demonstration clients' roster entries, aliases, budgets, obligations, scenarios, open-item decisions and connections, and sets the firm's policy back to what it was (recorded as one more policy change by the person who ran the seed; the policy history itself stays). Seeding again afterwards works.
+
+## What the seed will not do
+
+- **Touch a firm that holds work under its client names.** It refuses when the firm already holds the demonstration, or has a close, roster entry or alias for any of its ten client names, so removal can never reach a real client's work.
+- **Change who may enter the firm.** The administrator and every `-members` subject must already be current members; the seed grants membership only in a firm it created itself (a local database).
+- **Leave the firm's policy changed.** The policy it found is restored on removal.
+- **Run against a database it cannot place.** The connection string is read as the driver reads it (a URL or `key=value` pairs); anything that is not localhost, a loopback address or a socket path needs `-hosted -yes`.
 
 ## What to know before seeding the hosted firm
 
 - **The worker is running there.** The seed works the queue itself, with recorded answers, and the production worker may claim some of the same intake jobs and read them with the live model instead. The seed reports any document whose reading did not land where the story expects; rerunning the seed after `-remove` is the fix.
 - **Nothing reaches a provider.** The QuickBooks connections hold no credential, so no refresh is scheduled; nothing is posted; no email is sent (the firm has no sender connected); invitations are rows, not WorkOS invitations. People are shown by their WorkOS profile, so other members' closes read as "held by a colleague" when their subject is not a WorkOS user of the firm.
-- **It is one story.** The seed runs once per firm; its client names are fixed, and a second run without `-remove` refuses on the roster.
+- **It is one story.** The seed runs once per firm; a second run is refused until the first is removed.
 - **The goals are live.** Harbor's hand-over and Bluegrass's monthly routine are real goals the worker will look at and report on.
 
 `SEED_TRACE=1` prints every request the seed makes and what the route answered.

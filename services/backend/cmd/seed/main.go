@@ -12,12 +12,12 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/url"
 	"os"
 	"strings"
 
 	"close.local/backend/internal/seed"
 	"close.local/backend/internal/transport"
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -85,7 +85,7 @@ func main() {
 	firm := seed.Build()
 	options := transport.SeedOptions{Organization: org, Subject: sub, Members: others, FirmName: *firmName, Log: func(format string, args ...any) { fmt.Printf(format+"\n", args...) }}
 	if *remove {
-		fmt.Printf("Removing the demonstration clients from %s (%s)\n", org, name)
+		fmt.Printf("Removing the demonstration from %s (%s)\n", org, name)
 		if *hosted && !*yes {
 			log.Fatal("pass -yes to change a hosted database")
 		}
@@ -112,18 +112,19 @@ func main() {
 	}
 }
 
-// local refuses any database that is not on this machine, unless -hosted says so.
+// local refuses any database that is not on this machine, unless -hosted says so. The connection string is read the
+// way the driver reads it (a URL or key=value pairs), and anything that cannot be placed is refused.
 func local(database string) error {
-	u, err := url.Parse(database)
+	config, err := pgx.ParseConfig(database)
 	if err != nil {
-		return fmt.Errorf("database URL: %w", err)
+		return fmt.Errorf("database connection string: %w", err)
 	}
-	host := u.Hostname()
-	if host == "localhost" || host == "" {
+	host := config.Host
+	if host == "localhost" || strings.HasPrefix(host, "/") {
 		return nil
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return nil
 	}
-	return fmt.Errorf("%s is not a local database", host)
+	return fmt.Errorf("%q is not a local database", host)
 }
