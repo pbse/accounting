@@ -24,6 +24,7 @@ type Email struct {
 	ReplyTo string   `json:"reply_to,omitempty"`
 	Subject string   `json:"subject"`
 	Text    string   `json:"text"`
+	HTML    string   `json:"html,omitempty"`
 }
 
 // resendAPI is Resend's API; tests point it at a fake.

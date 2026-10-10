@@ -38,7 +38,7 @@ var workosUserID = regexp.MustCompile(`^user_[A-Za-z0-9]{1,100}$`)
 var (
 	errInvitationNotPending = errors.New("only a pending invitation that has not expired can be resent")
 	// errResendUnconfirmed is a resend WorkOS may have sent: its answer and its copy of the invitation were both lost.
-	errResendUnconfirmed = errors.New("WorkOS did not confirm whether it sent the invitation; the app keeps it open for seven days")
+	errResendUnconfirmed = errors.New("WorkOS did not confirm whether it renewed the invitation, so no new email was sent; the app keeps it open for seven days")
 )
 
 type workosUser struct {
@@ -192,7 +192,8 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
    'agent',(SELECT a.state FROM current_agent_access a WHERE a.organization_id=m.organization_id AND a.subject=m.subject)) ORDER BY m.granted DESC,o.name)
   FROM current_organization_members m JOIN organizations o ON o.id=m.organization_id WHERE m.subject IN (SELECT jsonb_array_elements_text($1::jsonb))),'[]'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id::text,'organization_id',i.organization_id,'firm_name',o.name,'email',i.email,'role',i.role_name,
-   'state',CASE WHEN i.state='pending' AND i.expires_at<=now() THEN 'expired' ELSE i.state END,'invited_by',i.invited_by,'created_at',i.created_at,'expires_at',i.expires_at) ORDER BY i.id DESC)
+   'state',CASE WHEN i.state='pending' AND i.expires_at<=now() THEN 'expired' ELSE i.state END,'invited_by',i.invited_by,'created_at',i.created_at,'expires_at',i.expires_at,
+   'email_state',(SELECT e.state FROM platform_emails e WHERE e.invitation=i.id ORDER BY e.id DESC LIMIT 1)) ORDER BY i.id DESC)
   FROM (SELECT * FROM member_invitations WHERE subject IN (SELECT jsonb_array_elements_text($1::jsonb)) OR (subject IS NULL AND email IN (SELECT jsonb_array_elements_text($2::jsonb))) ORDER BY id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
  COALESCE((SELECT jsonb_object_agg(id,name) FROM organizations WHERE id IN (SELECT jsonb_array_elements_text($3::jsonb))),'{}'::jsonb)`,
 			jsonList(ids), jsonList(emails), jsonList(orgs)).Scan(&memberships, &invitations, &firms)
@@ -353,8 +354,22 @@ func endWorkOSSessions(ctx context.Context, user string) (ended int, err error) 
 	return failed()
 }
 
-// adminResendInvitation asks WorkOS to send a pending invitation's email again, and keeps the new expiry. The attempt is
-// recorded as started, and committed, before WorkOS is asked, so the audit shows it even if its outcome cannot be.
+// adminResendInvitation renews a pending invitation in WorkOS, keeps the new expiry, and queues Krith's email for it
+// again (docs/sign-in.md#invitations). The attempt is recorded as started, and committed, before WorkOS is asked, so the
+// audit shows it even if its outcome cannot be.
+// resendAdvice is what to do after a resend that queued no email: an earlier email still waiting to go is left to go,
+// and another resend would send a second.
+func resendAdvice(ctx context.Context, db *sql.DB, invitation string) string {
+	var waiting bool
+	if err := db.QueryRowContext(platformContext(ctx), `SELECT EXISTS(SELECT 1 FROM platform_emails WHERE invitation::text=$1 AND state IN ('queued','sending'))`, invitation).Scan(&waiting); err != nil {
+		return "Check this view for its earlier email before resending."
+	}
+	if waiting {
+		return "Its earlier email is still on its way; this view shows when it has gone."
+	}
+	return "Resend it again."
+}
+
 func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	firm, invitation := r.PathValue("id"), r.PathValue("invitation")
 	if os.Getenv("WORKOS_API_KEY") == "" {
@@ -372,7 +387,7 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	var expires time.Time
-	sent := false // WorkOS resent it: from here on, a failure is the app's, and resending would email the person twice.
+	sent := false // WorkOS renewed it: from here on, a failure is the app's. Krith's email goes only with a commit, so none went.
 	// Outlives the request, so a closed browser cannot leave WorkOS's answer unrecorded.
 	ctx := context.WithoutCancel(r.Context())
 	action := adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason)}
@@ -382,8 +397,8 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	err := adminAct(ctx, db, action,
 		func(ctx context.Context, tx *sql.Tx) error {
-			var workosID string
-			err := tx.QueryRowContext(ctx, `SELECT workos_id FROM member_invitations WHERE id::text=$1 AND organization_id=$2 AND state='pending' AND workos_id IS NOT NULL AND expires_at>now() FOR UPDATE`, invitation, firm).Scan(&workosID)
+			var workosID, email, invitedBy string
+			err := tx.QueryRowContext(ctx, `SELECT workos_id,email,invited_by FROM member_invitations WHERE id::text=$1 AND organization_id=$2 AND state='pending' AND workos_id IS NOT NULL AND expires_at>now() FOR UPDATE`, invitation, firm).Scan(&workosID, &email, &invitedBy)
 			if errors.Is(err, sql.ErrNoRows) {
 				return errInvitationNotPending
 			}
@@ -412,17 +427,28 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				}
 			}
 			sent = true
+			// The renewal's answer may leave out what accepts the invitation; the copy just before it has it.
+			if current.Token == "" {
+				current.Token = before.Token
+			}
+			if current.AcceptURL == "" {
+				current.AcceptURL = before.AcceptURL
+			}
+			// WorkOS sends no invitation email of its own (docs/sign-in.md#invitations): Krith's goes with the renewal.
+			if err = queueInvitationEmail(ctx, tx, firm, invitation, email, invitationLink(current), inviterName(ctx, invitedBy)); err != nil {
+				return fmt.Errorf("WorkOS renewed it, but its email was not queued: %w", err)
+			}
 			if expires = current.ExpiresAt; expires.IsZero() {
 				return nil
 			}
 			if _, err = tx.ExecContext(ctx, `UPDATE member_invitations SET expires_at=$3 WHERE id::text=$1 AND organization_id=$2`, invitation, firm, expires); err != nil {
-				return fmt.Errorf("WorkOS sent it again, but its new expiry was not saved: %w", err)
+				return fmt.Errorf("WorkOS renewed it, but its new expiry was not saved: %w", err)
 			}
 			return nil
 		})
 	if err != nil && sent {
-		log.Printf("Invitation %s was resent but the app could not record it: %v", invitation, err)
-		problem(w, 503, "WorkOS sent the invitation again, but the app could not record it. Do not resend it, or the person gets it twice.")
+		log.Printf("Invitation %s was renewed but the app could not record it: %v", invitation, err)
+		problem(w, 503, "WorkOS renewed the invitation, but the app could not record it, so no new email was sent. "+resendAdvice(ctx, db, invitation))
 		return
 	}
 	if errors.Is(err, errResendUnconfirmed) {
@@ -431,12 +457,13 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		if _, hold := db.ExecContext(context.WithValue(ctx, systemKey{}, true), `UPDATE member_invitations SET expires_at=GREATEST(expires_at,now()+interval '7 days') WHERE id::text=$1 AND organization_id=$2 AND state='pending'`, invitation, firm); hold != nil {
 			log.Printf("Invitation %s could not be kept open after an unconfirmed resend: %v", invitation, hold)
 		}
-		problem(w, 502, "WorkOS did not confirm whether it sent the invitation. Check it in WorkOS before resending, or the person may get it twice.")
+		problem(w, 502, "WorkOS did not confirm renewing the invitation, so no new email was sent. "+resendAdvice(ctx, db, invitation))
 		return
 	}
 	if err != nil {
 		adminFirmProblem(w, err, "invitation resend")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"message": "Invitation sent again.", "expires_at": expires})
+	// The email is queued, not yet sent: the person view shows when it has gone.
+	jsonReply(w, 200, map[string]any{"message": "Invitation renewed. Krith is emailing it again now; this view shows when it has gone.", "expires_at": expires})
 }

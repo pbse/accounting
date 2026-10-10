@@ -3925,6 +3925,45 @@ PR 6 of the [agentic chat plan](agent-chat.md): chats are sessions (`chat_sessio
 
 Not verified: the rail's chats menu and the panel's list in a browser (no layout-check coverage was added; the rail keeps its width, the menu floats beside it).
 
+## Sign-in: Krith sends a firm's invitations, and its Join button accepts them with Google (2026-10-08)
+
+Request: an invitation arrived from `welcome@workos-mail.com`, under the WorkOS team's name ("Nivi"), with WorkOS's text. The user asked why it didn't come from getkrith.com, and for clearer, more agentic, simple and distinctive wording. WorkOS was sending its own invitation email.
+
+- **Change.**
+  - **Sending.** WorkOS still holds each invitation; Krith sends the email. It goes from `PLATFORM_EMAIL_FROM` through the platform email worker, as a new `platform_emails` kind, `invitation` (migration 139). The email:
+    - subject "<Inviter> invited you to join <firm> on Krith";
+    - says who invited them and the role;
+    - one sentence on what Krith's agents prepare;
+    - one Join button;
+    - the address to sign in as and the closing date;
+    - plain text and simple HTML.
+  - **Queueing.** The email is queued in the same transaction that opens the invitation. A send settled later from WorkOS's list, and a staff resend, queue it too. Its link's WorkOS token is sealed while it waits and cleared once it is done. It is sent only while the invitation is open and the firm enabled.
+  - **The Join button.** `/v1/auth/login?invitation=<token>` checks the token with WorkOS and against the firm's open invitation. It then goes straight to Google with the invited address suggested. The callback sends `invitation_token` with the code, so WorkOS accepts the invitation as it signs the person in. A token that can't be used lands on `/login?error=invitation`.
+  - **Visible delivery.** The firm's invitation list and the staff person view show each invitation's email state, with "revoke it and invite again" when it did not go. Sending answers "Invitation created. Krith is emailing it…", not "sent". A firm reads only its own invitation emails (policy `firm_invitations`).
+  - **One at a time.** A newer email for the same invitation replaces one still waiting, and an attempt in flight is never retried once replaced. A staff resend answers "renewed… emailing it again", not "sent".
+  - **Either session mode.** The Join link is chosen when the email is queued: Krith's sign-in with the invitation token under server sessions, WorkOS's acceptance page under browser sessions. A send WorkOS shows already accepted when it is settled gets no email.
+  - **Wording.** The firm's invitation panel, the staff console and the privacy notice (dated 8 October 2026) now say Krith sends invitations. The email is signed "Krith · The work, prepared.", at the user's request.
+- **Tested.** On a fresh local PostgreSQL with every migration applied:
+  - `TestInvitationEmailsSay` (new);
+  - `TestPlatformEmailsAreSentOnceWithKrithsKey` (extended): an open and a revoked invitation, and an unanswered attempt a resend replaced, which stays unknown while only the newer email goes;
+  - `TestEmailInvitationsEnrollOnlyAcceptedInvitees`: queued on send and on settle, none on a race-revoked send;
+  - `TestServerSessionKeepsWorkOSTokensOnTheServer`: the Join button, the token sent with the code, refusals, staff ignoring it;
+  - `TestStaffFindAPersonAcrossFirmsAndEndTheirSessions`: a resend queues one email each time, none when the renewal is unconfirmed;
+  - the rest of the transport and delivery packages pass, except the two PDF tests that need Poppler, which isn't installed locally;
+  - both apps typecheck;
+  - the HTML was rendered in headless Edge and checked by eye;
+  - the row-level security policies were probed as a non-superuser role on the local database: a firm sees only its own invitation emails and cannot write one, and the platform context sees all;
+  - `cmd/rotate-secrets` on a fresh local database re-encrypted a waiting Join link sealed with the old key (bound to its firm), which the new key then opened; before the rotation, it could not.
+
+Not verified:
+- a real invitation accepted through Google in production;
+- WorkOS's resend endpoint with its invitation email turned off.
+
+Rollout (2026-10-09):
+- WorkOS's display name is now "Krith", not the team name "Nivi", on the screens and emails WorkOS still shows.
+- Krith's sender is set in production (since 2026-10-07) and mail.getkrith.com is verified in Resend, but Resend's log had no email yet, so the sender is unproven.
+- WorkOS's invitation email therefore stays on through this deploy. One test invitation afterwards should bring both emails; once Krith's is in Resend's log, WorkOS's is turned off (`isInvitationEmailEnabled: false`), as [sign-in](sign-in.md#setup-once-per-environment) sets out.
+
 ## 2026-10-09: the demonstration seed
 
 `cmd/seed` and `internal/seed` ([seed-data.md](seed-data.md)): ten clients, June to September 2026, written through the routes and the capture path.

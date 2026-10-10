@@ -182,8 +182,18 @@ export function FirmEnrollment({ onEnrolled }: { onEnrolled: () => void }) {
 }
 
 type Role = { slug: string; name: string; description: string; permissions: string[]; allowed: boolean };
-type Invitation = { id: string; email: string; role_name: string; state: string; invited_by: string; subject?: string; expires_at?: string; created_at: string };
+type Invitation = { id: string; email: string; role_name: string; state: string; invited_by: string; subject?: string; expires_at?: string; created_at: string; email_state?: string | null };
 const invitationStates: Record<string, string> = { sending: "Not yet confirmed by WorkOS", pending: "Waiting for them to accept", accepted: "Joined", revoked: "Revoked", expired: "Expired" };
+// Whether Krith's email for an open invitation went (docs/sign-in.md#invitations), and what to do when it did not.
+const invitationEmails: Record<string, string> = {
+  queued: "Email on its way",
+  sending: "Email on its way",
+  sent: "Email sent",
+  failed: "Email not sent: revoke it and invite again",
+  expired: "Email not sent: revoke it and invite again",
+  cancelled: "Email not sent: revoke it and invite again",
+  unknown: "Email may not have arrived: if they can’t find it, revoke it and invite again",
+};
 
 export function Invitations() {
   const queryClient = useQueryClient();
@@ -251,7 +261,7 @@ export function Invitations() {
           Invite by email
         </button>
       </SectionHeader>
-      <p>WorkOS emails the invitation. Once they accept it and sign in, they join the firm. Assign their clients under client assignments if their role cannot see every client.</p>
+      <p>Krith emails the invitation. Its Join button signs them in with Google and they join the firm. Assign their clients under client assignments if their role cannot see every client.</p>
       {list.length === 0 ? (
         <p className="empty">Nobody has been invited yet.</p>
       ) : (
@@ -260,7 +270,7 @@ export function Invitations() {
             <div className="row" key={i.id}>
               <span>
                 <strong>{i.email}</strong>
-                <small>{i.role_name} · invited by {i.invited_by} {dates.date(i.created_at)}</small>
+                <small>{i.role_name} · invited by {i.invited_by} {dates.date(i.created_at)}{i.state === "pending" && i.email_state ? ` · ${invitationEmails[i.email_state] ?? i.email_state}` : ""}</small>
               </span>
               <span className={`pill ${i.state === "accepted" ? "" : i.state === "pending" || i.state === "sending" ? "info" : "neutral"}`}>{invitationStates[i.state] ?? i.state}</span>
               <span />
@@ -272,7 +282,7 @@ export function Invitations() {
       {message && <p role="status">{message}</p>}
       {error && !open && <p role="alert">{error}</p>}
       {readError && <p role="alert">{readError.message || "Invitations are unavailable."} The list is from the last read.</p>}
-      <Dialog open={open} onClose={dismiss} title="Invite by email" description="WorkOS emails the invitation; they join the firm once they accept it and sign in.">
+      <Dialog open={open} onClose={dismiss} title="Invite by email" description="Krith emails the invitation; its Join button signs them in with Google, and they join the firm.">
         <form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
           <fieldset disabled={busy}>
             <label>Email<input type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>

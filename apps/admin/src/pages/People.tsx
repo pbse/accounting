@@ -16,7 +16,7 @@ type WorkOSUser = {
   sessions: Session[];
 };
 type Membership = { subject: string; organization_id: string; firm_name: string; firm_enabled: boolean; id: string; granted: boolean; decided_by: string; decided_at: string; assignments: number; agent: string | null };
-type Invitation = { id: string; organization_id: string; firm_name: string; email: string; role: string; state: string; invited_by: string; created_at: string; expires_at: string | null };
+type Invitation = { id: string; organization_id: string; firm_name: string; email: string; role: string; state: string; invited_by: string; created_at: string; expires_at: string | null; email_state: string | null };
 type Found = { query: string; workos: "ok" | "not_configured" | "unavailable"; from_app_records: boolean; users: WorkOSUser[]; memberships: Membership[]; invitations: Invitation[] };
 
 const firmLink = (id: string, name: string, tab = "people") => (name ? <Link to={`/firms/${encodeURIComponent(id)}?tab=${tab}`}>{name}</Link> : id);
@@ -134,7 +134,7 @@ export function People() {
             <h2>Invitations</h2>
             {found.data.invitations.length === 0 ? <p>None.</p> : (
               <table>
-                <thead><tr><th>Firm</th><th>Email</th><th>Role</th><th>State</th><th>Invited by</th><th>Sent</th><th>Expires</th><th /></tr></thead>
+                <thead><tr><th>Firm</th><th>Email</th><th>Role</th><th>State</th><th>Krith's email</th><th>Invited by</th><th>Sent</th><th>Expires</th><th /></tr></thead>
                 <tbody>
                   {found.data.invitations.map((i) => (
                     <tr key={i.id}>
@@ -142,6 +142,7 @@ export function People() {
                       <td>{i.email}</td>
                       <td>{i.role}</td>
                       <td>{i.state}</td>
+                      <td>{i.email_state ?? "—"}</td>
                       <td>{i.invited_by}</td>
                       <td>{when(i.created_at)}</td>
                       <td>{when(i.expires_at)}</td>
@@ -160,7 +161,7 @@ export function People() {
   );
 }
 
-// Resend asks WorkOS to email a pending invitation again; revoke closes an open one in the app,
+// Resend renews a pending invitation in WorkOS and sends Krith's invitation email again; revoke closes an open one in the app,
 // then in WorkOS. Each says what happened.
 export function InvitationActions({ firm, invitation, allowed, onDone }: { firm: string; invitation: { id: string; state: string }; allowed: boolean; onDone: (message: string) => void }) {
   const base = `/v1/admin/firms/${encodeURIComponent(firm)}/invitations/${encodeURIComponent(invitation.id)}`;
