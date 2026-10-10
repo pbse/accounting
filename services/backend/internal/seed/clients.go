@@ -123,10 +123,6 @@ func (c *Client) TxnsFor(g *ids, period string, n int) []Txn {
 		txns = append(txns, Txn{Kind: "Purchase", ID: g.id(), Date: o.Day, Party: o.Payee, PartyID: "O1", Memo: o.Memo, Amount: Money(o.Amount),
 			Lines: []Posting{{Account: "77", Debit: Money(o.Amount)}, {Account: "10", Credit: Money(o.Amount)}}})
 	}
-	// The previous month's approved entries, booked on the first of this one.
-	if prior := previousMonth(period); prior != "" {
-		txns = append(txns, c.AdjustFor(g, prior)...)
-	}
 	// An accrual reverses on the first of the next month, and the vendor's bill arrives then.
 	if a, ok := c.Accruals[previousMonth(period)]; ok && a.Reverse {
 		amount := Money(a.Amount)
@@ -157,8 +153,7 @@ func previousMonth(period string) string {
 	return ""
 }
 
-// AdjustFor is the approved entries the bookkeeper posts for the month once it is signed off, dated the first of the
-// next month, where that month's capture shows them.
+// AdjustFor is the approved entries posted for the month once it is signed off, dated month-end, after its capture.
 func (c *Client) AdjustFor(g *ids, period string) []Txn {
 	var txns []Txn
 	for _, p := range c.Prepaids {
@@ -166,7 +161,7 @@ func (c *Client) AdjustFor(g *ids, period string) []Txn {
 			txns = append(txns, prepaidAdjust(g, period, p.Month, p.Amount, p.Months, p.Expense))
 		}
 	}
-	booked := day(nextMonth(period), 1)
+	booked := monthEnd(period)
 	if p := c.Payroll; p != nil {
 		gross, employer := Money(p.Gross), Money(p.EmployerTaxes)
 		txns = append(txns, journal(g, booked, "Close adjustment "+period+": payroll, "+p.Provider+" summary", Posting{Account: "74", Debit: gross}, Posting{Account: "75", Debit: employer}, Posting{Account: "24", Credit: add(gross, employer)}))
@@ -453,7 +448,7 @@ func cedar() Client {
 
 func larkspur() Client {
 	c := Client{Name: "Larkspur Landscaping Inc.", Industry: "Commercial landscaping", Contact: "Tom Alvarez", ContactEmail: "tom@larkspurlandscaping.example", Since: "2026-06", DueDays: 5, OwnerSlot: 1, EntityType: "s_corp",
-		Accounts: chart(append(loanAccounts, fuelAccounts...)...), Revenue: "54000.00", Income: "50", Scenario: Overdue, CashPlan: true, Reconcile: true,
+		Accounts: chart(append(loanAccounts, fuelAccounts...)...), Revenue: "54000.00", Income: "50", LatePayer: "City of Fairview Parks", Scenario: Overdue, CashPlan: true, Reconcile: true,
 		Opening:   map[string]string{"10": "19880.72", "12": "41200.00", "15": "188000.00", "20": "-12640.00", "30": "-96000.00", "42": "-140440.72"},
 		Customers: []Party{{"C1", "Meadowbrook HOA", "treasurer@meadowbrook.example"}, {"C2", "City of Fairview Parks", "ap@fairview.example"}, {"C3", "Ridgeline Office Park", "pm@ridgeline.example"}, {"C4", "Sunset Plaza Retail", "ap@sunsetplaza.example"}, {"C5", "Greenway Apartments", "office@greenway.example"}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Northstar Mutual Insurance", "P.O. Box 4410, Hartford, CT 06101", "NM-1877-26", "2940.00", 12, "72", "Commercial auto and equipment policy, annual premium"}},

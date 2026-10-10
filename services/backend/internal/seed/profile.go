@@ -86,8 +86,9 @@ type Client struct {
 	Opening    map[string]string
 	Vendors    []Party
 	Customers  []Party
-	// Revenue is the typical monthly billing across the customers; Income the account it lands in.
-	Revenue, Income string
+	// Revenue is the typical monthly billing across the customers; Income the account it lands in. LatePayer is the
+	// customer who pays late (net 45 and always behind); the last customer when unnamed.
+	Revenue, Income, LatePayer string
 	// Prepaids, Loan, Payroll, Accruals, Owners and Reconcile describe the client's recurring work; Extra adds the
 	// documents a month brings that fit none of them.
 	Prepaids  []PrepaidSpec
@@ -283,9 +284,14 @@ func recurring(c *Client, g *ids, period string, revenue string, customers []Par
 		}
 		issued := day(period, 2+i*3)
 		due := day(nextMonth(period), 2+i*3)
+		if cust.Name == c.LatePayer {
+			// Net 45, and paid after that.
+			t, _ := time.Parse("2006-01-02", issued)
+			due = t.AddDate(0, 0, 45).Format("2006-01-02")
+		}
 		var open *big.Rat
-		switch (i + seq(c.Name, period)) % 4 {
-		case 0:
+		switch {
+		case cust.Name == c.LatePayer || (i+seq(c.Name, period))%4 == 0:
 			open = amount // still open at month-end; paid in a later month or overdue
 			txns = append(txns, invoice(g, issued, cust, fmt.Sprintf("INV-%s-%02d", strings.ReplaceAll(period[2:], "-", ""), i+1), amount, income, "12", due, open))
 		default:
@@ -347,8 +353,8 @@ func BooksFor(c *Client, last string) []Books {
 		g := &ids{next: 1000 + n*200}
 		txns := c.TxnsFor(g, period, n)
 		if len(priorTxns) > 0 {
-			late := ""
-			if len(c.Customers) > 0 {
+			late := c.LatePayer
+			if late == "" && len(c.Customers) > 0 {
 				late = c.Customers[len(c.Customers)-1].Name
 			}
 			var payments []Txn
@@ -368,9 +374,12 @@ func BooksFor(c *Client, last string) []Books {
 		if period == last {
 			break
 		}
-		// Next month opens on this month's captured closing balances; the entries approved for this month are booked
-		// by the bookkeeper on the first of the next, where the next capture shows them (TxnsFor).
-		opening = b.Closing()
+		// The capture is taken before the firm's entries are posted, as the product captures a month; once the month is
+		// signed off, its approved entries are posted dated month-end, so the next month opens on this closing plus
+		// them. The drafts in the signed close are the record of those postings.
+		closing := b.Closing()
+		adjust := Books{Period: period, Currency: "USD", Accounts: c.Accounts, Opening: closing, Txns: c.AdjustFor(&ids{next: 9000 + n*100}, period)}
+		opening = adjust.Closing()
 		priorTxns = b.Txns
 	}
 	return out
@@ -465,7 +474,7 @@ func prepaidBill(g *ids, c *Client, period, vendorName, number, amount, expense 
 func prepaidAdjust(g *ids, period, invoiceMonth, amount string, months int, expense string) Txn {
 	total := Money(amount)
 	monthly := new(big.Rat).Quo(total, big.NewRat(int64(months), 1))
-	booked := day(nextMonth(period), 1)
+	booked := monthEnd(period)
 	if period == invoiceMonth {
 		move := sub(total, monthly)
 		return journal(g, booked, "Close adjustment "+period+": prepaid, unexpired portion", Posting{Account: "13", Debit: move}, Posting{Account: expense, Credit: move})

@@ -2035,9 +2035,12 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 				changed[fmt.Sprint(field)] = true
 			}
 		}
+		// A policy change recorded after the run is the firm's decision, whatever it chose: then nothing is put back.
+		var later int
+		tx.QueryRowContext(ctx, `SELECT count(*) FROM organization_policy_changes WHERE organization_id=$1 AND created_at>COALESCE((SELECT finished_at FROM demonstration_seeds WHERE organization_id=$1),now())`, o.Organization).Scan(&later)
 		restore := map[string]any{}
 		for field, set := range seedPolicy {
-			if changed[field] && fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
+			if later == 0 && changed[field] && fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
 				restore[field] = before[field]
 			}
 		}
