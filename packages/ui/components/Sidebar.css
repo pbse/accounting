@@ -367,6 +367,7 @@
   margin-top: var(--space-4);
 }
 .app-shell .ks-me > summary {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-10);
@@ -487,6 +488,21 @@
 }
 .ks-side.collapsed .ks-sub {
   display: none;
+}
+/* What sits beside the person (an open grant) folds to a dot on the avatar, so it stays visible. */
+.ks-side.collapsed .ks-me-aside {
+  display: none;
+}
+.ks-side.collapsed .ks-me:has(.ks-me-aside:not(:empty)) > summary::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--att-text);
+  box-shadow: 0 0 0 2px var(--surface-side);
 }
 /* The account menu needs more room than the icon column: it opens beside it. */
 .ks-side.collapsed .ks-me > div {

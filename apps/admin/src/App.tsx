@@ -85,7 +85,9 @@ function Layout() {
                 <b>{me.data?.subject ?? "Account"}</b>
                 <small>{me.data?.mode === "local-development" ? "Local development" : "Staff"}</small>
               </span>
-              <GrantCount />
+              <span className="ks-me-aside">
+                <GrantCount />
+              </span>
               <Icon name="select" />
             </summary>
             <div>

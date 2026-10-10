@@ -48,8 +48,11 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   // The sheet closes when the person goes somewhere, and on Escape, which hands focus back to the menu button.
   useEffect(() => setOpen(false), [location.pathname, location.search]);
   const menuButton = useRef<HTMLButtonElement>(null);
+  const sheet = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!open) return;
+    // Focus moves into the sheet; the phone bar behind it leaves the tab order while it is open.
+    sheet.current?.focus();
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setOpen(false);
@@ -69,7 +72,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   };
   return (
     <>
-      <div className="ks-phonebar">
+      <div className="ks-phonebar" inert={open || undefined}>
         <button type="button" className="ks-phonebar-brand" aria-label="Open the menu" aria-expanded={open} onClick={() => setOpen(!open)} ref={menuButton}>
           <span className="ks-wordmark">krith</span>
         </button>
@@ -83,6 +86,8 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
       <nav
         className={`ks-side${collapsed ? " collapsed" : ""}${open ? " open" : ""}`}
         aria-label={navLabel}
+        ref={sheet}
+        tabIndex={-1}
         // The sheet closes on anything that goes somewhere or opens a chat; opening a group, collapsing or the person's
         // menu keep it.
         onClick={(event) => {
