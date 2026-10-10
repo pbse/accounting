@@ -87,7 +87,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
           </button>
         )}
         <div className="ks-pages">
-          {items.map((item) => (isGroup(item) ? <Group key={item.label} group={item} path={location.pathname} /> : <Page key={item.to} item={item} />))}
+          {items.map((item) => (isGroup(item) ? <Group key={item.label} group={item} path={location.pathname} collapsed={collapsed} expand={toggleCollapsed} /> : <Page key={item.to} item={item} />))}
         </div>
         {children}
         <div className="ks-foot">
@@ -109,16 +109,23 @@ function Page({ item }: { item: SidebarPage }) {
   );
 }
 
-// A module is one line until opened; the one the person is in stays open and reads as current.
-function Group({ group, path }: { group: SidebarGroup; path: string }) {
+// A module is one line until opened; the one the person is in stays open and reads as current. Collapsed to icons,
+// opening a module expands the sidebar, so its pages are always reachable.
+function Group({ group, path, collapsed, expand }: { group: SidebarGroup; path: string; collapsed: boolean; expand: () => void }) {
   const inside = group.pages.some((p) => (p.end ? path === p.to : path.startsWith(p.to)));
   const [open, setOpen] = useState(inside);
   useEffect(() => {
     if (inside) setOpen(true);
   }, [inside]);
+  const toggle = () => {
+    if (collapsed) {
+      expand();
+      setOpen(true);
+    } else setOpen(!open);
+  };
   return (
     <>
-      <button type="button" className={`ks-nav ks-group${inside ? " has-current" : ""}`} aria-expanded={open} onClick={() => setOpen(!open)} title={group.label}>
+      <button type="button" className={`ks-nav ks-group${inside ? " has-current" : ""}`} aria-expanded={open && !collapsed} onClick={toggle} title={group.label}>
         <Icon name={group.icon} />
         <span className="ks-label">{group.label}</span>
         <Icon name="chevron" className="ks-chev" />

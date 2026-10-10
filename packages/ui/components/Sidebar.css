@@ -483,6 +483,14 @@
 .ks-side.collapsed .ks-sub {
   display: none;
 }
+/* The account menu needs more room than the icon column: it opens beside it. */
+.ks-side.collapsed .ks-me > div {
+  position: fixed;
+  left: calc(var(--side-collapsed) + var(--space-8));
+  right: auto;
+  bottom: var(--space-14);
+  width: 260px;
+}
 
 /* The phone bar and the sheet. */
 .ks-phonebar {
