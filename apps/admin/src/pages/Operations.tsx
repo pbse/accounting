@@ -143,7 +143,7 @@ const tone: Record<string, string> = { active: "ok", reconnect_required: "danger
 
 // The month-books record (docs/books-sources.md, Migration): how many month-end captures have their books version, and
 // whether the readers still agree with every version written. A reader moves to the record only while this agrees.
-type BooksRecord = { captures: number; versions: number; pending: number; unreadable: number; parity: { checked: number; pending: number; mismatched: string[]; finished_at: string } | null };
+type BooksRecord = { captures: number; versions: number; pending: number; unreadable: number; parity: { checked: number; pending: number; since: number; mismatched: string[]; finished_at: string } | null };
 
 function MonthBooks() {
   const books = useResource<BooksRecord>("/v1/admin/books");
@@ -163,14 +163,16 @@ function MonthBooks() {
           ) : (
             <>
               <p>
-                <span className={`status ${books.data.parity.mismatched.length ? "danger" : "ok"}`}>
-                  {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : "The readers agree"}
+                <span className={`status ${books.data.parity.mismatched.length ? "danger" : books.data.parity.pending || books.data.parity.since ? "warn" : "ok"}`}>
+                  {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : books.data.parity.pending || books.data.parity.since ? "The readers agreed, so far" : "The readers agree"}
                 </span>{" "}
-                with all {books.data.parity.checked} versions, checked {when(books.data.parity.finished_at)}.
+                with the {books.data.parity.checked} versions checked {when(books.data.parity.finished_at)}.
               </p>
-              {books.data.parity.pending > 0 && (
+              {(books.data.parity.pending > 0 || books.data.parity.since > 0) && (
                 <p className="note">
-                  {books.data.parity.pending} captures had no version yet when it ran, so it covers only those written; it gates a reader’s switch once a run finds none pending.
+                  {books.data.parity.pending > 0 && `${books.data.parity.pending} captures were still waiting for their version when it ran. `}
+                  {books.data.parity.since > 0 && `${books.data.parity.since} versions have been written since, and are checked at the next run. `}
+                  It gates a reader’s switch only once a run finds none waiting and none written since.
                 </p>
               )}
               {books.data.parity.mismatched.length > 0 && (

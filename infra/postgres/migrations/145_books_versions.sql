@@ -1,7 +1,7 @@
 BEGIN;
 -- One month-books record every source writes (docs/books-sources.md, One month-books record): a month's books as the
 -- month-end readers read them (readLedgerMonth), stored with lineage, whichever source they came from. QuickBooks and
--- Xero captures keep their raw payloads, and the worker writes a version here for each month-end capture, idempotently;
+-- Xero captures keep their raw payloads, and the worker writes a version here for each month-end capture, once;
 -- the readers do not switch to it until a parity check agrees for every close (delivery step 5).
 CREATE TABLE books_versions (
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -47,12 +47,27 @@ CREATE TABLE books_lines (
  cells jsonb NOT NULL,
  PRIMARY KEY (version_id,position)
 );
--- books_capture_cursor: the last capture of each source the worker has written a version for (captures only ever
--- grow), so each pass reads only the captures after it.
-CREATE TABLE books_capture_cursor (
- source text PRIMARY KEY CHECK (source IN ('quickbooks','xero')),
- last_id bigint NOT NULL
+-- books_pending: the month-end captures waiting for their books version. A capture joins it in the same transaction
+-- that saves it (the triggers below), so none is missed whatever order captures commit in; every existing capture
+-- joins it here; the worker writes each version and takes the capture off, in one transaction.
+CREATE TABLE books_pending (
+ source text NOT NULL CHECK (source IN ('quickbooks','xero')),
+ source_id bigint NOT NULL,
+ organization_id text NOT NULL REFERENCES organizations(id),
+ queued_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY (source,source_id)
 );
+CREATE INDEX books_pending_order ON books_pending(queued_at,source,source_id);
+CREATE FUNCTION books_pending_capture() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO books_pending(source,source_id,organization_id) SELECT TG_ARGV[0],NEW.id,c.organization_id FROM client_closes c WHERE c.id=NEW.close_id ON CONFLICT DO NOTHING;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER quickbooks_capture_books AFTER INSERT ON quickbooks_snapshots FOR EACH ROW WHEN (NEW.payload ? 'period') EXECUTE FUNCTION books_pending_capture('quickbooks');
+CREATE TRIGGER xero_capture_books AFTER INSERT ON xero_snapshots FOR EACH ROW EXECUTE FUNCTION books_pending_capture('xero');
+INSERT INTO books_pending(source,source_id,organization_id,queued_at)
+ SELECT 'quickbooks',s.id,c.organization_id,s.captured_at FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.payload ? 'period'
+ UNION ALL SELECT 'xero',s.id,c.organization_id,s.captured_at FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id;
 -- books_parity: each run of the parity check over every version, by the worker: how many it checked, and the captures
 -- whose stored version no longer matches what the readers compute (identifiers only). A run in progress has no
 -- finished_at. Staff read the latest finished run.
@@ -61,8 +76,10 @@ CREATE TABLE books_parity (
  started_at timestamptz NOT NULL DEFAULT now(),
  finished_at timestamptz,
  checked integer NOT NULL DEFAULT 0,
- -- pending is how many month-end captures had no version yet when the run began: a run is the gate only when none had.
+ -- pending is how many captures still waited for their version when the run began, and through the last version it
+ -- covers: a run is the gate only while none was pending and no version has been written since.
  pending integer NOT NULL DEFAULT 0,
+ through bigint NOT NULL DEFAULT 0,
  mismatched jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 ALTER TABLE books_versions ENABLE ROW LEVEL SECURITY;
@@ -70,7 +87,7 @@ CREATE POLICY tenant ON books_versions USING (current_setting('app.organization'
 ALTER TABLE books_lines ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON books_lines USING (current_setting('app.organization',true)='*' OR version_id IN (SELECT id FROM books_versions));
 ALTER TABLE books_parity ENABLE ROW LEVEL SECURITY;
-ALTER TABLE books_capture_cursor ENABLE ROW LEVEL SECURITY;
-CREATE POLICY platform ON books_capture_cursor USING (current_setting('app.organization',true)='*');
+ALTER TABLE books_pending ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant ON books_pending USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY platform ON books_parity USING (current_setting('app.organization',true)='*');
 COMMIT;

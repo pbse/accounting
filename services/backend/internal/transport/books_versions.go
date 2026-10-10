@@ -10,7 +10,6 @@ import (
 	"log"
 	"math/big"
 	"net/http"
-	"strconv"
 	"time"
 
 	"close.local/backend/internal/quickbooks"
@@ -112,9 +111,13 @@ func writeBooksVersion(ctx context.Context, db *sql.DB, source, id string) error
 		return err
 	}
 	defer tx.Rollback()
+	// The capture leaves the queue with its version, or alone when it is gone (its close was deleted).
+	if _, err = tx.ExecContext(ctx, `DELETE FROM books_pending WHERE source=$1 AND source_id::text=$2`, source, id); err != nil {
+		return err
+	}
 	m, closeID, org, err := captureMonth(ctx, tx, source, id)
 	if err == sql.ErrNoRows {
-		return nil
+		return tx.Commit()
 	}
 	if err != nil {
 		return err
@@ -138,7 +141,7 @@ func writeBooksVersion(ctx context.Context, db *sql.DB, source, id string) error
  VALUES($1,$2,$3,$4,$5,$6,$7::date,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17) ON CONFLICT (source,source_id) DO NOTHING RETURNING id::text`,
 		org, closeID, m.Period, source, id, m.realm, monthEnd(m.Period).Format("2006-01-02"), m.CapturedAt, v.Currency, v.Typed, string(accounts), string(balances), string(activity), cashFlow, string(uncounted), v.digest(), unreadable).Scan(&versionID)
 	if err == sql.ErrNoRows {
-		return nil
+		return tx.Commit()
 	}
 	if err != nil {
 		return err
@@ -182,67 +185,33 @@ func linesDigest(lines []quickbooks.LedgerLine) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// writeBooksVersions goes through up to limit captures after each source's cursor, oldest first, writing the version
-// of each month-end capture that has none (a capture with no month-end reports needs none), and says whether more
-// captures may be waiting. Captures only ever grow, so each pass reads only those after the cursor. The cursor moves
-// only past captures saved more than ten minutes ago: a capture's own transaction can commit after a later one's, so a
-// newer capture is written but kept after the cursor until no earlier one can still appear, and the pass reads on past
-// it rather than stopping there.
+// writeBooksVersions writes the versions of up to limit captures waiting in books_pending, oldest first, and says
+// whether more may be waiting. A capture joins books_pending in the transaction that saves it, so none is missed.
 func writeBooksVersions(ctx context.Context, db *sql.DB, limit int) (bool, error) {
-	more := false
-	for _, source := range []string{"quickbooks", "xero"} {
-		var cursor int64
-		if err := db.QueryRowContext(ctx, `SELECT COALESCE((SELECT last_id FROM books_capture_cursor WHERE source=$1),0)`, source).Scan(&cursor); err != nil {
-			return more, err
-		}
-		query := `SELECT s.id,s.payload ? 'period',s.captured_at<now()-interval '10 minutes',EXISTS(SELECT 1 FROM books_versions v WHERE v.source='quickbooks' AND v.source_id=s.id::text) FROM quickbooks_snapshots s WHERE s.id>$1 ORDER BY s.id LIMIT $2`
-		if source == "xero" {
-			query = `SELECT s.id,true,s.captured_at<now()-interval '10 minutes',EXISTS(SELECT 1 FROM books_versions v WHERE v.source='xero' AND v.source_id=s.id::text) FROM xero_snapshots s WHERE s.id>$1 ORDER BY s.id LIMIT $2`
-		}
-		scan, advancing, budget := cursor, true, limit
-		for budget > 0 {
-			rows, err := db.QueryContext(ctx, query, scan, min(budget, 100))
-			if err != nil {
-				return more, err
-			}
-			type capture struct {
-				id                       int64
-				period, settled, written bool
-			}
-			var page []capture
-			for rows.Next() {
-				var c capture
-				if err = rows.Scan(&c.id, &c.period, &c.settled, &c.written); err != nil {
-					rows.Close()
-					return more, err
-				}
-				page = append(page, c)
-			}
+	rows, err := db.QueryContext(ctx, `SELECT source,source_id::text FROM books_pending ORDER BY queued_at,source,source_id LIMIT $1`, limit)
+	if err != nil {
+		return false, err
+	}
+	type capture struct{ source, id string }
+	var pending []capture
+	for rows.Next() {
+		var c capture
+		if err = rows.Scan(&c.source, &c.id); err != nil {
 			rows.Close()
-			if err = rows.Err(); err != nil {
-				return more, err
-			}
-			for _, c := range page {
-				if c.period && !c.written {
-					if err = writeBooksVersion(ctx, db, source, strconv.FormatInt(c.id, 10)); err != nil {
-						return more, fmt.Errorf("%s capture %d: %w", source, c.id, err)
-					}
-				}
-				if advancing = advancing && c.settled; advancing {
-					if _, err = db.ExecContext(ctx, `INSERT INTO books_capture_cursor(source,last_id) VALUES($1,$2) ON CONFLICT (source) DO UPDATE SET last_id=GREATEST(books_capture_cursor.last_id,$2)`, source, c.id); err != nil {
-						return more, err
-					}
-				}
-				scan = c.id
-			}
-			budget -= len(page)
-			if len(page) < 100 {
-				break
-			}
-			more = more || budget == 0
+			return false, err
+		}
+		pending = append(pending, c)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return false, err
+	}
+	for _, c := range pending {
+		if err = writeBooksVersion(ctx, db, c.source, c.id); err != nil {
+			return false, fmt.Errorf("%s capture %s: %w", c.source, c.id, err)
 		}
 	}
-	return more, nil
+	return len(pending) == limit, nil
 }
 
 // RunBooksVersions keeps every month-end capture's books version written: the existing captures first, a batch at a
@@ -281,12 +250,13 @@ func RunBooksVersions(ctx context.Context, db *sql.DB) {
 func booksParity(ctx context.Context, q interface {
 	rowReader
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, org string) (checked int, mismatched []string, err error) {
-	// A page of versions at a time, by id, so every version is checked however many there are.
+}, org string, through int64) (checked int, mismatched []string, err error) {
+	// A page of versions at a time, by id, so every version up to through (0: every one) is checked however many
+	// there are.
 	after := int64(0)
 	for {
 		var page []storedVersion
-		if page, err = storedVersions(ctx, q, org, after, 200); err != nil || len(page) == 0 {
+		if page, err = storedVersions(ctx, q, org, after, through, 200); err != nil || len(page) == 0 {
 			return checked, mismatched, err
 		}
 		after = page[len(page)-1].row
@@ -303,11 +273,12 @@ type storedVersion struct {
 	source, id, digest, unreadable string
 }
 
-// storedVersions is up to limit versions after row id after, of firm org or of every firm ("").
+// storedVersions is up to limit versions after row id after (and up to through, unless it is 0), of firm org or of every
+// firm ("").
 func storedVersions(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, org string, after int64, limit int) ([]storedVersion, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id,source,source_id,digest,unreadable FROM books_versions WHERE ($1='' OR organization_id=$1) AND id>$2 ORDER BY id LIMIT $3`, org, after, limit)
+}, org string, after, through int64, limit int) ([]storedVersion, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id,source,source_id,digest,unreadable FROM books_versions WHERE ($1='' OR organization_id=$1) AND id>$2 AND ($3=0 OR id<=$3) ORDER BY id LIMIT $4`, org, after, through, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -360,6 +331,7 @@ func compareVersions(ctx context.Context, q interface {
 		lines, kept, lineErr := captureLines(m)
 		switch {
 		case lineErr != nil:
+			mismatched = append(mismatched, name+": its ledger lines cannot be read")
 		case kept && (recordedLines != linesDigest(lines) || storedLines != linesDigest(lines)):
 			mismatched = append(mismatched, name+": the ledger lines differ")
 		case !kept && (recordedLines != "" || storedLines != linesDigest(nil)):
@@ -409,15 +381,15 @@ func storedBooks(ctx context.Context, q interface {
 
 // adminBooks is the month-books record's state across firms, for staff deciding when a reader may switch to it
 // (delivery step 5): how many month-end captures there are, how many have a version and how many are unreadable, and
-// the worker's latest finished parity run over every version, with the captures where it disagrees (identifiers
-// only).
+// the worker's latest finished parity run, with the captures where it disagrees (identifiers only), how many captures
+// were still waiting when it began and how many versions were written since: it is the gate only when both are none.
 func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var captures, versions, unreadable int
 	var parity json.RawMessage
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM quickbooks_snapshots WHERE payload ? 'period')+(SELECT count(*) FROM xero_snapshots),
+		return tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM books_pending)+(SELECT count(*) FROM books_versions),
  (SELECT count(*) FROM books_versions),(SELECT count(*) FROM books_versions WHERE unreadable<>''),
- COALESCE((SELECT jsonb_build_object('checked',checked,'pending',pending,'mismatched',mismatched,'finished_at',finished_at) FROM books_parity WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &versions, &unreadable, &parity)
+ COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &versions, &unreadable, &parity)
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "books read")
@@ -428,13 +400,13 @@ func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 // runBooksParity checks every version against its capture and records the run, so staff read its outcome.
 func runBooksParity(ctx context.Context, db *sql.DB) error {
-	// The month-end captures with no version when the run begins: while any are left, a clean run is not yet the gate.
-	var run int64
-	if err := db.QueryRowContext(ctx, `INSERT INTO books_parity(pending) SELECT (SELECT count(*) FROM quickbooks_snapshots s WHERE s.payload ? 'period' AND NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='quickbooks' AND v.source_id=s.id::text))
- +(SELECT count(*) FROM xero_snapshots s WHERE NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='xero' AND v.source_id=s.id::text)) RETURNING id`).Scan(&run); err != nil {
+	// The captures still waiting when the run begins, and the last version it covers: a clean run is the gate only while
+	// none was waiting and no version has been written since.
+	var run, through int64
+	if err := db.QueryRowContext(ctx, `INSERT INTO books_parity(pending,through) SELECT (SELECT count(*) FROM books_pending),COALESCE((SELECT max(id) FROM books_versions),0) RETURNING id,through`).Scan(&run, &through); err != nil {
 		return err
 	}
-	checked, mismatched, err := booksParity(ctx, db, "")
+	checked, mismatched, err := booksParity(ctx, db, "", through)
 	if err != nil {
 		return err
 	}

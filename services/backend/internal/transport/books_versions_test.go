@@ -110,7 +110,7 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if before != 3 || after != 3 {
 		t.Fatalf("one version per capture: %d then %d", before, after)
 	}
-	checked, mismatched, err := booksParity(t.Context(), db, org)
+	checked, mismatched, err := booksParity(t.Context(), db, org, 0)
 	must(err)
 	if checked != 3 || len(mismatched) != 0 {
 		t.Fatalf("the readers agree with every version: %d %v", checked, mismatched)
@@ -126,7 +126,7 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	// Once the readers would read a capture differently, the parity check names it.
 	_, err = db.Exec(`UPDATE quickbooks_snapshots SET payload=jsonb_set(payload,'{reports,TrialBalance,Rows,Row,0,ColData,1,value}','"1500.26"') WHERE id=$1`, readable)
 	must(err)
-	_, mismatched, err = booksParity(t.Context(), db, org)
+	_, mismatched, err = booksParity(t.Context(), db, org, 0)
 	must(err)
 	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": the figures differ" {
 		t.Fatalf("a disagreement is named by its capture and what differs: %v", mismatched)
@@ -136,14 +136,14 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	// So is a stored version whose content no longer matches its capture: its figures, or its ledger lines.
 	_, err = db.Exec(`UPDATE books_lines SET cells=jsonb_set(cells,'{ColData,2,value}','"999.00"') WHERE position=1 AND version_id=(SELECT id FROM books_versions WHERE source='quickbooks' AND source_id=$1)`, readable)
 	must(err)
-	_, mismatched, err = booksParity(t.Context(), db, org)
+	_, mismatched, err = booksParity(t.Context(), db, org, 0)
 	must(err)
 	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": the ledger lines differ" {
 		t.Fatalf("stored lines are compared: %v", mismatched)
 	}
 	_, err = db.Exec(`UPDATE books_versions SET balances=jsonb_set(balances,'{1}','"1"') WHERE source='quickbooks' AND source_id=$1`, readable)
 	must(err)
-	_, mismatched, err = booksParity(t.Context(), db, org)
+	_, mismatched, err = booksParity(t.Context(), db, org, 0)
 	must(err)
 	if len(mismatched) != 1 || mismatched[0] != "quickbooks capture "+readable+": the figures differ" {
 		t.Fatalf("stored figures are compared: %v", mismatched)
