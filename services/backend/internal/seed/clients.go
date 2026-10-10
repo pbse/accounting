@@ -297,6 +297,15 @@ Thanks,
 	return work
 }
 
+// parked is the account an unknown charge sits in: Ask My Accountant in the month being closed, where it is still a
+// question, and Office Supplies in the months already closed, where it was resolved before sign-off.
+func parked(n int) string {
+	if n == len(Months)-1 {
+		return "83"
+	}
+	return "80"
+}
+
 func slug(s string) string {
 	return strings.ToLower(strings.NewReplacer(" ", "-", ".", "", ",", "", "&", "and", "'", "").Replace(s))
 }
@@ -343,7 +352,7 @@ func reconciliationWork(c *Client, period string, books Books) []Work {
 
 func harbor() Client {
 	c := Client{Name: "Harbor Fixture LLC", Industry: "Lighting fixture wholesaler", Contact: "Dana Whitfield", ContactEmail: "dana@harborfixture.example", Since: "2026-06", DueDays: 0, OwnerSlot: 0, EntityType: "s_corp",
-		Accounts: chart(retailAccounts...), Revenue: "38000.00", Income: "51", Scenario: Review,
+		Accounts: chart(retailAccounts...), Revenue: "38000.00", Income: "51", Scenario: Review, Reconcile: true,
 		Opening:   map[string]string{"10": "48210.55", "12": "22400.00", "15": "31500.00", "20": "-16890.20", "42": "-85220.35"},
 		Customers: []Party{{"C1", "Brightway Electric Supply", "ap@brightway.example"}, {"C2", "Coastal Builders Group", "accounts@coastalbuilders.example"}, {"C3", "Union Square Hospitality", "finance@usq.example"}, {"C4", "Kessler Interiors", "billing@kessler.example"}},
 		Prepaids: []PrepaidSpec{{"2026-06", "Clearbook Software Inc.", "400 Market Street, Suite 900, San Francisco, CA 94111", "CB-77120", "1188.00", 12, "73", "Annual Clearbook Inventory plan"},
@@ -356,7 +365,8 @@ func harbor() Client {
 			bill(g, day(period, 4), Party{ID: "V20", Name: "Lumen Components Ltd."}, "LC-"+fmt.Sprint(5100+n*7), cogs, "60", "20", day(nextMonth(period), 4), n == 3),
 			billPayment(g, day(period, 28), Party{ID: "V20", Name: "Lumen Components Ltd."}, vary("13900.00", c.Name, period, "cogs-pay"), "10", "20"),
 			purchase(g, day(period, 19), Party{ID: "V21", Name: "FreightLine Logistics"}, "Outbound freight", vary("1320.00", c.Name, period, "freight"), "60", "21"),
-			purchase(g, day(period, 22), Party{}, "Card purchase 9921", vary("212.35", c.Name, period, "nopayee"), "83", "21"),
+			// An unknown card charge the bookkeeper parked: resolved before sign-off in the months that are closed, still open in the month being closed.
+			purchase(g, day(period, 22), Party{}, "Card purchase 9921", vary("212.35", c.Name, period, "nopayee"), parked(n), "21"),
 		}
 	}
 	return c
@@ -364,7 +374,7 @@ func harbor() Client {
 
 func bluegrass() Client {
 	c := Client{Name: "Bluegrass Dental PLLC", Industry: "Dental practice", Contact: "Dr. Priya Raman", ContactEmail: "priya@bluegrassdental.example", Since: "2026-06", OwnerSlot: 1, EntityType: "s_corp",
-		Accounts: chart(append(payrollAccounts, loanAccounts...)...), Revenue: "61000.00", Income: "50", Scenario: WaitingClient, Routine: true,
+		Accounts: chart(append(payrollAccounts, loanAccounts...)...), Revenue: "61000.00", Income: "50", Scenario: WaitingClient, Routine: true, Reconcile: true,
 		Opening:   map[string]string{"10": "71880.40", "12": "9800.00", "15": "142000.00", "20": "-8120.00", "30": "-48000.00", "42": "-167560.40"},
 		Customers: []Party{{"C1", "Delta Dental of Kentucky", "claims@deltaky.example"}, {"C2", "Anthem Blue Cross", "provider@anthem.example"}, {"C3", "Patient receipts", ""}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Curve Dental Software", "1 Curve Way, Orem, UT 84057", "CD-30981", "3588.00", 12, "73", "Curve Hero practice management, annual subscription"}},
@@ -407,7 +417,7 @@ func cedar() Client {
 
 func larkspur() Client {
 	c := Client{Name: "Larkspur Landscaping Inc.", Industry: "Commercial landscaping", Contact: "Tom Alvarez", ContactEmail: "tom@larkspurlandscaping.example", Since: "2026-06", DueDays: 5, OwnerSlot: 1, EntityType: "s_corp",
-		Accounts: chart(append(loanAccounts, fuelAccounts...)...), Revenue: "54000.00", Income: "50", Scenario: Overdue, CashPlan: true,
+		Accounts: chart(append(loanAccounts, fuelAccounts...)...), Revenue: "54000.00", Income: "50", Scenario: Overdue, CashPlan: true, Reconcile: true,
 		Opening:   map[string]string{"10": "19880.72", "12": "41200.00", "15": "188000.00", "20": "-12640.00", "30": "-96000.00", "42": "-140440.72"},
 		Customers: []Party{{"C1", "Meadowbrook HOA", "treasurer@meadowbrook.example"}, {"C2", "City of Fairview Parks", "ap@fairview.example"}, {"C3", "Ridgeline Office Park", "pm@ridgeline.example"}, {"C4", "Sunset Plaza Retail", "ap@sunsetplaza.example"}, {"C5", "Greenway Apartments", "office@greenway.example"}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Northstar Mutual Insurance", "P.O. Box 4410, Hartford, CT 06101", "NM-1877-26", "2940.00", 12, "72", "Commercial auto and equipment policy, annual premium"}},
@@ -422,7 +432,7 @@ func larkspur() Client {
 			purchase(g, day(period, 21), Party{ID: "V50", Name: "Shell Fleet"}, "Fleet fuel", vary("2890.00", c.Name, period, "fuel2"), "82", "10"),
 			bill(g, day(period, 10), Party{ID: "V51", Name: "Valley Nursery Wholesale"}, "VN-"+fmt.Sprint(7700+n*21), vary("6380.00", c.Name, period, "plants"), "80", "20", day(nextMonth(period), 10), n == 3),
 			purchase(g, day(period, 17), Party{ID: "V52", Name: "Fairview Equipment Repair"}, "Mower repair", vary("640.00", c.Name, period, "repair"), "81", "10"),
-			purchase(g, day(period, 24), Party{ID: "V53", Name: "Tractor Supply"}, "Unknown purchase", vary("318.00", c.Name, period, "ama"), "83", "10"),
+			purchase(g, day(period, 24), Party{ID: "V53", Name: "Tractor Supply"}, "Unknown purchase", vary("318.00", c.Name, period, "ama"), parked(n), "10"),
 		}
 	}
 	return c
@@ -430,7 +440,7 @@ func larkspur() Client {
 
 func meridian() Client {
 	c := Client{Name: "Meridian Physical Therapy PC", Industry: "Outpatient physical therapy", Contact: "Dr. Elena Vasquez", ContactEmail: "elena@meridianpt.example", Since: "2026-06", OwnerSlot: 0, EntityType: "c_corp",
-		Accounts: chart(payrollAccounts...), Revenue: "47000.00", Income: "50", Scenario: Reopened,
+		Accounts: chart(payrollAccounts...), Revenue: "47000.00", Income: "50", Scenario: Reopened, Reconcile: true,
 		Opening:   map[string]string{"10": "38440.10", "12": "26100.00", "15": "52000.00", "20": "-4410.00", "42": "-112130.10"},
 		Customers: []Party{{"C1", "UnitedHealthcare", "provider@uhc.example"}, {"C2", "Aetna", "claims@aetna.example"}, {"C3", "Medicare Part B", ""}, {"C4", "Patient copays", ""}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "HPSO Professional Liability", "159 East County Line Road, Hatboro, PA 19040", "HP-556120", "6000.00", 12, "72", "Professional liability policy, annual premium"}},
@@ -448,7 +458,7 @@ func meridian() Client {
 
 func orchard() Client {
 	c := Client{Name: "Orchard Street Books LLC", Industry: "Independent bookstore", Contact: "Naomi Feld", ContactEmail: "naomi@orchardstreetbooks.example", Since: "2026-06", OwnerSlot: 1, EntityType: "partnership",
-		Accounts: chart(retailAccounts...), Revenue: "2200.00", Income: "51", Scenario: Uncaptured,
+		Accounts: chart(retailAccounts...), Revenue: "2200.00", Income: "51", Scenario: Uncaptured, Reconcile: true,
 		Opening:   map[string]string{"10": "14220.90", "15": "18000.00", "20": "-9870.00", "21": "-2210.40", "42": "-20140.50"},
 		Customers: []Party{{"C1", "Orchard Elementary PTA", "pta@orchardelementary.example"}, {"C2", "Riverside Public Library", "acquisitions@riversidelibrary.example"}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Bookline POS", "22 Chambers Street, New York, NY 10007", "BL-44090", "1440.00", 12, "73", "Bookline point-of-sale, annual plan"}},
@@ -492,7 +502,7 @@ func summit() Client {
 
 func tidewater() Client {
 	c := Client{Name: "Tidewater Marine Services Inc.", Industry: "Boat repair and storage", Contact: "Gus Pereira", ContactEmail: "gus@tidewatermarine.example", Since: "2026-06", OwnerSlot: 1, EntityType: "s_corp",
-		Accounts: chart(append(loanAccounts, fuelAccounts...)...), Revenue: "33000.00", Income: "50", Scenario: Review,
+		Accounts: chart(append(loanAccounts, fuelAccounts...)...), Revenue: "33000.00", Income: "50", Scenario: Review, Reconcile: true,
 		Opening:   map[string]string{"10": "16720.44", "12": "18900.00", "15": "240000.00", "20": "-21110.00", "30": "-156000.00", "42": "-98510.44"},
 		Customers: []Party{{"C1", "Bayview Yacht Club", "manager@bayviewyc.example"}, {"C2", "Harbor Charters LLC", "ops@harborcharters.example"}, {"C3", "Private owners", ""}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Northstar Mutual Insurance", "P.O. Box 4410, Hartford, CT 06101", "NM-0912-26", "9600.00", 12, "72", "Marina operators policy, annual premium"}},
@@ -520,7 +530,7 @@ func juniper() Client {
 
 func northgate() Client {
 	c := Client{Name: "Northgate Auto Repair", Industry: "Auto repair shop", Contact: "Mike Sorensen", ContactEmail: "mike@northgateauto.example", Since: "2026-06", LeftIn: "2026-08", OwnerSlot: 1, EntityType: "s_corp",
-		Accounts: chart(fuelAccounts...), Revenue: "26000.00", Income: "50", Scenario: Left,
+		Accounts: chart(fuelAccounts...), Revenue: "26000.00", Income: "50", Scenario: Left, Reconcile: true,
 		Opening:   map[string]string{"10": "12980.60", "12": "5400.00", "15": "41000.00", "20": "-7320.00", "42": "-52060.60"},
 		Customers: []Party{{"C1", "Fairview Taxi Co-op", "dispatch@fairviewtaxi.example"}, {"C2", "Walk-in customers", ""}},
 		Prepaids:  []PrepaidSpec{{"2026-06", "Northstar Mutual Insurance", "P.O. Box 4410, Hartford, CT 06101", "NM-0455-26", "2400.00", 12, "72", "Garage keepers policy, annual premium"}},

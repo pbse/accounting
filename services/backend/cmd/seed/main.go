@@ -107,12 +107,18 @@ func local(database string) error {
 	if err != nil {
 		return fmt.Errorf("database connection string: %w", err)
 	}
-	host := config.Host
-	if host == "localhost" || strings.HasPrefix(host, "/") {
-		return nil
+	hosts := []string{config.Host}
+	for _, fallback := range config.Fallbacks {
+		hosts = append(hosts, fallback.Host)
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return nil
+	for _, host := range hosts {
+		if host == "localhost" || strings.HasPrefix(host, "/") {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			continue
+		}
+		return fmt.Errorf("%q is not a local database", host)
 	}
-	return fmt.Errorf("%q is not a local database", host)
+	return nil
 }

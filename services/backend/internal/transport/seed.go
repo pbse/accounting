@@ -407,10 +407,9 @@ func (s *seeder) record(ctx context.Context, column string, value any) {
 	s.db.ExecContext(ctx, fmt.Sprintf(`UPDATE demonstration_seeds SET %s=array_append(%s,$2) WHERE organization_id=$1`, column, column), s.o.Organization, value)
 }
 
-// manifest records what removal needs: the closes (every close of the demonstration's clients, which had none
-// before), the chats, marks and rows no client name identifies.
+// manifest marks the run finished; everything removal needs was recorded as it was made.
 func (s *seeder) manifest(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=(SELECT COALESCE(array_agg(id),'{}') FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2) AND created_at>=demonstration_seeds.started_at),finished_at=now() WHERE organization_id=$1`, s.o.Organization, s.clientNames())
+	_, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET finished_at=now() WHERE organization_id=$1`, s.o.Organization)
 	return err
 }
 
@@ -1236,6 +1235,8 @@ func coverageReason(account string) string {
 		return "Agrees to the payroll provider's summary; cleared by the payroll entry."
 	case strings.Contains(account, "Accrued"):
 		return "Reviewed against the accrual drafts; no other accrued items this month."
+	case strings.Contains(account, "Ask My Accountant"):
+		return "Nothing posted here this month; any unknown charge is resolved before sign-off."
 	default:
 		return "Period activity reviewed from the Trial Balance and the General Ledger; no adjustment needed."
 	}
@@ -1317,6 +1318,7 @@ func (s *seeder) reopen(ctx context.Context, c *seed.Client, closeID, period str
 		payroll := *c.Payroll
 		payroll.EmployerTaxes = fmt.Sprintf("%.2f", mustFloat(payroll.EmployerTaxes)+56.25)
 		reissued.Payroll = &payroll
+		reissued.Reconcile = false // only the payroll summary is reissued
 		var corrected seed.Work
 		for _, again := range reissued.WorkFor(period, seed.Books{}) {
 			if again.Kind == "payroll" {
@@ -1698,8 +1700,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	// Every close of the demonstration's clients is the seed's (the firm had none under those names), so a run that
 	// stopped before it recorded them is still taken out whole. Newest first, so a connection's later months go before
 	// the month that holds it.
-	// The recorded closes, and any the run opened by sign-off before it could record them (within the run's own time);
-	// a close someone opened under a demonstration name afterwards is theirs and stays.
+	// Only the recorded closes: a close someone opened under a demonstration name, during the run or after, is theirs.
 	var started, finished time.Time
 	var finishedAt sql.NullTime
 	db.QueryRowContext(ctx, `SELECT started_at,finished_at FROM demonstration_seeds WHERE organization_id=$1`, o.Organization).Scan(&started, &finishedAt)
@@ -1707,7 +1708,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	if finishedAt.Valid {
 		finished = finishedAt.Time
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND (id=ANY($2) OR (lower(entity)=ANY($3) AND created_at BETWEEN $4 AND $5)) ORDER BY period DESC,id DESC`, o.Organization, closes, names, started, finished)
+	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND id=ANY($2) ORDER BY period DESC,id DESC`, o.Organization, closes)
 	if err != nil {
 		return err
 	}
