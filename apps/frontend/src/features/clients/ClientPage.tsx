@@ -71,7 +71,7 @@ type ClientRead = {
   people_unavailable?: string;
 };
 // A request sent to the client that it has not answered, from any month the reader can open.
-type AskedOfClient = { id: string; close_id: string; period: string; recipient: string; state: "sent" | "sending" | "failed" | "not_sent"; sent_at?: string; items: number };
+type AskedOfClient = { id: string; close_id: string; period: string; recipient: string; state: "sent" | "sending" | "failed" | "not_sent"; sent_at?: string; answered_in_part: boolean; items: number };
 
 const basisLabels = {
   cash: "cash basis",
@@ -397,7 +397,9 @@ export default function ClientPage() {
                   {monthName(item.period)} · {n(item.items, "item")}
                 </span>
                 <span role="cell">
-                  {item.state === "sent" && item.sent_at ? (
+                  {item.answered_in_part ? (
+                    <span className="pill muted">Answered in part</span>
+                  ) : item.state === "sent" && item.sent_at ? (
                     <span className="pill muted">Sent {dates.dayMonth(item.sent_at)}</span>
                   ) : item.state === "failed" ? (
                     <span className="pill danger">Not delivered</span>

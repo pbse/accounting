@@ -47,7 +47,8 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
+		for _, q := range []string{`DELETE FROM request_submissions WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
+			`DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
 			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_export_labels WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
@@ -160,8 +161,14 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	}
 	_, err = db.Exec(`UPDATE work_requests SET delivered_by='fixture',delivered_at=now(),delivery_reference='Handed over' WHERE id=$1`, request)
 	must(err)
-	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["state"] != "sent" || requests[0].(map[string]any)["sent_at"] == nil {
+	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["state"] != "sent" || requests[0].(map[string]any)["sent_at"] == nil || requests[0].(map[string]any)["answered_in_part"] != false {
 		t.Fatalf("a recorded delivery sends the request: %v", requests)
+	}
+	// The client answers part of it: the request stays, answered in part, for the firm to decide on.
+	_, err = db.Exec(`INSERT INTO request_submissions(request_id,receipt,complete) VALUES($1,'r1',false)`, request)
+	must(err)
+	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["answered_in_part"] != true {
+		t.Fatalf("a partial reply is shown: %v", requests)
 	}
 	// Who can hold Acme's closes, as the roster offers owners: Ann, who reviews every client. Cy is assigned to its
 	// alias' name only, which gives him its September close to work on but not the client's months to hold.
