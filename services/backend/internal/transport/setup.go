@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -120,20 +121,23 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		reconnect := []setupReconnect{}
 		if err == nil {
 			var rows *sql.Rows
-			rows, err = tx.QueryContext(r.Context(), `SELECT provider,environment,client_entity,error,COALESCE((SELECT id::text FROM client_closes c WHERE c.organization_id=$1 AND lower(c.entity)=lower(x.client_entity) ORDER BY period DESC,c.id DESC LIMIT 1),'') FROM (
- SELECT 'QuickBooks' provider,environment,client_entity,error FROM quickbooks_connections WHERE organization_id=$1 AND state='reconnect_required'
- UNION ALL SELECT 'Xero','',client_entity,error FROM xero_connections WHERE organization_id=$1 AND state='reconnect_required') x
+			rows, err = tx.QueryContext(r.Context(), `SELECT provider,client_entity,error,COALESCE((SELECT id::text FROM client_closes c WHERE c.organization_id=$1 AND lower(c.entity)=lower(x.client_entity) ORDER BY period DESC,c.id DESC LIMIT 1),'') FROM (
+ SELECT 'QuickBooks' provider,client_entity,error FROM quickbooks_connections WHERE organization_id=$1 AND state='reconnect_required'
+ UNION ALL SELECT 'Xero',client_entity,error FROM xero_connections WHERE organization_id=$1 AND state='reconnect_required') x
  WHERE `+access("x.client_entity")+` ORDER BY client_entity LIMIT 50`, org, all, me)
 			for err == nil && rows.Next() {
 				var item setupReconnect
-				var environment, close string
-				if err = rows.Scan(&item.Provider, &environment, &item.Client, &item.Error, &close); err != nil {
+				var close string
+				if err = rows.Scan(&item.Provider, &item.Client, &item.Error, &close); err != nil {
 					break
 				}
-				// Production QuickBooks is authorized on the close's Settings tab; sandbox and Xero on Evidence.
-				item.Href = "/dashboard/clients"
-				if close != "" {
-					item.Href = "/dashboard/closes/" + close + map[string]string{"production": "?tab=settings#quickbooks-production", "sandbox": "?tab=evidence#quickbooks-ledger", "": "?tab=evidence#xero"}[environment]
+				// QuickBooks is connected on the client's page; Xero still on a month's Evidence tab.
+				item.Href = "/dashboard/clients/" + url.PathEscape(item.Client)
+				if item.Provider == "Xero" {
+					item.Href = "/dashboard/clients"
+					if close != "" {
+						item.Href = "/dashboard/closes/" + close + "?tab=evidence#xero"
+					}
 				}
 				reconnect = append(reconnect, item)
 			}

@@ -78,7 +78,7 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
 
 // booksStep says what the agent reads the books from and what, if anything, a person must do for it.
 func booksStep(b booksRead, closeID, entity, period string) planStep {
-	s := planStep{Key: "books", Title: "Read the books", Link: "/dashboard/closes/" + closeID + "?tab=evidence#quickbooks-ledger"}
+	s := planStep{Key: "books", Title: "Read the books", Link: "/dashboard/closes/" + closeID + "?tab=books#quickbooks-ledger"}
 	xero := "/dashboard/closes/" + closeID + "?tab=evidence#xero"
 	month := period
 	if at, err := time.Parse("2006-01", period); err == nil {

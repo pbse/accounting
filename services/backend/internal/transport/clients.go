@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
@@ -54,7 +55,7 @@ type owedClientMonth struct {
 func registerClients(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/client", func(w http.ResponseWriter, r *http.Request) {
 		asked := strings.TrimSpace(r.URL.Query().Get("name"))
-		if asked == "" || len(asked) > 200 {
+		if asked == "" || utf8.RuneCountInString(asked) > 200 {
 			problem(w, 404, "Client not found.")
 			return
 		}
@@ -73,22 +74,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		// The client's own name: its roster entry's, else the name its closes were opened with that is its own (or, when
-		// none is, its newest close's). A member's access is to a name, as access to a close is: the client is theirs to
-		// open when any of its names is, showing the months they could open. What belongs to the client as a whole (its
-		// roster entry, the months it owes, its connections, currency and basis) is shown under its own name only, as the
-		// roster and a close's connection read show it.
-		var name string
-		var known, allowed, whole bool
-		err = tx.QueryRowContext(ctx, `WITH client AS (SELECT client_identity($1,$2) AS id),
- names AS (SELECT r.client_entity AS name,0 AS rank,'' AS period FROM current_client_roster r,client WHERE r.organization_id=$1 AND client_identity(r.organization_id,r.client_entity)=client.id
-  UNION ALL SELECT c.entity,CASE WHEN lower(c.entity)=client.id THEN 1 ELSE 2 END,c.period FROM client_closes c,client WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client.id),
- own AS (SELECT name FROM names ORDER BY rank,period DESC LIMIT 1),
- granted AS (SELECT lower(g.client_entity) AS name FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$4 AND g.granted)
- SELECT COALESCE((SELECT name FROM own),''),EXISTS(SELECT 1 FROM names),
-  $3 OR EXISTS(SELECT 1 FROM granted WHERE name IN (SELECT lower(name) FROM names)),
-  $3 OR EXISTS(SELECT 1 FROM granted WHERE name=(SELECT lower(name) FROM own))`,
-			org, asked, firm, who).Scan(&name, &known, &allowed, &whole)
+		name, known, allowed, whole, err := namedClient(ctx, tx, r, asked)
 		if err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
@@ -97,7 +83,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client not found.")
 			return
 		}
-		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r)}
+		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r), "can_grant": canGrant(r)}
 
 		// Every month opened under any of the client's names that the reader could open, newest first, each with where
 		// its books come from now: the newer of its QuickBooks period capture (from the connection its books are read
@@ -237,6 +223,17 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["quickbooks"] = json.RawMessage(quickbooksRaw)
+		// Which QuickBooks companies this server can connect, and the client's production posting grant, if any.
+		out["quickbooks_setup"] = map[string]bool{"sandbox": quickbooks.OAuthConfigured(), "production": quickbooks.OAuthConfiguredFor("production")}
+		switch grant, e := scanGrant(tx.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND lower(g.client_entity)=lower($2) AND g.revoked_at IS NULL LIMIT 1`, org, name)); e {
+		case nil:
+			out["production_grant"] = grant
+		case sql.ErrNoRows:
+			out["production_grant"] = nil
+		default:
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
 		if xeroRaw != nil {
 			out["xero"] = json.RawMessage(xeroRaw)
 		} else {
@@ -298,9 +295,55 @@ func clientPeople(ctx context.Context, tx *sql.Tx, org, who string, reviewers ma
 	return slices.DeleteFunc(people, func(p rosterPerson) bool { return !p.FirmWide && !slices.Contains(p.Clients, named) }), nil
 }
 
+// canGrant is a member of a hosted firm who may grant and revoke a client's production posting (posting:approve), as the
+// grant routes require.
+func canGrant(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return a != nil && a.Organization != "" && slices.Contains(a.Permissions, "posting:approve")
+}
+
 // canConnect is a member of a hosted firm who may connect and disconnect a client's ledgers (integrations:manage), as
 // the connection routes require.
 func canConnect(r *http.Request) bool {
 	a := auth.Actor(r.Context())
 	return a != nil && a.Organization != "" && slices.Contains(a.Permissions, "integrations:manage")
+}
+
+// namedClient is the client that asked names, for the reader: its own name, its roster entry's, else the name its
+// closes were opened with that is its own (or, when none is, its newest close's); whether it exists and the reader may
+// open it; and whether the reader may see it whole. A member's access is to a name, as access to a close is: the client
+// is theirs to open when any of its names is, showing the months they could open. What belongs to the client as a whole
+// (its roster entry, the months it owes, its connections, currency and basis) is theirs under its own name only, as the
+// roster and a close's connection read show it.
+func namedClient(ctx context.Context, q querier, r *http.Request, asked string) (name string, known, allowed, whole bool, err error) {
+	err = q.QueryRowContext(ctx, `WITH client AS (SELECT client_identity($1,$2) AS id),
+ names AS (SELECT r.client_entity AS name,0 AS rank,'' AS period FROM current_client_roster r,client WHERE r.organization_id=$1 AND client_identity(r.organization_id,r.client_entity)=client.id
+  UNION ALL SELECT c.entity,CASE WHEN lower(c.entity)=client.id THEN 1 ELSE 2 END,c.period FROM client_closes c,client WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client.id),
+ own AS (SELECT name FROM names ORDER BY rank,period DESC LIMIT 1),
+ granted AS (SELECT lower(g.client_entity) AS name FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$4 AND g.granted)
+ SELECT COALESCE((SELECT name FROM own),''),EXISTS(SELECT 1 FROM names),
+  $3 OR EXISTS(SELECT 1 FROM granted WHERE name IN (SELECT lower(name) FROM names)),
+  $3 OR EXISTS(SELECT 1 FROM granted WHERE name=(SELECT lower(name) FROM own))`,
+		organization(r), asked, firmAccess(r), subject(r)).Scan(&name, &known, &allowed, &whole)
+	return
+}
+
+// wholeClient is the client a request names (?name=) when the reader may act on it as a whole; otherwise it answers
+// that the client is not found, as for a close the reader cannot open, and ok is false.
+func wholeClient(w http.ResponseWriter, r *http.Request, db *sql.DB) (name string, ok bool) {
+	asked := strings.TrimSpace(r.URL.Query().Get("name"))
+	if asked == "" || utf8.RuneCountInString(asked) > 200 {
+		problem(w, 404, "Client not found.")
+		return "", false
+	}
+	name, known, allowed, whole, err := namedClient(r.Context(), db, r, asked)
+	if err != nil {
+		problem(w, 503, "The client is unavailable.")
+		return "", false
+	}
+	if !known || !allowed || !whole {
+		problem(w, 404, "Client not found.")
+		return "", false
+	}
+	return name, true
 }
