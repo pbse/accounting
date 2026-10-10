@@ -616,6 +616,30 @@
   .ks-side.collapsed .ks-collapse {
     display: none;
   }
+  /* The sheet is never collapsed: a remembered collapsed state keeps its menu, count and grant as on an open sidebar. */
+  .ks-side.collapsed .ks-me[open] > div {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + var(--space-4));
+    width: auto;
+  }
+  .ks-side.collapsed .ks-count {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 1px 7px;
+    font-size: 11px;
+    line-height: normal;
+    box-shadow: none;
+    background: var(--att-tint);
+  }
+  .ks-side.collapsed .ks-me-aside {
+    display: revert;
+  }
+  .ks-side.collapsed .ks-me:has(.ks-me-aside:not(:empty)) > summary::after {
+    content: none;
+  }
   .ks-backdrop {
     display: block;
     position: fixed;
