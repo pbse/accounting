@@ -38,7 +38,7 @@ export default function WorkspaceLayout() {
   const location = useLocation();
   const signedIn = useSignedIn();
   // Unknown until the server says; nothing of the workspace shows before then, so an executive never sees it.
-  const executiveRead = useQuery({ ...workspaceQuery<{ executive: boolean }>("/executive"), enabled: signedIn });
+  const executiveRead = useQuery({ ...workspaceQuery<{ executive: boolean; closes?: { id: string; entity: string }[] }>("/executive"), enabled: signedIn });
   const executive = !signedIn ? undefined : executiveRead.data ? !!executiveRead.data.executive : executiveRead.isError ? false : undefined;
   const examples = !!useQuery({ ...workspaceQuery<{ available: boolean }>("/examples"), enabled: executive === false }).data?.available;
   // A hosted session still loading is not yet signed out.
@@ -87,7 +87,11 @@ export default function WorkspaceLayout() {
       </main>
     );
   if (authKitClientId && !signedIn) return <Navigate to={`/login?return=${encodeURIComponent(location.pathname + location.search + location.hash)}`} replace />;
-  const items = executive ? executiveNav(new URLSearchParams(location.search).get("close")) : known ? (examples ? [...firmNav, exampleNav] : firmNav) : [];
+  const chosen = new URLSearchParams(location.search).get("close");
+  const items = executive ? executiveNav(chosen) : known ? (examples ? [...firmNav, exampleNav] : firmNav) : [];
+  // An executive's line names the client whose results the links open: the one they chose, else the first.
+  const executiveCloses = executiveRead.data?.closes ?? [];
+  const client = (executiveCloses.find((c) => c.id === chosen) ?? executiveCloses[0])?.entity ?? "Your business";
   // Home carries the count of what needs the person, until the Closes page takes it.
   const withCount = items.map((item) => ("end" in item && item.to === "/dashboard" && !executive && signedIn ? { ...item, count: <AttentionBadge /> } : item));
   // The firm is known by its sign-in domain until the firm's own name is kept; local development has none.
@@ -101,7 +105,7 @@ export default function WorkspaceLayout() {
         <Sidebar
           brandTo="/dashboard"
           brandLabel="Krith, home"
-          line={executive ? "Your business" : firm}
+          line={executive ? client : firm}
           newChat={signedIn ? { onClick: newChat, hint: "⇧⌘O" } : undefined}
           items={withCount}
           navLabel="Workspace"

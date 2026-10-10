@@ -413,7 +413,7 @@
   color: var(--ink-4);
   flex: none;
 }
-.app-shell .ks-me > div {
+.app-shell .ks-me[open] > div {
   position: absolute;
   left: 0;
   right: 0;
@@ -505,7 +505,7 @@
   box-shadow: 0 0 0 2px var(--surface-side);
 }
 /* The account menu needs more room than the icon column: it opens beside it. */
-.ks-side.collapsed .ks-me > div {
+.ks-side.collapsed .ks-me[open] > div {
   position: fixed;
   left: calc(var(--side-collapsed) + var(--space-8));
   right: auto;
