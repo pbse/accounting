@@ -2008,7 +2008,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		seedStatement{`DELETE FROM chat_sessions WHERE organization_id=$1 AND id=ANY($2) AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`, []any{o.Organization, chats}},
 	)
 	statements = append(statements,
-		seedStatement{`DELETE FROM procedure_versions WHERE organization_id=$1 AND id=ANY($2) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.procedure_id=procedure_versions.id)`, []any{o.Organization, procedures}},
+		seedStatement{`DELETE FROM procedure_versions WHERE organization_id=$1 AND id=ANY($2) AND NOT lower(client_entity)=ANY(COALESCE($3::text[],'{}')) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.procedure_id=procedure_versions.id)`, []any{o.Organization, procedures, retained}},
 		seedStatement{`DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2 AND key=ANY($3)`, []any{o.Organization, subject, keys}},
 		seedStatement{`DELETE FROM member_invitations WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, invitations}},
 		seedStatement{`DELETE FROM member_role_changes WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, roleChanges}},
