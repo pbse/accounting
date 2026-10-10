@@ -54,7 +54,8 @@ The seed records what it did in `demonstration_seeds` (migration 140): who ran i
 
 - **Touch a firm that holds work under its client names.** It refuses when the firm already holds the demonstration, or has a close, roster entry or alias for any of its ten client names, so removal can never reach a real client's work.
 - **Change who may enter the firm.** The administrator and every `-members` subject must already be current members; the seed grants membership only in a firm it created itself (a local database).
-- **Leave the firm's policy changed.** The policy it found is restored on removal.
+- **Change the firm's review rules.** Independent review stays as the firm has it; a firm that requires it needs a second member (`-members`) to approve what the administrator confirms. The rest of the policy it changes (agent, materiality, passcodes, reminders) is restored on removal. A firm with its own monthly template keeps it; one without gets a 15-day template, which stays after removal (a template, once set, has a due date), to be changed under Settings → Clients.
+- **Work another firm's queue.** The pipeline steps it runs take only this firm's jobs; everything else is the worker's.
 - **Run against a database it cannot place.** The connection string is read as the driver reads it (a URL or `key=value` pairs); anything that is not localhost, a loopback address or a socket path needs `-hosted -yes`.
 
 ## What to know before seeding the hosted firm

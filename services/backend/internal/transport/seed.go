@@ -217,6 +217,8 @@ func answerFor(w seed.Work) string {
 
 // settle works the queue as the worker does, one step of each kind at a time, until a round finds nothing to do.
 func (s *seeder) settle(ctx context.Context) error {
+	// Only this firm's queue is worked: another firm's jobs are the worker's.
+	ctx = documents.WithinOrganization(preparation.WithinOrganization(ctx, s.o.Organization), s.o.Organization)
 	reading := llm.WithClient(ctx, s.model)
 	for round := 0; ; round++ {
 		if round == 500 {
@@ -300,9 +302,14 @@ func (s *seeder) isolated(ctx context.Context) error {
 	if seeded {
 		return errors.New("this firm already holds the demonstration; remove it first (-remove)")
 	}
+	var independent bool
+	s.db.QueryRowContext(ctx, `SELECT require_independent_review OR independent_review_min_amount IS NOT NULL FROM organizations WHERE id=$1`, s.o.Organization).Scan(&independent)
+	if independent && len(s.o.Members) == 0 {
+		return errors.New("the firm requires an independent reviewer, so the seed needs a second member (-members) to approve what the administrator confirms")
+	}
 	names := s.clientNames()
 	var taken []string
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT entity FROM (SELECT entity FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2) UNION SELECT client_entity FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2) UNION SELECT client_entity FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=ANY($2)) t ORDER BY 1`, s.o.Organization, names)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT entity FROM (SELECT entity FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2) UNION SELECT client_entity FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2) UNION SELECT client_entity FROM client_aliases WHERE organization_id=$1 AND retired_at IS NULL AND (lower(client_entity)=ANY($2) OR alias IN (SELECT trim(regexp_replace(n,'[^[:alnum:]]+',' ','g')) FROM unnest($2::text[]) n))) t ORDER BY 1`, s.o.Organization, names)
 	if err != nil {
 		return err
 	}
@@ -341,8 +348,8 @@ func (s *seeder) people(ctx context.Context) error {
 	for _, subject := range append([]string{s.o.Subject}, s.o.Members...) {
 		var granted sql.NullBool
 		s.db.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, s.o.Organization, subject).Scan(&granted)
-		if granted.Valid && granted.Bool {
-			continue
+		if (granted.Valid && granted.Bool) || s.o.Organization == "local-development" {
+			continue // local development shares one identity, so everyone is in
 		}
 		if !s.createdFirm {
 			return fmt.Errorf("%s is not a current member of the firm; the seed does not change who may enter it", subject)
@@ -390,11 +397,6 @@ func (s *seeder) people(ctx context.Context) error {
 
 // policies are the firm's rules as a careful small firm sets them, each change recorded with its reason.
 func (s *seeder) policies(ctx context.Context) {
-	var independent bool
-	s.db.QueryRowContext(ctx, `SELECT require_independent_review OR independent_review_min_amount IS NOT NULL FROM organizations WHERE id=$1`, s.o.Organization).Scan(&independent)
-	if independent && s.o.Organization != "local-development" {
-		s.must(ctx, "policy", "POST", "/v1/closes/organization/policy", map[string]any{"independent_review": false, "independent_review_min_amount": "", "reason": "Paused while the firm's history is loaded; turned on again at the end"})
-	}
 	changes := []map[string]any{
 		{"agent_chat": "firm", "reason": "Turn the agent on for the whole firm after the June pilot with two clients"},
 		{"materiality_amount": "250.00", "reason": "Differences under $250 are noted, not chased, for our client sizes"},
@@ -413,8 +415,12 @@ func (s *seeder) roster(ctx context.Context) {
 	if !ok {
 		return
 	}
-	rev := str(field(out, "template", "rev"))
-	s.must(ctx, "template", "POST", "/v1/closes/close-template", map[string]any{"due_days": s.firm.Template.DueDays, "owner": "", "reason": "Every month is due on the 15th of the next; owners are set per client", "rev": rev})
+	// The firm's own monthly template stays; a firm without one gets the demonstration's.
+	if field(out, "template") == nil {
+		s.must(ctx, "template", "POST", "/v1/closes/close-template", map[string]any{"due_days": s.firm.Template.DueDays, "owner": "", "reason": "Every month is due on the 15th of the next; owners are set per client", "rev": ""})
+	} else if days, ok := field(out, "template", "due_days").(float64); ok && days > 0 {
+		s.firm.Template.DueDays = int(days)
+	}
 	for _, c := range s.firm.Clients {
 		entry := map[string]any{"entity": c.Name, "active": true, "since": c.Since, "reason": "Engaged for monthly close and management reporting", "rev": ""}
 		if c.DueDays > 0 {
@@ -981,10 +987,14 @@ func (s *seeder) papers(ctx context.Context, closeID string) []map[string]any {
 	return current
 }
 
-// review approves every current draft, as the owner; in a month that is not the last one, with the independent
-// second reviewer where the firm's policy asks for one.
+// review approves every current draft as a reviewer other than the administrator who confirmed and prepared the
+// agent's work: the first other member when the firm has one, so a firm that requires an independent reviewer gets
+// one; otherwise the administrator.
 func (s *seeder) review(ctx context.Context, closeID string, c *seed.Client, period string, final bool) {
-	owner := s.owner(c)
+	owner := s.o.Subject
+	if len(s.o.Members) > 0 {
+		owner = s.o.Members[0]
+	}
 	for _, p := range s.papers(ctx, closeID) {
 		if str(p["review_state"]) == "approved" {
 			continue
@@ -1271,7 +1281,12 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 	}
 	obligations = append(obligations, map[string]any{"action": "add", "name": "Quarterly estimated tax", "category": "tax", "direction": "out", "amount": "1150000", "first_on": "2027-01-15", "every": "once", "vendor": "", "basis": "Safe-harbor estimate from the 2025 return, per the owner's tax preparer.", "reason": "Standing obligation"})
 	for _, o := range obligations {
-		s.must(ctx, "obligation "+str(o["name"]), "POST", path+"/cash-obligations", o)
+		if _, ok := s.must(ctx, "obligation "+str(o["name"]), "POST", path+"/cash-obligations", o); ok {
+			// The plan counts approved obligations only.
+			var id string
+			s.db.QueryRowContext(ctx, `SELECT id::text FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND name=$3 AND approved_at IS NULL ORDER BY id DESC LIMIT 1`, s.o.Organization, c.Name, str(o["name"])).Scan(&id)
+			s.must(ctx, "approve obligation "+str(o["name"]), "POST", path+"/cash-obligations", map[string]any{"action": "approve", "id": id})
+		}
 	}
 	s.must(ctx, "scenario", "POST", path+"/cash-scenarios", map[string]any{"action": "add", "name": "Fairview pays 30 days late", "changes": []map[string]any{{"kind": "add", "label": "Fairview Parks invoice slips a month", "direction": "in", "amount": "685000", "first_on": "2026-11-20", "every": "once"}}})
 	if out, ok := s.must(ctx, "cash plan", "GET", path+"/cash-plan", nil); ok {
@@ -1325,11 +1340,8 @@ func (s *seeder) afterwards(ctx context.Context) {
 			s.call(ctx, "POST", "/v1/closes/"+closeID+"/daily-review", map[string]any{"sync_id": syncID, "source": "quickbooks"})
 		}
 	}
-	// The goals stay active for the worker, which looks at them as it does any hand-over.
-	if s.o.Organization != "local-development" {
-		// Local development shares one identity, so independent review is a hosted firm's rule.
-		s.must(ctx, "policy", "POST", "/v1/closes/organization/policy", map[string]any{"independent_review": true, "independent_review_min_amount": "25000.00", "reason": "A second reviewer on anything over $25,000 from October, per our quality control policy"})
-	}
+	// The goals stay active for the worker, which looks at them as it does any hand-over. The firm's review rules are
+	// never changed: what it requires of real work it requires of the demonstration too.
 	s.chats(ctx)
 	// Some of the inbox has been read already; one item is snoozed to next week.
 	if out, ok := s.must(ctx, "attention", "GET", "/v1/closes/attention", nil); ok {
@@ -1486,14 +1498,16 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 			return fmt.Errorf("%s: %w", st.sql[:40], err)
 		}
 	}
-	// The firm's policy as the seed found it, recorded as a change by the person who ran the seed.
+	// The firm's policy as the seed found it, recorded as a change by the person who ran the seed; the review rules
+	// were never changed, and the local firm cannot take them.
 	var before map[string]any
-	if json.Unmarshal(policy, &before) == nil && o.Organization != "local-development" {
+	if json.Unmarshal(policy, &before) == nil {
 		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
-		s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", map[string]any{
-			"independent_review": before["require_independent_review"], "independent_review_min_amount": before["independent_review_min_amount"], "materiality_amount": before["materiality_amount"],
-			"link_passcode": before["require_link_passcode"], "reminder_after_days": before["reminder_after_days"], "reminder_max": before["reminder_max"], "agent_chat": before["agent_chat"],
-			"staff_planning": before["assistant_model_answers"], "ledger_writes": before["allow_ledger_writes"], "reason": "The demonstration was removed; the firm's policy is as it was before it"})
+		restore := map[string]any{"materiality_amount": before["materiality_amount"], "link_passcode": before["require_link_passcode"], "reminder_after_days": before["reminder_after_days"], "reminder_max": before["reminder_max"],
+			"agent_chat": before["agent_chat"], "staff_planning": before["assistant_model_answers"], "ledger_writes": before["allow_ledger_writes"], "reason": "The demonstration was removed; the firm's policy is as it was before it"}
+		s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
+		// A monthly template, once set, has a due date of 1–60 days: a firm that had none keeps the demonstration's
+		// 15 days until it chooses its own (docs/seed-data.md says so).
 		if len(s.problems) > 0 {
 			return errors.New(s.problems[0])
 		}

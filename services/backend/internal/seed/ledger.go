@@ -80,6 +80,8 @@ type Books struct {
 	Accounts []Account
 	Opening  map[string]*big.Rat // net (debit positive) balance by account at the start of the month
 	Txns     []Txn
+	// Settled are the earlier months' invoices paid by the end of this month, which its open items leave out.
+	Settled map[string]bool
 }
 
 // Closing is the net balance by account at the end of the month.
@@ -454,7 +456,7 @@ func (b Books) OpenItems(earlier []Books) map[string][]json.RawMessage {
 	all := append(append([]Books{}, earlier...), b)
 	for _, month := range all {
 		for _, t := range month.Txns {
-			if (t.Kind == "Invoice" || t.Kind == "Bill") && t.Balance != nil && t.Balance.Sign() > 0 {
+			if (t.Kind == "Invoice" || t.Kind == "Bill") && t.Balance != nil && t.Balance.Sign() > 0 && !b.Settled[t.ID] {
 				open[t.Kind] = append(open[t.Kind], month.Record(t))
 			}
 		}

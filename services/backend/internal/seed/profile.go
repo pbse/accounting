@@ -290,17 +290,21 @@ func recurring(c *Client, g *ids, period string, revenue string, customers []Par
 	return txns
 }
 
-// settleOpenInvoices pays the invoices the prior month left open, except the customer who is always late.
-func settleOpenInvoices(g *ids, period string, prior []Txn, late string) []Txn {
+// settleOpenInvoices pays the invoices the prior month left open, except the customer who is always late, and says
+// which it paid; the prior month's records stay as they were.
+func settleOpenInvoices(g *ids, period string, prior []Txn, late string, settled map[string]bool) ([]Txn, map[string]bool) {
 	var txns []Txn
-	for i := range prior {
-		t := &prior[i]
-		if t.Kind == "Invoice" && t.Balance != nil && t.Party != late {
+	paid := map[string]bool{}
+	for id := range settled {
+		paid[id] = true
+	}
+	for _, t := range prior {
+		if t.Kind == "Invoice" && t.Balance != nil && t.Party != late && !paid[t.ID] {
 			txns = append(txns, payment(g, day(period, 6), Party{ID: t.PartyID, Name: t.Party}, t.Balance, "10", "12"))
-			t.Balance = nil
+			paid[t.ID] = true
 		}
 	}
-	return txns
+	return txns, paid
 }
 
 // Build makes the firm's profile.
@@ -320,6 +324,7 @@ func BooksFor(c *Client, last string) []Books {
 		opening[id] = Money(v)
 	}
 	var priorTxns []Txn
+	settled := map[string]bool{}
 	for n, period := range Months {
 		b := Books{Period: period, Currency: "USD", Accounts: c.Accounts, Opening: opening}
 		g := &ids{next: 1000 + n*200}
@@ -329,8 +334,11 @@ func BooksFor(c *Client, last string) []Books {
 			if len(c.Customers) > 0 {
 				late = c.Customers[len(c.Customers)-1].Name
 			}
-			txns = append(settleOpenInvoices(g, period, priorTxns, late), txns...)
+			var payments []Txn
+			payments, settled = settleOpenInvoices(g, period, priorTxns, late, settled)
+			txns = append(payments, txns...)
 		}
+		b.Settled = settled
 		for i := range txns {
 			if txns[i].ID == "" {
 				txns[i].ID = g.id()

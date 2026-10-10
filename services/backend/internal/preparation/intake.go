@@ -212,7 +212,7 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	defer tx.Rollback()
 	var id, closeID, entity, period string
-	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.state='waiting_evidence' AND (e.extraction_state IN ('ready','failed') OR e.superseded_by IS NOT NULL) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`).Scan(&id, &closeID)
+	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.state='waiting_evidence' AND (e.extraction_state IN ('ready','failed') OR e.superseded_by IS NOT NULL) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled AND c.organization_id=COALESCE($1,c.organization_id)) ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`, OrganizationScope(ctx)).Scan(&id, &closeID)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -258,4 +258,18 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	return true, tx.Commit()
+}
+
+type scopeKey struct{}
+
+// WithinOrganization limits the work a queue step takes to one firm's; without it a step takes the next job of any
+// enabled firm. The demonstration seed works its own firm's queue this way.
+func WithinOrganization(ctx context.Context, organization string) context.Context {
+	return context.WithValue(ctx, scopeKey{}, organization)
+}
+
+// OrganizationScope is the firm a step is limited to, or NULL for every firm.
+func OrganizationScope(ctx context.Context) sql.NullString {
+	org, _ := ctx.Value(scopeKey{}).(string)
+	return sql.NullString{String: org, Valid: org != ""}
 }
