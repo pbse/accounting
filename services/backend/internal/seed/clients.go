@@ -348,7 +348,13 @@ func reconciliationWork(c *Client, period string, books Books) []Work {
 	input := map[string]any{"account": "Checking", "account_type": "bank", "currency": "USD", "statement_reference": "Riverbend Bank export " + period + ", account 4471", "ledger_reference": "QuickBooks Checking register export " + period,
 		"expected_pages": 1, "pages": []int{1}, "statement_opening": show(opening), "statement_closing": show(closing), "ledger_opening": show(opening), "ledger_closing": show(closing),
 		"policy_confirmed": true, "reviewed_matches": []any{}, "prior_outstanding": []any{}, "current_outstanding": []any{}, "transfers": []any{}}
-	answer := map[string]any{"kind": "reconciliation", "summary": "Bank statement export for Checking, " + period + ", with its register", "questions": []string{}, "facts": []map[string]string{}}
+	// The reading names the account the export is for (the export's own first line is its citation), so coverage can
+	// match the reconciliation to Checking.
+	facts := []map[string]string{}
+	if len(statement) > 1 {
+		facts = cited([]map[string]string{{"field": "account", "value": "Checking", "quote": statement[1]}})
+	}
+	answer := map[string]any{"kind": "reconciliation", "summary": "Bank statement export for Checking, " + period + ", with its register", "questions": []string{}, "facts": facts}
 	item := Work{Kind: "reconciliation", File: statementFile, Text: strings.Join(statement, "\n") + "\n", Answer: answer, Confirm: input, Register: registerFile,
 		Sources: []map[string]string{{"id": "$primary", "role": "statement"}, {"id": "$source:" + registerFile, "role": "ledger"}}}
 	return []Work{register, item}
@@ -485,7 +491,7 @@ func orchard() Client {
 
 func summit() Client {
 	c := Client{Name: "Summit Peak Fitness LLC", Industry: "Fitness studio", Contact: "Jordan Blake", ContactEmail: "jordan@summitpeakfitness.example", Since: "2026-06", OwnerSlot: 0, EntityType: "s_corp",
-		Accounts: chart(payrollAccounts...), Revenue: "28600.00", Income: "50", Scenario: Signed, Budget: true, CashPlan: true, Publish: true,
+		Accounts: chart(payrollAccounts...), Revenue: "28600.00", Income: "50", Scenario: Signed, Budget: true, CashPlan: true, Publish: true, Reconcile: true,
 		Opening:   map[string]string{"10": "27650.33", "12": "3400.00", "15": "96000.00", "20": "-6180.00", "42": "-120870.33"},
 		Customers: []Party{{"C1", "Member dues (ClassPass)", "partners@classpass.example"}, {"C2", "Corporate wellness, Vantage Tech", "benefits@vantagetech.example"}, {"C3", "Personal training packages", ""}},
 		Prepaids:  []PrepaidSpec{{"2026-08", "Northstar Mutual Insurance", "P.O. Box 4410, Hartford, CT 06101", "NM-3304-26", "3600.00", 12, "72", "General liability policy, annual premium"}},

@@ -439,8 +439,19 @@ func (s *seeder) members(ctx context.Context) error {
 	for _, subject := range append([]string{s.o.Subject}, s.o.Members...) {
 		var granted sql.NullBool
 		s.db.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, s.o.Organization, subject).Scan(&granted)
-		if (granted.Valid && granted.Bool) || s.o.Organization == "local-development" {
+		if s.o.Organization == "local-development" {
 			continue // local development shares one identity, so everyone is in
+		}
+		if granted.Valid && granted.Bool {
+			// A teammate who will own closes must be able to work them: an administrator by the firm's own records.
+			if subject != s.o.Subject {
+				if admin, err := s.administrator(ctx, subject); err != nil {
+					return err
+				} else if !admin {
+					return fmt.Errorf("%s is not recorded as an administrator of this firm, so the seed cannot give them closes to work", subject)
+				}
+			}
+			continue
 		}
 		if !s.createdFirm {
 			return fmt.Errorf("%s is not a current member of the firm; the seed does not change who may enter it", subject)
@@ -1197,6 +1208,10 @@ func (s *seeder) cover(ctx context.Context, closeID string, b seed.Books) {
 				ID    string `json:"id"`
 				State string `json:"state"`
 				Kind  string `json:"kind"`
+				Facts []struct {
+					Field string `json:"field"`
+					Value string `json:"value"`
+				} `json:"facts"`
 			} `json:"jobs"`
 		} `json:"coverage"`
 	}
@@ -1209,9 +1224,20 @@ func (s *seeder) cover(ctx context.Context, closeID string, b seed.Books) {
 		body := map[string]any{"action": "bind", "digest": view.Digest, "account_id": item.AccountID, "confirmed": true}
 		jobs := []string{}
 		for _, j := range view.Jobs {
-			if j.State == "completed" && j.Kind == item.Kind {
-				jobs = append(jobs, j.ID)
+			if j.State != "completed" || j.Kind != item.Kind {
+				continue
 			}
+			// A reconciliation supports the one account it reconciles, named in its reading.
+			if item.Kind == "reconciliation" {
+				reconciles := false
+				for _, f := range j.Facts {
+					reconciles = reconciles || (f.Field == "account" && strings.EqualFold(f.Value, item.Name))
+				}
+				if !reconciles {
+					continue
+				}
+			}
+			jobs = append(jobs, j.ID)
 		}
 		if len(item.SuggestedJobIDs) > 0 {
 			jobs = item.SuggestedJobIDs
@@ -1609,6 +1635,72 @@ func (s *seeder) afterwards(ctx context.Context) {
 	// Model usage for the month so far, as the operations view counts it.
 }
 
+// overviewAnswer describes each September close from what the database holds for it, so a step the run could not
+// take is not claimed.
+func (s *seeder) overviewAnswer(ctx context.Context) string {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.entity,
+ COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),''),
+ (SELECT count(*) FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='pending'),
+ (SELECT count(*) FROM preparation_jobs j WHERE j.close_id=c.id AND j.state='needs_confirmation'),
+ (SELECT count(*) FROM preparation_jobs j WHERE j.close_id=c.id AND j.state='waiting_client'),
+ (SELECT count(*) FROM preparation_jobs j WHERE j.close_id=c.id AND j.state='failed'),
+ EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=c.id AND e.superseded_by IS NOT NULL AND e.replaced_at>COALESCE((SELECT created_at FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'-infinity')),
+ EXISTS(SELECT 1 FROM quickbooks_snapshots q WHERE q.close_id=c.id),
+ COALESCE(c.due_on<CURRENT_DATE,false)
+ FROM client_closes c WHERE c.organization_id=$1 AND c.period='2026-09' AND lower(c.entity)=ANY($2) ORDER BY c.entity`, s.o.Organization, s.clientNames())
+	if err != nil {
+		return "I could not read the September closes."
+	}
+	defer rows.Close()
+	var lines, signed []string
+	open := 0
+	for rows.Next() {
+		var entity, decision string
+		var pending, confirm, waiting, failed int
+		var replaced, captured, overdue bool
+		if rows.Scan(&entity, &decision, &pending, &confirm, &waiting, &failed, &replaced, &captured, &overdue) != nil {
+			continue
+		}
+		short := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(entity, " LLC"), " PLLC"), " Inc."), " PC")
+		if decision == "signed_off" && !replaced {
+			signed = append(signed, short)
+			continue
+		}
+		open++
+		var parts []string
+		if decision == "signed_off" && replaced {
+			parts = append(parts, "was signed off, but a document was replaced since, so it needs reopening")
+		}
+		if overdue {
+			parts = append(parts, "is past its due date")
+		}
+		if !captured {
+			parts = append(parts, "has no books captured yet")
+		}
+		if pending > 0 {
+			parts = append(parts, fmt.Sprintf("has %d draft(s) waiting for your approval", pending))
+		}
+		if confirm > 0 {
+			parts = append(parts, fmt.Sprintf("has %d reading(s) waiting for you to confirm", confirm))
+		}
+		if waiting > 0 {
+			parts = append(parts, "has a request to the client approved and waiting to be sent")
+		}
+		if failed > 0 {
+			parts = append(parts, fmt.Sprintf("has %d document(s) I could not read", failed))
+		}
+		if len(parts) == 0 {
+			parts = append(parts, "is open with nothing waiting")
+		}
+		lines = append(lines, short+" "+strings.Join(parts, ", ")+".")
+	}
+	answer := fmt.Sprintf("%d September closes are open. %s", open, strings.Join(lines, " "))
+	if len(signed) > 0 {
+		answer += " " + strings.Join(signed, " and ") + " are signed off."
+	}
+	return answer
+}
+
 // openCount says how many of the demonstration's September closes are open, as the closes stand.
 func (s *seeder) openCount(ctx context.Context) string {
 	var open int
@@ -1657,7 +1749,7 @@ func (s *seeder) chats(ctx context.Context) {
 	}{
 		{"What is still open for September", "", s.today.Add(-26 * time.Hour), []turn{
 			{"user", "What is still open for September across the firm?"},
-			{"assistant", s.openCount(ctx) + " Harbor Fixture has two drafts waiting for your approval. Bluegrass Dental needs the Riverbend loan statement; the request to Dr. Raman is approved and waiting to be sent. Larkspur Landscaping is four days past its due date with a question open about the Fairview retainage. Meridian PT was signed off, but ADP reissued the payroll summary, so it needs reopening. Orchard Street Books has its documents in but no books captured yet. Tidewater Marine has one scan I could not read. Cedar & Pine and Summit Peak are signed off."},
+			{"assistant", s.overviewAnswer(ctx)},
 			{"user", "Which of those is mine?"},
 			{"assistant", s.ownershipAnswer(ctx)},
 		}},
