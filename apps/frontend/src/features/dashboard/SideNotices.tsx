@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Icon, type IconName } from "@close/ui/components/Icon";
 import { SidebarCategory } from "@close/ui/components/Sidebar";
@@ -18,6 +18,7 @@ export function SideNotices() {
   // when newer read or teammate events fill the inbox's first page.
   const inbox = useQuery({ ...workspaceQuery<AttentionInbox>(attentionPath), refetchInterval: 60000, refetchOnWindowFocus: true });
   const navigate = useNavigate();
+  const location = useLocation();
   const queries = useQueryClient();
   const [leaving, setLeaving] = useState<string[]>([]);
   const [failed, setFailed] = useState("");
@@ -70,9 +71,18 @@ export function SideNotices() {
           {failed}
         </p>
       )}
-      <Link className="ks-more" to="/dashboard#decisions">
+      <button
+        type="button"
+        className="ks-more"
+        onClick={() => {
+          // Home's decisions, where read notices stay: scrolled to when already there, opened otherwise.
+          const list = location.pathname === "/dashboard" ? document.getElementById("decisions") : null;
+          if (list) list.scrollIntoView({ block: "start", behavior: "smooth" });
+          else navigate("/dashboard#decisions");
+        }}
+      >
         All notices
-      </Link>
+      </button>
     </div>
   );
 }
