@@ -712,6 +712,10 @@ body {
   height: 18px;
   padding: 0 var(--space-6);
 }
+/* The clients table: the months take the room, and the last column holds the month-opening control. */
+.ks-clients {
+  --ks-columns: minmax(180px, 2fr) 3fr 150px 150px;
+}
 .ks-tr details.ks-another {
   justify-self: end;
 }
@@ -730,12 +734,13 @@ body {
 }
 .ks-tr details.ks-another[open] > form {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--space-6);
   margin-top: var(--space-6);
 }
 .ks-tr details.ks-another[open] > form input {
-  width: 150px;
+  width: 100%;
   margin: 0;
 }
 @media (max-width: 860px) {

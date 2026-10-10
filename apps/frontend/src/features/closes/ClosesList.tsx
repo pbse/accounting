@@ -129,6 +129,7 @@ export default function ClosesList() {
     if (r.owed.length) return <span className="pill muted">{n(r.owed.length, "month")} to open</span>;
     if (open_(r)) return <span className="pill muted">{n(open_(r), "month")} open</span>;
     if (r.closes.some((c) => c.unchecked)) return <span className="pill danger">Sign-off not checked</span>;
+    if (r.closes.some((c) => c.signed_off && c.rechecked === false)) return <span className="pill neutral">Older sign-off, not rechecked</span>;
     if (r.closes.length) return <span className="pill">Signed off</span>;
     return <span className="pill neutral">New</span>;
   };
@@ -183,7 +184,7 @@ export default function ClosesList() {
           </DialogActions>
         </form>
       </Dialog>
-      <div className="ks-table" role="table" aria-label="Clients">
+      <div className="ks-table ks-clients" role="table" aria-label="Clients">
         <div className="ks-tr head" role="row">
           <span>Client</span>
           <span>Months</span>

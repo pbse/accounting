@@ -1,9 +1,15 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@close/ui/components/PageHeader";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { workspaceQuery } from "../../data/queries";
 import { useDates } from "../../data/time";
-import { Decisions, type HomeCounts, type View } from "../home/Home";
+import { ClientFilter, Decisions, type HomeCounts, type View } from "../home/Home";
+import { DailyBooks } from "../home/DailyBooks";
+import { Dependencies } from "../home/Dependencies";
+import { BulkReview, type QueueItem } from "../review/BulkReview";
+import { DelegatedCloses } from "./Goal";
+import { NotOpened } from "./Morning";
 
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
@@ -18,6 +24,13 @@ export default function Closes() {
   const error = homeRead.error ? homeRead.error.message || "Closes are unavailable." : "";
   const tick = Math.max(homeRead.dataUpdatedAt, homeRead.errorUpdatedAt);
   const [view, setView] = useState<View>("all");
+  // The review queue is a capped read; a client or month filter reaches the rest. Once a batch was approved here,
+  // the section stays so its outcomes can be read after the queue empties.
+  const [queueClient, setQueueClient] = useState("");
+  const queueRead = useQuery({ ...workspaceQuery<{ items: QueueItem[]; count: number }>(`/review-queue?client=${encodeURIComponent(queueClient)}`), refetchInterval: 30_000 });
+  const queue = queueRead.data;
+  const queueError = queueRead.error ? queueRead.error.message || "The review queue is unavailable." : "";
+  const [reviewed, setReviewed] = useState(false);
   const bump = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   const today = (counts?.as_of ?? new Date().toISOString()).slice(0, 10);
   const d = counts?.deadlines;
@@ -27,7 +40,7 @@ export default function Closes() {
   const reopened = [...(counts?.owed.filter((item) => item.state === "reopen_required" || item.state === "unknown") ?? []), ...(counts?.reopened_later ?? [])];
   const context = counts
     ? [
-        `Books captured for ${counts.books.captured} of ${counts.books.of}`,
+        `Books captured for ${counts.books.captured} of ${counts.books.of}${counts.books.exported ? ` · ${counts.books.exported} from exports` : ""}`,
         counts.books.exceptions ? n(counts.books.exceptions, "new exception") + " in the books" : "",
         counts.books.unchecked ? n(counts.books.unchecked, "capture") + " not fully checked" : "",
         `counted at ${dates.time(counts.as_of)}`,
@@ -79,6 +92,36 @@ export default function Closes() {
         </div>
       </div>
       <Decisions today={today} tick={tick} snapshot={counts?.inbox} reopened={reopened} canReview={counts?.can_review ?? false} teamTotal={counts?.decisions.team ?? 0} view={view} onView={setView} onChange={bump} />
+      <Dependencies />
+      <DailyBooks canReview={counts?.can_review ?? false} onReviewed={bump} />
+      {(queueError || queueClient || reviewed || (queue && queue.count > 0)) && (
+        <>
+          <SectionHeader title="Ready for your review" id="review-queue">
+            {(queueClient || (queue && queue.count > queue.items.length)) && <ClientFilter value={queueClient} onChange={(next) => next !== queueClient && setQueueClient(next)} shown={queue?.items.length ?? 0} of={queue?.count ?? 0} />}
+          </SectionHeader>
+          {queueError && (
+            <p role="alert">
+              {queueError}
+              {queue ? " Showing the last queue read." : ""}
+            </p>
+          )}
+          {queueRead.isPending ? (
+            <p role="status" className="empty">
+              Reading the queue…
+            </p>
+          ) : (
+            <BulkReview
+              items={queue?.items}
+              onDone={() => {
+                setReviewed(true);
+                bump();
+              }}
+            />
+          )}
+        </>
+      )}
+      <DelegatedCloses client="" />
+      {counts && <NotOpened months={counts.not_opened} />}
     </section>
   );
 }
