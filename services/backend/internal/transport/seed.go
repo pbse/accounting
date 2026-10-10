@@ -229,8 +229,15 @@ func answerFor(w seed.Work) string {
 
 // settle works the queue as the worker does, one step of each kind at a time, until a round finds nothing to do.
 func (s *seeder) settle(ctx context.Context) error {
-	// Only this firm's queue is worked: another firm's jobs are the worker's.
-	ctx = documents.WithinOrganization(preparation.WithinOrganization(ctx, s.o.Organization), s.o.Organization)
+	// Only the demonstration's own closes are worked: any other job, this firm's or another's, is the worker's.
+	var closes []int64
+	if err := s.db.QueryRowContext(ctx, `SELECT close_ids FROM demonstration_seeds WHERE organization_id=$1`, s.o.Organization).Scan(&closes); err != nil {
+		return fmt.Errorf("the seed's closes could not be read: %w", err)
+	}
+	if len(closes) == 0 {
+		return nil
+	}
+	ctx = documents.WithinCloses(preparation.WithinCloses(ctx, closes), closes)
 	reading := llm.WithClient(ctx, s.model)
 	for round := 0; ; round++ {
 		if round == 500 {
@@ -359,7 +366,19 @@ func (s *seeder) isolated(ctx context.Context) error {
 	}
 	names := s.clientNames()
 	var taken []string
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT entity FROM (SELECT entity FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2) UNION SELECT client_entity FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2) UNION SELECT client_entity FROM client_aliases WHERE organization_id=$1 AND retired_at IS NULL AND (lower(client_entity)=ANY($2) OR alias IN (SELECT trim(regexp_replace(n,'[^[:alnum:]]+',' ','g')) FROM unnest($2::text[]) n))) t ORDER BY 1`, s.o.Organization, names)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT entity FROM (SELECT entity FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2)
+ UNION SELECT client_entity FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM client_aliases WHERE organization_id=$1 AND retired_at IS NULL AND (lower(client_entity)=ANY($2) OR alias IN (SELECT trim(regexp_replace(n,'[^[:alnum:]]+',' ','g')) FROM unnest($2::text[]) n))
+ UNION SELECT client_entity FROM budget_versions WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM open_item_actions WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM collection_contact_preferences WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM close_routines WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM client_access WHERE organization_id=$1 AND lower(client_entity)=ANY($2)
+ UNION SELECT client_entity FROM procedure_versions WHERE organization_id=$1 AND lower(client_entity)=ANY($2)) t ORDER BY 1`, s.o.Organization, names)
 	if err != nil {
 		return err
 	}
@@ -721,6 +740,10 @@ func (s *seeder) openClose(ctx context.Context, c *seed.Client, period string) (
 	s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=array_append(close_ids,$2::bigint) WHERE organization_id=$1 AND NOT $2::bigint=ANY(close_ids)`, s.o.Organization, id)
 	if period == seed.Months[0] {
 		s.clientProcedures(ctx, c)
+		// A named teammate who will own the client is assigned it, so its work is theirs to open.
+		if owner := s.owner(c); owner != s.o.Subject {
+			s.must(ctx, "assign "+c.Name, "POST", "/v1/closes/access", map[string]any{"subject": owner, "entity": c.Name, "granted": true, "reason": "Assigned " + c.Name + " at onboarding", "confirmed": true})
+		}
 	}
 	// The client's approved prepaid procedure is applied to the close as evidence, so the agent can prepare
 	// straight through.
@@ -1697,14 +1720,18 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	rows.Close()
 	// A legal hold or a retention date still to come protects a close, demonstration or not.
 	var held []string
-	if rows, err := db.QueryContext(ctx, `SELECT entity||' '||period FROM client_closes WHERE organization_id=$1 AND id::text=ANY($2) AND (legal_hold OR retain_until>CURRENT_DATE) ORDER BY entity,period`, o.Organization, ordered); err == nil {
-		for rows.Next() {
-			var name string
-			rows.Scan(&name)
-			held = append(held, name)
-		}
-		rows.Close()
+	rows, err = db.QueryContext(ctx, `SELECT entity||' '||period FROM client_closes WHERE organization_id=$1 AND id::text=ANY($2) AND (legal_hold OR retain_until>CURRENT_DATE) ORDER BY entity,period`, o.Organization, ordered)
+	if err != nil {
+		return fmt.Errorf("retention could not be read: %w", err)
 	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		held = append(held, name)
+	}
+	rows.Close()
 	if len(held) > 0 {
 		return fmt.Errorf("a legal hold or retention date protects %s; lift it under the close's Settings before removing the demonstration", strings.Join(held, ", "))
 	}
@@ -1809,12 +1836,17 @@ func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions [
 		return err
 	}
 	defer tx.Rollback()
-	// The deletion is receipted as the deletion route receipts one: the demonstration's relationship with the client ends.
+	// The close is locked and its hold checked again here, under the deletion's own transaction, before anything goes.
 	var org, entity, period, client, plainClient string
 	var postings int
-	if err := tx.QueryRowContext(ctx, `SELECT organization_id,entity,period,client_identity(organization_id,entity),trim(regexp_replace(client_identity(organization_id,entity),'[^[:alnum:]]+',' ','g')),(SELECT count(*) FROM production_postings WHERE close_id=client_closes.id) FROM client_closes WHERE id::text=$1`, closeID).Scan(&org, &entity, &period, &client, &plainClient, &postings); err != nil {
+	var held bool
+	if err := tx.QueryRowContext(ctx, `SELECT organization_id,entity,period,client_identity(organization_id,entity),trim(regexp_replace(client_identity(organization_id,entity),'[^[:alnum:]]+',' ','g')),(SELECT count(*) FROM production_postings WHERE close_id=client_closes.id),legal_hold OR COALESCE(retain_until>CURRENT_DATE,false) FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID).Scan(&org, &entity, &period, &client, &plainClient, &postings, &held); err != nil {
 		return fmt.Errorf("read the close: %w", err)
 	}
+	if held {
+		return fmt.Errorf("a legal hold or retention date now protects %s %s", entity, period)
+	}
+	// The deletion is receipted as the deletion route receipts one: the demonstration's relationship with the client ends.
 	if _, err := tx.ExecContext(ctx, `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,$2::bigint,$3,$4,$5,$6,'contract_termination',$7,$8)`,
 		org, closeID, preparation.Digest([]byte(org+"\x00"+strings.ToLower(entity)+"\x00"+period)), period, postings, actor, preparation.Digest([]byte(org+"\x00"+client+"\x00"+period)), preparation.Digest([]byte(org+"\x00"+plainClient+"\x00"+period))); err != nil {
 		return fmt.Errorf("receipt: %w", err)

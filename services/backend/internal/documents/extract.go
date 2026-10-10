@@ -252,8 +252,8 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	claim := rand.Text()
 	var id, org string
 	var original []byte
-	err := db.QueryRowContext(ctx, `UPDATE evidence SET extraction_state='processing',extraction_claim=$1,extraction_started_at=now() WHERE id=(SELECT id FROM evidence WHERE close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled AND c.organization_id=COALESCE($2,c.organization_id)) AND original IS NOT NULL AND (extraction_state='queued' OR (extraction_state='processing' AND extraction_started_at<now()-interval '3 minutes')) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
- RETURNING id::text,original,(SELECT organization_id FROM client_closes WHERE id=evidence.close_id)`, claim, OrganizationScope(ctx)).Scan(&id, &original, &org)
+	err := db.QueryRowContext(ctx, `UPDATE evidence SET extraction_state='processing',extraction_claim=$1,extraction_started_at=now() WHERE id=(SELECT id FROM evidence WHERE close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled AND ($2::bigint[] IS NULL OR c.id=ANY($2::bigint[]))) AND original IS NOT NULL AND (extraction_state='queued' OR (extraction_state='processing' AND extraction_started_at<now()-interval '3 minutes')) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
+ RETURNING id::text,original,(SELECT organization_id FROM client_closes WHERE id=evidence.close_id)`, claim, CloseScope(ctx)).Scan(&id, &original, &org)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -298,14 +298,17 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 
 type scopeKey struct{}
 
-// WithinOrganization limits the work a queue step takes to one firm's; without it a step takes the next job of any
-// enabled firm. The demonstration seed works its own firm's queue this way.
-func WithinOrganization(ctx context.Context, organization string) context.Context {
-	return context.WithValue(ctx, scopeKey{}, organization)
+// WithinCloses limits the work a queue step takes to the given closes; without it a step takes the next job of any
+// enabled firm. The demonstration seed works its own closes' queue this way.
+func WithinCloses(ctx context.Context, closes []int64) context.Context {
+	return context.WithValue(ctx, scopeKey{}, closes)
 }
 
-// OrganizationScope is the firm a step is limited to, or NULL for every firm.
-func OrganizationScope(ctx context.Context) sql.NullString {
-	org, _ := ctx.Value(scopeKey{}).(string)
-	return sql.NullString{String: org, Valid: org != ""}
+// CloseScope is the closes a step is limited to, or NULL for every close.
+func CloseScope(ctx context.Context) any {
+	closes, _ := ctx.Value(scopeKey{}).([]int64)
+	if len(closes) == 0 {
+		return nil
+	}
+	return closes
 }
