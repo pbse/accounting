@@ -172,9 +172,9 @@ Reuse current API/MCP capability handlers and durable jobs. Add a capability onl
 
 ## Seamless agent-first experience
 
-Keep [Tray](design-system.md): existing tokens, light shell, Inter type, Hugeicons, PageHeader, shared rows/cards/charts, AgentComposer/AskAgent and AgentMark. These are implemented foundations, not proposed design work. Add shared components only after a genuine repeated pattern exists.
+The look is [Krith](design-system.md), chosen on 2026-10-10; it supersedes Tray (archived at [archive/design-system-tray.md](archive/design-system-tray.md)) for tokens, type and the shell, and lands in the order the design-system doc's rollout section gives. Until a page has moved it keeps its Tray foundations: the existing tokens, light shell, Inter type, Hugeicons, PageHeader, shared rows/cards/charts, AgentComposer/AskAgent and AgentMark are implemented and stay in use, and B01–B12 work on an unmoved page builds on them rather than restyling it ahead of the rollout. Add shared components only after a genuine repeated pattern exists.
 
-The primary navigation should express the user's jobs: existing Work/Attention for firm delivery and decisions, client context for accounting, and business results/planning for permitted executives. Executive navigation in the same Tray shell exposes Business overview, Reports, Cash plan and My decisions for the selected client; accountants reach these same views through client context. Firm operations and administration remain permission-scoped. Reuse existing routes/components where possible and add destinations only for these distinct jobs; do not create a parallel executive app.
+The primary navigation should express the user's jobs: existing Work/Attention for firm delivery and decisions, client context for accounting, and business results/planning for permitted executives. Executive navigation in the same shell exposes Business overview, Reports, Cash plan and My decisions for the selected client; accountants reach these same views through client context. Firm operations and administration remain permission-scoped. Reuse existing routes/components where possible and add destinations only for these distinct jobs; do not create a parallel executive app.
 
 Interaction requirements:
 
