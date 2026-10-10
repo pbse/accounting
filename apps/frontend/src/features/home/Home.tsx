@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Icon } from "@close/ui/components/Icon";
 import { workspaceQuery } from "../../data/queries";
-import { useDates } from "../../data/time";
+import { useDates, useHour } from "../../data/time";
 import { Setup } from "../closes/Setup";
 import { Conversation } from "../dashboard/Assistant";
 import type { HomeCounts } from "./Decisions";
@@ -24,7 +24,7 @@ export default function Home() {
   const me = useQuery(workspaceQuery<{ email?: string; first_name?: string }>("/me")).data;
   const [chatting, setChatting] = useState(false);
   const bump = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
-  const hour = new Date().getHours();
+  const hour = useHour();
   const daypart = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
   const name = me?.first_name?.trim() || me?.email?.split("@")[0] || "";
   const d = counts?.deadlines;
@@ -38,10 +38,23 @@ export default function Home() {
       ].filter(Boolean)
     : [];
   const line = counts ? `${waiting.length ? waiting.join(" · ") : "Nothing is waiting on you"} · counted at ${dates.time(counts.as_of)}` : error ? "Your closes could not be read." : "Reading your closes…";
-  // This week: the most pressing closes with a decision of the reader's, as the decision list orders them.
-  const week = (counts?.inbox.groups ?? [])
-    .map((g) => ({ ...g, events: g.events.filter((e) => e.yours && !e.snoozed_until) }))
-    .filter((g) => g.events.length > 0)
+  // This week: the most pressing closes with a decision of the reader's, as the decision list orders them, and the
+  // closes whose sign-off no longer stands, which count as decisions without an attention event.
+  const today = (counts?.as_of ?? "").slice(0, 10);
+  const reopened = [...(counts?.owed.filter((item) => item.state === "reopen_required" || item.state === "unknown") ?? []), ...(counts?.reopened_later ?? [])].map((item) => ({
+    close_id: item.close_id,
+    entity: item.entity,
+    due_on: item.due_on,
+    text: item.state === "unknown" ? "Sign-off could not be rechecked" : "Changed since sign-off",
+  }));
+  const week = [
+    ...(counts?.inbox.groups ?? [])
+      .map((g) => ({ ...g, events: g.events.filter((e) => e.yours && !e.snoozed_until) }))
+      .filter((g) => g.events.length > 0)
+      .map((g) => ({ close_id: g.close_id, entity: g.entity, due_on: g.due_on, text: g.events[0].text })),
+    ...reopened,
+  ]
+    .filter((item, i, all) => all.findIndex((other) => other.close_id === item.close_id) === i)
     .slice(0, 3);
   const empty = counts && counts.closes === 0 && counts.not_opened.length === 0;
   return (
@@ -72,9 +85,9 @@ export default function Home() {
               {week.map((g) => (
                 <Link className="ks-row" key={g.close_id} to={`/dashboard/closes/${g.close_id}`}>
                   <div>
-                    <b>{g.entity}</b> <span>· {g.events[0].text}</span>
+                    <b>{g.entity}</b> <span>· {g.text}</span>
                   </div>
-                  <span className="ks-when">{g.due_on ? (g.due_on < (counts?.as_of ?? "").slice(0, 10) ? "Overdue" : dates.calendarDay(g.due_on)) : "No date"}</span>
+                  <span className="ks-when">{g.due_on ? (g.due_on < today ? "Overdue" : dates.calendarDay(g.due_on)) : "No date"}</span>
                   <Icon name="arrow" className="ks-go" />
                 </Link>
               ))}

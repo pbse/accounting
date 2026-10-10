@@ -2,6 +2,9 @@ import { useSyncExternalStore } from "react";
 import { workspaceRequest } from "../closes/workspace";
 import type { Ask } from "./commands";
 
+// Home, with or without a trailing slash, is the stage: the firm's conversation on the page, never the drawer.
+export const isHomePath = (pathname: string) => pathname.replace(/\/+$/, "") === "/dashboard";
+
 // Starter questions: each is a command the panel's fixed reads answer without a model, shown by its question.
 export const starters = {
   firm: ["What needs me today?", "What is ready for review?", "What is blocked?"],

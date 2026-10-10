@@ -6,7 +6,7 @@ import { useUnlocked, workspaceRequest, type AgentEvent } from "../closes/worksp
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
 import { RequestCard } from "./RequestCard";
 import { ProposalCard } from "./ProposalCard";
-import { askAssistant, bumpSessions, clearSessionRequest, loadSessions, nextReview, openSession, starterCommands, starters, takePending, useOpenRequests, usePending, useSessionRequest, useSessionsVersion, type ChatSession } from "./assistantStore";
+import { askAssistant, bumpSessions, clearSessionRequest, isHomePath, loadSessions, nextReview, openSession, starterCommands, starters, takePending, useOpenRequests, usePending, useSessionRequest, useSessionsVersion, type ChatSession } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand, type Ask } from "./commands";
 import { AgentMark } from "@close/ui/components/AgentMark";
@@ -50,7 +50,7 @@ function Panel({ executive }: { executive: boolean }) {
   const closeId = match?.[1] ?? "";
   const paperId = match?.[2] ?? "";
   // On Home the firm's conversation is the page's stage (home/Home.tsx), so the drawer stays closed there.
-  const stage = !executive && location.pathname === "/dashboard";
+  const stage = !executive && isHomePath(location.pathname);
   // Closed on the server and in the browser's first render alike; a panel left open is reopened once hydrated.
   const [open, setOpen] = useState(false);
   useEffect(() => {

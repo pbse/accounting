@@ -14,6 +14,11 @@ export function PageComposer({ closeId, executive }: { closeId: string; executiv
   const close = useQuery({ ...workspaceQuery<{ close: { entity: string; period: string } }>(`/${closeId}`), enabled: !!closeId }).data?.close;
   const scope = executive ? "Your business" : close ? `${close.entity} · ${close.period}` : closeId ? `Close #${closeId}` : "Firm-wide";
   const asks = executive ? starters.executive : closeId ? starters.close : starters.firm;
+  // A draft belongs to the scope it was typed in: leaving the close clears it, so nothing goes to another client.
+  useEffect(() => {
+    setText("");
+    setMenu(false);
+  }, [closeId]);
   const send = (what: string) => {
     const line = what.trim();
     if (!line) return;

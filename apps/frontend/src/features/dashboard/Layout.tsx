@@ -2,7 +2,7 @@ import { Suspense, useEffect } from "react";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router";
 import { AccountMenu } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
-import { openSession } from "./assistantStore";
+import { isHomePath, openSession } from "./assistantStore";
 import { SideChats } from "./SideChats";
 import { SideNotices } from "./SideNotices";
 import { PageComposer } from "./PageComposer";
@@ -141,7 +141,7 @@ export default function WorkspaceLayout() {
           </Suspense>
         </div>
         {/* The composer at the foot of every page; Home has its own, the stage. */}
-        {known && signedIn && location.pathname !== "/dashboard" && <PageComposer closeId={closeId} executive={!!executive} />}
+        {known && signedIn && !isHomePath(location.pathname) && <PageComposer closeId={closeId} executive={!!executive} />}
       </main>
       {executive !== undefined && <Assistant executive={executive} />}
     </div>
