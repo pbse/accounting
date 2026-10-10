@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BrowserRouter, Link, NavLink, Outlet, Route, Routes, useOutletContext } from "react-router";
+import { BrowserRouter, Link, Outlet, Route, Routes, useOutletContext } from "react-router";
 import { signOut } from "./auth";
 import { GrantCount, GrantList, GrantsProvider } from "./components/Grants";
 import { useResource } from "./api";
@@ -18,6 +18,7 @@ import { Plan, Plans } from "./pages/Plans";
 import { PlanBuilder } from "./pages/PlanBuilder";
 import { Avatar } from "@close/ui/components/Avatar";
 import { Icon } from "@close/ui/components/Icon";
+import { Sidebar, type SidebarItem } from "@close/ui/components/Sidebar";
 
 type Me = { subject: string; permissions: string[]; mode: string };
 
@@ -55,36 +56,37 @@ export function App() {
 function Layout() {
   const me = useResource<Me>("/v1/admin/me");
   const [signOutError, setSignOutError] = useState("");
+  const permissions = me.data?.permissions ?? [];
+  const items: SidebarItem[] = [
+    { to: "/", label: "Overview", icon: "home", end: true },
+    { to: "/firms", label: "Firms", icon: "firm" },
+    { to: "/people", label: "People", icon: "clients" },
+    { to: "/audit", label: "Staff audit", icon: "shield" },
+    { to: "/contact-notes", label: "Contact notes", icon: "file" },
+    { label: "Workflows", icon: "run", pages: [{ to: "/workflows", label: "Catalog" }, { to: "/runs", label: "Runs", end: true }, ...(permissions.includes("platform:plans") ? [{ to: "/plans", label: "Plans" }] : [])] },
+    { label: "Operations", icon: "blocked", pages: [{ to: "/jobs", label: "Stuck work" }, { to: "/connections", label: "Connections" }] },
+  ];
   return (
-    <GrantsProvider enabled={me.data?.permissions.includes("platform:content") ?? false}>
+    <GrantsProvider enabled={permissions.includes("platform:content")}>
     <div className="app-shell">
       <a className="skip" href="#main">Skip to content</a>
-      <header className="topbar">
-        <Link className="topbar-brand" to="/" aria-label="Krith staff console, overview">
-          <span className="wordmark">krith</span>
-          <small>Platform staff</small>
-        </Link>
-        <nav aria-label="Staff console">
-          <div className="topbar-nav">
-          <NavLink className="nav-item" end to="/"><Icon name="work" />Overview</NavLink>
-          <NavLink className="nav-item" to="/firms"><Icon name="firm" />Firms</NavLink>
-          <NavLink className="nav-item" to="/people"><Icon name="clients" />People</NavLink>
-          <NavLink className="nav-item" to="/audit"><Icon name="shield" />Staff audit</NavLink>
-          <NavLink className="nav-item" to="/contact-notes"><Icon name="file" />Contact notes</NavLink>
-          <NavLink className="nav-item" to="/workflows"><Icon name="book" />Catalog</NavLink>
-          <NavLink className="nav-item" end to="/runs"><Icon name="run" />Runs</NavLink>
-          {me.data?.permissions.includes("platform:plans") && <NavLink className="nav-item" to="/plans"><Icon name="file" />Plans</NavLink>}
-          <NavLink className="nav-item" to="/jobs"><Icon name="blocked" />Stuck work</NavLink>
-          <NavLink className="nav-item" to="/connections"><Icon name="link" />Connections</NavLink>
-          </div>
-        </nav>
-        <div className="topbar-tools">
-          <details className="topbar-account">
+      <Sidebar
+        brandTo="/"
+        brandLabel="Krith staff console, overview"
+        line="Platform staff"
+        items={items}
+        navLabel="Staff console"
+        person={
+          <details className="ks-me">
             <summary>
               <span className="visually-hidden">Account: </span>
               <Avatar label={me.data?.subject ?? "?"} />
-              <span className="topbar-account-name">{me.data?.subject ?? "Account"}</span>
+              <span className="ks-me-name">
+                <b>{me.data?.subject ?? "Account"}</b>
+                <small>{me.data?.mode === "local-development" ? "Local development" : "Staff"}</small>
+              </span>
               <GrantCount />
+              <Icon name="select" />
             </summary>
             <div>
               <GrantList />
@@ -101,33 +103,13 @@ function Layout() {
               <button onClick={() => signOut().catch((error: Error) => setSignOutError(error.message))}>Sign out</button>
             </div>
           </details>
+        }
+      />
+      <main id="main" className="app-main">
+        <div className="page">
+          <Outlet context={permissions} />
         </div>
-      </header>
-      <div className="app-body">
-        <nav className="rail" aria-label="Console places">
-          <div className="rail-group">
-            <NavLink className="rail-item" end to="/" title="Overview" aria-label="Overview"><Icon name="work" size={18} /></NavLink>
-            <NavLink className="rail-item" to="/firms" title="Firms" aria-label="Firms"><Icon name="firm" size={18} /></NavLink>
-            <NavLink className="rail-item" to="/people" title="People" aria-label="People"><Icon name="clients" size={18} /></NavLink>
-            <NavLink className="rail-item" to="/audit" title="Staff audit" aria-label="Staff audit"><Icon name="shield" size={18} /></NavLink>
-            <NavLink className="rail-item" to="/contact-notes" title="Contact notes" aria-label="Contact notes"><Icon name="file" size={18} /></NavLink>
-          </div>
-          <div className="rail-group">
-            <NavLink className="rail-item" to="/workflows" title="Catalog" aria-label="Catalog"><Icon name="book" size={18} /></NavLink>
-            <NavLink className="rail-item" end to="/runs" title="Runs" aria-label="Runs"><Icon name="run" size={18} /></NavLink>
-            {me.data?.permissions.includes("platform:plans") && <NavLink className="rail-item" to="/plans" title="Plans" aria-label="Plans"><Icon name="file" size={18} /></NavLink>}
-          </div>
-          <div className="rail-group">
-            <NavLink className="rail-item" to="/jobs" title="Stuck work" aria-label="Stuck work"><Icon name="blocked" size={18} /></NavLink>
-            <NavLink className="rail-item" to="/connections" title="Connections" aria-label="Connections"><Icon name="link" size={18} /></NavLink>
-          </div>
-        </nav>
-        <main id="main" className="app-main">
-          <div className="page">
-            <Outlet context={me.data?.permissions ?? []} />
-          </div>
-        </main>
-      </div>
+      </main>
     </div>
     </GrantsProvider>
   );
