@@ -1525,8 +1525,18 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 	obligations := []map[string]any{
 		{"action": "add", "name": "Rent, " + c.Name, "category": "rent", "direction": "out", "amount": c.Rent(), "first_on": "2026-10-01", "every": "month", "vendor": "Lakeside Property Management", "basis": "Lease dated 2024-03-01, section 4: due on the first of each month.", "reason": "Standing obligation"},
 	}
-	if c.Payroll != nil {
-		obligations = append(obligations, map[string]any{"action": "add", "name": c.Payroll.Provider + " payroll", "category": "payroll", "direction": "out", "amount": c.Payroll.Net, "first_on": "2026-10-15", "every": "two_weeks", "vendor": c.Payroll.Provider, "basis": "Payroll runs every two weeks; the provider debits net pay and taxes together.", "reason": "Standing obligation"})
+	if p := c.Payroll; p != nil {
+		// Each pay date's debit as the books show it: net pay and taxes together, split across the month's pay dates.
+		total := mustFloat(p.Gross) + mustFloat(p.EmployerTaxes)
+		each := float64(int64(total*100/float64(len(p.PayDays)))) / 100
+		first := total - each*float64(len(p.PayDays)-1)
+		for i, d := range p.PayDays {
+			amount := each
+			if i == 0 {
+				amount = first
+			}
+			obligations = append(obligations, map[string]any{"action": "add", "name": fmt.Sprintf("%s payroll, the %dth", p.Provider, d), "category": "payroll", "direction": "out", "amount": fmt.Sprintf("%.2f", amount), "first_on": fmt.Sprintf("2026-10-%02d", d), "every": "month", "vendor": p.Provider, "basis": fmt.Sprintf("Payroll is paid on the %dth; the provider debits net pay and taxes together.", d), "reason": "Standing obligation"})
+		}
 	}
 	if c.Loan != nil {
 		obligations = append(obligations, map[string]any{"action": "add", "name": c.Loan.Lender + " note payment", "category": "debt", "direction": "out", "amount": fmt.Sprintf("%.2f", mustFloat(c.Loan.Principal)+mustFloat(c.Loan.Interest)), "first_on": fmt.Sprintf("2026-10-%02d", c.Loan.PayDay), "every": "month", "vendor": c.Loan.Lender, "basis": c.Loan.Agreement + ": fixed monthly payment on the " + fmt.Sprint(c.Loan.PayDay) + "th.", "reason": "Standing obligation"})
@@ -1890,6 +1900,19 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	db.QueryRowContext(ctx, `SELECT count(*) FROM email_outbox m WHERE m.state IN ('queued','sending','unknown') AND (m.request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id::text=ANY($1)) OR m.collection_id IN (SELECT id FROM collection_messages WHERE close_id::text=ANY($1)))`, ordered).Scan(&inFlight)
 	if inFlight > 0 {
 		return fmt.Errorf("%d email(s) from the demonstration's closes are still being sent; wait for their outcome before removing it", inFlight)
+	}
+	// A posting or correction whose outcome the provider has not yet confirmed is kept until it is, as the deletion
+	// route keeps it.
+	var unresolved int
+	db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM production_postings WHERE close_id::text=ANY($1) AND state IN ('executing','unknown'))
+ +(SELECT count(*) FROM sandbox_postings WHERE close_id::text=ANY($1) AND state IN ('executing','unknown'))
+ +(SELECT count(*) FROM xero_postings WHERE close_id::text=ANY($1) AND state IN ('executing','unknown'))
+ +(SELECT count(*) FROM vendor_credit_postings WHERE close_id::text=ANY($1) AND state IN ('executing','unknown'))
+ +(SELECT count(*) FROM bill_corrections WHERE close_id::text=ANY($1) AND state IN ('executing','unknown'))
+ +(SELECT count(*) FROM credit_applications WHERE close_id::text=ANY($1) AND state IN ('executing','unknown'))
+ +(SELECT count(*) FROM xero_corrections WHERE close_id::text=ANY($1) AND state IN ('executing','unknown'))`, ordered).Scan(&unresolved)
+	if unresolved > 0 {
+		return fmt.Errorf("%d posting(s) or correction(s) on the demonstration's closes have an outcome still to confirm; resolve them before removing it", unresolved)
 	}
 	for _, id := range ordered {
 		if err := removeClose(ctx, db, id, chats, subject); err != nil {
