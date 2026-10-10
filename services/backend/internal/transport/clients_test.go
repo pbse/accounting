@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/preparation"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -46,7 +47,10 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM close_export_labels WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+		for _, q := range []string{`DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
+			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_export_labels WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`,
 			`DELETE FROM procedure_versions WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`,
@@ -83,6 +87,18 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	must(err)
 	_, err = db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,method,instructions,enabled,reason,actor) VALUES($1,'Acme Co','basis','cash','Cash basis',true,'Synthetic','fixture')`, org)
 	must(err)
+	// September's lease waits on a request sent to the client.
+	var lease, request string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'Lease, unsigned.txt','f','x','fixture') RETURNING id::text`, september).Scan(&lease))
+	tx, err := db.Begin()
+	must(err)
+	job, err := preparation.StartIntake(t.Context(), tx, september, lease, "fixture")
+	must(err)
+	must(tx.Commit())
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='waiting_client' WHERE id=$1`, job)
+	must(err)
+	must(db.QueryRow(`WITH d AS (INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'1. Send the signed lease.','[]','y','fixture') RETURNING id)
+ INSERT INTO work_requests(job_id,draft_id,revision,recipient,approved_by) SELECT $2,id,0,'dana@acme.test','fixture' FROM d RETURNING id::text`, september, job).Scan(&request))
 
 	store := savedCloses(db, strings.Repeat("a", 32))
 	call := func(subject string, permissions []string, path string, want int) map[string]any {
@@ -136,6 +152,10 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if basis := read["basis"].(map[string]any); basis["method"] != "cash" || basis["scope"] != "client" {
 		t.Fatalf("basis: %v", basis)
 	}
+	// The request waiting on the client, from the month opened under its alias.
+	if requests := read["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["id"] != request || requests[0].(map[string]any)["close_id"] != september || requests[0].(map[string]any)["items"] != float64(1) {
+		t.Fatalf("requests: %v", requests)
+	}
 	// Who can hold Acme's closes, as the roster offers owners: Ann, who reviews every client. Cy is assigned to its
 	// alias' name only, which gives him its September close to work on but not the client's months to hold.
 	people := read["people"].([]any)
@@ -146,8 +166,8 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	// Cy is assigned to the name September was opened with: he reads the client with that month alone, and nothing of
 	// the client as a whole (its roster entry, the months it owes, its connections, currency and basis).
 	cy := call("user_c", []string{"workpapers:review"}, page("Acme Co"), 200)
-	if months := cy["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != september {
-		t.Fatalf("Cy's months: %v", months)
+	if months := cy["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != september || len(cy["requests"].([]any)) != 1 {
+		t.Fatalf("Cy's months and requests: %v %v", months, cy["requests"])
 	}
 	if cy["whole"] != false || cy["roster"] != nil || len(cy["owed"].([]any)) != 0 || len(cy["quickbooks"].([]any)) != 0 || cy["profile"] != nil || cy["basis"] != nil ||
 		cy["template"] != nil || cy["template_hidden"] != true || cy["people"] != nil || cy["can_manage"] != false || cy["can_connect"] != false {
@@ -160,8 +180,8 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if dee["whole"] != true || dee["roster"] == nil || len(dee["owed"].([]any)) != 1 || len(dee["quickbooks"].([]any)) != 1 || dee["template"] != nil || dee["template_hidden"] != true {
 		t.Fatalf("Dee's read: %v", dee)
 	}
-	if months := dee["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != august {
-		t.Fatalf("Dee's months: %v", months)
+	if months := dee["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != august || len(dee["requests"].([]any)) != 0 {
+		t.Fatalf("Dee's months and requests: %v %v", months, dee["requests"])
 	}
 	// A client nobody has heard of, or one the reader is not assigned to, is not found; so is one whose name is too long.
 	call("user_a", admin, page("Birch Dental"), 404)

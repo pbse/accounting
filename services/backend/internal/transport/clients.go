@@ -46,6 +46,17 @@ type monthBooks struct {
 	Stale bool `json:"stale,omitempty"`
 }
 
+// openRequest is a request sent to the client that it has not answered: who it went to, when, and how many items of
+// the month's work wait on it.
+type openRequest struct {
+	ID        string    `json:"id"`
+	CloseID   string    `json:"close_id"`
+	Period    string    `json:"period"`
+	Recipient string    `json:"recipient"`
+	Sent      time.Time `json:"sent_at"`
+	Items     int       `json:"items"`
+}
+
 type owedClientMonth struct {
 	Period string `json:"period"`
 	DueOn  string `json:"due_on,omitempty"`
@@ -179,6 +190,37 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["months"], out["owed"] = months, owed
+		// What the client was asked and has not yet answered, across the months the reader can open: each request still
+		// waiting on the client, as Work shows it (the newest request of a job waiting on the client).
+		ids := make([]string, len(months))
+		for i, m := range months {
+			ids[i] = m.ID
+		}
+		requests := []openRequest{}
+		var waiting *sql.Rows
+		if waiting, err = tx.QueryContext(ctx, `SELECT q.id::text,d.close_id::text,c.period,q.recipient,COALESCE(q.delivered_at,q.approved_at),
+ (SELECT count(*) FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client')
+ FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id
+ WHERE d.close_id::text=ANY($1) AND EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
+  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id))
+ ORDER BY COALESCE(q.delivered_at,q.approved_at),q.id`, ids); err == nil {
+			for waiting.Next() {
+				var q openRequest
+				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &q.Sent, &q.Items); err != nil {
+					break
+				}
+				requests = append(requests, q)
+			}
+			waiting.Close()
+			if err == nil {
+				err = waiting.Err()
+			}
+		}
+		if err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		out["requests"] = requests
 		// A member who can open only some of the client's months, under another of its names, sees those alone.
 		if !whole {
 			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"] = nil, nil, true, []any{}, nil, nil, nil

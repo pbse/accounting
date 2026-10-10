@@ -7,7 +7,7 @@ import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
 import { cashPlanQuery } from "./data/cashPlan";
-import { clientPath, waitingPath } from "./data/clients";
+import { clientPath } from "./data/clients";
 import { closeTab, type CloseTab } from "./data/closeTabs";
 import { appData, effortPath, prefetch, prefetchLater, workPath, workspaceKey, workViews } from "./data/queries";
 
@@ -84,12 +84,9 @@ async function clientsLoader({ context, request }: LoaderFunctionArgs) {
   return null;
 }
 
-// A client's page reads the client, then what is waiting on it, whose read takes the client's own name.
+// A client's page reads the client, in one request.
 async function clientLoader({ context, params }: LoaderFunctionArgs) {
-  if (!prefetching || !params.client) return null;
-  await prefetch(context, clientPath(params.client));
-  const own = context.get(appData).queryClient.getQueryData<{ entity?: string }>(workspaceKey(clientPath(params.client)))?.entity;
-  if (own) await prefetch(context, waitingPath(own));
+  if (prefetching && params.client) await prefetch(context, clientPath(params.client));
   return null;
 }
 

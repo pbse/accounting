@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { Card, Cards } from "@close/ui/components/Card";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { Icon } from "@close/ui/components/Icon";
-import { clientPath, waitingPath } from "../../data/clients";
+import { clientPath } from "../../data/clients";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, monthShort, useDates, useToday } from "../../data/time";
 import { ClientForm, type Person, type RosterEntry } from "../closes/Roster";
@@ -66,6 +66,7 @@ type ClientRead = {
     method: "accrual" | "cash" | "modified_cash";
     scope: "client" | "firm";
   } | null;
+  requests: Request[];
   people?: Person[];
   people_unavailable?: string;
 };
@@ -109,10 +110,6 @@ export default function ClientPage() {
   const today = useToday();
   const read = useQuery(workspaceQuery<ClientRead>(clientPath(asked)));
   const client = read.data;
-  const waiting = useQuery({
-    ...workspaceQuery<Waiting>(waitingPath(client?.entity ?? asked)),
-    enabled: !!client,
-  });
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [dialog, setDialog] = useState<"" | "another" | "schedule">("");
@@ -187,7 +184,9 @@ export default function ClientPage() {
   // The one action: the oldest month open, else the earliest month it owes.
   const inHand = active ? oldest : undefined;
   const next = active && !inHand && owed[0] ? owed[0] : null;
-  const latest = months[0];
+  // Connections and procedures are kept under the client's own name, so they are managed from its newest month opened
+  // under that name (a month opened under another of its names shows neither).
+  const latest = months.find((m) => m.entity.toLowerCase() === name.toLowerCase());
 
   // How each month is due and who holds it: the client's own terms, else the firm template's, said once.
   const people = client.people ?? [];
@@ -213,7 +212,7 @@ export default function ClientPage() {
     ? `Kept on the ${basisLabels[client.basis.method]}, by ${client.basis.scope === "client" ? `${name}’s own procedure` : "the firm’s procedure"}.`
     : "No accounting basis is approved yet.";
   const workers = people.length;
-  const asks = (waiting.data?.items ?? []).filter((item) => months.some((m) => m.id === item.close_id));
+  const asks = client.requests;
 
   return (
     <>
@@ -261,7 +260,7 @@ export default function ClientPage() {
             }
           >
             {ledger.line}
-            {latest ? "" : " Open a month to connect its ledger."}
+            {latest ? "" : ` Open a month under ${name}’s own name to connect its ledger.`}
           </Card>
           <Card
             icon="history"
@@ -390,11 +389,11 @@ export default function ClientPage() {
               <div className="ks-tr linked" role="row" key={item.id}>
                 <span role="cell">
                   <Link className="ks-rowlink" to={`/dashboard/closes/${item.close_id}?tab=requests`}>
-                    {item.source_name || "A request"}
+                    Request #{item.id} to {item.recipient}
                   </Link>
                 </span>
                 <span role="cell" className="ks-mut">
-                  {monthName(item.period)}
+                  {monthName(item.period)} · {n(item.items, "item")} · sent {dates.dayMonth(item.sent_at)}
                 </span>
                 <Icon name="arrow" className="ks-go" />
               </div>
