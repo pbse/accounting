@@ -11,7 +11,6 @@ import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand, type Ask } from "./commands";
 import { AgentMark } from "@close/ui/components/AgentMark";
 import { Icon } from "@close/ui/components/Icon";
-import { Suggestions } from "@close/ui/components/Suggestions";
 
 // The agent panel: one conversation per close (or firm-wide), as a drawer beside the page on a desktop and a sheet on a
 // phone. Free text goes to the agent when the firm allows it; commands run their fixed read without a model; every
@@ -50,6 +49,8 @@ function Panel({ executive }: { executive: boolean }) {
   const match = /^\/dashboard\/closes\/(\d+)(?:\/workpapers\/(\d+))?/.exec(location.pathname);
   const closeId = match?.[1] ?? "";
   const paperId = match?.[2] ?? "";
+  // On Home the firm's conversation is the page's stage (home/Home.tsx), so the drawer stays closed there.
+  const stage = !executive && location.pathname === "/dashboard";
   // Closed on the server and in the browser's first render alike; a panel left open is reopened once hydrated.
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -57,7 +58,7 @@ function Panel({ executive }: { executive: boolean }) {
   }, []);
   const asked = usePending();
   useEffect(() => {
-    if (asked && !open) toggle(true);
+    if (asked && !open && !stage) toggle(true);
   }, [asked]);
   // Only a request made while this panel is mounted opens it, so an old one never overrides a closed panel.
   const openRequests = useOpenRequests();
@@ -65,7 +66,7 @@ function Panel({ executive }: { executive: boolean }) {
   useEffect(() => {
     if (openRequests === handledRequests.current) return;
     handledRequests.current = openRequests;
-    if (!open) toggle(true);
+    if (!open && !stage) toggle(true);
   }, [openRequests]);
   // A link such as /dashboard/closes/7?ask=… asks that close's agent once.
   const navigate = useNavigate();
@@ -78,9 +79,9 @@ function Panel({ executive }: { executive: boolean }) {
     askAssistant(question, closeId);
   }, [location.search, closeId]);
   useEffect(() => {
-    document.body.classList.toggle("assistant-open", open);
+    document.body.classList.toggle("assistant-open", open && !stage);
     return () => document.body.classList.remove("assistant-open");
-  }, [open]);
+  }, [open, stage]);
   // Closing the panel hands focus back to the top bar's Ask the agent button, which opened it.
   const opened = useRef(open);
   useEffect(() => {
@@ -95,12 +96,14 @@ function Panel({ executive }: { executive: boolean }) {
       // The panel still works without remembering its state.
     }
   }
-  if (!open) return null;
+  if (!open || stage) return null;
   // A new close or draft mounts a fresh conversation, so nothing from the previous context can show.
   return <Conversation key={`${closeId}/${paperId}`} closeId={closeId} paperId={paperId} executive={executive} focus={openRequests} onClose={() => toggle(false)} />;
 }
 
-function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId: string; paperId: string; executive: boolean; focus: number; onClose: () => void }) {
+// A conversation: the drawer beside a page, or Home's stage (mode "stage"), where it tells the page whether it is
+// empty so the greeting and the week step aside while a thread shows.
+export function Conversation({ closeId, paperId, executive, focus, onClose, mode = "drawer", onEmpty }: { closeId: string; paperId: string; executive: boolean; focus: number; onClose: () => void; mode?: "drawer" | "stage"; onEmpty?: (empty: boolean) => void }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [live, setLive] = useState<string[]>([]);
   const [liveLinks, setLiveLinks] = useState<{ label: string; href: string }[]>([]);
@@ -117,6 +120,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
   // Counts every step event, so the waiting timer restarts on a step's change of state, not only on a new step.
   const [stepTick, setStepTick] = useState(0);
   const [menu, setMenu] = useState(false);
+  const [actions, setActions] = useState(false);
   const [about, setAbout] = useState(false);
   // The chat shown: null is a fresh chat, saved on its first question. The list view shows every chat to switch to.
   const [session, setSession] = useState<{ id: string; title: string } | null>(null);
@@ -131,17 +135,6 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
   const input = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   const waiting = usePending();
-  // A page that leads with its own "Ask the agent" composer (Work, Attention, a close's Overview) already offers the
-  // starter questions, so the panel shows no chips of its own beside it.
-  const [pageComposer, setPageComposer] = useState(false);
-  useEffect(() => {
-    // The page's composer may mount after its own read, or unmount on a hand-over, so the page is watched, not probed.
-    const look = () => setPageComposer(!!document.querySelector(".agent-composer"));
-    look();
-    const watcher = new MutationObserver(look);
-    watcher.observe(document.body, { childList: true, subtree: true });
-    return () => watcher.disconnect();
-  }, []);
   const path = closeId ? `/${closeId}/chat` : "/chat";
   // A question from the palette is asked once the history has loaded, so its answer is the last thing shown.
   useEffect(() => {
@@ -375,8 +368,11 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
       .catch((e) => setError(e instanceof Error ? e.message : "The command could not run."));
   }
   const empty = messages.length === 0 && !busy;
-  return (
-    <aside className="assistant" aria-label="Agent">
+  const drawer = mode === "drawer";
+  useEffect(() => onEmpty?.(empty), [empty]);
+  // The parts of a conversation, arranged as the drawer or as Home's stage.
+  const head = (
+    <>
       <header>
         <button type="button" className="assistant-back" onClick={onClose} aria-label="Close the agent">
           <Icon name="back" />
@@ -418,9 +414,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
           </button>
         </span>
       </header>
-      <p className="assistant-context" aria-label="Conversation context">
-        {closeId ? <span className="pill">{label || `Close #${closeId}`}</span> : <span className="pill">{executive ? "Your business" : "Firm-wide"}</span>}
-        {paperId && <span className="pill">Draft #{paperId}</span>}
+      <p className="assistant-context" aria-label="This chat">
         {renaming !== null && session ? (
           <form
             className="assistant-rename"
@@ -446,7 +440,9 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
           session && <span className="assistant-title" title={session.title}>{session.title}</span>
         )}
       </p>
-      {view === "chats" && (
+    </>
+  );
+  const chatsList = view === "chats" && (
         <Chats
           closeId={closeId}
           current={session?.id ?? ""}
@@ -460,7 +456,9 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
           }}
           onNew={startNew}
         />
-      )}
+      );
+  const aboutText = (
+    <>
       {about && executive && (
         <p className="assistant-about">
           Answers come from your clients’ published reports, cash plan and budget, read with your access and listed under each answer. With the firm’s Agent chat on firm-wide, every question goes to the configured model provider with the reads the agent chooses and the last turns of this conversation; below that level a question gets one fixed line and is not sent anywhere. The agent proposes nothing for an executive and changes nothing.
@@ -471,12 +469,10 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
           Answers come from saved work you can access, read with your permissions and listed under each answer. With Agent chat on for client closes, every question you type in a client close goes to the configured model provider with the reads of this close the agent chooses and the last turns of this conversation; commands typed with / never go to a model, except /ask. With it on firm-wide, a question asked outside a close goes the same way with the reads the agent chooses across the closes you can open, and an answer built on a read that cannot be tied to particular closes is shown once and not kept. An action the agent proposes runs only after you confirm its card, through the same checks as the page; the agent never approves, sends or posts anything.
         </p>
       )}
+    </>
+  );
+  const thread = (
       <ol ref={list} className="assistant-messages" aria-live="polite" hidden={view === "chats"}>
-        {empty && !pageComposer && (
-          <li className="assistant-hint">
-            <Suggestions label="Starter questions" items={executive ? starters.executive : closeId ? starters.close : starters.firm} disabled={busy || !loaded} onPick={(label) => void send({ ...((!executive && starterCommands[label]) || { text: label }), workpaper_id: paperId })} />
-          </li>
-        )}
         {messages.map((m, i) => {
           // A firm-wide card acts on the close it named; the card reads that close as a close conversation's would.
           const cardClose = m.target_close_id || closeId;
@@ -551,7 +547,8 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
           </li>
         )}
       </ol>
-      {error && (
+  );
+  const errorLine = error && (
         <p role="alert" className="assistant-error">
           {error}{" "}
           {lastBody && !busy && (
@@ -560,8 +557,9 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
             </button>
           )}
         </p>
-      )}
-      <form className="assistant-composer" onSubmit={submit}>
+      );
+  const composer = (
+      <form className="assistant-composer ks-composer" onSubmit={submit}>
         {slash.length > 0 && (
           <ul id="assistant-commands" className="assistant-commands" role="listbox" aria-label="Commands">
             {slash.map((c) => (
@@ -571,7 +569,7 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
             ))}
           </ul>
         )}
-        <div className="assistant-field">
+        <div className="ks-box">
           <textarea
             ref={input}
             aria-label="Message the agent"
@@ -583,8 +581,8 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
             aria-autocomplete="list"
             value={text}
             maxLength={1000}
-            rows={1}
-            placeholder={executive ? "Ask about your reports, cash plan or budget" : closeId ? "Ask about this close, or / for commands" : "Ask about your work, or / for commands"}
+            rows={2}
+            placeholder={executive ? "Ask about your reports, cash plan or budget" : closeId ? "Ask about this close, or tell the agent what to do" : "Ask anything, or tell the agent what to do"}
             onChange={(e) => {
               setText(e.target.value);
               setSelected(0);
@@ -606,14 +604,72 @@ function Conversation({ closeId, paperId, executive, focus, onClose }: { closeId
               else if (e.key === "Escape" && menu) setMenu(false);
             }}
           />
-          <button className="assistant-send" disabled={busy || !loaded || !text.trim()} aria-label={busy ? "Answering" : !loaded ? "Opening the chat" : "Send"}>
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-              <path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
+          <div className="ks-box-row">
+            <span className="ks-plus">
+              <button type="button" className="ks-round" aria-label="Choose an ask" aria-haspopup="menu" aria-expanded={actions} disabled={busy || !loaded} onClick={() => setActions((v) => !v)}>
+                <Icon name="plus" size={18} />
+              </button>
+              {actions && (
+                <div className="ks-menu" role="menu" aria-label="Asks">
+                  <div className="ks-menu-head">Ask</div>
+                  {(executive ? starters.executive : closeId ? starters.close : starters.firm).map((label) => (
+                    <button type="button" role="menuitem" key={label} onClick={() => { setActions(false); void send({ ...((!executive && starterCommands[label]) ?? { text: label }), workpaper_id: paperId }); }}>
+                      <Icon name="agent" />
+                      {label}
+                    </button>
+                  ))}
+                  {!executive && (
+                    <>
+                      <div className="ks-menu-head">Commands</div>
+                      {commands.filter((c) => !c.close || closeId).map((c) => (
+                        <button type="button" role="menuitem" key={c.name} onClick={() => { setActions(false); complete(c, true); }}>
+                          <span className="ks-cmd">/{c.name}</span>
+                          {c.description}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </span>
+            <span className="ks-scope">{closeId ? label || `Close #${closeId}` : executive ? "Your business" : "Firm-wide"}{paperId ? ` · Draft #${paperId}` : ""}</span>
+            <span className="ks-spacer" />
+            <button className="ks-send" disabled={busy || !loaded || !text.trim()} aria-label={busy ? "Answering" : !loaded ? "Opening the chat" : "Send"}>
+              <Icon name="up" />
+            </button>
+          </div>
         </div>
-        {empty && !about && <p className="assistant-note">Reads your firm's saved work with your permissions. Actions need your confirmation.</p>}
+        {empty && (
+          <div className="ks-suggest" aria-label="Starter questions">
+            {(executive ? starters.executive : closeId ? starters.close : starters.firm).map((label) => (
+              <button type="button" key={label} disabled={busy || !loaded} onClick={() => void send({ ...((!executive && starterCommands[label]) ?? { text: label }), workpaper_id: paperId })}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {empty && !about && drawer && <p className="assistant-note">Reads your firm's saved work with your permissions. Actions need your confirmation.</p>}
       </form>
+  );
+  if (mode === "stage")
+    return (
+      <div className="ks-stage-chat">
+        {(!empty || view === "chats" || session) && <div className="ks-thread-head">{head}</div>}
+        {chatsList}
+        {aboutText}
+        {!empty && thread}
+        {errorLine}
+        {composer}
+      </div>
+    );
+  return (
+    <aside className="assistant" aria-label="Agent">
+      {head}
+      {chatsList}
+      {aboutText}
+      {thread}
+      {errorLine}
+      {composer}
     </aside>
   );
 }

@@ -283,44 +283,7 @@
 .app-shell .prepare-menu a:hover {
   background: var(--hover);
 }
-/* Home: the trust strip under the cards, and each client's decisions as its own card, the first in the spotlight. */
-.trust-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-8);
-  margin: calc(-1 * var(--space-12)) 0 var(--space-24);
-}
-.app-shell .chip.warn {
-  background: var(--attention-tint);
-  box-shadow: none;
-  color: var(--attention-text);
-  border: 0;
-  cursor: pointer;
-}
-.app-shell .chip.neutral {
-  background: var(--fill);
-  box-shadow: none;
-  color: var(--ink-2);
-}
 @media (max-width: 860px) {
-}
-.app-shell .first-client {
-  display: flex;
-  align-items: center;
-  gap: var(--space-16);
-  background: var(--spotlight);
-  color: var(--spotlight-text);
-}
-.first-client > span {
-  flex: 1;
-}
-.first-client h2,
-.first-client p {
-  margin: 0;
-}
-.first-client p {
-  margin-top: var(--space-4);
-  font-size: 13px;
 }
 .decision {
   margin-bottom: var(--space-12);
@@ -691,10 +654,6 @@ aside.assistant {
   padding: var(--space-8) var(--space-12);
   background: var(--blue-tint);
 }
-.assistant-messages > li.assistant-hint {
-  display: block;
-  padding: var(--space-4) 0;
-}
 .assistant-messages p {
   margin: 0;
   white-space: pre-line;
@@ -772,52 +731,6 @@ aside.assistant {
   flex-direction: column;
   gap: 6px;
   position: relative;
-}
-.assistant-field {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-8);
-  padding: 6px 6px 6px var(--space-12);
-  border: 1px solid var(--line-strong);
-  border-radius: 22px;
-  background: var(--surface);
-}
-.assistant-field:focus-within {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
-}
-.app-shell .assistant-field textarea {
-  flex: 1;
-  min-width: 0;
-  max-height: 130px;
-  margin: 0;
-  padding: 6px 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  font-size: 14px;
-  line-height: 22px;
-  resize: none;
-}
-.app-shell .assistant-field textarea:focus {
-  outline: none;
-}
-.app-shell .assistant-send {
-  flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--blue);
-  color: var(--on-chip);
-  box-shadow: none;
-}
-.app-shell .assistant-send:disabled {
-  background: var(--fill);
-  color: var(--ink-2);
 }
 .assistant-note {
   margin: 0;
@@ -1010,4 +923,497 @@ aside.assistant {
   box-shadow: none;
   font: inherit;
   cursor: pointer;
+}
+
+/* Home is a stage (docs/design-system.md, Stage): the greeting, the composer at the centre with the agent's offers,
+   This week beneath. Send, and the greeting and the list fade up while the composer glides to the foot and the thread
+   fills the stage. Below 860px the stage is flow. */
+.app-shell section.ks-stage {
+  position: relative;
+  height: calc(100vh - 20px);
+  min-height: 640px;
+  margin: 0 calc(-1 * var(--space-24));
+  padding: 0 var(--space-24);
+  overflow: hidden;
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+.ks-hello {
+  position: absolute;
+  left: var(--space-24);
+  right: var(--space-24);
+  top: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-8);
+  text-align: center;
+  transition: opacity 220ms var(--ease), transform 320ms var(--ease);
+}
+.app-shell .ks-hello h2 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 40px;
+  line-height: 46px;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+.app-shell .ks-hello p {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  line-height: 28px;
+  color: var(--ink-3);
+  font-style: italic;
+  text-wrap: balance;
+}
+.ks-week {
+  position: absolute;
+  left: 50%;
+  top: 520px;
+  width: var(--composer-width);
+  max-width: 100%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  transition: opacity 200ms var(--ease), transform 320ms var(--ease);
+}
+.ks-week .ks-cat {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-12) var(--space-6);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.app-shell .ks-row {
+  display: grid;
+  grid-template-columns: 1fr auto 16px;
+  align-items: center;
+  gap: var(--space-12);
+  min-height: var(--row);
+  padding: 0 var(--space-12);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  box-shadow: none;
+  text-align: left;
+  width: 100%;
+  font-size: 14px;
+  color: var(--ink);
+  text-decoration: none;
+  transition: background 120ms;
+}
+.app-shell .ks-row:hover {
+  background: var(--hover);
+}
+.ks-row b {
+  font-weight: 500;
+}
+.ks-row > div > span {
+  color: var(--ink-2);
+}
+.ks-row .ks-when {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.ks-row .ks-go {
+  width: 16px;
+  height: 16px;
+  color: var(--ink-4);
+  opacity: 0;
+  transition: opacity 140ms;
+}
+.ks-row:hover .ks-go,
+.ks-row:focus-visible .ks-go {
+  opacity: 1;
+}
+.ks-week-note {
+  margin: 0;
+  padding: var(--space-8) var(--space-12);
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.app-shell .ks-week .ks-more {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 var(--space-12);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.app-shell .ks-week .ks-more:hover {
+  background: var(--hover);
+}
+.ks-stage.chatting .ks-hello,
+.ks-stage.chatting .ks-week {
+  opacity: 0;
+  pointer-events: none;
+}
+.ks-stage.chatting .ks-hello {
+  transform: translateY(-16px);
+}
+.ks-stage.chatting .ks-week {
+  transform: translate(-50%, -16px);
+}
+/* What follows the stage (a firm's first steps, its goals) sits beneath it while nothing is being asked. */
+.ks-under {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding-top: var(--space-24);
+}
+
+/* The conversation on the stage: the thread above, the composer gliding from the centre to the foot. */
+.ks-stage-chat {
+  position: absolute;
+  inset: 0;
+}
+.ks-stage-chat .ks-composer {
+  position: absolute;
+  left: 50%;
+  top: 320px;
+  transform: translateX(-50%);
+  width: var(--composer-width);
+  max-width: calc(100% - 2 * var(--space-24));
+  transition: top 380ms var(--ease);
+  z-index: 5;
+}
+.ks-stage.chatting .ks-stage-chat .ks-composer {
+  top: calc(100% - 128px);
+}
+/* On the stage there is nothing to close or go back from. */
+.ks-stage-chat .assistant-back,
+.ks-stage-chat .assistant-close {
+  display: none;
+}
+.ks-stage-chat .ks-thread-head {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: var(--composer-width);
+  max-width: calc(100% - 2 * var(--space-24));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-8) 0;
+  background: var(--surface);
+  z-index: 2;
+}
+.ks-stage-chat .assistant-messages {
+  position: absolute;
+  left: 50%;
+  top: 64px;
+  bottom: 150px;
+  width: var(--composer-width);
+  max-width: calc(100% - 2 * var(--space-24));
+  transform: translateX(-50%);
+  padding: var(--space-8) 0 var(--space-16);
+  gap: 18px;
+}
+.ks-stage-chat .assistant-messages p,
+.ks-stage-chat .assistant-messages li {
+  font-size: 15px;
+  line-height: 24px;
+}
+.ks-stage-chat .assistant-error {
+  position: absolute;
+  left: 50%;
+  bottom: 138px;
+  width: var(--composer-width);
+  max-width: calc(100% - 2 * var(--space-24));
+  transform: translateX(-50%);
+}
+.ks-stage-chat .assistant-chats {
+  position: absolute;
+  left: 50%;
+  top: 64px;
+  bottom: 150px;
+  width: var(--composer-width);
+  max-width: calc(100% - 2 * var(--space-24));
+  transform: translateX(-50%);
+}
+
+/* The composer (docs/design-system.md, Composer): a box with room for sentences and three controls. */
+.ks-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+.ks-composer.foot {
+  position: sticky;
+  bottom: var(--space-20);
+  width: var(--composer-width);
+  max-width: 100%;
+  margin: var(--space-24) auto 0;
+  z-index: 5;
+}
+/* The page's content ends above the composer, so nothing hides under it. */
+.app-shell .app-main:has(> .ks-composer.foot) .page {
+  padding-bottom: 150px;
+}
+/* The page's own composer gives way to the drawer's while the drawer is open. */
+body.assistant-open .ks-composer.foot {
+  display: none;
+}
+.app-shell .ks-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin: 0;
+  padding: var(--space-14) var(--space-14) var(--space-10);
+  border-radius: var(--radius-3xl);
+  background: var(--surface);
+  box-shadow: var(--float);
+  transition: box-shadow 160ms var(--ease);
+}
+.app-shell .ks-box:focus-within {
+  box-shadow: var(--float-focus);
+}
+.app-shell .ks-box textarea {
+  width: 100%;
+  max-width: none;
+  min-height: 52px;
+  max-height: 172px;
+  margin: 0;
+  padding: 2px 4px;
+  border: 0;
+  box-shadow: none;
+  background: none;
+  outline: none;
+  resize: none;
+  font-size: 16px;
+  line-height: 24px;
+}
+.app-shell .ks-box textarea:focus,
+.app-shell .ks-box textarea:focus-visible {
+  box-shadow: none;
+}
+.ks-box-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.ks-box-row .ks-spacer {
+  flex: 1;
+}
+.ks-plus {
+  position: relative;
+}
+.app-shell .ks-round {
+  display: grid;
+  place-items: center;
+  width: var(--control);
+  height: var(--control);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: none;
+  box-shadow: none;
+  color: var(--ink-2);
+  flex: none;
+}
+.app-shell .ks-round:hover:not(:disabled) {
+  background: var(--hover);
+  box-shadow: none;
+  color: var(--ink);
+}
+.ks-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 30px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  color: var(--ink-3);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+.app-shell .ks-send {
+  display: grid;
+  place-items: center;
+  width: var(--control);
+  height: var(--control);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: none;
+  flex: none;
+  transition: background 160ms, transform 160ms var(--ease);
+}
+.app-shell .ks-send:hover:not(:disabled) {
+  background: var(--primary);
+  transform: scale(1.06);
+}
+.app-shell .ks-send:disabled {
+  background: var(--fill);
+  color: var(--ink-4);
+  box-shadow: var(--ring);
+  opacity: 1;
+  cursor: default;
+}
+.ks-suggest {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+.app-shell .ks-suggest button {
+  height: var(--control);
+  padding: 0 var(--space-14);
+  border-radius: var(--radius-full);
+  background: none;
+  box-shadow: var(--ring);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 400;
+}
+.app-shell .ks-suggest button:hover:not(:disabled) {
+  background: var(--surface);
+  box-shadow: var(--ring-strong);
+  color: var(--ink);
+}
+.ks-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + var(--space-8));
+  width: 300px;
+  padding: var(--space-6);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--float);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  z-index: 6;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.ks-menu-head {
+  padding: var(--space-8) var(--space-12) var(--space-4);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.app-shell .ks-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-10);
+  min-height: 38px;
+  padding: 0 var(--space-10);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink);
+  text-align: left;
+  width: 100%;
+}
+.app-shell .ks-menu button:hover:not(:disabled) {
+  background: var(--hover);
+  box-shadow: none;
+}
+.ks-menu button svg {
+  color: var(--ink-4);
+  flex: none;
+}
+.ks-menu .ks-cmd {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-2);
+  flex: none;
+}
+/* The drawer keeps the box at its foot. */
+aside.assistant .ks-composer {
+  position: relative;
+}
+aside.assistant .ks-box {
+  box-shadow: var(--ring);
+  border-radius: var(--radius-2xl);
+  padding: var(--space-10) var(--space-10) var(--space-8);
+}
+aside.assistant .ks-box:focus-within {
+  box-shadow: var(--ring-strong);
+}
+aside.assistant .ks-box textarea {
+  min-height: 24px;
+  font-size: 15px;
+  line-height: 23px;
+}
+@media (max-width: 860px) {
+  .app-shell section.ks-stage {
+    height: auto;
+    min-height: 0;
+    margin: 0;
+    padding: var(--space-32) 0 0;
+    overflow: visible;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-24);
+    padding-top: var(--space-32);
+  }
+  .ks-hello,
+  .ks-week,
+  .ks-stage-chat,
+  .ks-stage-chat .ks-composer,
+  .ks-stage-chat .ks-thread-head,
+  .ks-stage-chat .assistant-messages,
+  .ks-stage-chat .assistant-error,
+  .ks-stage-chat .assistant-chats {
+    position: static;
+    width: auto;
+    max-width: none;
+    transform: none;
+  }
+  .ks-hello h2 {
+    font-size: 30px;
+    line-height: 36px;
+  }
+  .ks-hello p {
+    font-size: 18px;
+    line-height: 24px;
+  }
+  .ks-stage.chatting .ks-hello,
+  .ks-stage.chatting .ks-week {
+    display: none;
+  }
+  .ks-stage-chat .assistant-messages {
+    max-height: 60vh;
+  }
+  .ks-composer.foot {
+    width: auto;
+    bottom: var(--space-12);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ks-hello,
+  .ks-week,
+  .ks-stage-chat .ks-composer,
+  .ks-box,
+  .ks-send {
+    transition: none;
+  }
 }

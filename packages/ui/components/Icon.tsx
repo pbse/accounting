@@ -40,6 +40,7 @@ const icons = {
   select: [["path", { d: "M8 10l4-4 4 4M8 14l4 4 4-4", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }]],
   sidebar: [["rect", { x: "3", y: "4", width: "18", height: "16", rx: "3", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }], ["path", { d: "M9 4v16", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }]],
   "sidebar-open": [["rect", { x: "3", y: "4", width: "18", height: "16", rx: "3", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }], ["path", { d: "M15 4v16", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }]],
+  up: [["path", { d: "M12 19V5M6 11l6-6 6 6", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2" }]],
   check: [["path", { d: "M5 12.5l4.5 4.5L19 7.5", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }]],
   tax: [["path", { d: "M6 3h9l4 4v14H6z", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }], ["path", { d: "M9 12h6M9 16h6", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }]],
 } as const satisfies Record<string, readonly (readonly [string, Readonly<Record<string, string>>])[]>;

@@ -4,7 +4,7 @@ import { PageHeader } from "@close/ui/components/PageHeader";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { workspaceQuery } from "../../data/queries";
 import { useDates } from "../../data/time";
-import { ClientFilter, Decisions, type HomeCounts, type View } from "../home/Home";
+import { ClientFilter, Decisions, type HomeCounts, type View } from "../home/Decisions";
 import { DeadlinesSection, OwedSection, UncapturedSection, deadlineParts } from "../home/Lists";
 import { Link } from "react-router";
 import { DailyBooks } from "../home/DailyBooks";

@@ -5,6 +5,7 @@ import { Assistant, useSignedIn } from "./Assistant";
 import { openSession } from "./assistantStore";
 import { SideChats } from "./SideChats";
 import { SideNotices } from "./SideNotices";
+import { PageComposer } from "./PageComposer";
 import { AttentionBadge } from "../closes/Attention";
 import { useQuery } from "@tanstack/react-query";
 import { workspaceQuery } from "../../data/queries";
@@ -139,6 +140,8 @@ export default function WorkspaceLayout() {
             {known ? <Outlet /> : <p role="status">Opening…</p>}
           </Suspense>
         </div>
+        {/* The composer at the foot of every page; Home has its own, the stage. */}
+        {known && signedIn && location.pathname !== "/dashboard" && <PageComposer closeId={closeId} executive={!!executive} />}
       </main>
       {executive !== undefined && <Assistant executive={executive} />}
     </div>

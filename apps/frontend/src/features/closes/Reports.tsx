@@ -2,7 +2,6 @@ import { workspaceKey, workspaceQuery } from "../../data/queries";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { Fragment, useState } from "react";
-import { AskAgent } from "../dashboard/AskAgent";
 import { LedgerSelection } from "./Coverage";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
@@ -123,14 +122,6 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
   const prior = pack.prior;
   return (
     <section aria-label="Management pack">
-      {staff && (
-        <AskAgent
-          closeId={closeId}
-          description="Ask about these results. The agent reads the same captured reports and cites them."
-          placeholder="Why did operating profit change this month?"
-          suggestions={["Explain the largest movements in profit this month", "What drove the change in working capital?", "Which accounts make up book cash?"]}
-        />
-      )}
       <p>
         <strong>
           {pack.entity} · {pack.period}
