@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"image"
 	"image/png"
@@ -23,7 +24,19 @@ func pagePNG(t *testing.T) []byte {
 }
 
 func TestPageReadingFollowsProviderSwitchAndModelPolicy(t *testing.T) {
-	page := pagePNG(t)
+	// An actual, poorly compressible PNG exceeds the old 2 MiB text limit.
+	picture := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
+	if _, err := rand.Read(picture.Pix); err != nil {
+		t.Fatal(err)
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, picture); err != nil {
+		t.Fatal(err)
+	}
+	page := encoded.Bytes()
+	if len(page) <= 2<<20 {
+		t.Fatal("fixture must exercise image-sized request limit")
+	}
 	scope := Scope{Organization: "org", Subject: "owner", AccessProfile: "personal"}
 	for _, provider := range []string{"api", "context_machine"} {
 		t.Run(provider, func(t *testing.T) {
@@ -102,5 +115,14 @@ func TestContextMachineDoesNotUseConfiguredGeminiAdapter(t *testing.T) {
 	}
 	if c.routes["ocr"].Provider != ContextMachine || c.gemini != nil {
 		t.Fatal("Gemini bypasses routing switch")
+	}
+}
+
+func TestClaudeImageLimitIsCheckedBeforeDispatch(t *testing.T) {
+	if err := ValidateAgentImages("claude", []Image{{PNG: make([]byte, 7500001)}}); err == nil {
+		t.Fatal("Claude would reject an image over 10 MB base64")
+	}
+	if err := ValidateAgentImages("codex", []Image{{PNG: make([]byte, 7500001)}}); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -19,7 +19,7 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, llm.ImageRequestBytes))
 	dec.DisallowUnknownFields()
 	dec.UseNumber()
-	if dec.Decode(&in) != nil || llm.ValidateImages(in.Request) != nil || dec.Decode(new(any)) != io.EOF || in.Version != 1 || !llm.IsAccountingPurpose(in.Request.Purpose) || !in.Deadline.After(time.Now()) || in.Request.Scope != nil || in.Request.MaxModelCalls != 0 || in.Request.MaxOutputTokens < 1 || in.Request.MaxOutputTokens > 32768 || in.Request.MaxResponseBytes < 1 || in.Request.MaxResponseBytes > 4<<20 {
+	if dec.Decode(&in) != nil || llm.ValidateImages(in.Request) != nil || llm.ValidateAgentImages(in.Agent, in.Request.Images) != nil || dec.Decode(new(any)) != io.EOF || in.Version != 1 || !llm.IsAccountingPurpose(in.Request.Purpose) || !in.Deadline.After(time.Now()) || in.Request.Scope != nil || in.Request.MaxModelCalls != 0 || in.Request.MaxOutputTokens < 1 || in.Request.MaxOutputTokens > 32768 || in.Request.MaxResponseBytes < 1 || in.Request.MaxResponseBytes > 4<<20 {
 		http.Error(w, "invalid completion", 400)
 		return
 	}

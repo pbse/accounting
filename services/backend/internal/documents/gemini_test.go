@@ -86,7 +86,7 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 		if text, method, err = reading.page(ctx, "", render, tesseract); err != nil || text != "SCANNED INVOICE 6000.00" || method != "OCR (English; verify against original)" {
 			t.Fatalf("%+v: a scanned page falls back to Tesseract: %q %q %v", failing, text, method, err)
 		}
-		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; The image model could not compare it with the page image" {
+		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Image model could not compare it with the page image" {
 			t.Fatalf("%+v: a page with text keeps it, saying it went unchecked: %q %q", failing, text, method)
 		}
 	}
@@ -147,7 +147,7 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 	// A page that cannot be rendered fails only when nothing else can read it.
 	broken := func() ([]byte, error) { return nil, errors.New("pdftoppm failed") }
 	reading = Reading{Gemini: &fakeReader{text: "never sent"}}
-	if text, method, err = reading.page(ctx, layer, broken, noTesseract); err != nil || text != layer || method != "PDF text; The image model could not compare it with the page image" {
+	if text, method, err = reading.page(ctx, layer, broken, noTesseract); err != nil || text != layer || method != "PDF text; Image model could not compare it with the page image" {
 		t.Fatalf("an unrenderable page with text keeps it: %q %q %v", text, method, err)
 	}
 	if _, _, err = reading.page(ctx, "", broken, noTesseract); err != errRender {

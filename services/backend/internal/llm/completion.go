@@ -28,6 +28,9 @@ type CompletionResponse struct {
 }
 
 func (c *Client) completion(ctx context.Context, r route, in Request) (Response, error) {
+	if err := ValidateAgentImages(r.Agent, in.Images); err != nil {
+		return Response{}, err
+	}
 	id, _ := ctx.Value(identityKey{}).(identity)
 	var scope Scope
 	if id.subject != "" && id.subject != AnyMember {

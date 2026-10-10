@@ -30,7 +30,7 @@ func ValidateImages(in Request) error {
 		return ErrLimit
 	}
 	size, err := png.DecodeConfig(bytes.NewReader(data))
-	if err != nil || size.Width < 1 || size.Height < 1 || size.Width > 8192 || size.Height > 8192 || int64(size.Width)*int64(size.Height) > 16000000 {
+	if err != nil || size.Width < 1 || size.Height < 1 || size.Width > 8000 || size.Height > 8000 || int64(size.Width)*int64(size.Height) > 16000000 {
 		return ErrIncomplete
 	}
 	return nil
@@ -70,4 +70,17 @@ func OCRConfiguration(ctx context.Context) map[string]string {
 		return map[string]string{"provider": Engine(ctx, "ocr"), "model": Model(ctx, "ocr")}
 	}
 	return OCRSetting()
+}
+
+// Claude's direct endpoint caps each base64 image at 10 MB. Reject oversized
+// pages before dispatch rather than consuming an upstream attempt on a known limit.
+func ValidateAgentImages(agent string, images []Image) error {
+	if agent == "claude" {
+		for _, image := range images {
+			if base64.StdEncoding.EncodedLen(len(image.PNG)) > 10000000 {
+				return ErrLimit
+			}
+		}
+	}
+	return nil
 }
