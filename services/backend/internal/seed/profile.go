@@ -265,7 +265,8 @@ func recurring(c *Client, g *ids, period string, revenue string, customers []Par
 	txns = append(txns, purchase(g, day(period, 5), vendor("V4"), "Monthly subscription", vary("189.00", c.Name, "software"), "73", "10"))
 	txns = append(txns, purchase(g, day(period, 9), vendor("V6"), "Office supplies", vary("86.50", c.Name, period, "supplies"), "80", "10"))
 	if seq(c.Name, period, "ads")%3 != 0 {
-		txns = append(txns, bill(g, day(period, 15), vendor("V5"), "PM-"+fmt.Sprint(seq(c.Name, period)%9000+1000), vary("650.00", c.Name, period, "ads"), "78", "20", day(nextMonth(period), 15), false))
+		// Due next month, so open at month-end and paid then.
+		txns = append(txns, bill(g, day(period, 15), vendor("V5"), "PM-"+fmt.Sprint(seq(c.Name, period)%9000+1000), vary("650.00", c.Name, period, "ads"), "78", "20", day(nextMonth(period), 15), true))
 	}
 	// Invoices: each customer is billed once a month; most pay within the month, one pays late, one stays open.
 	n := len(customers)
@@ -290,8 +291,8 @@ func recurring(c *Client, g *ids, period string, revenue string, customers []Par
 	return txns
 }
 
-// settleOpenInvoices pays the invoices the prior month left open, except the customer who is always late, and says
-// which it paid; the prior month's records stay as they were.
+// settleOpenInvoices pays the invoices and bills the prior month left open, except the customer who is always late,
+// and says which it paid; the prior month's records stay as they were.
 func settleOpenInvoices(g *ids, period string, prior []Txn, late string, settled map[string]bool) ([]Txn, map[string]bool) {
 	var txns []Txn
 	paid := map[string]bool{}
@@ -299,8 +300,16 @@ func settleOpenInvoices(g *ids, period string, prior []Txn, late string, settled
 		paid[id] = true
 	}
 	for _, t := range prior {
-		if t.Kind == "Invoice" && t.Balance != nil && t.Party != late && !paid[t.ID] {
+		if paid[t.ID] || t.Balance == nil {
+			continue
+		}
+		switch {
+		case t.Kind == "Invoice" && t.Party != late:
 			txns = append(txns, payment(g, day(period, 6), Party{ID: t.PartyID, Name: t.Party}, t.Balance, "10", "12"))
+			paid[t.ID] = true
+		case t.Kind == "Bill":
+			// The firm's own bills are paid on their due date, in the month after they were booked.
+			txns = append(txns, billPayment(g, day(period, 15), Party{ID: t.PartyID, Name: t.Party}, t.Balance, "10", "20"))
 			paid[t.ID] = true
 		}
 	}

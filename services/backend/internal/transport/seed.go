@@ -312,12 +312,19 @@ func (s *seeder) firmRow(ctx context.Context) error {
 	return nil
 }
 
-// administrator says whether the firm's own records make the subject one of its administrators: the person who
-// created it or arrived first, someone given the firm-admin role, or someone enrolled by an invitation to it.
+// administrator says whether the firm's own records make the subject one of its administrators now: their latest
+// settled role change decides when there is one; otherwise the person who created the firm or arrived first, or
+// someone enrolled by a firm-admin invitation.
 func (s *seeder) administrator(ctx context.Context, subject string) (bool, error) {
+	var latest sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT to_role FROM member_role_changes WHERE organization_id=$1 AND subject=$2 AND state NOT IN ('pending','failed','unknown') ORDER BY id DESC LIMIT 1`, s.o.Organization, subject).Scan(&latest); err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	if latest.Valid {
+		return latest.String == "firm-admin", nil
+	}
 	var admin bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organization_member_access WHERE organization_id=$1 AND subject=$2 AND actor=$2 AND (reason LIKE 'Created the firm%' OR reason LIKE 'First member of the firm%'))
- OR EXISTS(SELECT 1 FROM member_role_changes WHERE organization_id=$1 AND subject=$2 AND to_role='firm-admin' AND state<>'pending' AND state<>'failed')
  OR EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND subject=$2 AND role_slug='firm-admin' AND state='accepted')`, s.o.Organization, subject).Scan(&admin)
 	return admin, err
 }
@@ -1388,14 +1395,28 @@ func (s *seeder) afterwards(ctx context.Context) {
 	if out, ok := s.must(ctx, "attention", "GET", "/v1/closes/attention", nil); ok {
 		var inbox struct {
 			Groups []struct {
-				Events []struct {
+				CloseID string `json:"close_id"`
+				Events  []struct {
 					Key string `json:"key"`
 				} `json:"events"`
 			} `json:"groups"`
 		}
 		json.Unmarshal(out, &inbox)
+		// Only the demonstration's own events are marked; a real client's decisions stay as they are.
+		mine := map[string]bool{}
+		if rows, err := s.db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2)`, s.o.Organization, s.clientNames()); err == nil {
+			for rows.Next() {
+				var id string
+				rows.Scan(&id)
+				mine[id] = true
+			}
+			rows.Close()
+		}
 		var keys []string
 		for _, g := range inbox.Groups {
+			if !mine[g.CloseID] {
+				continue
+			}
 			for _, item := range g.Events {
 				keys = append(keys, item.Key)
 			}
@@ -1620,6 +1641,7 @@ func removeClose(ctx context.Context, db *sql.DB, closeID string) error {
 		`DELETE FROM quickbooks_snapshots WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
 		`DELETE FROM quickbooks_connections WHERE close_id=$1`,
 		`DELETE FROM client_attachments WHERE close_id=$1`,
+		`UPDATE procedure_drafts SET source_evidence_id=NULL,source_digest='',source_quote='' WHERE source_evidence_id IN (SELECT id FROM evidence WHERE close_id=$1)`,
 		`DELETE FROM evidence WHERE close_id=$1`,
 		`DELETE FROM preparation_plans WHERE close_id=$1`,
 		`DELETE FROM close_preparations WHERE close_id=$1`,
