@@ -37,7 +37,7 @@ result, err := llm.Generate(ctx, llm.Request{
 | Setting | Meaning |
 | --- | --- |
 | `LLM_API_IMAGE_ENABLED` | Explicit opt-in (`true`, default `false`) to sending whole, unredacted PDF images to OpenAI in API mode. Does not enable credentials or text inference. Gemini uses its existing paid-service acknowledgment; context-machine images follow the selected private route. |
-| `LLM_PROVIDER` | `api` or `context_machine`; applies to all nine accounting purposes. |
+| `LLM_PROVIDER` | `api` or `context_machine`; applies to all ten accounting purposes. |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Direct API credentials/model. Neither is needed in the main services when routing completions through the context machine. |
 | `GEMINI_API_KEY`, `GEMINI_OCR_MODEL` | The API-mode `ocr` route uses Google's Gemini when its paid-service key is configured and OpenAI image reading has not been explicitly selected. In context-machine mode the same gateway purpose sends page images through Codex or Claude; Gemini credentials cannot bypass the provider switch. `GEMINI_PAID_SERVICE=confirmed` is also required: the credential script installs it with the key, by `--paid-service`, the operator's confirmation that the key's Google project is on the paid service. Its calls still count against the firm's daily model-call limit ([PDF reading](recalculation-and-pdf.md)). |
 | `LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS` | Explicit `true` acknowledgement required for Codex subscription completions; API-key and Claude modes retain token caps. |
