@@ -265,8 +265,11 @@ func booksParity(ctx context.Context, q interface {
 	after := int64(0)
 	for {
 		var page []storedVersion
-		if page, err = storedVersions(ctx, q, org, after, through, 200); err != nil || len(page) == 0 {
+		if page, err = storedVersions(ctx, q, org, after, through, 200); err != nil {
 			return checked, mismatched, err
+		}
+		if len(page) == 0 {
+			break
 		}
 		after = page[len(page)-1].row
 		n, wrong, e := compareVersions(ctx, q, page)
@@ -275,7 +278,27 @@ func booksParity(ctx context.Context, q interface {
 			return checked, mismatched, e
 		}
 	}
+	// Every capture has its version, or waits in the queue for it: one with neither is missing from the record.
+	rows, err := q.QueryContext(ctx, `SELECT x.source,x.id FROM (`+unversionedCaptures+`) x JOIN client_closes c ON c.id=x.close_id
+ WHERE ($1='' OR c.organization_id=$1) AND NOT EXISTS(SELECT 1 FROM books_pending p WHERE p.source=x.source AND p.source_id::text=x.id) ORDER BY 1,2`, org)
+	if err != nil {
+		return checked, mismatched, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var source, id string
+		if err = rows.Scan(&source, &id); err != nil {
+			return checked, mismatched, err
+		}
+		mismatched = append(mismatched, source+" capture "+id+": it has no version")
+	}
+	return checked, mismatched, rows.Err()
 }
+
+// unversionedCaptures is SQL for each month-end capture with no books version yet: its source, id and close.
+const unversionedCaptures = `SELECT 'quickbooks' AS source,s.id::text AS id,s.close_id FROM quickbooks_snapshots s WHERE s.payload ? 'period'
+  AND NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='quickbooks' AND v.source_id=s.id::text)
+ UNION ALL SELECT 'xero',s.id::text,s.close_id FROM xero_snapshots s WHERE NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='xero' AND v.source_id=s.id::text)`
 
 type storedVersion struct {
 	row                            int64
@@ -356,8 +379,13 @@ func compareVersions(ctx context.Context, q interface {
 		switch {
 		case lineErr != nil && lineErr.Error() != linesRefused:
 			mismatched = append(mismatched, name+": its ledger lines cannot be read")
+		case lineErr != nil && (recordedLines != "" || storedLines != linesDigest(nil)):
+			mismatched = append(mismatched, name+": its ledger lines are refused, but lines are stored")
 		case lineErr != nil:
-			// The General Ledger is refused now as it was when the version was written: the record agrees.
+			// The General Ledger is refused now as it was when the version was written, and no lines are kept: the
+			// record agrees.
+		case linesRefused != "":
+			mismatched = append(mismatched, name+": its ledger lines are stored as unreadable, but the readers read them")
 		case kept && (recordedLines != linesDigest(lines) || storedLines != linesDigest(lines)):
 			mismatched = append(mismatched, name+": the ledger lines differ")
 		case !kept && (recordedLines != "" || storedLines != linesDigest(nil)):
@@ -420,18 +448,18 @@ func storedBooks(ctx context.Context, q interface {
 // were still waiting when it began, how many versions were written since and how many captures wait now: it is the
 // gate only when all three are none.
 func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	var captures, versions, unreadable int
+	var captures, pending, unreadable int
 	var parity json.RawMessage
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM books_pending)+(SELECT count(*) FROM books_versions),
- (SELECT count(*) FROM books_versions),(SELECT count(*) FROM books_versions WHERE unreadable<>''),
- COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through),'waiting',(SELECT count(*) FROM books_pending)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &versions, &unreadable, &parity)
+		return tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM quickbooks_snapshots WHERE payload ? 'period')+(SELECT count(*) FROM xero_snapshots),
+ (SELECT count(*) FROM (`+unversionedCaptures+`) x),(SELECT count(*) FROM books_versions WHERE unreadable<>''),
+ COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through),'waiting',(SELECT count(*) FROM books_pending)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &pending, &unreadable, &parity)
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "books read")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"captures": captures, "versions": versions, "pending": max(captures-versions, 0), "unreadable": unreadable, "parity": parity})
+	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity})
 }
 
 // runBooksParity checks every version against its capture and records the run, so staff read its outcome.

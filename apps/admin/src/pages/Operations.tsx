@@ -155,7 +155,7 @@ function MonthBooks() {
       {books.data && (
         <>
           <p>
-            {books.data.versions} of {books.data.captures} month-end captures have their books version{books.data.pending ? `; ${books.data.pending} are waiting for the worker` : ""}. {books.data.unreadable} are kept as unreadable, as the readers find
+            {books.data.versions} of {books.data.captures} month-end captures have their books version{books.data.pending ? `; ${books.data.pending} have none yet` : ""}. {books.data.unreadable} are kept as unreadable, as the readers find
             them.
           </p>
           {!books.data.parity ? (

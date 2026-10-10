@@ -212,4 +212,28 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if !slices.Contains(mismatched, "quickbooks capture 999999999: the capture is gone") {
 		t.Fatalf("a version without its capture: %v", mismatched)
 	}
+	// The capture whose version went is missing from the record, and parity says so.
+	if !slices.Contains(mismatched, "quickbooks capture "+readable+": it has no version") {
+		t.Fatalf("a capture without its version: %v", mismatched)
+	}
+	// Ledger lines refused must leave none stored, and lines read must not be stored as refused.
+	_, err = db.Exec(`INSERT INTO books_lines(version_id,position,account_id,location,cells) SELECT id,1,'1','x','[]'::jsonb FROM books_versions WHERE source='quickbooks' AND source_id=$1`, brokenLedger)
+	must(err)
+	_, err = db.Exec(`UPDATE books_versions SET lines_unreadable='refused' WHERE source='xero' AND source_id=$1`, xeroCapture)
+	must(err)
+	_, mismatched, err = booksParity(t.Context(), db, org, 0)
+	must(err)
+	if !slices.Contains(mismatched, "quickbooks capture "+brokenLedger+": its ledger lines are refused, but lines are stored") {
+		t.Fatalf("lines stored for a refused General Ledger: %v", mismatched)
+	}
+	if !slices.Contains(mismatched, "xero capture "+xeroCapture+": its ledger lines are stored as unreadable, but the readers read them") {
+		t.Fatalf("lines stored as refused though read: %v", mismatched)
+	}
+	// Staff count the captures without a version among those pending, whether or not they wait in the queue.
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	token := strings.Repeat("b", 32)
+	read := adminJSON(t, apiWithStore(db, token), token, "GET", "/v1/admin/books", "", 200)
+	if read["pending"].(float64) < 1 || read["versions"].(float64) != read["captures"].(float64)-read["pending"].(float64) {
+		t.Fatalf("the staff read: %v", read)
+	}
 }
