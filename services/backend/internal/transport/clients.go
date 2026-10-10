@@ -317,6 +317,9 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["profile"] = profile
+		// The approved basis, as a close reads it for the name it was opened under: the client's own override, else the
+		// firm's. An override approved under a name since confirmed as the client's alias is that name's months' basis,
+		// so each is listed with the name it was approved under rather than folded into one client-wide value.
 		var basis, scope string
 		switch err = tx.QueryRowContext(ctx, `SELECT p.method,CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END FROM procedure_versions p WHERE p.organization_id=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower($2)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, org, name).Scan(&basis, &scope); err {
 		case nil:
@@ -327,6 +330,30 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
+		aliasBases := []map[string]string{}
+		if err == nil || err == sql.ErrNoRows {
+			var rows *sql.Rows
+			if rows, err = tx.QueryContext(ctx, `SELECT DISTINCT ON (lower(p.client_entity)) p.client_entity,p.method FROM procedure_versions p
+ WHERE p.organization_id=$1 AND p.kind='basis' AND p.client_entity<>'' AND lower(p.client_entity)<>lower($2) AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)
+ ORDER BY lower(p.client_entity),p.id DESC`, org, name); err == nil {
+				for rows.Next() {
+					var held, method string
+					if err = rows.Scan(&held, &method); err != nil {
+						break
+					}
+					aliasBases = append(aliasBases, map[string]string{"held_under": held, "method": method})
+				}
+				rows.Close()
+				if err == nil {
+					err = rows.Err()
+				}
+			}
+		}
+		if err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		out["alias_bases"] = aliasBases
 
 		// Who can do the client's work, for an administrator, who assigns it: the reviewers holding every client, and
 		// those assigned to this one, as the roster offers owners.

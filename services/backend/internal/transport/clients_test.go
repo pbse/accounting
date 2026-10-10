@@ -150,8 +150,14 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if profile := read["profile"].(map[string]any); profile["currency"] != "USD" || profile["fiscal_year_start"] != float64(4) || profile["state"] != "detected" {
 		t.Fatalf("profile: %v", profile)
 	}
-	if basis := read["basis"].(map[string]any); basis["method"] != "cash" || basis["scope"] != "client" {
-		t.Fatalf("basis: %v", basis)
+	if basis := read["basis"].(map[string]any); basis["method"] != "cash" || basis["scope"] != "client" || len(read["alias_bases"].([]any)) != 0 {
+		t.Fatalf("basis: %v %v", basis, read["alias_bases"])
+	}
+	// A basis approved under the alias stays that name's months' basis, and is listed with it.
+	_, err = db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,method,instructions,enabled,reason,actor) VALUES($1,'Acme Services LLC','basis','accrual','Accrual basis',true,'Synthetic','fixture')`, org)
+	must(err)
+	if held := call("user_a", admin, page("Acme Co"), 200)["alias_bases"].([]any); len(held) != 1 || held[0].(map[string]any)["held_under"] != "Acme Services LLC" || held[0].(map[string]any)["method"] != "accrual" {
+		t.Fatalf("a basis approved under an alias: %v", held)
 	}
 	// The request waiting on the client, from the month opened under its alias: approved, not sent yet; then sent,
 	// once its delivery is recorded.

@@ -69,6 +69,8 @@ type ClientRead = {
     method: "accrual" | "cash" | "modified_cash";
     scope: "client" | "firm";
   } | null;
+  // A basis approved under a name since confirmed as the client's alias stays that name's months' basis.
+  alias_bases?: { held_under: string; method: "accrual" | "cash" | "modified_cash" }[];
   requests: AskedOfClient[];
   people?: Person[];
   people_unavailable?: string;
@@ -222,6 +224,7 @@ export default function ClientPage() {
   const procedure = client.basis
     ? `Kept on the ${basisLabels[client.basis.method]}, by ${client.basis.scope === "client" ? `${name}’s own procedure` : "the firm’s procedure"}.`
     : "No accounting basis is approved yet.";
+  const aliasBases = (client.alias_bases ?? []).map((b) => ` Months opened as ${b.held_under} keep the ${basisLabels[b.method]} approved under that name.`).join("");
   const workers = people.length;
   // The requests the client has not answered: those that reached it first, then those the firm has still to send.
   const asks = [...client.requests].sort((a, b) => Number(a.state !== "sent") - Number(b.state !== "sent"));
@@ -269,7 +272,7 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              managedIn ? (
+              managedIn && client.can_connect ? (
                 <Link className="button" to={`/dashboard/closes/${managedIn.id}?tab=${ledger.tab}#${ledger.anchor}`}>
                   {ledger.connected ? "Manage" : "Connect"} in {monthShort(managedIn.period)}
                 </Link>
@@ -277,7 +280,7 @@ export default function ClientPage() {
             }
           >
             {ledger.line}
-            {managedIn ? "" : ` Open a month under ${ledger.held ?? name} to ${ledger.connected ? "manage" : "connect"} its ledger.`}
+            {managedIn || !client.can_connect ? "" : ` Open a month under ${ledger.held ?? name} to ${ledger.connected ? "manage" : "connect"} its ledger.`}
           </Card>
           <Card
             icon="history"
@@ -316,8 +319,8 @@ export default function ClientPage() {
             }
           >
             {profile.state === "conflict"
-              ? `${name}’s connected ledgers report different currencies or fiscal years; disconnect the wrong one. ${procedure}`
-              : `${profile.currency}, with a fiscal year starting in ${fiscalMonth(profile.fiscal_year_start)}${assumed ? (profile.state === "none" ? ", assumed until a ledger is connected" : ", assumed until the ledger’s currency is read") : ""}. ${procedure}`}
+              ? `${name}’s connected ledgers report different currencies or fiscal years; disconnect the wrong one. ${procedure}${aliasBases}`
+              : `${profile.currency}, with a fiscal year starting in ${fiscalMonth(profile.fiscal_year_start)}${assumed ? (profile.state === "none" ? ", assumed until a ledger is connected" : ", assumed until the ledger’s currency is read") : ""}. ${procedure}${aliasBases}`}
           </Card>
           {client.can_manage && (
             <Card
