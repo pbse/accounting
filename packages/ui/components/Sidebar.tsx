@@ -49,7 +49,6 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   useEffect(() => setOpen(false), [location.pathname, location.search]);
   const menuButton = useRef<HTMLButtonElement>(null);
   const sheet = useRef<HTMLElement>(null);
-  const [restore, setRestore] = useState(false);
   // The sheet exists below 860px; widening past that closes it, so nothing stays inert on a desktop.
   useEffect(() => {
     if (!open) return;
@@ -69,7 +68,6 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setOpen(false);
-      setRestore(true);
     };
     window.addEventListener("keydown", key);
     return () => {
@@ -77,12 +75,12 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
       others.forEach((e) => e.removeAttribute("inert"));
     };
   }, [open]);
-  // Escape hands focus back to the menu button once the bar is no longer inert.
+  // However the sheet closes (Escape, a link, the backdrop), focus left inside it goes back to the menu button once
+  // the bar can take it again.
   useEffect(() => {
-    if (open || !restore) return;
-    menuButton.current?.focus();
-    setRestore(false);
-  }, [open, restore]);
+    if (open) return;
+    if (sheet.current?.contains(document.activeElement)) menuButton.current?.focus();
+  }, [open]);
   const toggleCollapsed = () => {
     const next = !collapsed;
     setCollapsed(next);
