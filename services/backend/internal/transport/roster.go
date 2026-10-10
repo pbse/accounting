@@ -354,17 +354,17 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		// How each client's books arrive, by client identity (its own name in lower case, as the Clients page groups
 		// it): the state of its QuickBooks connection (production first) and of its Xero connection, under any of its
 		// names, for every client the reader can see whole (the firm's, or one assigned to them under its own name, as
-		// the client's page shows them), on the roster or not; and, as "exports", whether a month of it has its uploaded
-		// exports labeled in place of a live ledger, its latest label still on the current exports.
+		// the client's page shows them), on the roster or not; and, as "exports", whether the newest label of its
+		// uploaded exports, in place of a live ledger, is still on the current exports (labeled) or one has been
+		// replaced since (stale).
 		connections := map[string]map[string]string{}
 		if err == nil {
 			var rows *sql.Rows
 			if rows, err = tx.QueryContext(r.Context(), `SELECT DISTINCT ON (provider,client_identity($1,client_entity)) provider,client_identity($1,client_entity),state FROM (
  SELECT 'quickbooks' AS provider,client_entity,state,environment='production' AS first,id FROM quickbooks_connections WHERE organization_id=$1 AND state<>'disconnected'
  UNION ALL SELECT 'xero',client_entity,state,true,id FROM xero_connections WHERE organization_id=$1 AND state<>'disconnected'
- UNION ALL SELECT 'exports',c.entity,'labeled',true,l.id FROM close_export_labels l JOIN client_closes c ON c.id=l.close_id WHERE c.organization_id=$1
-  AND l.id=(SELECT max(n.id) FROM close_export_labels n WHERE n.close_id=l.close_id)
-  AND NOT EXISTS(SELECT 1 FROM unnest(l.evidence_ids) e(id) WHERE NOT EXISTS(SELECT 1 FROM evidence v WHERE v.id=e.id AND v.close_id=l.close_id AND v.superseded_by IS NULL))) x
+ UNION ALL SELECT 'exports',c.entity,CASE WHEN EXISTS(SELECT 1 FROM unnest(l.evidence_ids) e(id) WHERE NOT EXISTS(SELECT 1 FROM evidence v WHERE v.id=e.id AND v.close_id=l.close_id AND v.superseded_by IS NULL)) THEN 'stale' ELSE 'labeled' END,true,l.id
+  FROM close_export_labels l JOIN client_closes c ON c.id=l.close_id WHERE c.organization_id=$1 AND l.id=(SELECT max(n.id) FROM close_export_labels n WHERE n.close_id=l.close_id)) x
  WHERE $2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$3 AND g.granted AND lower(g.client_entity)=client_identity($1,x.client_entity))
  ORDER BY provider,client_identity($1,client_entity),first DESC,id DESC`, org, firmAccess(r), subject(r)); err == nil {
 				for rows.Next() {

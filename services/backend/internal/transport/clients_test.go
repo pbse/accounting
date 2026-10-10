@@ -212,9 +212,19 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 		t.Fatalf("Dee's months and requests: %v %v", months, dee["requests"])
 	}
 	// Clients tells Dee how Acme's books arrive, the Xero connection held under its alias included.
-	if connections := call("user_d", []string{"workpapers:review"}, "/v1/closes/roster", 200)["connections"].(map[string]any)["acme co"].(map[string]any); connections["quickbooks"] != "active" || connections["xero"] != "active" {
+	if connections := call("user_d", []string{"workpapers:review"}, "/v1/closes/roster", 200)["connections"].(map[string]any)["acme co"].(map[string]any); connections["quickbooks"] != "active" || connections["xero"] != "active" || connections["exports"] != "labeled" {
 		t.Fatalf("Dee's view of Acme's books: %v", connections)
 	}
+	// Once a labeled export is replaced, Clients says the exports are out of date rather than dropping them.
+	var replacement string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'Trial balance v2.csv','e2','y','fixture') RETURNING id::text`, september).Scan(&replacement))
+	_, err = db.Exec(`UPDATE evidence SET superseded_by=$2 WHERE id=$1`, export, replacement)
+	must(err)
+	if connections := call("user_d", []string{"workpapers:review"}, "/v1/closes/roster", 200)["connections"].(map[string]any)["acme co"].(map[string]any); connections["exports"] != "stale" {
+		t.Fatalf("replaced exports: %v", connections)
+	}
+	_, err = db.Exec(`UPDATE evidence SET superseded_by=NULL WHERE id=$1`, export)
+	must(err)
 	if connections := call("user_c", []string{"workpapers:review"}, "/v1/closes/roster", 200)["connections"].(map[string]any); len(connections) != 0 {
 		t.Fatalf("Cy, assigned to the alias alone, is not shown the client's connections: %v", connections)
 	}
