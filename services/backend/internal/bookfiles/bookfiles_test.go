@@ -3,6 +3,7 @@ package bookfiles
 import (
 	"archive/zip"
 	"bytes"
+	"math/big"
 	"slices"
 	"testing"
 )
@@ -83,12 +84,12 @@ func workbook(t *testing.T, parts map[string]string) []byte {
 func TestAWorkbookIsReadWhole(t *testing.T) {
 	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
 	body := workbook(t, map[string]string{
-		"xl/workbook.xml": `<workbook ` + main + `><calcPr fullCalcOnLoad="1"/><sheets><sheet name="Trial Balance" sheetId="1" r:id="rId1"/><sheet name="Workings" sheetId="2" state="hidden" r:id="rId2"/></sheets><externalReferences><externalReference r:id="rId3"/></externalReferences></workbook>`,
-		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Target="externalLinks/externalLink1.xml"/></Relationships>`,
+		"xl/workbook.xml":                               `<workbook ` + main + `><calcPr fullCalcOnLoad="1"/><sheets><sheet name="Trial Balance" sheetId="1" r:id="rId1"/><sheet name="Workings" sheetId="2" state="hidden" r:id="rId2"/></sheets><externalReferences><externalReference r:id="rId3"/></externalReferences></workbook>`,
+		"xl/_rels/workbook.xml.rels":                    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Target="externalLinks/externalLink1.xml"/></Relationships>`,
 		"xl/externalLinks/_rels/externalLink1.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="Schedules%20Sept.xlsx" TargetMode="External"/></Relationships>`,
-		"xl/externalLinks/externalLink1.xml": `<externalLink ` + main + `/>`,
-		"xl/sharedStrings.xml": `<sst ` + main + `><si><t>Account</t></si><si><t>Balance</t></si><si><r><t>Check</t></r><r><t>ing</t></r></si></sst>`,
-		"xl/styles.xml": `<styleSheet ` + main + `><numFmts><numFmt numFmtId="164" formatCode="d-mmm-yy"/></numFmts><cellXfs><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs></styleSheet>`,
+		"xl/externalLinks/externalLink1.xml":            `<externalLink ` + main + `/>`,
+		"xl/sharedStrings.xml":                          `<sst ` + main + `><si><t>Account</t></si><si><t>Balance</t></si><si><r><t>Check</t></r><r><t>ing</t></r></si></sst>`,
+		"xl/styles.xml":                                 `<styleSheet ` + main + `><numFmts><numFmt numFmtId="164" formatCode="d-mmm-yy"/></numFmts><cellXfs><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs></styleSheet>`,
 		"xl/worksheets/sheet1.xml": `<worksheet ` + main + `><cols><col min="3" max="3" hidden="1"/></cols><sheetData>
 <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
 <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>1234.5678901234</v></c><c r="C2" s="1"><v>46295</v></c></row>
@@ -121,4 +122,56 @@ func TestAWorkbookIsReadWhole(t *testing.T) {
 	if cells(file.Tables[1])["A1"].Value != "TRUE" {
 		t.Fatalf("booleans: %+v", file.Tables[1])
 	}
+}
+
+// Amounts are read exactly in the style a person confirmed: every way of writing a negative, thousands separators,
+// decimal commas, a stated scale; and an amount rounded at its source is told apart from one exact to the cent.
+func TestAmountsAreReadExactly(t *testing.T) {
+	point, comma, thousands := NumberStyle{Scale: 1}, NumberStyle{DecimalComma: true, Scale: 1}, NumberStyle{Scale: 1000}
+	for _, c := range []struct {
+		text  string
+		style NumberStyle
+		want  string
+		cents bool
+	}{
+		{"1,234.56", point, "1234.56", true},
+		{"(1,234.56)", point, "-1234.56", true},
+		{"1,234.56-", point, "-1234.56", true},
+		{"-$1,234.56", point, "-1234.56", true},
+		{"$ (12.00)", point, "-12", true},
+		{"1 234.56 Cr", point, "-1234.56", true},
+		{"Dr 99", point, "99", true},
+		{"1'234.50", point, "1234.5", true},
+		{"1.234,56", comma, "1234.56", true},
+		{"(1.234,56)", comma, "-1234.56", true},
+		{"EUR 12,5", comma, "12.5", true},
+		{"1.23456", thousands, "1234.56", true},
+		{"1.2", thousands, "1200", true},
+		{"0.0001", point, "0.0001", false},
+		{"−5.00", point, "-5", true},
+	} {
+		got, err := ParseAmount(c.text, c.style)
+		if err != nil || got.Value.FloatString(4) != new(big.Rat).SetFrac(mustRat(c.want).Num(), mustRat(c.want).Denom()).FloatString(4) || got.Cents != c.cents {
+			t.Fatalf("%q in %+v: %v %v %v", c.text, c.style, got.Value, got.Cents, err)
+		}
+	}
+	for _, text := range []string{"", "n/a", "1.2.3", "12abc", "--"} {
+		if _, err := ParseAmount(text, point); err == nil {
+			t.Fatalf("%q is not an amount", text)
+		}
+	}
+	if style, unsure := GuessNumberStyle([]string{"1.234,56", "12,00", "(3,50)"}); !style.DecimalComma || unsure {
+		t.Fatalf("decimal commas are proposed: %+v %v", style, unsure)
+	}
+	if style, unsure := GuessNumberStyle([]string{"1,234.56", "12.00"}); style.DecimalComma || unsure {
+		t.Fatalf("decimal points are proposed: %+v %v", style, unsure)
+	}
+	if _, unsure := GuessNumberStyle([]string{"1,234", "5,000"}); !unsure {
+		t.Fatal("whole thousands could be either, and are left to a person")
+	}
+}
+
+func mustRat(s string) *big.Rat {
+	r, _ := new(big.Rat).SetString(s)
+	return r
 }
