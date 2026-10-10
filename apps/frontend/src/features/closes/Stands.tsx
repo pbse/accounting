@@ -25,7 +25,8 @@ export function signOffAvailable(brief: Brief | undefined) {
 // What needs the person: the areas whose line needs attention, which are the tasks shown, so the sentence and the
 // list always agree. A section that could not be read is said so, never counted as the person's work.
 export function needsOf(brief: Brief) {
-  const needs = brief.lines.filter((l) => l.state === "attention");
+  // Signing off is the page's own action, not a task: a sign-off line that says the close is ready leaves the list.
+  const needs = brief.lines.filter((l) => l.state === "attention" && !(l.area === "sign-off" && /ready/i.test(l.text)));
   return { needs, count: needs.length };
 }
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
@@ -45,10 +46,9 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
   const brief = read.data;
   const [planning, setPlanning] = useState(false);
   const lines = brief?.lines ?? [];
-  // Ready to sign off is its own state: signing off is not a step left, so it leaves the count.
+  // Ready to sign off is its own state; signing off is the page's action, never a step (needsOf).
   const ready = signOffAvailable(brief);
-  const { count: counted } = brief ? needsOf(brief) : { count: 0 };
-  const count = ready ? Math.max(counted - 1, 0) : counted;
+  const { count } = brief ? needsOf(brief) : { count: 0 };
   const waiting = lines.filter((l) => l.state === "waiting");
   const done = lines.filter((l) => l.state === "done");
   const unchecked = lines.filter((l) => l.state === "unknown");
@@ -77,7 +77,7 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
   ].filter(Boolean);
   return (
     <div className="ks-lede">
-      <h2>{sentence}</h2>
+      <h1>{sentence}</h1>
       <p>
         {context.join(" · ")}
         {" · "}
