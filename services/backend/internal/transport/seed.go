@@ -37,8 +37,10 @@ type SeedOptions struct {
 	Organization, Subject string
 	// Members are the firm's other members, who own some clients' closes; their subjects must already be members.
 	Members []string
-	// FirmName names a firm the seed has to create (a local database). An existing firm keeps its name.
+	// FirmName names a firm the seed has to create (a local database). An existing firm keeps its name. Hosted says the
+	// database is not on this machine: the firm must exist already, and the seed creates nothing but its clients.
 	FirmName string
+	Hosted   bool
 	// Log receives one line per step.
 	Log func(format string, args ...any)
 }
@@ -250,7 +252,17 @@ func SeedFirm(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) ([
 	if err := s.isolated(ctx); err != nil {
 		return nil, err
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT to_jsonb(o)-'id'-'name'-'created_at' FROM (SELECT id,name,created_at,require_independent_review,require_link_passcode,COALESCE(independent_review_min_amount::text,'') AS independent_review_min_amount,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat,assistant_model_answers,allow_ledger_writes FROM organizations WHERE id=$1) o`, s.o.Organization).Scan(&s.policyBefore); err != nil {
+	if !s.createdFirm && s.o.Organization != "local-development" {
+		// The seed acts with the administrator's authority, so the firm's own records must say the person has it.
+		admin, err := s.administrator(ctx, s.o.Subject)
+		if err != nil {
+			return nil, err
+		}
+		if !admin {
+			return nil, fmt.Errorf("%s is not recorded as an administrator of this firm (its creator, or given the firm-admin role); the seed acts with that authority only", s.o.Subject)
+		}
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT to_jsonb(o)-'id'-'name'-'created_at' FROM (SELECT id,name,created_at,require_independent_review,require_link_passcode,COALESCE(independent_review_min_amount::text,'') AS independent_review_min_amount,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat,agent_chat_stopped,assistant_model_answers,allow_ledger_writes FROM organizations WHERE id=$1) o`, s.o.Organization).Scan(&s.policyBefore); err != nil {
 		return nil, fmt.Errorf("the firm's policy could not be read: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO demonstration_seeds(organization_id,subject,members,created_firm,policy) VALUES($1,$2,COALESCE($3::text[],'{}'),$4,$5)`, s.o.Organization, s.o.Subject, s.o.Members, s.createdFirm, string(s.policyBefore)); err != nil {
@@ -283,13 +295,31 @@ func (s *seeder) firmRow(ctx context.Context) error {
 	if name == "" {
 		name = s.firm.Name
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO organizations(id,name) VALUES($1,$2) ON CONFLICT (id) DO NOTHING`, s.o.Organization, name)
-	if err != nil {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1)`, s.o.Organization).Scan(&exists); err != nil {
 		return err
 	}
-	n, _ := result.RowsAffected()
-	s.createdFirm = n == 1
+	if exists {
+		return nil
+	}
+	if s.o.Hosted {
+		return fmt.Errorf("no firm %s exists; a hosted firm is never created by the seed", s.o.Organization)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO organizations(id,name) VALUES($1,$2)`, s.o.Organization, name); err != nil {
+		return err
+	}
+	s.createdFirm = true
 	return nil
+}
+
+// administrator says whether the firm's own records make the subject one of its administrators: the person who
+// created it or arrived first, someone given the firm-admin role, or someone enrolled by an invitation to it.
+func (s *seeder) administrator(ctx context.Context, subject string) (bool, error) {
+	var admin bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organization_member_access WHERE organization_id=$1 AND subject=$2 AND actor=$2 AND (reason LIKE 'Created the firm%' OR reason LIKE 'First member of the firm%'))
+ OR EXISTS(SELECT 1 FROM member_role_changes WHERE organization_id=$1 AND subject=$2 AND to_role='firm-admin' AND state<>'pending' AND state<>'failed')
+ OR EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND subject=$2 AND role_slug='firm-admin' AND state='accepted')`, s.o.Organization, subject).Scan(&admin)
+	return admin, err
 }
 
 // isolated refuses a firm that already holds the demonstration, or any client the demonstration would add: the seed
@@ -333,12 +363,15 @@ func (s *seeder) clientNames() []string {
 	return names
 }
 
+// record adds one ID or key to the seed's record as soon as the row exists, so a run that stops can still be removed.
+func (s *seeder) record(ctx context.Context, column string, value any) {
+	s.db.ExecContext(ctx, fmt.Sprintf(`UPDATE demonstration_seeds SET %s=array_append(%s,$2) WHERE organization_id=$1`, column, column), s.o.Organization, value)
+}
+
 // manifest records what removal needs: the closes (every close of the demonstration's clients, which had none
 // before), the chats, marks and rows no client name identifies.
 func (s *seeder) manifest(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=(SELECT COALESCE(array_agg(id),'{}') FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2)),
- chat_session_ids=COALESCE($3::bigint[],'{}'),invitation_ids=COALESCE($4::bigint[],'{}'),role_change_ids=COALESCE($5::bigint[],'{}'),agent_access_ids=COALESCE($6::bigint[],'{}'),procedure_ids=COALESCE($7::bigint[],'{}'),attention_keys=COALESCE($8::text[],'{}'),model_call_days=COALESCE($9::date[],'{}'),finished_at=now() WHERE organization_id=$1`,
-		s.o.Organization, s.clientNames(), s.chatSessions, s.invitations, s.roleChanges, s.agentAccess, s.procedureIDs, s.attentionKeys, s.modelCallDays)
+	_, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=(SELECT COALESCE(array_agg(id),'{}') FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2)),finished_at=now() WHERE organization_id=$1`, s.o.Organization, s.clientNames())
 	return err
 }
 
@@ -377,13 +410,13 @@ func (s *seeder) people(ctx context.Context) error {
  VALUES($1,'r.castillo@example.com','member','Member','invitation_01SEEDACCEPTED'||right($1,8),'accepted',$2,'Joins as a staff accountant for the dental and landscaping clients',$3,$4,$5) RETURNING id`, s.o.Organization, s.o.Subject, s.today.AddDate(0, 0, -80), s.today.AddDate(0, 0, -87), s.today.AddDate(0, 0, -86)).Scan(&id); err != nil {
 		s.problem("invitation: %v", err)
 	} else {
-		s.invitations = append(s.invitations, id)
+		s.record(ctx, "invitation_ids", id)
 	}
 	if err := s.db.QueryRowContext(ctx, `INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at)
  VALUES($1,'j.okonkwo@example.com','member','Member','invitation_01SEEDPENDING'||right($1,8),'pending',$2,'Seasonal help for the September and October closes',$3,$4) RETURNING id`, s.o.Organization, s.o.Subject, s.today.AddDate(0, 0, 5), s.today.AddDate(0, 0, -2)).Scan(&id); err != nil {
 		s.problem("invitation: %v", err)
 	} else {
-		s.invitations = append(s.invitations, id)
+		s.record(ctx, "invitation_ids", id)
 	}
 	// The administrator's own agent connection, approved when the firm turned the agent on.
 	if code, out := s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "request", "scope": "prepare", "reason": "Use the agent from my editor for the monthly preparation work", "confirmed": true}); code == 200 {
@@ -392,7 +425,7 @@ func (s *seeder) people(ctx context.Context) error {
 		if err == nil {
 			for rows.Next() {
 				if rows.Scan(&id) == nil {
-					s.agentAccess = append(s.agentAccess, id)
+					s.record(ctx, "agent_access_ids", id)
 				}
 			}
 			rows.Close()
@@ -490,7 +523,7 @@ func (s *seeder) publishProcedure(ctx context.Context) func(client, kind, method
 		}
 		if out, ok := s.must(ctx, "procedure "+kind+" "+client, "POST", "/v1/closes/procedures", body); ok {
 			if id, err := strconv.ParseInt(str(field(out, "id")), 10, 64); err == nil {
-				s.procedureIDs = append(s.procedureIDs, id)
+				s.record(ctx, "procedure_ids", id)
 			}
 		}
 	}
@@ -1369,20 +1402,21 @@ func (s *seeder) afterwards(ctx context.Context) {
 		}
 		if len(keys) > 3 {
 			if code, _ := s.call(ctx, "POST", "/v1/closes/attention", map[string]any{"action": "read", "keys": keys[len(keys)/2:]}); code == 200 {
-				s.attentionKeys = append(s.attentionKeys, keys[len(keys)/2:]...)
+				for _, key := range keys[len(keys)/2:] {
+					s.record(ctx, "attention_keys", key)
+				}
 			}
 			if code, _ := s.call(ctx, "POST", "/v1/closes/attention", map[string]any{"action": "snooze", "keys": keys[:1], "until": s.today.AddDate(0, 0, 5).Format(time.RFC3339)}); code == 200 {
-				s.attentionKeys = append(s.attentionKeys, keys[0])
+				s.record(ctx, "attention_keys", keys[0])
 			}
 		}
 	}
 	// Model usage for the month so far, as the operations view counts it.
+	// Usage is added to each day's count and remembered, so removal subtracts exactly it.
 	for d := 0; d < 9; d++ {
-		day := s.today.AddDate(0, 0, -d).Format("2006-01-02")
-		if result, err := s.db.ExecContext(ctx, `INSERT INTO model_calls(organization_id,day,calls) VALUES($1,$2,$3) ON CONFLICT (organization_id,day) DO NOTHING`, s.o.Organization, day, 14+(d*7)%23); err == nil {
-			if n, _ := result.RowsAffected(); n == 1 {
-				s.modelCallDays = append(s.modelCallDays, day)
-			}
+		day, calls := s.today.AddDate(0, 0, -d).Format("2006-01-02"), 14+(d*7)%23
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO model_calls(organization_id,day,calls) VALUES($1,$2,$3) ON CONFLICT (organization_id,day) DO UPDATE SET calls=model_calls.calls+EXCLUDED.calls`, s.o.Organization, day, calls); err == nil {
+			s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||jsonb_build_object('model_calls',COALESCE(policy->'model_calls','{}'::jsonb)||jsonb_build_object($2::text,$3::int)) WHERE organization_id=$1`, s.o.Organization, day, calls)
 		}
 	}
 }
@@ -1424,7 +1458,7 @@ func (s *seeder) chats(ctx context.Context) {
 			continue
 		}
 		if id, err := strconv.ParseInt(sessionID, 10, 64); err == nil {
-			s.chatSessions = append(s.chatSessions, id)
+			s.record(ctx, "chat_session_ids", id)
 		}
 		for i, t := range session.turns {
 			citations := "[]"
@@ -1446,8 +1480,8 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	var createdFirm bool
 	var policy []byte
 	var closes, chats, invitations, roleChanges, agentAccess, procedures []int64
-	var keys, days []string
-	err := db.QueryRowContext(ctx, `SELECT subject,members,created_firm,policy,close_ids,chat_session_ids,invitation_ids,role_change_ids,agent_access_ids,procedure_ids,attention_keys,model_call_days::text[] FROM demonstration_seeds WHERE organization_id=$1`, o.Organization).Scan(&subject, &members, &createdFirm, &policy, &closes, &chats, &invitations, &roleChanges, &agentAccess, &procedures, &keys, &days)
+	var keys []string
+	err := db.QueryRowContext(ctx, `SELECT subject,members,created_firm,policy,close_ids,chat_session_ids,invitation_ids,role_change_ids,agent_access_ids,procedure_ids,attention_keys FROM demonstration_seeds WHERE organization_id=$1`, o.Organization).Scan(&subject, &members, &createdFirm, &policy, &closes, &chats, &invitations, &roleChanges, &agentAccess, &procedures, &keys)
 	if err == sql.ErrNoRows {
 		return errors.New("this firm holds no demonstration to remove")
 	}
@@ -1501,7 +1535,6 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		{`DELETE FROM member_invitations WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, invitations}},
 		{`DELETE FROM member_role_changes WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, roleChanges}},
 		{`DELETE FROM agent_access WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, agentAccess}},
-		{`DELETE FROM model_calls WHERE organization_id=$1 AND day=ANY($2::date[])`, []any{o.Organization, days}},
 	}
 	for _, st := range statements {
 		if _, err := db.ExecContext(ctx, st.sql, st.args...); err != nil {
@@ -1512,10 +1545,21 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	// were never changed, and the local firm cannot take them.
 	var before map[string]any
 	if json.Unmarshal(policy, &before) == nil {
+		// Usage the seed added to a day's count is subtracted; a day it alone filled goes.
+		if calls, ok := before["model_calls"].(map[string]any); ok {
+			for day, n := range calls {
+				db.ExecContext(ctx, `UPDATE model_calls SET calls=GREATEST(calls-$3,0) WHERE organization_id=$1 AND day=$2::date`, o.Organization, day, int(n.(float64)))
+			}
+			db.ExecContext(ctx, `DELETE FROM model_calls WHERE organization_id=$1 AND calls=0 AND COALESCE(gemini_calls,0)=0`, o.Organization)
+		}
 		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
 		restore := map[string]any{"materiality_amount": before["materiality_amount"], "link_passcode": before["require_link_passcode"], "reminder_after_days": before["reminder_after_days"], "reminder_max": before["reminder_max"],
 			"agent_chat": before["agent_chat"], "staff_planning": before["assistant_model_answers"], "ledger_writes": before["allow_ledger_writes"], "reason": "The demonstration was removed; the firm's policy is as it was before it"}
 		s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
+		if stopped, ok := before["agent_chat_stopped"].(bool); ok {
+			// The notice that the agent was stopped by a migration is not a policy the route sets; it is put back as found.
+			db.ExecContext(ctx, `UPDATE organizations SET agent_chat_stopped=$2 WHERE id=$1`, o.Organization, stopped)
+		}
 		// A monthly template, once set, has a due date of 1–60 days: a firm that had none keeps the demonstration's
 		// 15 days until it chooses its own (docs/seed-data.md says so).
 		if set, _ := before["set_time_zone"].(bool); set {

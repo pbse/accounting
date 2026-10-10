@@ -83,7 +83,7 @@ func main() {
 		}
 	}
 	firm := seed.Build()
-	options := transport.SeedOptions{Organization: org, Subject: sub, Members: others, FirmName: *firmName, Log: func(format string, args ...any) { fmt.Printf(format+"\n", args...) }}
+	options := transport.SeedOptions{Organization: org, Subject: sub, Members: others, FirmName: *firmName, Hosted: *hosted, Log: func(format string, args ...any) { fmt.Printf(format+"\n", args...) }}
 	if *remove {
 		fmt.Printf("Removing the demonstration from %s (%s)\n", org, name)
 		if *hosted && !*yes {
