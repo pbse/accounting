@@ -62,8 +62,9 @@ export function SideNotices() {
             <Icon name="arrow" className="ks-go" size={14} />
           </button>
         ))}
-        {notices.length === 0 && <div className="ks-notes-empty">{inbox.isError ? "Notices could not be read" : "Nothing needs you"}</div>}
+        {notices.length === 0 && <div className="ks-notes-empty">{inbox.isPending ? "Reading…" : inbox.isError ? "Notices could not be read" : "Nothing needs you"}</div>}
       </div>
+      {inbox.isError && notices.length > 0 && <p className="ks-empty">Not refreshed since {new Date(inbox.dataUpdatedAt).toLocaleTimeString([], { timeStyle: "short" })}.</p>}
       {failed && (
         <p className="ks-empty" role="alert">
           {failed}

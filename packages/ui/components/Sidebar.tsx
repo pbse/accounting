@@ -89,7 +89,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
         </div>
         {line && <div className="ks-firm">{line}</div>}
         {newChat && (
-          <button type="button" className="ks-new-chat" onClick={newChat.onClick} title="New chat">
+          <button type="button" className="ks-new-chat" onClick={newChat.onClick} title="New chat" aria-label="New chat">
             <Icon name="plus" />
             <span className="ks-label">New chat</span>
             {newChat.hint && <kbd className="ks-kbd">{newChat.hint}</kbd>}
@@ -110,7 +110,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
 
 function Page({ item }: { item: SidebarPage }) {
   return (
-    <NavLink className="ks-nav" end={item.end} to={item.to} title={item.label}>
+    <NavLink className="ks-nav" end={item.end} to={item.to} title={item.label} aria-label={item.label}>
       <Icon name={item.icon} />
       <span className="ks-label">{item.label}</span>
       {item.count}
@@ -134,7 +134,7 @@ function Group({ group, path, collapsed, expand }: { group: SidebarGroup; path: 
   };
   return (
     <>
-      <button type="button" className={`ks-nav ks-group${inside ? " has-current" : ""}`} aria-expanded={open && !collapsed} onClick={toggle} title={group.label}>
+      <button type="button" className={`ks-nav ks-group${inside ? " has-current" : ""}`} aria-expanded={open && !collapsed} onClick={toggle} title={group.label} aria-label={group.label}>
         <Icon name={group.icon} />
         <span className="ks-label">{group.label}</span>
         <Icon name="chevron" className="ks-chev" />
@@ -163,7 +163,7 @@ export function SidebarCategory({ children, aside }: { children: ReactNode; asid
 // A quiet link at the foot: Settings, Help.
 export function SidebarFootLink({ to, icon, children }: { to: string; icon: IconName; children: ReactNode }) {
   return (
-    <NavLink className="ks-nav" to={to} title={typeof children === "string" ? children : undefined}>
+    <NavLink className="ks-nav" to={to} title={typeof children === "string" ? children : undefined} aria-label={typeof children === "string" ? children : undefined}>
       <Icon name={icon} />
       <span className="ks-label">{children}</span>
     </NavLink>

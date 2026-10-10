@@ -51,7 +51,7 @@ const prefetching = serverSession;
 // executive's refused reads cost them nothing either, since they run in parallel.
 async function workspaceLoader({ context, request }: LoaderFunctionArgs) {
   if (!prefetching) return null;
-  await prefetch(context, "/executive", "/examples", "/attention", "/me");
+  await prefetch(context, "/executive", "/examples", "/attention", "/attention?view=unread&order=priority", "/me");
   const executive = context.get(appData).queryClient.getQueryData<{ executive?: boolean }>(workspaceKey("/executive"))?.executive;
   if (executive && !new URL(request.url).pathname.startsWith("/dashboard/executive")) throw redirect("/dashboard/executive");
   return null;
