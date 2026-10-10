@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -301,17 +302,42 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 	if body := call("POST", "/v1/closes/"+closeID+"/email/"+queued+"/settle", settle, 409); !strings.Contains(string(body), "Krith's team settles it") {
 		t.Fatalf("a firm cannot read Krith's records: %s", body)
 	}
+	// Staff settle as the admin console does: inside the firm's row-level security, as a role that cannot bypass it, and
+	// still see another firm's email through Krith's sender.
+	other := "org_KrithOther" + rand.Text()
+	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Other firm')`, other)
+	must(err)
+	defer func() {
+		db.Exec(`DELETE FROM email_delivery_events WHERE connection_id IN (SELECT id FROM email_connections WHERE organization_id=$1)`, other)
+		db.Exec(`DELETE FROM email_connections WHERE organization_id=$1`, other)
+		db.Exec(`DELETE FROM organizations WHERE id=$1`, other)
+	}()
+	_, err = db.Exec(`WITH c AS (INSERT INTO email_connections(organization_id,provider,sender,domain_id,actor) VALUES($1,'krith','"Other firm via Krith" <requests@mail.krith.test>','','krith') RETURNING id)
+ INSERT INTO email_delivery_events(connection_id,event_id,body_digest,provider_id,recipient,kind,occurred_at) SELECT id,'other-sent','x','provider-other','someone@else.test','sent',now() FROM c`, other)
+	must(err)
+	_, err = db.Exec(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='close_rls_probe') THEN CREATE ROLE close_rls_probe LOGIN PASSWORD 'probe-only' NOSUPERUSER NOBYPASSRLS; END IF; END $$;
+		GRANT USAGE ON SCHEMA public TO close_rls_probe; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO close_rls_probe; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO close_rls_probe`)
+	must(err)
+	probe, err := neturl.Parse(url)
+	must(err)
+	probe.User = neturl.UserPassword("close_rls_probe", "probe-only")
+	tenant, err := OpenTenantDB(probe.String(), "")
+	must(err)
+	defer tenant.Close()
+	inFirm := auth.WithActor(context.Background(), &auth.Claims{Organization: org, RegisteredClaims: jwt.RegisteredClaims{Subject: "staff:fixture"}})
 	staff := func(provider string) error {
-		tx, e := db.BeginTx(context.Background(), nil)
+		tx, e := tenant.BeginTx(inFirm, nil)
 		must(e)
 		defer tx.Rollback()
-		if _, e = settleEmail(context.Background(), tx, queued, []string{"unknown"}, emailSettlement{ExpectedState: "unknown", Outcome: "accepted", ProviderID: provider, Evidence: "Krith's Resend log"}, "staff:fixture"); e == nil {
+		if _, e = settleEmail(inFirm, tx, queued, []string{"unknown"}, emailSettlement{ExpectedState: "unknown", Outcome: "accepted", ProviderID: provider, Evidence: "Krith's Resend log"}, "staff:fixture"); e == nil {
 			e = tx.Commit()
 		}
 		return e
 	}
-	if e := staff("provider-" + id); e == nil || !strings.Contains(e.Error(), "belongs to another email") {
-		t.Fatalf("a message ID of another connection of Krith's sender is taken: %v", e)
+	for _, taken := range []string{"provider-other", "provider-" + id} {
+		if e := staff(taken); e == nil || !strings.Contains(e.Error(), "belongs to another email") {
+			t.Fatalf("a message ID another email through Krith's sender holds, in any firm, is taken: %s %v", taken, e)
+		}
 	}
 	must(staff("provider-fresh"))
 	if s, _ := state(queued); s != "accepted" {

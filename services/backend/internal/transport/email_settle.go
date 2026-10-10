@@ -55,15 +55,16 @@ func settleEmail(ctx context.Context, tx *sql.Tx, outbox string, states []string
 	if in.Outcome == "accepted" {
 		var taken bool
 		// Settlements naming the same message ID on a sender wait for each other, so two emails never both take it. Every
-		// firm's email through Krith's sender shares Krith's account, so there the ID is checked across all of them.
-		scope := connection
+		// firm's email through Krith's sender shares Krith's account, so there the ID is checked across all of them, read
+		// outside any one firm (only Krith's team settles these; the firm's route refuses them).
+		scope, check := connection, ctx
 		if sender == delivery.Krith {
-			scope = delivery.Krith
+			scope, check = delivery.Krith, platformContext(ctx)
 		}
 		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('email_provider:'||$1||':'||$2))`, scope, in.ProviderID); err != nil {
 			return org, err
 		}
-		if err = tx.QueryRowContext(ctx, `WITH senders AS (SELECT id FROM email_connections WHERE id::text=$1 OR ($5 AND provider='krith'))
+		if err = tx.QueryRowContext(check, `WITH senders AS (SELECT id FROM email_connections WHERE id::text=$1 OR ($5 AND provider='krith'))
  SELECT EXISTS(SELECT 1 FROM email_outbox WHERE connection_id IN (SELECT id FROM senders) AND provider_id=$2 AND id<>$3)
  OR EXISTS(SELECT 1 FROM email_delivery_events WHERE connection_id IN (SELECT id FROM senders) AND provider_id=$2 AND lower(recipient)<>lower($4))`, connection, in.ProviderID, outbox, recipient, sender == delivery.Krith).Scan(&taken); err != nil {
 			return org, err

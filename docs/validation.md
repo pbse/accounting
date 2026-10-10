@@ -3998,7 +3998,7 @@ Checked on a fresh local PostgreSQL 18 with all migrations:
   - A worker without Krith's key fails the email: "not set up".
   - An unknown email through Krith's sender:
     - the firm's settle route refuses it, since only Krith's team can read Krith's records;
-    - staff settling it with a message ID that another connection of Krith's sender already holds are refused;
+    - staff settling it with a message ID that another connection of Krith's sender already holds are refused, including one of another firm's, through the tenant connection as a role that cannot bypass row-level security (the test fails without the cross-firm read);
     - a fresh ID settles it.
   - A server without Krith's address stops Krith's sender. The firm then has no sender, nothing is approved through the old one, and Krith's sender returns with the address, its old records kept.
   - A request through Krith's sender carries the reply address back to the close, and without one it is refused.
