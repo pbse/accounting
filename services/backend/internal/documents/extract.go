@@ -58,8 +58,11 @@ func command(ctx context.Context, name string, args ...string) (string, error) {
 // counts each Gemini call against the firm's daily model limit first. Tesseract reads a page without a text layer that
 // Gemini could not.
 type Reading struct {
-	Gemini  PageReader // nil: no machine reading but Tesseract's
-	Reserve func(context.Context) error
+	Gemini      PageReader // nil: local PDF text/Tesseract only
+	Provider    string     // label for the configured page reader
+	Reserve     func(context.Context) error
+	Timeout     time.Duration
+	StopOnError bool
 	// local is the time the document's scanned pages from this one on need to be read locally, should Gemini fail
 	// them: Gemini is asked only while the time left covers its call and that.
 	local time.Duration
@@ -78,6 +81,10 @@ const (
 // than its text, or other text, is flagged. A page without a text layer takes Gemini's reading, or else Tesseract's.
 // render draws the page as a PNG; tesseract reads one.
 func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte, error), tesseract func([]byte) (string, error)) (string, string, error) {
+	provider := r.Provider
+	if provider == "" {
+		provider = "Gemini"
+	}
 	var image []byte
 	var renderErr error
 	rendered := func() ([]byte, error) {
@@ -87,13 +94,22 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 		return image, renderErr
 	}
 	hasLayer := strings.TrimSpace(layer) != ""
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < llm.GeminiTimeout+r.local+geminiMargin {
+	timeout := r.Timeout
+	if timeout == 0 {
+		timeout = llm.GeminiTimeout
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout+r.local+geminiMargin {
 		r.off = true
 	}
 	if r.Gemini != nil && !r.off {
 		// A page Gemini would refuse unsent (an empty or oversized image) is never charged to the firm's limit.
 		if png, err := rendered(); err == nil && len(png) > 0 && len(png) <= llm.GeminiMaxImage {
-			if r.Reserve != nil {
+			if validator, ok := r.Gemini.(interface {
+				ValidatePage(context.Context, []byte) error
+			}); ok {
+				err = validator.ValidatePage(ctx, png)
+			}
+			if err == nil && r.Reserve != nil {
 				if err = r.Reserve(ctx); err != nil {
 					r.off = true
 				}
@@ -102,14 +118,17 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 				text, model, err := r.Gemini.ReadPage(ctx, png)
 				switch {
 				case err != nil:
-					log.Printf("Gemini could not read a PDF page; using the local reading: %v", err)
+					if errors.Is(err, llm.ErrBusy) || r.StopOnError {
+						r.off = true
+					}
+					log.Printf("Image model could not read a PDF page; using the local reading: %v", err)
 				case strings.TrimSpace(text) == "":
 				case !hasLayer:
-					return text, "Gemini " + model + " (verify against original)", nil
+					return text, provider + " " + model + " (verify against original)", nil
 				case sameReading(text, layer):
-					return layer, "PDF text; Gemini " + model + " read the same text", nil
+					return layer, "PDF text; " + provider + " " + model + " read the same text", nil
 				default:
-					return layer, "PDF text; Gemini " + model + imageDiffers, nil
+					return layer, "PDF text; " + provider + " " + model + imageDiffers, nil
 				}
 			}
 		}
@@ -143,7 +162,8 @@ const imageDiffers = " read it differently, so check the original"
 // read nothing, the image was too large, or the firm's limit or the document's time ruled it out). The page is then
 // exactly what it was before Gemini: its own text, unchecked. Check names it; it holds nothing, since an unchecked
 // page is the product's standing case without Gemini.
-const imageUnchecked = "; Gemini could not compare it with the page image"
+const imageUnchecked = "; Image model could not compare it with the page image"
+const legacyImageUnchecked = "; Gemini could not compare it with the page image"
 
 // Extract retains page numbers and labels machine readings separately from the PDF text layer.
 // ponytail: English OCR, 20 pages, 5 MiB originals; larger documents need a separate intake budget.
@@ -250,10 +270,10 @@ func Run(ctx context.Context, db *sql.DB) {
 // A fenced three-minute lease survives crashes without holding a transaction during OCR.
 func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	claim := rand.Text()
-	var id, org string
+	var id, org, subject, entity string
 	var original []byte
 	err := db.QueryRowContext(ctx, `UPDATE evidence SET extraction_state='processing',extraction_claim=$1,extraction_started_at=now() WHERE id=(SELECT id FROM evidence WHERE close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled AND ($2::bigint[] IS NULL OR c.id=ANY($2::bigint[])) AND ($2::bigint[] IS NOT NULL OR NOT EXISTS(SELECT 1 FROM demonstration_seeds d WHERE d.organization_id=c.organization_id AND d.finished_at IS NULL AND c.id=ANY(d.close_ids)))) AND original IS NOT NULL AND (extraction_state='queued' OR (extraction_state='processing' AND extraction_started_at<now()-interval '3 minutes')) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
- RETURNING id::text,original,(SELECT organization_id FROM client_closes WHERE id=evidence.close_id)`, claim, CloseScope(ctx)).Scan(&id, &original, &org)
+ RETURNING id::text,original,(SELECT organization_id FROM client_closes WHERE id=evidence.close_id),created_by,(SELECT entity FROM client_closes WHERE id=evidence.close_id)`, claim, CloseScope(ctx)).Scan(&id, &original, &org, &subject, &entity)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -261,8 +281,9 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	// Each Gemini page reading counts against the firm's daily model limit, as preparation's calls do, and as Gemini's.
-	reading := Reading{Reserve: func(ctx context.Context) error { return budget.ReserveGeminiCalls(ctx, db, org, 1) }}
-	if g := llm.GeminiFromEnv(); g != nil {
+	ctx = llm.WithIdentity(ctx, org, subject)
+	reading := Reading{Provider: "Image model", Timeout: llm.PageReadTimeout(ctx), StopOnError: llm.Engine(ctx, "ocr") == string(llm.ContextMachine), Reserve: func(ctx context.Context) error { return budget.ReserveGeminiCalls(ctx, db, org, 1) }}
+	if g := llm.PageReaderFromContext(ctx); g != nil && pageReadingAllowed(ctx, db, org, entity) {
 		reading.Gemini = g
 	}
 	text, extractErr := Extract(ctx, original, reading)
@@ -311,4 +332,18 @@ func CloseScope(ctx context.Context) any {
 		return nil
 	}
 	return closes
+}
+
+// The worker supplies image bytes, so it checks the uploader's current client
+// authority before reserving or rendering model input, as the service does for reads.
+func pageReadingAllowed(ctx context.Context, db *sql.DB, org, entity string) bool {
+	if !llm.Allows(ctx, org) {
+		return false
+	}
+	if llm.Engine(ctx, "ocr") != string(llm.ContextMachine) {
+		return true
+	}
+	var allowed bool
+	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) AND EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted) AND EXISTS(SELECT 1 FROM organizations WHERE id=$1 AND enabled AND disabled_at IS NULL)`, org, llm.Subject(ctx), entity).Scan(&allowed)
+	return err == nil && allowed
 }

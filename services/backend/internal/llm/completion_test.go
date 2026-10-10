@@ -14,7 +14,7 @@ func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
 	scope := Scope{Organization: "owner-org", Subject: "owner", AccessProfile: "own-read"}
 	for _, provider := range []string{"api", "context_machine"} {
 		calls := 0
-		cfg := Config{Provider: provider, APIKey: "api-key", Model: "api-model", ContextMachineToken: "service-token", ContextMachineModel: "codex", CodexModel: "cli-model", Profiles: []Scope{scope}, AllowUncappedOutputTokens: true}
+		cfg := Config{APIImages: true, Provider: provider, APIKey: "api-key", Model: "api-model", ContextMachineToken: "service-token", ContextMachineModel: "codex", CodexModel: "cli-model", Profiles: []Scope{scope}, AllowUncappedOutputTokens: true}
 		cfg.HTTP = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			calls++
 			if provider == "api" {
@@ -39,7 +39,11 @@ func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
 		}
 		ctx := WithIdentity(WithClient(context.Background(), client), scope.Organization, scope.Subject)
 		for _, purpose := range purposes {
-			out, err := Generate(ctx, Request{Purpose: purpose, Instructions: "Complete", Data: "authorized data", Schema: &OutputSchema{Name: "result", Definition: json.RawMessage(`{"type":"object"}`)}, MaxOutputTokens: 100})
+			in := Request{Purpose: purpose, Instructions: "Complete", Data: "authorized data", Schema: &OutputSchema{Name: "result", Definition: json.RawMessage(`{"type":"object"}`)}, MaxOutputTokens: 100}
+			if purpose == "ocr" {
+				in.Images = []Image{{PNG: pagePNG(t)}}
+			}
+			out, err := Generate(ctx, in)
 			if err != nil || out.Text != "{}" || string(out.Provider) != map[string]string{"api": "openai", "context_machine": "context_machine"}[provider] {
 				t.Fatal(purpose, out, err)
 			}

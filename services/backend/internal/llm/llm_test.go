@@ -167,7 +167,7 @@ func TestModelEndpointsStayInGateway(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for _, endpoint := range []string{"api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com", "chatgpt.com/backend-api/codex", `os.Getenv("OPENAI_`, `os.Getenv("CONTEXT_MACHINE_`, "GenerateOpenAI"} {
+		for _, endpoint := range []string{"api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com", "chatgpt.com/backend-api/codex", `os.Getenv("OPENAI_`, `os.Getenv("CONTEXT_MACHINE_`, `os.Getenv("GEMINI_`, "GeminiFromEnv(", "GenerateOpenAI"} {
 			if strings.Contains(string(raw), endpoint) {
 				t.Errorf("direct model endpoint in %s", path)
 			}

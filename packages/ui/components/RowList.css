@@ -8,7 +8,7 @@
   border: 0;
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .app-shell fieldset.row-list {
   margin: 0 0 var(--space-24);
@@ -34,13 +34,13 @@
   min-height: 64px;
   border-radius: var(--radius-sm);
   background: var(--surface);
-  box-shadow: var(--shadow-tile);
+  box-shadow: inset var(--ring);
   color: inherit;
   text-decoration: none;
 }
 a.row:hover {
   background: var(--hover);
-  box-shadow: var(--shadow-tile-hover);
+  box-shadow: inset var(--ring-strong);
 }
 .row small {
   color: var(--ink-2);

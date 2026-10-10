@@ -30,7 +30,15 @@ func (c *Client) openAI(ctx context.Context, route route, in Request) (Response,
 			}
 			content = string(data)
 		}
-		input = append(input, map[string]string{"role": "system", "content": in.Instructions}, map[string]string{"role": "user", "content": content})
+		user := map[string]any{"role": "user", "content": content}
+		if len(in.Images) > 0 {
+			parts := []any{map[string]string{"type": "input_text", "text": content}}
+			for _, image := range in.Images {
+				parts = append(parts, OpenAIImage(image))
+			}
+			user["content"] = parts
+		}
+		input = append(input, map[string]string{"role": "system", "content": in.Instructions}, user)
 	} else {
 		for _, m := range in.Messages {
 			if m.providerItem != nil {
@@ -73,7 +81,7 @@ func (c *Client) openAI(ctx context.Context, route route, in Request) (Response,
 	if endpoint == "" {
 		endpoint = "https://api.openai.com/v1/responses"
 	}
-	res, err := c.post(ctx, endpoint, route.Token, payload)
+	res, err := c.post(ctx, endpoint, route.Token, payload, RequestByteLimit(in))
 	if err != nil {
 		return Response{}, err
 	}

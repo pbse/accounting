@@ -3,8 +3,8 @@
   flex: none;
   display: grid;
   place-items: center;
-  background: var(--blue);
-  color: var(--on-chip);
+  background: var(--accent);
+  color: var(--on-primary);
 }
 .agent-mark-md {
   width: var(--icon-tile);

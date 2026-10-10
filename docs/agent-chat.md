@@ -185,3 +185,5 @@ Four pull requests, each shippable on its own and each with its user journey, ag
 - **Default off.** A firm that never turned on written answers stays at `off` (migration 133's default); its administrator turns the agent on under Settings with a reason.
 - **A profile per organization.** The first cohort runs with one organization-wide profile per firm (`subject: "*"`, a unique `access_profile` name such as `accounting-read-<org>`) in `CONTEXT_MACHINE_PROFILES`, under API-key mode on the service ([deployment](context-machine-deployment.md#organization-wide-profiles)). One owner profile is not used.
 - **The executive view gets the agent this round** (PR 5).
+
+The context-machine golden-set replay now carries the recorded gateway identity as well as the platform actor. For a personal subscription, run a local context machine with a single synthetic owner and use `agent-eval -profile local-eval` to map all fixture identities to that member. Both the database and service must be local; the hosted personal profile is never widened for evaluation. See [context-machine deployment](context-machine-deployment.md#single-owner-local-golden-set-evaluation).

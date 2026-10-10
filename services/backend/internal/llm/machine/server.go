@@ -161,6 +161,7 @@ func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 type runRequest struct {
+	CompletionImages                  []llm.Image     `json:"-"`
 	CompletionSchema                  json.RawMessage `json:"-"`
 	CompletionModel, CompletionEffort string          `json:"-"`
 	Version                           int             `json:"version"`
@@ -274,7 +275,7 @@ func (s *server) execute(ctx context.Context, in runRequest) (result llm.Respons
 	if completion {
 		settings.model, settings.effort = in.CompletionModel, in.CompletionEffort
 	}
-	proxy := &modelProxy{completion: completion, schema: in.CompletionSchema, ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: settings.credential, model: settings.model, effort: settings.effort, authMode: settings.mode}
+	proxy := &modelProxy{images: in.CompletionImages, completion: completion, schema: in.CompletionSchema, ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: settings.credential, model: settings.model, effort: settings.effort, authMode: settings.mode}
 	if settings.mode == "chatgpt" {
 		auth, err := restoreCodexAuth(ctx, s.cfg, dir)
 		if err != nil {

@@ -74,3 +74,5 @@ The inbox is a convenience; the record is the staff console's **Contact notes** 
 ## Checks
 
 `npm run check:layout` opens every public page directly and from the home page's links, at desktop and phone width, alongside the product's pages. `npm test` runs the workpaper and contact-email tests; `go test ./internal/transport -run Contact` runs the form's validation, limits and storage against local PostgreSQL.
+
+The October 10 LLM routing update names OpenAI, paid Gemini and private Codex/Claude image paths in the Security and Privacy pages. Whole PDF images bypass text redaction; OpenAI images require a separate operator opt-in. Personal subscriptions serve only their configured owner, and their account data-handling/model-improvement settings must be verified before activation. These disclosures do not claim that a staged model pin is supported by the account.

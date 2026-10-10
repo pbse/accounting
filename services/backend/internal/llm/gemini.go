@@ -17,8 +17,8 @@ import (
 )
 
 // Gemini reads a rendered PDF page through Google's Gemini API (generateContent), for the worker's document
-// extraction, which decides how its reading is used. It is not a purpose route: gateway requests are text, and a page
-// goes as an image. Configured on the worker: GEMINI_API_KEY; GEMINI_PAID_SERVICE, which must be "confirmed"; and
+// extraction, which decides how its reading is used. The ocr purpose uses this adapter in API mode when configured; context-machine
+// mode routes images through the same completion contract as text. Configured on the worker: GEMINI_API_KEY; GEMINI_PAID_SERVICE, which must be "confirmed"; and
 // optionally GEMINI_OCR_MODEL. Google may use content sent with a free-tier key to improve its products and have people
 // review it, against what Krith tells firms, and a key's billing cannot be read through the API, so the operator
 // confirms the key's project is on the paid service; without that no page is sent. Both are Cloudflare secrets of the
