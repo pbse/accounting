@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useState } from "react";
+import { Link, useLocation } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Icon } from "@close/ui/components/Icon";
 import { workspaceQuery } from "../../data/queries";
@@ -24,6 +24,12 @@ export default function Home() {
   // The person's name comes with their profile, read with the page.
   const me = useQuery(workspaceQuery<{ email?: string; first_name?: string }>("/me/profile")).data;
   const [chatting, setChatting] = useState(false);
+  // A portfolio goal the agent linked to (/dashboard?goal=…) previews beneath the stage: the page scrolls to it.
+  const location = useLocation();
+  const goal = new URLSearchParams(location.search).get("goal");
+  useEffect(() => {
+    if (goal) document.getElementById("goals")?.scrollIntoView({ block: "start" });
+  }, [goal]);
   const bump = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   const hour = useHour();
   const daypart = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
@@ -104,7 +110,7 @@ export default function Home() {
           )}
         </div>
       </section>
-      <div className="ks-under">
+      <div className="ks-under" id="goals">
         <Goals onChange={bump} />
         {!empty && <Setup onEnrolled={bump} />}
       </div>

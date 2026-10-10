@@ -4,6 +4,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { workspaceQuery } from "../../data/queries";
 import { useNavigate } from "react-router";
 import { askAssistant, nextReview, starterCommands, starters } from "./assistantStore";
+import { openPalette } from "./CommandPalette";
 import { parseCommand, runCommand, type Ask } from "./commands";
 
 // The composer at the foot of every page but Home (docs/design-system.md, Composer): a box with room for sentences
@@ -37,6 +38,11 @@ export function PageComposer({ closeId, executive }: { closeId: string; executiv
         return;
       }
       setText("");
+      // A close's command asked outside a close chooses the close in the palette, as the drawer does.
+      if (command.close && !closeId) {
+        openPalette(command.argument ? `/${command.name} ` : line, command.argument ? argument : "");
+        return;
+      }
       void runCommand(command, argument, {
         closeId,
         navigate,

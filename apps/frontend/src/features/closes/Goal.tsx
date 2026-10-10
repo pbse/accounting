@@ -625,12 +625,18 @@ export function GoalPanel({ closeId }: { closeId: string }) {
   // Not handed over yet: the routine line stands alone; the page's composer asks the agent, and handing over still
   // waits for a confirmation.
   if (!status.goal && !status.signed_off)
-    return status.routine || error ? (
-      <section className="panel" aria-label="Hand-over">
+    return (
+      <section className="panel hand-over" aria-label="Hand-over">
+        <p>
+          <strong>Hand this close to the agent.</strong> It keeps preparation moving and tells you only what needs you; nothing runs until you confirm.
+        </p>
+        <button type="button" className="primary" onClick={() => askAssistant(handOver, closeId)}>
+          {handOver}
+        </button>
         <RoutineLine closeId={closeId} status={status} refresh={refresh} />
         {error && <p role="alert">{error}</p>}
       </section>
-    ) : null;
+    );
   return (
     <section className="panel" aria-labelledby="goal-title">
       <h2 id="goal-title">{status.goal && status.goal.state !== "stopped" ? "Handed to the agent" : status.signed_off ? "Monthly hand-over" : "Hand this close to the agent"}</h2>
