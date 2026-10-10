@@ -214,7 +214,9 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
       clearSessionRequest();
       return;
     }
-    if (!started.current) load();
+    // The stage opens on the greeting with a fresh chat; the scope's current chat waits under Chats. The drawer
+    // shows the scope's current chat.
+    if (!started.current) mode === "stage" ? startNew() : load();
     started.current = true;
   }, [request, closeId]);
   useEffect(() => {
@@ -369,7 +371,9 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
   }
   const empty = messages.length === 0 && !busy;
   const drawer = mode === "drawer";
-  useEffect(() => onEmpty?.(empty), [empty]);
+  // The stage is idle only with nothing shown: no messages, no answer coming, and not the list of chats.
+  const idle = empty && view !== "chats";
+  useEffect(() => onEmpty?.(idle), [idle]);
   // The parts of a conversation, arranged as the drawer or as Home's stage.
   const head = (
     <>

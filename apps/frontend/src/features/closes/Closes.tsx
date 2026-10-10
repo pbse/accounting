@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
@@ -26,6 +26,17 @@ export default function Closes() {
   const error = homeRead.error ? homeRead.error.message || "Closes are unavailable." : "";
   const tick = Math.max(homeRead.dataUpdatedAt, homeRead.errorUpdatedAt);
   const [view, setView] = useState<View>("all");
+  // A link to a section (#review-queue, #decisions) scrolls there once the section has rendered from its read.
+  const scrolledTo = useRef("");
+  useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    if (!hash || scrolledTo.current === hash) return;
+    const target = document.getElementById(hash);
+    if (target) {
+      scrolledTo.current = hash;
+      target.scrollIntoView({ block: "start" });
+    }
+  });
   // The review queue is a capped read; a client or month filter reaches the rest. Once a batch was approved here,
   // the section stays so its outcomes can be read after the queue empties.
   const [queueClient, setQueueClient] = useState("");

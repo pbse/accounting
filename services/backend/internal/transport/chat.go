@@ -711,7 +711,7 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 				lines = append(lines, fmt.Sprintf("%s: %s draft #%s", label(item.Entity, item.Period), item.Kind, item.WorkpaperID))
 			}
 		}
-		return chatReply{body: "Here is the review queue. Open Home to review the current drafts.", citations: []chatCitation{{"Home", "/dashboard#review-queue"}}}, lines, nil
+		return chatReply{body: "Here is the review queue. Open Home to review the current drafts.", citations: []chatCitation{{"Home", "/dashboard/closes#review-queue"}}}, lines, nil
 	case "delegated":
 		var g struct {
 			Goals []struct {

@@ -231,7 +231,7 @@ func agentLink(t mcpTool, args map[string]any) chatCitation {
 			}
 			return chatCitation{t.title, "/dashboard/work?view=" + url.QueryEscape(view)}
 		case "/v1/closes/review-queue":
-			return chatCitation{t.title, "/dashboard#review-queue"}
+			return chatCitation{t.title, "/dashboard/closes#review-queue"}
 		case "/v1/closes":
 			return chatCitation{t.title, "/dashboard/clients"}
 		}

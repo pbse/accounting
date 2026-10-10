@@ -75,10 +75,10 @@ export function SideNotices() {
         type="button"
         className="ks-more"
         onClick={() => {
-          // Home's decisions, where read notices stay: scrolled to when already there, opened otherwise.
-          const list = location.pathname === "/dashboard" ? document.getElementById("decisions") : null;
+          // Closes' decisions, where read notices stay: scrolled to when already there, opened otherwise.
+          const list = location.pathname === "/dashboard/closes" ? document.getElementById("decisions") : null;
           if (list) list.scrollIntoView({ block: "start", behavior: "smooth" });
-          else navigate("/dashboard#decisions");
+          else navigate("/dashboard/closes#decisions");
         }}
       >
         All notices

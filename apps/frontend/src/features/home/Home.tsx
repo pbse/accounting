@@ -86,12 +86,10 @@ export default function Home() {
           )}
         </div>
       </section>
-      {!chatting && (
-        <div className="ks-under">
-          <Goals onChange={bump} />
-          {!empty && <Setup onEnrolled={bump} />}
-        </div>
-      )}
+      <div className="ks-under">
+        <Goals onChange={bump} />
+        {!empty && <Setup onEnrolled={bump} />}
+      </div>
     </>
   );
 }

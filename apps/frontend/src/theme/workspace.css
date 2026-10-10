@@ -650,9 +650,9 @@ aside.assistant {
   max-width: 85%;
 }
 .assistant-messages > li.user .assistant-body {
-  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
-  padding: var(--space-8) var(--space-12);
-  background: var(--blue-tint);
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-xs) var(--radius-2xl);
+  padding: var(--space-10) var(--space-16);
+  background: var(--fill);
 }
 .assistant-messages p {
   margin: 0;
@@ -1058,7 +1058,9 @@ aside.assistant {
 .ks-stage.chatting .ks-hello,
 .ks-stage.chatting .ks-week {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
+  transition: opacity 220ms var(--ease), transform 320ms var(--ease), visibility 0s 320ms;
 }
 .ks-stage.chatting .ks-hello {
   transform: translateY(-16px);
