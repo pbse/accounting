@@ -205,6 +205,7 @@ export default function ClientPage() {
   // neither).
   const latest = months.find((m) => m.entity.toLowerCase() === name.toLowerCase());
   const managedIn = months.find((m) => m.entity.toLowerCase() === (ledger.held ?? name).toLowerCase());
+  const otherIn = ledger.other && months.find((m) => m.entity.toLowerCase() === ledger.other!.held.toLowerCase());
 
   // How each month is due and who holds it: the client's own terms, else the firm template's, said once.
   const people = client.people ?? [];
@@ -288,10 +289,19 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              managedIn && client.can_connect ? (
-                <Link className="button" to={`/dashboard/closes/${managedIn.id}?tab=${ledger.tab}#${ledger.anchor}`}>
-                  {ledger.connected ? "Manage" : "Connect"} in {monthShort(managedIn.period)}
-                </Link>
+              client.can_connect && (managedIn || (ledger.other && otherIn)) ? (
+                <>
+                  {managedIn && (
+                    <Link className="button" to={`/dashboard/closes/${managedIn.id}?tab=${ledger.tab}#${ledger.anchor}`}>
+                      {ledger.connected ? "Manage" : "Connect"} in {monthShort(managedIn.period)}
+                    </Link>
+                  )}
+                  {ledger.other && otherIn && (
+                    <Link className="button" to={`/dashboard/closes/${otherIn.id}?tab=${ledger.other.tab}#${ledger.other.anchor}`}>
+                      Fix {ledger.other.name}
+                    </Link>
+                  )}
+                </>
               ) : undefined
             }
           >
@@ -526,35 +536,46 @@ function books(client: ClientRead, day: (value: string) => string) {
         : s === "pending_confirmation" || s === "choose_tenant"
           ? [confirm, "pill muted"]
           : ["Connecting", "pill neutral"];
+  // Each connection: how it reads, its state, and the month that manages it.
+  type Ledger = { name: string; short: string; line: string; held: string; chip: [string, string]; ok: boolean; tab: string; anchor: string };
+  const quickbooks: Ledger | undefined = qbo && {
+    name: "QuickBooks",
+    short: qbo.environment === "production" ? "QuickBooks Online" : "QuickBooks sandbox",
+    line: `Read from QuickBooks${qbo.environment === "production" ? "" : " (sandbox)"}${qbo.company_name ? `, ${qbo.company_name}` : ""}.${qbo.error ? ` ${qbo.error}` : ""}${heldUnder(qbo)}`,
+    held: qbo.client_entity,
+    chip: state(qbo.state, "Confirm the company"),
+    ok: live(qbo.state),
+    tab: qbo.environment === "production" ? "settings" : "evidence",
+    anchor: qbo.environment === "production" ? "quickbooks-production" : "quickbooks-ledger",
+  };
+  const xeroLedger: Ledger | undefined = xero && {
+    name: "Xero",
+    short: "Xero",
+    line: `Read from Xero${xero.tenant_name ? `, ${xero.tenant_name}` : ""}.${xero.error ? ` ${xero.error}` : ""}${heldUnder(xero)}`,
+    held: xero.client_entity,
+    chip: state(xero.state, "Choose the organisation"),
+    ok: live(xero.state),
+    tab: "evidence",
+    anchor: "xero",
+  };
   // With both ledgers connected, the card leads with the one the newest month-end books came from (the month-end
-  // readers take the newer capture), else the one connected and working, else QuickBooks; the other is named after it.
+  // readers take the newer capture), else the one connected and working, else QuickBooks; the other is said after it,
+  // with its own state, and its own way in when it needs attention.
   const captured = client.months.find((m) => m.books && m.books.source !== "exports")?.books?.source;
   const leadXero = !!xero && (!qbo || captured === "xero" || (captured !== "quickbooks" && live(xero.state) && !live(qbo.state)));
-  const quickbooksLine = qbo && `Read from QuickBooks${qbo.environment === "production" ? "" : " (sandbox)"}${qbo.company_name ? `, ${qbo.company_name}` : ""}.${qbo.error ? ` ${qbo.error}` : ""}`;
-  const xeroLine = xero && `Read from Xero${xero.tenant_name ? `, ${xero.tenant_name}` : ""}.${xero.error ? ` ${xero.error}` : ""}`;
-  if (qbo && !leadXero) {
-    const production = qbo.environment === "production";
+  const lead = leadXero ? xeroLedger : quickbooks;
+  const other = leadXero ? quickbooks : xeroLedger;
+  if (lead) {
     return {
-      short: production ? "QuickBooks Online" : "QuickBooks sandbox",
-      line: `${quickbooksLine}${heldUnder(qbo)}${xero ? " Xero is connected too." : ""}${latest}`,
-      held: qbo.client_entity,
-      chip: state(qbo.state, "Confirm the company"),
-      attention: !live(qbo.state),
+      short: lead.short,
+      line: `${lead.line}${other ? ` ${other.name} is connected too: ${other.chip[0].toLowerCase()}.` : ""}${latest}`,
+      held: lead.held as string | undefined,
+      chip: !lead.ok || !other || other.ok ? lead.chip : other.chip,
+      attention: !lead.ok || (!!other && !other.ok),
       connected: true,
-      tab: production ? "settings" : "evidence",
-      anchor: production ? "quickbooks-production" : "quickbooks-ledger",
-    };
-  }
-  if (xero) {
-    return {
-      short: "Xero",
-      line: `${xeroLine}${heldUnder(xero)}${qbo ? " QuickBooks is connected too." : ""}${latest}`,
-      held: xero.client_entity,
-      chip: state(xero.state, "Choose the organisation"),
-      attention: !live(xero.state),
-      connected: true,
-      tab: "evidence",
-      anchor: "xero",
+      tab: lead.tab,
+      anchor: lead.anchor,
+      other: other && !other.ok ? other : undefined,
     };
   }
   return {
@@ -566,6 +587,7 @@ function books(client: ClientRead, day: (value: string) => string) {
     held: undefined as string | undefined,
     tab: "evidence",
     anchor: "quickbooks-ledger",
+    other: undefined as { name: string; held: string; tab: string; anchor: string } | undefined,
   };
 }
 
