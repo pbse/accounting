@@ -223,6 +223,7 @@ export default function ClientClose() {
       {tab === "books" && (
         <div className="stack">
           <MonthBooks key={`books-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
+          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
           <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
           <Flux key={`flux-${close.id}`} closeId={close.id} />
@@ -277,7 +278,6 @@ export default function ClientClose() {
       {tab === "evidence" && (
         <div className="stack">
           <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
-          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} />
           <HistoricalExports key={`history-${close.id}`} closeId={close.id} />
           <Stripe key={`stripe-${close.id}`} closeId={close.id} entity={close.entity} />
           <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
