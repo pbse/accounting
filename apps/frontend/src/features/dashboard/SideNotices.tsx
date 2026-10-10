@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Icon, type IconName } from "@close/ui/components/Icon";
@@ -20,6 +20,35 @@ export function SideNotices() {
   const navigate = useNavigate();
   const location = useLocation();
   const queries = useQueryClient();
+  // Live: one long-lived request says when the person's unread items change, and the inbox is read again then. The
+  // request ends on the server's schedule and is opened again; a failure waits a while before trying again. The
+  // 60-second read above stands behind it.
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const listen = async () => {
+      try {
+        await workspaceRequest(
+          "/attention/stream",
+          undefined,
+          false,
+          (event) => {
+            if ((event as { type: string }).type === "attention") void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && String(q.queryKey[1]).startsWith("/attention") });
+          },
+          controller.signal,
+        );
+        if (!controller.signal.aborted) timer = window.setTimeout(listen, 1000);
+      } catch {
+        // The stream ends without a final document, which the request reads as an interruption; a real failure waits.
+        if (!controller.signal.aborted) timer = window.setTimeout(listen, 30_000);
+      }
+    };
+    void listen();
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [queries]);
   const [leaving, setLeaving] = useState<string[]>([]);
   const [failed, setFailed] = useState("");
   // The reader's own unread decisions, as the badge counts them; what waits on a teammate stays on Home.

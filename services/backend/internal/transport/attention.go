@@ -218,6 +218,11 @@ func attentionPreferences(ctx context.Context, db reader, r *http.Request) ([]st
 	return kinds, browser, err
 }
 
+// attentionStreamEvery is how often the stream reads the inbox again; attentionStreamFor is how long one request
+// lives before the sidebar opens another. Tests shorten both.
+var attentionStreamEvery = 10 * time.Second
+var attentionStreamFor = 10 * time.Minute
+
 func registerAttention(mux *http.ServeMux, db *sql.DB) {
 	// One list per person of what needs them, grouped by close; marks and preferences are theirs alone.
 	mux.HandleFunc("GET /v1/closes/attention", func(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +238,61 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 		}
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 		jsonReply(w, 200, attentionInbox(events, kinds, browser, r.URL.Query().Get("view"), page, r.URL.Query().Get("order") == "priority"))
+	})
+	// The inbox as it changes: one long-lived request that says, as NDJSON, when the person's unread items change
+	// (their count and keys), read again every attentionStreamEvery; a line every tick keeps the connection alive.
+	// It ends after attentionStreamFor, and the sidebar opens it again (features/dashboard/SideNotices.tsx).
+	mux.HandleFunc("GET /v1/closes/attention/stream", func(w http.ResponseWriter, r *http.Request) {
+		// The server's write timeout is for answers; this response lives as long as the stream does.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(attentionStreamFor + time.Minute))
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		send := func(v map[string]any) bool {
+			line, _ := json.Marshal(v)
+			if _, err := w.Write(append(line, '\n')); err != nil {
+				return false
+			}
+			_ = http.NewResponseController(w).Flush()
+			return true
+		}
+		ticker := time.NewTicker(attentionStreamEvery)
+		defer ticker.Stop()
+		deadline := time.NewTimer(attentionStreamFor)
+		defer deadline.Stop()
+		last := ""
+		first := true
+		for {
+			events, err := attentionEvents(r.Context(), db, r)
+			var kinds []string
+			var browser bool
+			if err == nil {
+				kinds, browser, err = attentionPreferences(r.Context(), db, r)
+			}
+			if err != nil {
+				send(map[string]any{"type": "error", "message": "Attention inbox unavailable."})
+				return
+			}
+			inbox := attentionInbox(events, kinds, browser, "unread", 0, true)
+			keys, _ := inbox["unread_keys"].([]string)
+			fingerprint := strings.Join(keys, "\n")
+			if first || fingerprint != last {
+				if !send(map[string]any{"type": "attention", "unread": len(keys), "unread_keys": keys}) {
+					return
+				}
+				last = fingerprint
+				first = false
+			} else if !send(map[string]any{"type": "tick"}) {
+				return
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-deadline.C:
+				return
+			case <-ticker.C:
+			}
+		}
 	})
 	mux.HandleFunc("POST /v1/closes/attention", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
