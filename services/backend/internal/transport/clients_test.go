@@ -2,10 +2,10 @@ package transport
 
 import (
 	"bytes"
-	"fmt"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"net/url"
 	"os"

@@ -156,10 +156,10 @@ export default function ClosesList() {
   // Who holds the client's months, where the reader can see it: its own owner, else the firm template's.
   const people = roster?.people;
   // Who holds the client's work: whoever holds the month in hand now, else, for the months still to open, the client's
-  // own owner or the template's. A client off the roster takes no template, so nobody holds its months by schedule.
+  // own owner or the template's. A client off the roster, or no longer a client, has no months scheduled to hold.
   const owner = (r: ClientRow) => {
     const inHand = r.closes.filter((c) => !c.signed_off).sort((a, b) => a.period.localeCompare(b.period))[0];
-    const subject = inHand ? (inHand.owner ?? "") : r.active === undefined ? undefined : (r.owner ?? roster?.template?.owner ?? "");
+    const subject = inHand ? (inHand.owner ?? "") : r.active !== true ? undefined : (r.owner ?? roster?.template?.owner ?? "");
     if (subject === undefined) return "—";
     return subject ? (people?.find((p) => p.subject === subject)?.name ?? subject) : "Nobody";
   };
