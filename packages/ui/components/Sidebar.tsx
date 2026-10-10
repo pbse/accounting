@@ -69,7 +69,16 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
         )}
       </div>
       {open && <div className="ks-backdrop" onClick={() => setOpen(false)} />}
-      <nav className={`ks-side${collapsed ? " collapsed" : ""}${open ? " open" : ""}`} aria-label={navLabel}>
+      <nav
+        className={`ks-side${collapsed ? " collapsed" : ""}${open ? " open" : ""}`}
+        aria-label={navLabel}
+        // The sheet closes on anything that goes somewhere or opens a chat; opening a group, collapsing or the person's
+        // menu keep it.
+        onClick={(event) => {
+          const control = (event.target as HTMLElement).closest("a, button");
+          if (control && !control.closest(".ks-group, .ks-collapse, .ks-me")) setOpen(false);
+        }}
+      >
         <div className="ks-brand">
           <Link className="ks-wordmark" to={brandTo} aria-label={brandLabel}>
             krith

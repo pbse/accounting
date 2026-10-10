@@ -43,10 +43,9 @@ export function SideNotices() {
     window.setTimeout(() => {
       workspaceRequest("/attention", { action: "read", keys: [key] })
         .then(() => navigate(to))
-        .catch((e: unknown) => {
-          setLeaving((l) => l.filter((k) => k !== key));
-          setFailed(e instanceof Error ? e.message : "The notice could not be marked read.");
-        })
+        .catch((e: unknown) => setFailed(e instanceof Error ? e.message : "The notice could not be marked read."))
+        // Read or not, the key leaves the leaving state: a notice marked new again on Home must show again.
+        .then(() => setLeaving((l) => l.filter((k) => k !== key)))
         .finally(() => void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && String(q.queryKey[1]).startsWith("/attention") }));
     }, 220);
   }
