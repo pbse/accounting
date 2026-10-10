@@ -442,6 +442,12 @@ func (s *seeder) people(ctx context.Context) error {
 }
 
 // policies are the firm's rules as a careful small firm sets them, each change recorded with its reason.
+// seedPolicy is what the seed sets, by the firm's column, and policyInputs the route's name for each.
+var seedPolicy = map[string]any{"agent_chat": "firm", "materiality_amount": "250.00", "require_link_passcode": true, "reminder_after_days": 3, "reminder_max": 2}
+var policyInputs = map[string]string{"agent_chat": "agent_chat", "materiality_amount": "materiality_amount", "require_link_passcode": "link_passcode", "reminder_after_days": "reminder_after_days", "reminder_max": "reminder_max"}
+
+// policies are the firm's rules as a careful small firm sets them, each change recorded with its reason. The review
+// rules are never touched.
 func (s *seeder) policies(ctx context.Context) {
 	changes := []map[string]any{
 		{"agent_chat": "firm", "reason": "Turn the agent on for the whole firm after the June pilot with two clients"},
@@ -489,22 +495,30 @@ func (s *seeder) roster(ctx context.Context) {
 
 // procedures are the firm's approved methods: firm-wide for payroll, loans, owner items, accruals and bank
 // reconciliations, and per client for prepaids (each client's expense account differs).
-func (s *seeder) procedures(ctx context.Context) {
-	publish := s.publishProcedure(ctx)
-	publish("", "basis", "accrual", "Every client keeps its books on the accrual basis; the month-end capture is read on that basis.", "", "")
-	publish("", "payroll", "payroll_summary_v1", "Record payroll from the provider's monthly summary: wages and employer taxes to expense, the provider's debits cleared through Payroll Clearing.", "", "")
-	publish("", "loan", "lender_statement_v1", "Take principal, interest and the closing balance from the lender's statement; accrue interest from the last payment to month-end when the note is paid mid-month.", "", "")
-	publish("", "owner", "", "Personal purchases paid by the business are reclassified to the owner's distributions once the owner confirms in writing.", "", "")
-	publish("", "accrual", "", "Accrue services incurred but not yet invoiced from the vendor's estimate, reversing on the first of the next month.", "", "")
-	publish("", "reconciliation", "", "Reconcile each bank account to the statement every month; timing items need their clearing reference.", "", "")
-}
+// procedures publishes nothing firm-wide: a firm's own defaults stay as they are, and each demonstration client gets
+// its own versions (clientProcedures), which reach no other client.
+func (s *seeder) procedures(ctx context.Context) {}
 
-// clientProcedures are a client's own rules, published once its first month exists: its entity type for owner items
-// and the accounts its prepaids use.
+// clientProcedures are a client's own rules, published once its first month exists: its accounting basis, its entity
+// type for owner items, the accounts its prepaids use, and the methods its payroll, loan, accruals and
+// reconciliations follow.
 func (s *seeder) clientProcedures(ctx context.Context, c *seed.Client) {
 	publish := s.publishProcedure(ctx)
+	publish(c.Name, "basis", "accrual", c.Name+" keeps its books on the accrual basis; the month-end capture is read on that basis.", "", "")
+	if c.Payroll != nil {
+		publish(c.Name, "payroll", "payroll_summary_v1", "Record payroll from "+c.Payroll.Provider+"'s monthly summary: wages and employer taxes to expense, the provider's debits cleared through Payroll Clearing.", "", "")
+	}
+	if c.Loan != nil {
+		publish(c.Name, "loan", "lender_statement_v1", "Take principal, interest and the closing balance from "+c.Loan.Lender+"'s statement; accrue interest from the last payment to month-end when the note is paid mid-month.", "", "")
+	}
 	if len(c.Owners) > 0 {
-		publish(c.Name, "owner", c.EntityType, "Owner items for "+c.Name+" follow the firm's rule; the entity type decides the treatment.", "", "")
+		publish(c.Name, "owner", c.EntityType, "Personal purchases paid by the business are reclassified to the owner's distributions once the owner confirms in writing; the entity type decides the treatment.", "", "")
+	}
+	if len(c.Accruals) > 0 {
+		publish(c.Name, "accrual", "", "Accrue services incurred but not yet invoiced from the vendor's estimate, reversing on the first of the next month.", "", "")
+	}
+	if c.Reconcile {
+		publish(c.Name, "reconciliation", "", "Reconcile Checking to the bank's export every month; timing items need their clearing reference.", "", "")
 	}
 	if len(c.Prepaids) > 0 {
 		publish(c.Name, "prepaid", "", "Spread annual policies and subscriptions over equal full months from the first month of service.", seed.ExpenseName(c.Prepaids[0].Expense), "Prepaid Expenses")
@@ -1556,7 +1570,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	}
 	rows.Close()
 	for _, id := range ordered {
-		if err := removeClose(ctx, db, id); err != nil {
+		if err := removeClose(ctx, db, id, chats); err != nil {
 			return fmt.Errorf("close %s: %w", id, err)
 		}
 	}
@@ -1602,9 +1616,24 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 			db.ExecContext(ctx, `DELETE FROM model_calls WHERE organization_id=$1 AND calls=0 AND COALESCE(gemini_calls,0)=0`, o.Organization)
 		}
 		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
-		restore := map[string]any{"materiality_amount": before["materiality_amount"], "link_passcode": before["require_link_passcode"], "reminder_after_days": before["reminder_after_days"], "reminder_max": before["reminder_max"],
-			"agent_chat": before["agent_chat"], "staff_planning": before["assistant_model_answers"], "ledger_writes": before["allow_ledger_writes"], "reason": "The demonstration was removed; the firm's policy is as it was before it"}
-		s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
+		// Only what the seed set, and only where the firm has left it as the seed set it: a later decision stands.
+		var now map[string]any
+		var raw []byte
+		if db.QueryRowContext(ctx, `SELECT to_jsonb(o) FROM (SELECT require_link_passcode,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat FROM organizations WHERE id=$1) o`, o.Organization).Scan(&raw) == nil {
+			json.Unmarshal(raw, &now)
+		}
+		restore := map[string]any{"reason": "The demonstration was removed; the firm's policy is as it was before it"}
+		for field, set := range seedPolicy {
+			if fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
+				restore[policyInputs[field]] = before[field]
+			}
+		}
+		if len(restore) == 1 {
+			restore = nil
+		}
+		if restore != nil {
+			s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
+		}
 		if stopped, ok := before["agent_chat_stopped"].(bool); ok {
 			// The notice that the agent was stopped by a migration is not a policy the route sets; it is put back as found.
 			db.ExecContext(ctx, `UPDATE organizations SET agent_chat_stopped=$2 WHERE id=$1`, o.Organization, stopped)
@@ -1626,12 +1655,18 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 }
 
 // removeClose deletes one close and everything that hangs off it, in the order the deletion route uses.
-func removeClose(ctx context.Context, db *sql.DB, closeID string) error {
+func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions []int64) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	// A member's own conversation that mentions the close keeps its messages, detached from it; only the seed's chats
+	// and the chats held inside the close go with it.
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_messages m SET close_id=NULLIF(m.close_id,$1::bigint),target_close_id=NULLIF(m.target_close_id,$1::bigint),closes=array_remove(m.closes,$1::bigint) FROM chat_sessions s
+ WHERE s.id=m.session_id AND s.close_id IS NULL AND NOT s.id=ANY($2::bigint[]) AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint OR $1::bigint=ANY(m.closes))`, closeID, seedSessions); err != nil {
+		return fmt.Errorf("detach chats: %w", err)
+	}
 	for _, statement := range []string{
 		`DELETE FROM sandbox_postings WHERE close_id=$1`,
 		`DELETE FROM procedure_example_approvals WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`,
