@@ -127,7 +127,7 @@ func standingApproval(db *sql.DB) http.HandlerFunc {
 
 // sweepStandingApprovals approves up to 20 unreviewed later-month drafts after the cursor that an active standing approval covers.
 func sweepStandingApprovals(ctx context.Context, db *sql.DB, cursor string) (string, int, error) {
-	rows, err := db.QueryContext(ctx, `SELECT w.id::text,w.close_id::text FROM workpapers w WHERE (w.kind='prepaid' AND w.paper ? 'carry_forward' OR w.kind='accrual' AND w.paper ? 'recurring_accrual' OR w.kind='loan') AND w.id>$1::bigint AND NOT EXISTS(SELECT 1 FROM workpaper_reviews v WHERE v.workpaper_id=w.id) ORDER BY w.id LIMIT 20`, cursor)
+	rows, err := db.QueryContext(ctx, `SELECT w.id::text,w.close_id::text FROM workpapers w WHERE (w.kind='prepaid' AND w.paper ? 'carry_forward' OR w.kind='accrual' AND w.paper ? 'recurring_accrual' OR w.kind='loan') AND w.id>$1::bigint AND NOT EXISTS(SELECT 1 FROM workpaper_reviews v WHERE v.workpaper_id=w.id) AND NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.id=w.close_id AND `+seedInProgress("c")+`) ORDER BY w.id LIMIT 20`, cursor)
 	if err != nil {
 		return cursor, 0, err
 	}
