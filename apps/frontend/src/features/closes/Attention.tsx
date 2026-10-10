@@ -7,6 +7,10 @@ export type AttentionEvent = { key: string; kind: string; yours: boolean; text: 
 export type AttentionGroup = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: AttentionEvent[] };
 export type AttentionInbox = { groups: AttentionGroup[]; unread: number; unread_keys: string[]; page: number; has_more: boolean; kinds: string[]; preferences: { kinds: string[]; browser: boolean } };
 
+// The one inbox read the shell makes: the reader's unread items by priority, which carries the count, the keys and the
+// preferences the badge needs and the notices the sidebar shows. The page's loader prefetches it.
+export const attentionPath = "/attention?view=unread&order=priority";
+
 export const kindLabels: Record<string, string> = {
   answered: "Client replies",
   confirm: "Facts to confirm",
@@ -27,7 +31,7 @@ export const kindLabels: Record<string, string> = {
 export function AttentionBadge() {
   // Read with the page (the layout's loader), then every minute, in a background tab too (that is when a
   // notification matters), and again on returning to the tab.
-  const inbox = useQuery({ ...workspaceQuery<AttentionInbox>("/attention"), refetchInterval: 60000, refetchIntervalInBackground: true, refetchOnWindowFocus: true });
+  const inbox = useQuery({ ...workspaceQuery<AttentionInbox>(attentionPath), refetchInterval: 60000, refetchIntervalInBackground: true, refetchOnWindowFocus: true });
   const unread = inbox.data?.unread ?? 0;
   const seen = useRef<Set<string>>(undefined);
   const navigate = useNavigate();

@@ -5,7 +5,7 @@ import { Icon, type IconName } from "@close/ui/components/Icon";
 import { SidebarCategory } from "@close/ui/components/Sidebar";
 import { workspaceQuery } from "../../data/queries";
 import { workspaceRequest } from "../closes/workspace";
-import type { AttentionInbox } from "../closes/Attention";
+import { attentionPath, type AttentionInbox } from "../closes/Attention";
 
 // Needs you: what the agent noticed, one line each, from the attention inbox the Home badge already reads. Taking one
 // marks it read, slides it out and opens its close; All notices opens Home's decisions, where read ones stay.
@@ -14,10 +14,9 @@ const kinds: Record<string, Kind> = { answered: "reply", handoff: "reply", fix: 
 const icons: Record<Kind, IconName> = { doc: "file", reply: "mail", wait: "waiting", done: "review" };
 
 export function SideNotices() {
-  // The unread view by priority, so the four notices are the person's most pressing even when newer read or teammate
-  // events fill the inbox's first page; the count comes with it.
-  const path = "/attention?view=unread&order=priority";
-  const inbox = useQuery({ ...workspaceQuery<AttentionInbox>(path), refetchInterval: 60000, refetchOnWindowFocus: true });
+  // The same read as the badge: the unread view by priority, so the four notices are the person's most pressing even
+  // when newer read or teammate events fill the inbox's first page.
+  const inbox = useQuery({ ...workspaceQuery<AttentionInbox>(attentionPath), refetchInterval: 60000, refetchOnWindowFocus: true });
   const navigate = useNavigate();
   const queries = useQueryClient();
   const [leaving, setLeaving] = useState<string[]>([]);
