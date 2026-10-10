@@ -142,6 +142,12 @@ export default function ClientPage() {
   const signed = months.filter((m) => m.signed_off);
   const active = client.roster?.active ?? true;
   async function openMonth(period: string) {
+    // A month already opened, under any of the client's names, is opened as it is rather than opened again under this one.
+    const existing = months.find((m) => m.period === period);
+    if (existing) {
+      navigate(`/dashboard/closes/${existing.id}`);
+      return;
+    }
     setBusy(period);
     setError("");
     try {

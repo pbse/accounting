@@ -230,11 +230,12 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &sent, &email, &q.Answered, &q.Job, &q.Items); err != nil {
 					break
 				}
+				// A request that reached the client stays sent, whatever became of a later reminder.
 				switch {
-				case email == "failed":
-					q.State = "failed"
 				case sent.Valid:
 					q.State, q.Sent = "sent", &sent.Time
+				case email == "failed":
+					q.State = "failed"
 				case email == "sending":
 					q.State = "sending"
 				default:
