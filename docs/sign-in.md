@@ -162,6 +162,7 @@ In WorkOS (production environment):
   2. Send one invitation and see Krith's email arrive (Resend's log shows it). Until the next step, invitees get WorkOS's email too.
   3. Turn off WorkOS's invitation email (Authentication → Emails, or `isInvitationEmailEnabled: false`).
   Without Krith's sender, keep WorkOS's email on: Krith's invitation emails wait and then expire unsent.
+  Done in production 2026-10-10: Krith's first invitation email was delivered, then WorkOS's invitation email was turned off. WorkOS's display name is "Krith".
 - **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, the default redirect URI `https://getkrith.com/login` (where WorkOS sends a sign-in it started itself), and the sign-out URI `https://getkrith.com/`.
 
 In GitHub (production environment variables): set `AUTH_SESSION=server`, then run Deploy production. The API needs `WORKOS_API_KEY` and `SECRETS_KEY`, which production already has.
