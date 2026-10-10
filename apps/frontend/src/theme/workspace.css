@@ -854,7 +854,7 @@ aside.assistant {
 }
 /* The shimmer runs from ink to ink-3 and back, so every frame of the line stays at 4.5:1 on the surface. */
 .ks-thinking {
-  background: linear-gradient(90deg, #18181b 0%, #18181b 35%, #6b6f78 50%, #18181b 65%, #18181b 100%);
+  background: linear-gradient(90deg, var(--ink) 0%, var(--ink) 35%, var(--ink-3) 50%, var(--ink) 65%, var(--ink) 100%);
   background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
