@@ -21,12 +21,12 @@ export async function check({ repository, sha, query, verify, pause = setTimeout
     if (!pending) throw new Error('The merged pull request did not pass CI');
     if (attempt + 1 < attempts) await pause(15000);
   }
-  throw new Error('Merged PR/CI evidence is still unavailable after three minutes; deployment was not started. For incomplete CI or uploads, rerun the merged PR CI and then retry this deployment. An older workflow without provenance or a direct main push requires a manually validated Deploy production dispatch.');
+  throw new Error('Merged PR/CI evidence is still unavailable after three minutes; deployment was not started. If merged PR CI is still running, wait for it to finish and retry deployment. If its current workflow supports provenance but the upload failed, rerun that CI and retry deployment. An older workflow without provenance or a direct main push requires a manually validated Deploy production dispatch.');
 }
 
 export function hasProvenance(artifacts) {
  if (artifacts.some(a=>a.name==='ci-provenance' && !a.expired)) return true;
- if (artifacts.some(a=>a.name==='ci-provenance' && a.expired)) throw new Error('CI provenance expired; rerun CI before automatic deployment.');
+ if (artifacts.some(a=>a.name==='ci-provenance' && a.expired)) throw new Error('CI provenance expired; rerun CI for the merged PR if GitHub still allows it, then retry deployment; otherwise use a manually validated Deploy production dispatch.');
  return false;
 }
 
