@@ -37,6 +37,7 @@ jobs:
       TEXT_SCANNER_URL: ${{ vars.TEXT_SCANNER_URL }}
       UPLOAD_SCAN_HOST: ${{ vars.UPLOAD_SCAN_HOST }}
       EMAIL_INTAKE_ADDRESS: ${{ vars.EMAIL_INTAKE_ADDRESS }}
+      CLIENT_EMAIL_ADDRESS: ${{ vars.CLIENT_EMAIL_ADDRESS }}
       CONTACT_FORWARD_ADDRESS: ${{ vars.CONTACT_FORWARD_ADDRESS }}
       QBO_CLIENT_ID: ${{ vars.QBO_CLIENT_ID }}
       QBO_REDIRECT_URI: ${{ vars.QBO_REDIRECT_URI }}
@@ -123,6 +124,12 @@ jobs:
             if (process.env.MCP_RESOURCE_URL !== mcp) throw new Error(`MCP_RESOURCE_URL must be ${mcp}`);
           }
           if (process.env.EMAIL_INTAKE_ADDRESS && !/^[a-z0-9._-]+@[a-z0-9.-]+$/i.test(process.env.EMAIL_INTAKE_ADDRESS)) throw new Error('Invalid email intake address');
+          // Krith's sender sends with the key of PLATFORM_EMAIL_FROM's domain, so its address is on that domain.
+          if (process.env.CLIENT_EMAIL_ADDRESS) {
+            if (!/^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]+$/i.test(process.env.CLIENT_EMAIL_ADDRESS)) throw new Error('CLIENT_EMAIL_ADDRESS must be a bare address, e.g. requests@mail.example.com');
+            const platform = /<([^<>]+)>\s*$/.exec(process.env.PLATFORM_EMAIL_FROM || '')?.[1] ?? (process.env.PLATFORM_EMAIL_FROM || '');
+            if (platform.split('@')[1]?.toLowerCase() !== process.env.CLIENT_EMAIL_ADDRESS.split('@')[1].toLowerCase()) throw new Error("CLIENT_EMAIL_ADDRESS must be on PLATFORM_EMAIL_FROM's domain");
+          }
           if (process.env.CONTACT_FORWARD_ADDRESS && !/^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]+$/i.test(process.env.CONTACT_FORWARD_ADDRESS)) throw new Error('Invalid contact forwarding address');
           for (const name of ['PRODUCTION_URL','WORKOS_ISSUER','TEXT_SCANNER_URL']) {
             if (new URL(process.env[name]).protocol !== 'https:') throw new Error(`${name} must use HTTPS`);

@@ -32,7 +32,7 @@ const securityServices = `SELECT COALESCE(jsonb_agg(x ORDER BY x.connected_at DE
  UNION ALL SELECT 'Stripe',c.close_id::text,c.client_entity,COALESCE(c.account_name,''),CASE WHEN c.livemode THEN 'live' ELSE 'test' END,c.state,c.actor,c.created_at,c.confirmed_by,c.confirmed_at FROM stripe_connections c WHERE c.organization_id=$1 AND c.state<>'disconnected'
 ) x`
 
-const securityEmail = `SELECT COALESCE((SELECT jsonb_build_object('sender',sender,'enabled',enabled,'verified_at',verified_at,'connected_by',actor,'connected_at',created_at) FROM email_connections WHERE organization_id=$1 ORDER BY id DESC LIMIT 1),'null'::jsonb)`
+const securityEmail = `SELECT COALESCE((SELECT jsonb_build_object('provider',provider,'sender',sender,'enabled',enabled,'verified_at',verified_at,'connected_by',actor,'connected_at',created_at) FROM email_connections WHERE organization_id=$1 ORDER BY id DESC LIMIT 1),'null'::jsonb)`
 
 // securityGrants is posting authority posting would honour now: unrevoked, unexpired, granted by a current member, on an
 // active connection to the granted company, with where each is revoked (the close that holds that connection).
@@ -60,7 +60,7 @@ const activityEvents = `
  UNION ALL SELECT created_at,actor,'xero.connected','Connected Xero for '||client_entity FROM xero_connections WHERE organization_id=$1
  UNION ALL SELECT confirmed_at,confirmed_by,'xero.confirmed','Confirmed Xero for '||client_entity FROM xero_connections WHERE organization_id=$1 AND confirmed_at IS NOT NULL
  UNION ALL SELECT created_at,actor,'stripe.connected','Connected Stripe ('||CASE WHEN livemode THEN 'live' ELSE 'test' END||') for '||client_entity FROM stripe_connections WHERE organization_id=$1
- UNION ALL SELECT created_at,actor,'email.sender','Set email sending from '||sender FROM email_connections WHERE organization_id=$1
+ UNION ALL SELECT created_at,actor,'email.sender',CASE WHEN provider='krith' THEN 'Email sending from Krith''s sender, '||sender ELSE 'Set email sending from '||sender END FROM email_connections WHERE organization_id=$1
  UNION ALL SELECT granted_at,granted_by,'posting.quickbooks_granted','Granted QuickBooks posting for '||client_entity||': '||reason FROM production_posting_grants WHERE organization_id=$1
  UNION ALL SELECT revoked_at,revoked_by,'posting.quickbooks_revoked','Revoked QuickBooks posting for '||client_entity FROM production_posting_grants WHERE organization_id=$1 AND revoked_at IS NOT NULL
  UNION ALL SELECT granted_at,granted_by,'posting.xero_granted','Granted Xero posting for '||client_entity||': '||reason FROM xero_posting_grants WHERE organization_id=$1

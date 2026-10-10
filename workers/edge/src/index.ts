@@ -33,6 +33,8 @@ export class CapabilityAPI extends Container<Env> {
     PUBLIC_APP_URL: this.env.PUBLIC_APP_URL ?? "",
     EMAIL_INTAKE_ADDRESS: this.env.EMAIL_INTAKE_ADDRESS ?? "",
     EMAIL_INTAKE_KEY: this.env.EMAIL_INTAKE_KEY ?? "",
+    CLIENT_EMAIL_ADDRESS: this.env.CLIENT_EMAIL_ADDRESS ?? "",
+    CLIENT_EMAIL_WEBHOOK_SECRET: this.env.CLIENT_EMAIL_WEBHOOK_SECRET ?? "",
     WORKOS_CLIENT_ID: this.env.WORKOS_CLIENT_ID ?? "",
     WORKOS_ORGANIZATION_ID: this.env.WORKOS_ORGANIZATION_ID ?? "",
     WORKOS_ISSUER: this.env.WORKOS_ISSUER ?? "",
@@ -93,6 +95,8 @@ interface Env {
   PUBLIC_APP_URL?: string;
   EMAIL_INTAKE_ADDRESS?: string;
   EMAIL_INTAKE_KEY?: string;
+  CLIENT_EMAIL_ADDRESS?: string;
+  CLIENT_EMAIL_WEBHOOK_SECRET?: string;
   QBO_CLIENT_ID?: string;
   QBO_CLIENT_SECRET?: string;
   QBO_REDIRECT_URI?: string;

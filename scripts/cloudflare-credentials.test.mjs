@@ -14,6 +14,8 @@ test('credential validation rejects unsafe URLs and compacts managed login', () 
  assert.throws(() => validateCredential('CODEX_AUTH_JSON',JSON.stringify({...auth,extra:'x'.repeat(5000)})));
  assert.throws(() => validateCredential('CLOUDFLARE_API_TOKEN','x'));
  assert.throws(() => validateCredential('SECRETS_KEY','invalid'));
+ assert.throws(() => validateCredential('CLIENT_EMAIL_WEBHOOK_SECRET','not-a-signing-secret'));
+ assert.equal(validateCredential('CLIENT_EMAIL_WEBHOOK_SECRET','whsec_c3ludGhldGljLXNpZ25pbmctc2VjcmV0\n'),'whsec_c3ludGhldGljLXNpZ25pbmctc2VjcmV0');
  assert.throws(() => validateCredential('QBO_WEBHOOK_VERIFIER',' padded '));
  assert.throws(() => validateCredential('OPERATIONS_ALERT_WEBHOOK_URL','http://host'));
  assert.throws(() => validateCredential('OPERATIONS_ALERT_WEBHOOK_URL','https://user:pass@host'));
@@ -140,6 +142,12 @@ test('metadata preflight preserves optional features and checks configured integ
   for (const overrides of [{AUTH_SESSION:'server'},{QBO_CLIENT_ID:'client'},{XERO_CLIENT_ID:'client',XERO_REDIRECT_URI:'https://host/callback'},{EMAIL_INTAKE_ADDRESS:'evidence@host.example'},{CONTEXT_MACHINE_ENABLED:'true'}]) assert.notEqual(f.run('edge',['--check'],overrides).status,0);
   names(['DATABASE_URL','UPLOAD_SCAN_KEY','XERO_CLIENT_SECRET','SECRETS_KEY','EMAIL_INTAKE_KEY','CONTEXT_MACHINE_TOKEN']);
   assert.equal(f.run('edge',['--check'],{XERO_CLIENT_ID:'client',XERO_REDIRECT_URI:'https://host/callback',EMAIL_INTAKE_ADDRESS:'evidence@host.example',CONTEXT_MACHINE_ENABLED:'true'}).status,0);
+  // Krith's sender needs Krith's webhook secret on the API and Krith's key on the worker.
+  assert.notEqual(f.run('edge',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
+  assert.notEqual(f.run('queue',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
+  names(['DATABASE_URL','UPLOAD_SCAN_KEY','CLIENT_EMAIL_WEBHOOK_SECRET','PLATFORM_EMAIL_KEY']);
+  assert.equal(f.run('edge',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
+  assert.equal(f.run('queue',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
   assert.equal(f.run('edge',[],{UPLOAD_SCAN_HOST:'staging.example'}).status,0);
   assert.ok(JSON.parse(readFileSync(join(f.dir,'upload.json'),'utf8')).args.includes('staging.example/*'));
  } finally {f.cleanup();}

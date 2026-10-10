@@ -25,7 +25,7 @@ type Security = {
   people: Person[];
   invitations: { email: string; role: string; invited_by: string; expires_at?: string; created_at: string }[];
   services: Service[];
-  email: null | { sender: string; enabled: boolean; verified_at?: string; connected_by: string; connected_at: string };
+  email: null | { provider?: string; sender: string; enabled: boolean; verified_at?: string; connected_by: string; connected_at: string };
   posting_grants: Grant[];
   activity: { at: string; actor: string; text: string }[];
   providers: { provider: string; receives: string; evidence: string; in_use: boolean }[];
@@ -231,7 +231,13 @@ export function SecurityTab() {
           </RowList>
         )}
         <p>
-          Email sending: {security.email ? `${security.email.sender}, ${security.email.enabled ? "enabled" : "disabled"}${security.email.verified_at ? ", verified" : ", not verified"}, set by ${security.email.connected_by}` : "not set up"} ·{" "}
+          Email sending:{" "}
+          {security.email
+            ? security.email.provider === "krith"
+              ? `Krith's sender, ${security.email.sender}${security.email.enabled ? "" : ", disabled"}`
+              : `${security.email.sender}, ${security.email.enabled ? "enabled" : "disabled"}${security.email.verified_at ? ", verified" : ", not verified"}, set by ${security.email.connected_by}`
+            : "not set up"}{" "}
+          ·{" "}
           <Link to="/dashboard/settings?tab=firm">Manage under Firm</Link>
         </p>
         <p className="note">Google Drive grants are held by the sign-in provider for each person, not stored here.</p>

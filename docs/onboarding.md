@@ -113,7 +113,7 @@ For approved procedures, client-side accountant access and permission setup, fol
 
 ## Approved email delivery
 
-Use [the Resend setup and recovery guide](email-delivery.md) for per-firm verified senders, role permissions, encryption, request approval and delivery-state boundaries. Manual links remain available without provider configuration.
+Every firm emails clients from Krith's sender in its name until it connects its own ([senders](email-delivery.md#senders)). Use [the email setup and recovery guide](email-delivery.md) for a firm's own verified sender, role permissions, encryption, request approval and delivery-state boundaries. Manual links remain available without any sender.
 
 For the close-level evidence scope, live question list and durable job coordination, follow [Prepare this close](close-coordinator.md).
 

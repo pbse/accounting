@@ -8,6 +8,7 @@ export const configuration = {
   "TEXT_SCANNER_URL",
   "UPLOAD_SCAN_HOST",
   "EMAIL_INTAKE_ADDRESS",
+  "CLIENT_EMAIL_ADDRESS",
   "CONTACT_FORWARD_ADDRESS",
   "QBO_CLIENT_ID",
   "QBO_REDIRECT_URI",
@@ -66,6 +67,7 @@ export const configuration = {
   "PUBLIC_APP_URL",
   "TEXT_SCANNER_URL",
   "PLATFORM_EMAIL_FROM",
+  "CLIENT_EMAIL_ADDRESS",
   "GEMINI_OCR_MODEL"
  ],
  "scanner": []
@@ -80,6 +82,10 @@ if (process.argv.includes('--check')) {
  if (app === 'edge' && process.env.EMAIL_INTAKE_ADDRESS) required.push('EMAIL_INTAKE_KEY');
  // Krith's sender sends invitations, so a sender without its key would leave them unsent (docs/sign-in.md#invitations).
  if (app === 'queue' && process.env.PLATFORM_EMAIL_FROM) required.push('PLATFORM_EMAIL_KEY');
+ // Krith's sender sends firms' client email with Krith's key, and the API tracks it through Krith's webhook
+ // (docs/email-delivery.md#senders).
+ if (app === 'queue' && process.env.CLIENT_EMAIL_ADDRESS) required.push('PLATFORM_EMAIL_KEY');
+ if (app === 'edge' && process.env.CLIENT_EMAIL_ADDRESS) required.push('CLIENT_EMAIL_WEBHOOK_SECRET');
  if (app !== 'scanner') {
   for (const [id,secret,redirect] of [['QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI'],['QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI'],['XERO_CLIENT_ID','XERO_CLIENT_SECRET','XERO_REDIRECT_URI']]) {
    if (!process.env[id] && !process.env[redirect]) continue;

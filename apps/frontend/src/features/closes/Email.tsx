@@ -1,7 +1,7 @@
 import { workspaceQuery } from "../../data/queries";
 import { useQuery } from "@tanstack/react-query";
 import { useDates, useNow } from "../../data/time";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { apiBaseUrl } from "../../lib/api";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { RowList } from "@close/ui/components/RowList";
@@ -10,13 +10,41 @@ import { workspaceRequest } from "./workspace";
 
 type Sender = {
   id: string;
+  // "krith" for Krith's own sender, every firm's default; otherwise the integration the firm connected.
+  provider: string;
   sender: string;
   domain_id: string;
   verified_at: string;
   tracking_configured: boolean;
 };
-type Configuration = { connection: Sender | null; hosted: boolean };
-// The firm's verified sender: its state in view, and each change (connect or replace, tracking, disconnect) in a dialog.
+type Provider = { name: string; label: string };
+// providers are the integrations the firm may connect instead of Krith's sender; krith says this server has Krith's.
+type Configuration = { connection: Sender | null; hosted: boolean; providers?: Provider[]; krith?: boolean };
+
+// What each integration asks for when the firm connects it. A new integration adds its fields here, named as its
+// provider reads them (delivery.Provider.Connect).
+const providerFields: Record<string, ReactNode> = {
+  resend: (
+    <>
+      <label>
+        Verified sender (email or Firm name &lt;email&gt;)
+        <input name="from" required maxLength={320} />
+      </label>
+      <label>
+        Resend domain ID
+        <input name="domain_id" required maxLength={100} />
+      </label>
+      <label>
+        Resend API key
+        <input name="key" required type="password" autoComplete="off" />
+      </label>
+      <p>The key needs sender-domain read and email-send access. Disable click tracking on the sending domain to keep private links direct.</p>
+    </>
+  ),
+};
+
+// The firm's sender: Krith's own unless the firm connected one, its state in view, and each change (connect or replace,
+// tracking, going back to Krith's) in a dialog.
 export function EmailSettings() {
   const dates = useDates();
   // The firm's sender, read with the page (Settings' loader) and again after a change.
@@ -44,13 +72,16 @@ export function EmailSettings() {
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
+    // Everything the integration's form asked for goes to its provider as it was entered.
+    const fields: Record<string, string> = {};
+    values.forEach((value, name) => {
+      if (name !== "provider" && name !== "confirmed" && typeof value === "string") fields[name] = value;
+    });
     setBusy(true);
     setError("");
     try {
       await workspaceRequest("/email", {
-        key: values.get("key") ?? "",
-        from: values.get("from") ?? "",
-        domain_id: values.get("domain_id") ?? "",
+        ...(disable ? {} : { provider: values.get("provider") ?? "", fields }),
         previous_id: data?.connection?.id ?? "",
         confirmed: values.get("confirmed") === "on",
         disable,
@@ -80,16 +111,23 @@ export function EmailSettings() {
     }
   }
   const connection = data?.connection;
+  const krith = connection?.provider === "krith";
+  const providers = data?.providers ?? [];
+  const [chosen, setChosen] = useState("");
+  const provider = providers.find((p) => p.name === chosen) ?? providers[0];
   return (
     <section aria-label="Email sender">
       <SectionHeader title="Email sender">
-        {data?.hosted && (
-          <button type="button" className="primary" onClick={() => open("sender")}>
-            {connection ? "Replace the sender" : "Connect the sender"}
+        {data?.hosted && providers.length > 0 && (
+          <button type="button" className={connection ? "" : "primary"} onClick={() => open("sender")}>
+            {connection && !krith ? "Replace the sender" : "Use the firm's own sender"}
           </button>
         )}
       </SectionHeader>
-      <p>Client requests and reminders go out from the firm's own verified Resend domain. The API key is encrypted on the server and never returned to this page. Connecting a sender does not authorize any email.</p>
+      <p>
+        Client requests, reminders and collection messages go out from Krith's sender in the firm's name, or from a sender the firm connects instead. A
+        firm's own key is encrypted on the server and never returned to this page. Every email is still approved by a person.
+      </p>
       {!data ? (
         error ? (
           <p role="alert">
@@ -104,52 +142,70 @@ export function EmailSettings() {
       ) : !data.hosted ? (
         <p className="note">Live sending needs the firm's hosted sign-in, which local development does not have. Share links by hand instead.</p>
       ) : !connection ? (
-        <p className="empty">No email sender connected. Private links can still be shared by hand.</p>
+        <p className="empty">No email sender. Krith's sender is not set up on this server; connect the firm's own, or share private links by hand.</p>
       ) : (
         <RowList>
           <div className="row">
             <span>
               <strong>{connection.sender}</strong>
-              <small>Domain last checked {dates.dateTime(connection.verified_at)}</small>
+              <small>
+                {krith
+                  ? data.krith
+                    ? "Krith's sender, in the firm's name. Clients' replies to requests come back to the close."
+                    : "Krith's sender, which is not set up on this server: nothing goes out until it is, or until the firm connects its own."
+                  : `Domain last checked ${dates.dateTime(connection.verified_at)}`}
+              </small>
             </span>
             <span className={`pill ${connection.tracking_configured ? "" : "muted"}`}>{connection.tracking_configured ? "Delivery tracked" : "Tracking not set up"}</span>
-            <span>
-              <button type="button" onClick={() => open("tracking")}>
-                {connection.tracking_configured ? "Change tracking" : "Set up tracking"}
+            {!krith && (
+              <span>
+                <button type="button" onClick={() => open("tracking")}>
+                  {connection.tracking_configured ? "Change tracking" : "Set up tracking"}
+                </button>
+              </span>
+            )}
+            {!krith && (
+              <button type="button" onClick={() => open("disconnect")}>
+                {data.krith ? "Use Krith's sender" : "Disconnect"}
               </button>
-            </span>
-            <button type="button" onClick={() => open("disconnect")}>
-              Disconnect
-            </button>
+            )}
           </div>
         </RowList>
       )}
       {error && data && !dialog && <p role="alert">{error}</p>}
-      <Dialog open={dialog === "sender"} onClose={() => setDialog(null)} title={connection ? "Replace the sender" : "Connect the sender"} description="The firm's verified Resend domain and the key that sends from it.">
-        <form key={connection?.id ?? "new"} onSubmit={(e) => void save(e, false)}>
+      <Dialog
+        open={dialog === "sender"}
+        onClose={() => setDialog(null)}
+        title={connection && !krith ? "Replace the sender" : "Use the firm's own sender"}
+        description="Emails approved from then on go from the firm's own account instead of Krith's sender."
+      >
+        <form key={`${connection?.id ?? "new"}:${provider?.name ?? ""}`} onSubmit={(e) => void save(e, false)}>
           <fieldset disabled={busy}>
-            <label>
-              Verified sender (email or Firm name &lt;email&gt;)
-              <input name="from" required maxLength={320} defaultValue={connection?.sender ?? ""} />
-            </label>
-            <label>
-              Resend domain ID
-              <input name="domain_id" required maxLength={100} defaultValue={connection?.domain_id ?? ""} />
-            </label>
-            <label>
-              Resend API key
-              <input name="key" required type="password" autoComplete="off" />
-            </label>
-            <p>The key needs sender-domain read and email-send access. Disable click tracking on the sending domain to keep private links direct.</p>
+            {providers.length > 1 ? (
+              <label>
+                Send through
+                <select name="provider" value={provider?.name ?? ""} onChange={(e) => setChosen(e.target.value)}>
+                  {providers.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <input type="hidden" name="provider" value={provider?.name ?? ""} />
+            )}
+            {provider && providerFields[provider.name]}
             <label className="checkbox-label">
-              <input name="confirmed" type="checkbox" required />I am authorized to connect this firm’s Resend account and sender. Replacing a connection stops pending attempts using the previous connection.
+              <input name="confirmed" type="checkbox" required />I am authorized to connect this firm’s {provider?.label ?? ""} account and sender. Replacing a connection stops pending
+              attempts using the previous connection.
             </label>
             {error && <p role="alert">{error}</p>}
             <DialogActions>
               <button type="button" onClick={() => setDialog(null)}>
                 Cancel
               </button>
-              <button className="primary">Verify domain and save</button>
+              <button className="primary">Verify and save</button>
             </DialogActions>
           </fieldset>
         </form>
@@ -179,7 +235,12 @@ export function EmailSettings() {
         </Dialog>
       )}
       {connection && (
-        <Dialog open={dialog === "disconnect"} onClose={() => setDialog(null)} title="Disconnect the sender" description="No email goes out until a sender is connected again. Already accepted or in-flight emails cannot be recalled.">
+        <Dialog
+          open={dialog === "disconnect"}
+          onClose={() => setDialog(null)}
+          title={data?.krith ? "Use Krith's sender" : "Disconnect the sender"}
+          description={`${data?.krith ? "Emails approved from then on go from Krith's sender in the firm's name." : "No email goes out until a sender is connected again."} Already accepted or in-flight emails cannot be recalled.`}
+        >
           <form onSubmit={(e) => void save(e, true)}>
             <fieldset disabled={busy}>
               <label className="checkbox-label">
@@ -287,7 +348,7 @@ export function SendRequestEmail({
         if (e.currentTarget.open && !data && !busy) void load();
       }}
     >
-      <summary>{previousId ? "Approve a reminder" : "Send the approved request via Resend"}</summary>
+      <summary>{previousId ? "Approve a reminder" : "Send the approved request by email"}</summary>
       {error && <p role="alert">{error}</p>}
       {data?.hosted && data.connection ? (
         <form onSubmit={(e) => void send(e)}>
@@ -304,8 +365,8 @@ export function SendRequestEmail({
             </p>
             <label>
               <input name="confirmed" type="checkbox" required />I approve
-              sending this private request link through Resend from this sender
-              to this exact recipient.
+              sending this private request link from this sender to this exact
+              recipient.
             </label>
             {waiting && <p role="status">{waiting}</p>}
             <button disabled={!!waiting}>{previousId ? "Approve and queue this reminder" : "Approve and queue email"}</button>
@@ -314,9 +375,9 @@ export function SendRequestEmail({
       ) : (
         data && (
           <p>
-            Connect a verified firm sender from Client closes and use a hosted
-            session with sending permission. Manual link sharing remains
-            available.
+            Email needs a sender (Krith's, or the firm's own under Settings →
+            Firm) and a hosted session with sending permission. Manual link
+            sharing remains available.
           </p>
         )
       )}

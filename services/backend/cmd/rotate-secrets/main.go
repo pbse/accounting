@@ -34,11 +34,18 @@ func main() {
 	if _, err = tx.ExecContext(ctx, `LOCK TABLE quickbooks_connections,xero_connections,stripe_connections,email_connections,email_outbox,platform_emails IN ACCESS EXCLUSIVE MODE`); err != nil {
 		log.Fatal("Could not isolate rotation; no changes committed: ", err)
 	}
+	// Every email integration's settings must be covered below, or rotation would leave them sealed under the old key.
+	var uncovered int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM email_connections WHERE credential IS NOT NULL AND provider<>'resend'`).Scan(&uncovered); err != nil || uncovered > 0 {
+		log.Fatal("Email connections of an integration this rotation does not cover; no changes committed")
+	}
 	queries := []struct{ table, column, scope, query string }{
 		{"quickbooks_connections", "credential", "qbo", `SELECT id::text,organization_id,credential FROM quickbooks_connections WHERE credential IS NOT NULL FOR UPDATE`},
 		{"xero_connections", "credential", "xero", `SELECT id::text,organization_id,credential FROM xero_connections WHERE credential IS NOT NULL FOR UPDATE`},
 		{"stripe_connections", "credential", "stripe", `SELECT id::text,organization_id,credential FROM stripe_connections WHERE credential IS NOT NULL FOR UPDATE`},
-		{"email_connections", "credential", "resend", `SELECT id::text,organization_id,credential FROM email_connections FOR UPDATE`},
+		// A firm's own integration's settings, sealed under its provider (delivery.SettingsScope); Krith's sender has none.
+		// Each new provider adds its own line.
+		{"email_connections", "credential", "resend", `SELECT id::text,organization_id,credential FROM email_connections WHERE provider='resend' FOR UPDATE`},
 		{"email_connections", "webhook_secret", "resend-webhook", `SELECT id::text,organization_id,webhook_secret FROM email_connections WHERE webhook_secret IS NOT NULL FOR UPDATE`},
 		{"email_outbox", "payload", "email", `SELECT m.id,o.organization_id,m.payload FROM email_outbox m JOIN email_connections o ON o.id=m.connection_id FOR UPDATE OF m`},
 		// The Join link of an invitation email still waiting (docs/sign-in.md#invitations).

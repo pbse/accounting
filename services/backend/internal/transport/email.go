@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -40,15 +41,33 @@ const reminderFollow = `(SELECT CASE
  ELSE '' END
  FROM (SELECT ` + reminderStatus + ` AS s) x LEFT JOIN LATERAL (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m ON true)`
 
+// currentSender is the firm's current sender in a transaction of its own (firmSender).
+func currentSender(ctx context.Context, db *sql.DB, org string) (id, sender, provider string, err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", "", err
+	}
+	defer tx.Rollback()
+	if id, sender, provider, err = firmSender(ctx, tx, org); err == nil {
+		err = tx.Commit()
+	}
+	return id, sender, provider, err
+}
+
 func registerEmail(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/email", func(w http.ResponseWriter, r *http.Request) {
-		var raw []byte
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT jsonb_build_object('id',id::text,'sender',sender,'domain_id',domain_id,'verified_at',verified_at,'tracking_configured',webhook_secret IS NOT NULL) FROM email_connections WHERE organization_id=$1 AND enabled),'null'::jsonb)`, organization(r)).Scan(&raw)
-		if err != nil {
+		// The firm's current sender, Krith's own unless it connected one, and the integrations it may connect instead.
+		raw := []byte("null")
+		id, _, _, err := currentSender(r.Context(), db, organization(r))
+		if err == nil {
+			err = db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('id',id::text,'provider',provider,'sender',sender,'domain_id',domain_id,'verified_at',verified_at,
+ 'tracking_configured',CASE WHEN provider='krith' THEN $3 ELSE webhook_secret IS NOT NULL END) FROM email_connections WHERE organization_id=$1 AND id::text=$2`, organization(r), id, delivery.KrithWebhookSecret() != "").Scan(&raw)
+		}
+		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Email connection unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"connection": json.RawMessage(raw), "hosted": auth.Actor(r.Context()).Organization != ""})
+		jsonReply(w, 200, map[string]any{"connection": json.RawMessage(raw), "hosted": auth.Actor(r.Context()).Organization != "", "providers": delivery.Providers, "krith": delivery.KrithAddress() != ""})
 	})
 	mux.HandleFunc("POST /v1/closes/email", func(w http.ResponseWriter, r *http.Request) {
 		a := auth.Actor(r.Context())
@@ -57,6 +76,9 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var in struct {
+			Provider string            `json:"provider"`
+			Fields   map[string]string `json:"fields"`
+			// A Resend connection's fields, as pages before integrations sent them.
 			Key           string `json:"key"`
 			From          string `json:"from"`
 			DomainID      string `json:"domain_id"`
@@ -69,7 +91,7 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if !in.Confirmed {
-			problem(w, 422, "Confirm that this sender and Resend account belong to your firm.")
+			problem(w, 422, "Confirm that this sender and its account belong to your firm.")
 			return
 		}
 		if in.WebhookSecret != "" {
@@ -82,7 +104,8 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Webhook encryption unavailable.")
 				return
 			}
-			result, err := db.ExecContext(r.Context(), `UPDATE email_connections SET webhook_secret=$3 WHERE organization_id=$1 AND id::text=$2 AND enabled`, a.Organization, in.PreviousID, encrypted)
+			// Krith's own sender is tracked by Krith's webhook, never a firm's.
+			result, err := db.ExecContext(r.Context(), `UPDATE email_connections SET webhook_secret=$3 WHERE organization_id=$1 AND id::text=$2 AND enabled AND provider<>'krith'`, a.Organization, in.PreviousID, encrypted)
 			if err != nil {
 				problem(w, 503, "Webhook configuration unavailable.")
 				return
@@ -95,18 +118,32 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, map[string]bool{"saved": true})
 			return
 		}
-		c := delivery.Connection{Key: strings.TrimSpace(in.Key), From: strings.TrimSpace(in.From), DomainID: strings.TrimSpace(in.DomainID)}
+		// The firm's own integration, checked with its provider before anything is saved.
+		var provider delivery.Provider
+		var sender, reference string
 		var encrypted []byte
 		if !in.Disable {
-			raw, _ := json.Marshal(c)
-			var err error
-			encrypted, err = secrets.Seal(a.Organization+"/resend", raw)
-			if err != nil {
+			if in.Provider == "" && in.Fields == nil {
+				in.Provider, in.Fields = "resend", map[string]string{"key": in.Key, "from": in.From, "domain_id": in.DomainID}
+			}
+			var ok bool
+			if provider, ok = delivery.Lookup(in.Provider); !ok {
+				problem(w, 422, "Choose an email integration this server supports.")
+				return
+			}
+			scope := delivery.SettingsScope(a.Organization, provider.Name)
+			if _, err := secrets.Seal(scope, nil); err != nil {
 				problem(w, 503, err.Error())
 				return
 			}
-			if err = delivery.VerifySender(r.Context(), c); err != nil {
+			var settings []byte
+			var err error
+			if sender, reference, settings, err = provider.Connect(r.Context(), in.Fields); err != nil {
 				problem(w, 422, err.Error())
+				return
+			}
+			if encrypted, err = secrets.Seal(scope, settings); err != nil {
+				problem(w, 503, err.Error())
 				return
 			}
 		}
@@ -116,12 +153,12 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var org, prior string
+		var org, prior, priorProvider string
 		if err = tx.QueryRowContext(r.Context(), `SELECT id FROM organizations WHERE id=$1 AND enabled FOR UPDATE`, a.Organization).Scan(&org); err != nil {
 			problem(w, 403, "Organization unavailable.")
 			return
 		}
-		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM email_connections WHERE organization_id=$1 AND enabled),'')`, org).Scan(&prior); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM email_connections WHERE organization_id=$1 AND enabled),''),COALESCE((SELECT provider FROM email_connections WHERE organization_id=$1 AND enabled),'')`, org).Scan(&prior, &priorProvider); err != nil {
 			problem(w, 503, "Current sender unavailable.")
 			return
 		}
@@ -129,8 +166,17 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Sender changed. Refresh before changing the connection.")
 			return
 		}
+		if in.Disable && priorProvider == delivery.Krith {
+			problem(w, 409, "Krith's sender is the firm's default. Connect the firm's own sender to replace it.")
+			return
+		}
+		// Disconnecting the firm's own sender brings back Krith's, where this server has it.
 		if _, err = tx.ExecContext(r.Context(), `UPDATE email_connections SET enabled=false WHERE organization_id=$1 AND enabled`, org); err == nil && !in.Disable {
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO email_connections(organization_id,sender,domain_id,credential,actor) VALUES($1,$2,$3,$4,$5)`, org, c.From, c.DomainID, encrypted, a.Subject)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO email_connections(organization_id,provider,sender,domain_id,credential,actor) VALUES($1,$2,$3,$4,$5,$6)`, org, provider.Name, sender, reference, encrypted, a.Subject)
+		} else if err == nil {
+			if _, _, _, err = firmSender(r.Context(), tx, org); err == sql.ErrNoRows {
+				err = nil
+			}
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Email connection save could not be confirmed. Refresh before retrying.")
@@ -230,7 +276,7 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, err.Error())
 			return
 		}
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,sender FROM email_connections WHERE organization_id=$1 AND enabled`, org).Scan(&connection, &sender); err != nil || connection != in.ConnectionID {
+		if connection, sender, _, err = firmSender(r.Context(), tx, org); err != nil || connection != in.ConnectionID {
 			problem(w, 409, "Verify and select the current firm sender before approving delivery.")
 			return
 		}

@@ -11,7 +11,7 @@ const PROVIDERS = [
   { name: "WorkOS", does: "Sign-in, roles and invitations." },
   { name: "OpenAI or Anthropic", does: "AI reading of documents. Your firm’s workspace names the provider it uses." },
   { name: "Google (Gemini API)", does: "Reads the text of each page of the PDFs a firm adds, sent as an image of the page. On the paid service we use, Google does not use them to improve its products and keeps them only briefly, to detect abuse. Firm settings show whether it is in use." },
-  { name: "Resend", does: "Sends emails a person at the firm has approved, through the firm’s own sender, and our own emails to firm members: the invitations a firm sends, and a note when someone sets up or joins a firm." },
+  { name: "Resend", does: "Sends emails a person at the firm has approved, from our sender in the firm’s name unless the firm connects its own, and our own emails to firm members: the invitations a firm sends, and a note when someone sets up or joins a firm." },
   { name: "Google (Workspace and Gmail)", does: "Our team’s email, which receives mail sent to our addresses and the notes sent through our contact page." },
 ];
 
