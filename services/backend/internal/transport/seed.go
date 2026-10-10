@@ -1982,6 +1982,12 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	if intake > 0 {
 		return fmt.Errorf("%d client link(s), attachment(s), forwarded file(s) or report run(s) on the demonstration's closes are still live; revoke or dispose of them before removing it", intake)
 	}
+	// A procedure rule the firm learned from a demonstration document and still runs under keeps its source.
+	var rules int
+	db.QueryRowContext(ctx, `SELECT count(*) FROM procedure_drafts d JOIN procedure_versions p ON p.id=d.activated_version_id JOIN evidence e ON e.id=d.source_evidence_id WHERE e.close_id::text=ANY($1) AND p.enabled`, ordered).Scan(&rules)
+	if rules > 0 {
+		return fmt.Errorf("%d active procedure rule(s) were learned from the demonstration's documents; retire them before removing it", rules)
+	}
 	// The client-scoped rows the run recorded as it made them; anything else under those names is someone else's.
 	recorded := map[string][]string{}
 	var before map[string]any
@@ -2164,6 +2170,9 @@ func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions, 
 	// An action card the agent offered on the close cannot stand without it (chat_action_scope), so it goes with the close.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_messages m USING chat_sessions s WHERE s.id=m.session_id AND s.close_id IS NULL AND m.action IS NOT NULL AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint)`, closeID); err != nil {
 		return fmt.Errorf("detach chat actions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_messages m SET workpaper_id=NULL WHERE m.workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1::bigint)`, closeID); err != nil {
+		return fmt.Errorf("detach draft references: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE chat_messages m SET close_id=NULLIF(m.close_id,$1::bigint),target_close_id=NULLIF(m.target_close_id,$1::bigint),closes=array_remove(m.closes,$1::bigint) FROM chat_sessions s
  WHERE s.id=m.session_id AND s.close_id IS NULL AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint OR $1::bigint=ANY(m.closes))`, closeID); err != nil {
