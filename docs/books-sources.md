@@ -4,7 +4,7 @@ Written 2026-10-10. **Proposed, not yet adopted.** The [agent-first build plan](
 
 ## The problem
 
-Every check that makes a close useful reads the month's books: the opening baseline, the tie-out, readiness and sign-off, the balance exceptions, month-over-month changes, account coverage, the management pack, budget against actual and the cash plan's starting cash. Today those books come only from a QuickBooks Online or Xero capture.
+Every check that makes a close useful reads the month's books: the opening baseline, the tie-out, readiness and sign-off, the balance exceptions, month-over-month changes, account coverage, the management pack and budget against actual. Today those books come only from a QuickBooks Online or Xero capture, and the cash plan opens only for QuickBooks clients, from the latest capture's bank balances.
 
 A client on anything else (QuickBooks Desktop, Sage, NetSuite, Business Central, MYOB, Tally, Zoho Books, FreshBooks, Wave) can upload exports and label them ([historical exports](validation.md#historical-exports-labeled-as-reported-2026-09-28)), but a label is not a Trial Balance. None of those checks run, and the brief keeps asking for the exports to be verified. The same is true of a QuickBooks Online client whose owner will not grant the firm a connection.
 
@@ -24,23 +24,25 @@ A firm moves its practice only when it can bring all of its clients. A product t
 
 | File | What it gives | What it cannot give alone |
 | --- | --- | --- |
-| Trial Balance at the month-end | Month-end balances: opening baseline, tie-out, readiness, wrong-side, holding-account and opening-equity exceptions, coverage, the Balance Sheet and working capital, the cash plan's starting cash | The month's profit and loss activity, unless it carries a movement column or a compatible prior month exists (see [monthly activity](#monthly-activity)) |
+| Trial Balance at the month-end | Month-end balances: opening baseline, tie-out, readiness, wrong-side, holding-account and opening-equity exceptions, coverage, the Balance Sheet and working capital | The month's profit and loss activity, unless it carries a movement column or a compatible prior month exists (see [monthly activity](#monthly-activity)) |
 | Trial Balance with a column per month, or several months' files | Balances and, with compatible months, activity for each; prior-period comparatives | Closes for those months (see [history and takeover](#history-and-takeover)) |
 | General Ledger detail for the month | Activity by account; with trusted opening balances, a derived Trial Balance; reconciliation ledger fill, schedule discovery, drill-down from a change to its transactions, the month's transaction review in Daily Books, payee causes; journal-level readback of written-back entries | Opening balances, unless the prior month is accepted or an opening column is present |
 | Chart of accounts export | A better first guess at each account's classification and hierarchy | |
 | Statement of cash flows | The management pack's cash flow, through the firm-attested import Xero months already use | |
-| Receivables and payables open items (invoice and bill level) | Open items for B10 and dated receipts and payments for the B09 cash plan, each reconciled to its control account | |
+| Bank balances at a recent date (a bank export, or a Trial Balance run to that date) | The cash plan's opening cash, as of that date | A forecast, without open items at the same cutoff (see [cash and open items](#open-items-and-cash-dates)) |
+| Receivables and payables open items (invoice and bill level) | Open items for B10 and dated receipts and payments for the B09 cash plan | |
 
 **A Trial Balance is not required.** A complete General Ledger for the month plus trusted opening balances (the prior accepted month's closing balances, or an opening column in the export) gives a Trial Balance by a deterministic roll-forward, recorded as derived. A month whose books come from a live ledger can take files as supplements: a fuller General Ledger, an imported cash-flow statement, open items, or a temporary replacement during a connection outage (see [one authoritative books version](#one-authoritative-books-version-per-month)).
 
-**A Trial Balance alone is not a publishable pack.** It gives the Balance Sheet and, with activity, the Profit and Loss. Publication also needs a reconciled cash-flow statement, as it does today; balances alone cannot classify cash and non-cash movements (equipment bought for cash and equipment financed by a loan move the same balances).
+**A Trial Balance alone is not a publishable pack.** It gives the Balance Sheet and, with activity, the Profit and Loss. Publication also needs a reconciled cash-flow statement, as it does today. Balances alone cannot give gross flows: a loan borrowed and repaid within the month leaves the same month-end balances as no borrowing at all, yet the statement must show both flows.
 
 ## Reading files
 
 ### Formats and lineage
 
 - **CSV**, any delimiter and encoding the file declares or that can be detected without ambiguity.
-- **Excel**, every sheet; the workbook itself is kept (today only the first sheet is kept, as CSV). Hidden rows, columns and sheets are read and shown as hidden. A formula cell's stored value is used and marked as a formula; a workbook saved without stored values is a question, not a guess.
+- **Excel**, every sheet; the workbook itself is kept (today only the first sheet is kept, as CSV). Hidden rows, columns and sheets are read and shown as hidden. A stored value displayed rounded is read at its stored precision.
+- **Formulas.** Ledger exports rarely have them; spreadsheets a firm builds by hand often do. A stored formula result is the last calculation, not necessarily the current one, so a balanced workbook can still be stale. Formula text is kept beside each stored value. When an amount depends on formulas, the reader recalculates the workbook's own formulas over its own cells and compares; a match releases the amounts. A workbook it cannot recalculate (external links, unsupported functions, a recalculation flag it cannot honour) holds those amounts until a values-only export, freshly produced from the ledger, replaces it.
 - **PDF**, read page by page with the existing extraction. As bank-statement PDFs are confirmed today (`transport/statement.go`), every page is checked and every proposed row accounted for before the reading is used. Repeated page headers and page subtotals are recognised as such.
 - Each figure keeps the location it came from (sheet and cell, or page and line) and its original text.
 
@@ -50,7 +52,7 @@ The reader states, per import, how it read amounts. It never applies one rule si
 
 - negatives in parentheses, with a trailing minus, or as `Dr`/`Cr` suffixes; separate debit and credit columns; a single signed balance with its sign convention confirmed;
 - thousands separators and decimal commas, from the file's locale or a confirmed choice;
-- a stated scale ("in thousands"): such a file loses cents, so it can serve as a labelled comparative, never as the month's books;
+- a stated scale ("in thousands"): amounts are converted with exact decimal arithmetic, so `1.23456` thousand is `$1,234.56`. Precision is then judged on the converted amounts: amounts exact to the cent are usable like any others; amounts that were rounded at the source hold their use as the month's books, and can serve as comparatives with their precision shown;
 - column meaning: opening balance, period movement, year-to-date, closing balance, budget. A column's meaning is confirmed, not inferred from its position.
 
 A value the reader cannot place with certainty is flagged for a person; it is never dropped or defaulted.
@@ -61,10 +63,16 @@ A value the reader cannot place with certainty is flagged for a person; it is ne
 - **Parent accounts with their own postings** keep those postings as the parent's own balance, beside its children.
 - **Dimensions** (class, location, department, tracking category) are kept as dimensions, separate from the account's classification. An account repeated once per dimension is one account whose balance is the sum, with the split preserved.
 - **Several entities in one workbook** are split into one import per client. Each is authorised, checked and accepted on its own. Accepting such a file gives each client its own books; it does not consolidate them.
+- **Access to a combined original.** The original holding several clients is kept under access covering all of them (a member who can open every client in it). Each client gets an extracted view of its own rows, with provenance back to the original's digest and locations. Downloads, exports, the close package and model context use the extracted view for anyone without access to the whole.
 
 ### Size and parts
 
-At least 3,000 accounts and 100,000 ledger lines a month. A larger export, or a ledger that exports in pieces, can come as **parts of one import**: the parts declare the same client, month, basis and scope, may not overlap (no account and dimension in two parts), and the combined import must pass every check as one.
+At least 3,000 accounts and 100,000 ledger lines a month. A larger export, or a ledger that exports in pieces, can come as **parts of one import**. The parts declare the same client, month, basis and scope. Overlap is judged on what each part contains, not on account names:
+
+- ledger-detail parts may repeat accounts (the 1st–15th and the 16th–31st of a month will), so they are combined by their transaction and line identities, or by a partition the person confirms, such as non-overlapping date ranges;
+- balance parts must be mutually exclusive slices (account ranges, entities, or dimension values confirmed not to overlap); class and location summaries of the same accounts are not.
+
+The combined import is checked as one, for completeness and for duplicates.
 
 ## How an upload becomes the month's books
 
@@ -72,7 +80,7 @@ At least 3,000 accounts and 100,000 ledger lines a month. A larger export, or a 
 2. **Read.** A recognised layout is parsed directly. Otherwise the agent proposes the header rows, row kinds, column meanings, sign convention, as-of date and currency; a person confirms. The confirmed layout is saved for the client as a version and proposed again next month. It is reused without a question only when the new file matches it on headers, column meanings and scale, and its totals check; any difference asks again.
 3. **Scope.** The import records what population it covers: the client and entity, the ledger or reporting book, any filters the export applied, the accounts and dimensions present, and the periods. The person attests that it is complete, or names what is missing.
 4. **Map the accounts.** Each account needs a class (asset, liability, equity, revenue, expense) and, where the checks use one, a type (bank, credit card, receivables, payables, prepaid, fixed asset, accumulated depreciation, loan, payroll liability, sales tax and so on): what QuickBooks' account directory gives a capture today. The agent proposes from names, numbers, the hierarchy, a chart-of-accounts export and earlier months; a person confirms. The map is versioned. A reclassified, renamed or renumbered account is a change to the map, not a new account, and revalidates whatever depended on it.
-5. **Basis.** Accrual, cash or modified cash, confirmed for the import (see [checks](#checks)).
+5. **Basis.** What the export represents (accrual, cash or modified cash), confirmed for the import and compared with the client's approved basis (see [basis](#basis)).
 6. **Check.** The checks below run on every import and every replacement.
 7. **Accept.** A member with review authority accepts the reading: the client's books for the month, from the named system, exported on the named date, with the stated scope, basis and whether the final adjustments are in. The acceptance replaces the historical-exports label for these files, and is part of what a sign-off covers.
 8. **Activate.** The accepted import becomes the month's books version if Files is the month's source, or a supplement if it is not.
@@ -83,13 +91,13 @@ Each check either holds results that depend on it, or is a note. None refuses th
 
 | Check | What it holds |
 | --- | --- |
-| **Scope is complete:** the attested population, every account with a balance in the prior accepted month present or explained, no filter that excludes postings | A partial import holds every result that depends on what is missing, and any claim of full coverage, until the rest arrives or an authorised engagement exclusion is recorded, as the plan already allows |
+| **Scope is complete:** the attested population, every account with a balance in the prior accepted month present or explained, no filter that excludes postings | Every statement, total and check that includes what is missing, until the rest arrives. An engagement exclusion, as the plan allows, narrows which accounts the firm prepares and reconciles; it never stands in for missing balances, so company-wide statements stay held. A report on a narrower population (one department, say) names that population on its face |
 | Debits equal credits to the cent, after totals are excluded | Everything that reads balances |
 | The as-of date is the month-end | Use as the month's books (it can still be kept as history) |
 | Totals equal the sum of their children | The import, until the hierarchy is confirmed |
 | Every account has a class | The statements and coverage; unclassified accounts already make the pack incomplete |
-| Amounts in the client's currency, two decimals, not scaled | Use as the month's books |
-| Basis matches the client's confirmed basis, and any month it is compared or combined with | Comparisons, derived activity and roll-forwards across the mismatch, and treatments the basis does not support (`preparation.BasisIssue` already refuses these by the client's approved basis) |
+| Amounts in the client's currency and exact to the cent once converted | Use as the month's books |
+| Basis: what the export represents matches the client's approved basis, and any month it is compared or combined with | Comparisons, derived activity and roll-forwards across the mismatch, and the treatments the approved basis does not support (see [basis](#basis)) |
 | Roll-forward, when ledger detail or an opening column is present | The accounts that do not roll (see [roll-forward](#roll-forward-and-changed-prior-months)) |
 
 The first month on files goes through the existing opening baseline review, as a first captured month does.
@@ -100,13 +108,13 @@ The management pack and budget against actual need each profit and loss account'
 
 1. a period-movement column the person confirmed;
 2. a complete General Ledger for the month;
-3. this month's and the prior month's year-to-date balances, only when both are the same basis, book and scope, and the fiscal-year boundary is accounted for: in the first month of the fiscal year the activity is the year-to-date balance itself, and a post-closing Trial Balance (profit and loss balances closed to equity) is recognised and not differenced.
+3. this month's and the prior month's year-to-date balances, only when both are the same basis, book and scope, the fiscal-year boundary is accounted for, **and the prior figure is current**: it comes from the same export as this month's (a multi-month export with both columns), or there is evidence the prior month is unchanged since it was accepted (a re-export of it that matches, or ledger detail with no prior-dated entries made since). Otherwise a backdated adjustment to the prior month would be reported as this month's profit. In the first month of the fiscal year the activity is the year-to-date balance itself, and a post-closing Trial Balance (profit and loss balances closed to equity) is recognised and not differenced.
 
-Otherwise activity is unavailable and the page asks for the one thing that would supply it. It is never estimated. Signs follow the existing convention: balances are debit minus credit; activity uses the profit and loss presentation sign, as `books.Activity` does now.
+Otherwise activity is unavailable and the page asks for the one thing that would supply it, usually a period-movement column. It is never estimated. Derived activity pins both versions it was taken from and is recalculated when either changes. Signs follow the existing convention: balances are debit minus credit; activity uses the profit and loss presentation sign, as `books.Activity` does now.
 
 ### Roll-forward and changed prior months
 
-With ledger detail or an opening column, each account's opening balance is compared with the prior accepted month's closing balance, and the month's movements are reconciled separately from that opening. A difference is reported first as **unexplained**, with its accounts and amounts. It becomes "the prior month changed after it was closed" only with evidence of that change: ledger lines dated in the prior month and entered after its acceptance, or a re-export of the prior month that differs from what was accepted. Fiscal-year closing entries are modelled explicitly, not reported as differences. Both versions of a changed prior month are kept, and its downstream effects (signed drafts, published packs, carried schedules) are listed.
+With ledger detail, an opening column, or a multi-month export that includes the prior month, each account's opening balance is compared with the prior accepted month's closing balance, and the month's movements are reconciled separately from that opening. A difference is reported first as **unexplained**, with its accounts and amounts. It becomes "the prior month changed after it was closed" only with evidence of that change: ledger lines dated in the prior month and entered after its acceptance, or a re-export of the prior month that differs from what was accepted. Fiscal-year closing entries are modelled explicitly, not reported as differences. Both versions of a changed prior month are kept, and its downstream effects (signed drafts, published packs, carried schedules) are listed.
 
 ### Versions, replacements and approvals
 
@@ -141,7 +149,14 @@ A month on files gets its cash flow as Xero months do: the firm imports its stat
 
 ### Open items and cash dates
 
-B09 and B10 need invoice- and bill-level facts and dated receipts and payments; balances cannot supply them. A client without a live ledger brings them as open-item exports (customer, document, dates, amount, open amount). Each import is reconciled to its control account's balance in the same month's books; a difference holds the open items, not the close. Refreshing is a re-upload; promised dates and follow-up notes carry over by document. Payment and collection actions keep their existing approvals and hand-offs.
+B09 and B10 need invoice- and bill-level facts, dated receipts and payments, and current cash; month-end balances cannot supply them. Three times are kept apart: the **accounting period end** a books version describes, the **observation time** a cash balance or open-item list was true at, and the **upload time**.
+
+- **Current cash.** The cash plan opens from an observation, as it does today (the latest QuickBooks capture's bank balances, at its capture time; a Xero client's cash plan is not built yet). A client on files brings bank balances at a recent date. September's month-end books uploaded on 10 October are not cash on 10 October.
+- **Open items** come as exports (customer or vendor, document, dates, amount, open amount) with their own as-of time. Cash and open items must share a cutoff, or the gap is bridged with evidence (receipts and payments between the two times); otherwise collections in the gap would vanish from both opening cash and future receipts.
+- **Accrual books:** open items at a month-end are reconciled to the receivables and payables control accounts of that month's books; a difference holds the open items, not the close.
+- **Cash-basis books** carry no receivables or payables, yet the client still has unpaid invoices and bills. Their open items are accepted as an operational list, checked for completeness on their own terms (the source report's totals and document sequence) and labelled as outside the books. They feed collections and the cash plan and never enter cash-basis statements.
+
+Refreshing is a re-upload; promised dates and follow-up notes carry over by document. Payment and collection actions keep their existing approvals and hand-offs. Month-end versions are kept independently of later observations.
 
 ### History and takeover
 
@@ -157,9 +172,13 @@ The opening baseline reviews the takeover month's month-end tie-out; it does not
 - **Supplements** never replace the month's books. A connected client's uploaded ledger detail, cash-flow statement or open items are reconciled to the month's books before use; a supplement that does not reconcile is shown with its difference and not used.
 - Months may differ in source: a takeover can bring a year of reviewed comparatives as files and run the current month live.
 
+## Basis
+
+The client's accounting basis already has one authority: the approved `basis` procedure (`procedure_versions`), changed only under `procedures:manage`, and read by `preparation.BasisIssue` to refuse treatments the basis does not support. It stays the authority. An import records what the export represents; a reviewer confirms that fact, not the client's policy. When the two differ, the affected comparisons, derivations and treatments are held and the difference is a question for whoever may change the procedure, with its existing invalidation. The management pack's basis label, `Accrual` today, comes from the approved procedure.
+
 ## Client profile
 
-`preparation.ClientProfile` takes the client's currency and fiscal-year start from its active QuickBooks or Xero connection, and without one falls back to USD and January with state `none`. A file-only client needs a **confirmed client profile independent of connections**: entity, currency, fiscal-year start and basis, versioned with effective dates. Where a connection reports different values, the difference is a question, not an override. Currency checks, fiscal-year calculations, statement confirmation, takeover setup and the year-end handoff read the profile. No file-only client gets a placeholder connection to satisfy them.
+`preparation.ClientProfile` takes the client's currency and fiscal-year start from its active QuickBooks or Xero connection, and without one falls back to USD and January with state `none`. A file-only client needs a **confirmed client profile independent of connections**: entity, currency and fiscal-year start, versioned with effective dates, and referring to the approved basis procedure rather than holding a basis of its own. Where a connection reports different values, the difference is a question, not an override. Currency checks, fiscal-year calculations, statement confirmation, takeover setup and the year-end handoff read the profile. No file-only client gets a placeholder connection to satisfy them.
 
 ## Architecture
 
@@ -173,6 +192,7 @@ Instead, every source writes **one month-books record**:
 - **`books_lines`**: ledger lines when the source has them, with dimensions.
 - **`books_imports`**, **`books_layouts`**, **`books_account_maps`** and **`client_profiles`**: uploaded files with each figure's location, the client's confirmed layouts and account maps with their versions, and the confirmed profile.
 - **`books_sources`**: each client's default source and each month's overrides and supplements.
+- **`books_observations`**: current bank balances and open-item lists with their observation and upload times, apart from month-end versions.
 
 The shape already exists in miniature. `periodBooks` (`transport/flux.go`) returns a close's newest month-end capture from either provider, and `readLedgerMonth` turns it into the management pack's `books` type (`transport/management.go`): currency, accounts with class and type, balances and activity. Month-over-month changes, budget against actual and the management pack read through that seam. `ledger.AccountBalance` is the per-account form the shared exception checks take. The month-books record is that shape, stored, with lineage. Today `periodBooks` picks whichever capture is newer; with the record, the month reads the version its source selects.
 
@@ -184,7 +204,7 @@ The demonstration seed writes QuickBooks-shaped captures from generated reports.
 
 1. **Backfill and dual-write.** Write a month-books version for every existing QuickBooks and Xero month-end capture, then for every new one, idempotently. A parity check compares what each reader computes from the provider payload and from the record; readers do not switch until it agrees for every existing close.
 2. **Source selection.** The client's default source and month overrides exist, set from today's behaviour (the newest capture), before any file can become a month's books.
-3. **Feature by feature.** Each feature moves its readers, its readiness and digest inputs, its status lines, its exports and its invalidation together, so no two parts of the product disagree about one month. Order: the `periodBooks` seam (management pack, month-over-month, budget against actual); the tie-out and opening baseline; readiness and exceptions; coverage and the cash plan; then the ledger-line readers (reconciliation fill, schedule discovery in `preparation/straight.go` and the recurring paths, Daily Books, search); then Home, Portfolio, the morning brief, the coordinator, the plan and the close package.
+3. **Feature by feature.** Each feature moves its readers, its readiness and digest inputs, its status lines, its exports and its invalidation together, so no two parts of the product disagree about one month. Order: the `periodBooks` seam (management pack, month-over-month, budget against actual); the tie-out and opening baseline; readiness and exceptions; coverage; the cash plan, once current-cash and open-item observations are stored apart from month-end versions and covered by the parity check; then the ledger-line readers (reconciliation fill, schedule discovery in `preparation/straight.go` and the recurring paths, Daily Books, search); then Home, Portfolio, the morning brief, the coordinator, the plan and the close package.
 4. **Existing records stand.** Signed-off and published versions keep their digests and their content; nothing already signed is recomputed under the new record.
 
 File imports stay behind a firm setting until every feature a month on files needs reads the record.
@@ -214,7 +234,8 @@ File imports stay behind a firm setting until every feature a month on files nee
 | Confirm a layout, account map, scope and basis; accept an import | A member with `workpapers:review` |
 | Connect a ledger, set the default source, override a month | A member with `integrations:manage` |
 | Mark a written-back journal entered | A member with `posting:approve` |
-| Sign off | As today (`closes:signoff`) |
+| Change the client's accounting basis | As today (`procedures:manage`) |
+| Sign off | As today (`close:signoff`) |
 
 ### Client-provided books
 
@@ -252,7 +273,7 @@ Reliable US market-share figures for these ledgers were not found; the counts ab
 
 ## Delivery
 
-Each PR leaves the product working, and is reviewed and validated as usual. File imports stay behind a firm setting until step 7.
+Each PR leaves the product working, and is reviewed and validated as usual. File imports stay behind a firm setting. Step 7 turns it on for internal validation and the demonstration firm only; partner firms get it after step 11, once the acceptance below passes, so the plan's complete-service gate holds.
 
 1. **Month-books record.** `books_versions` and `books_lines`; backfill and dual-write for QuickBooks and Xero; parity checks. No visible change.
 2. **Client profile and source selection.** The confirmed profile and its readers; each client's default source and month overrides, set from today's behaviour.
@@ -260,18 +281,18 @@ Each PR leaves the product working, and is reviewed and validated as usual. File
 4. **The client's Books card.** Connections and uploads move out of the month.
 5. **Reading files.** Formats, values, hierarchy, dimensions, entities, parts; layouts and account maps with versions; scope and basis; the checks; acceptance.
 6. **Activity, roll-forward and history.** Monthly activity, roll-forward and changed prior months, reviewed comparatives and cross-source identity.
-7. **Months on files.** Activation, supplements and overrides; the opening baseline, tie-out, exceptions, coverage, sign-off and the pack (with an imported cash-flow statement) on files. The firm setting can be turned on.
+7. **Months on files.** Activation, supplements and overrides; the opening baseline, tie-out, exceptions, coverage, sign-off and the pack (with an imported cash-flow statement) on files. Internal validation only; work that later steps supply is shown as unavailable, not attempted.
 8. **Ledger detail.** Ledger-line imports; derived Trial Balances; reconciliation fill, schedule discovery, drill-down and Daily Books on files.
 9. **Writing back by file.** Journal import batches, the journal states and source-record correction instructions.
-10. **Open items.** Open-item imports reconciled to control accounts, for B09 and B10.
-11. **Client-provided books.** Connect and upload requests, workbook scanning, larger limits.
+10. **Cash and open items.** Current-cash and open-item observations with their cutoffs; reconciliation to control accounts for accrual books and operational lists for cash-basis books; the cash plan on files.
+11. **Client-provided books.** Connect and upload requests, workbook scanning, larger limits. Then partner firms can turn files on.
 12. **Native connectors,** in the order the first firms' clients call for.
 
 ## Acceptance
 
 - **Files agree with the live ledger.** For a sandbox QuickBooks month and a Xero demo month, the same month's exports, uploaded as files, give the same month-books version to the cent and the same tie-out, exceptions and management pack.
 - **Real exports read without a template.** At least QuickBooks Desktop, Sage 50, NetSuite and a spreadsheet the firm built by hand, each read, mapped and accepted, then read again the next month with no question.
-- **The hard cases are caught, not absorbed:** a partial export (missing department, account range or journal) holds dependent results; a file with parent totals and children does not double-count; an account per class or location sums once; parentheses, `Dr`/`Cr`, decimal commas and a scaled file read correctly or are refused as the month's books; a cash-basis file is not compared with an accrual month; a post-closing Trial Balance and a first fiscal month give the right activity; a reclassified account revalidates its approvals; an unexplained roll-forward difference is not called a changed prior month; a journal imported twice, or partly, is uncertain.
+- **The hard cases are caught, not absorbed:** a partial export (missing department, account range or journal) holds dependent results; a file with parent totals and children does not double-count; an account per class or location sums once; ledger parts for two halves of a month combine without loss or duplicates; parentheses, `Dr`/`Cr`, decimal commas and an exact scaled file read correctly, and a rounded one is held as the month's books; a balanced workbook with stale formula results is caught; a cash-basis file is not compared with an accrual month, and a basis that differs from the approved procedure is a question; a post-closing Trial Balance and a first fiscal month give the right activity; a backdated prior-month adjustment in a year-to-date export is not reported as this month's profit; a reclassified account revalidates its approvals; an unexplained roll-forward difference is not called a changed prior month; a journal imported twice, or partly, is uncertain; month-end books uploaded later are not used as current cash; a member with access to one client in a combined workbook sees only that client's rows.
 - **Two consecutive months on files** for one client, through sign-off and publication, with the second month's opening rolling from the first and the first month's written-back journals verified at journal level.
 - **A client's own upload and connection** through a request, confirmed by a member.
 - The plan's partner-signup gates apply to months on files as to live ones.
@@ -284,7 +305,7 @@ Adopting this amends the plan:
 - **Phase A (B01, B02, B12):** the month-books record, the client profile and source selection; the provider capability inventory gains a row for files; takeover history as reviewed comparatives; the client's Books card.
 - **Phase B (B03–B06, B11):** months on files through every recurring job; writing back by journal batch with journal-level readback and source-record instructions; carry-forward across sources.
 - **Phase C (B07, B08):** a month on files publishes like any other, with its source and basis named; reviewed comparatives in comparisons and budgets.
-- **Phase D (B09, B10):** open-item imports reconciled to control accounts.
+- **Phase D (B09, B10):** current-cash and open-item observations with aligned cutoffs; open items reconciled to control accounts for accrual books, operational lists for cash-basis books.
 - **Phase E:** the acceptance above, including the hard cases, with real exports.
 
 ## Open decisions
