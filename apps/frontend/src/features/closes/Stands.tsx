@@ -45,7 +45,10 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
   const brief = read.data;
   const [planning, setPlanning] = useState(false);
   const lines = brief?.lines ?? [];
-  const { count } = brief ? needsOf(brief) : { count: 0 };
+  // Ready to sign off is its own state: signing off is not a step left, so it leaves the count.
+  const ready = signOffAvailable(brief);
+  const { count: counted } = brief ? needsOf(brief) : { count: 0 };
+  const count = ready ? Math.max(counted - 1, 0) : counted;
   const waiting = lines.filter((l) => l.state === "waiting");
   const done = lines.filter((l) => l.state === "done");
   const unchecked = lines.filter((l) => l.state === "unknown");
@@ -59,7 +62,7 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
         ? `${close.entity} is ${count === 1 ? "one step" : `${n(count, "step")}`} from done.`
         : waiting.length
           ? `${close.entity} is waiting on ${waiting.map((l) => l.area).join(" and ")}.`
-          : signOffAvailable(brief)
+          : ready
             ? `${close.entity} is ready to sign off.`
             : `${close.entity} could not be fully checked.`;
   const context = [
