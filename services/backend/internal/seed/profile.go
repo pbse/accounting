@@ -368,11 +368,9 @@ func BooksFor(c *Client, last string) []Books {
 		if period == last {
 			break
 		}
-		// Next month opens on this month's closing balances plus the entries approved for it.
-		closing := b.Closing()
-		adjust := Books{Period: period, Currency: "USD", Accounts: c.Accounts, Opening: closing, Txns: c.AdjustFor(&ids{next: 9000 + n*100}, period)}
-		closing = adjust.Closing()
-		opening = closing
+		// Next month opens on this month's captured closing balances; the entries approved for this month are booked
+		// by the bookkeeper on the first of the next, where the next capture shows them (TxnsFor).
+		opening = b.Closing()
 		priorTxns = b.Txns
 	}
 	return out
@@ -467,11 +465,12 @@ func prepaidBill(g *ids, c *Client, period, vendorName, number, amount, expense 
 func prepaidAdjust(g *ids, period, invoiceMonth, amount string, months int, expense string) Txn {
 	total := Money(amount)
 	monthly := new(big.Rat).Quo(total, big.NewRat(int64(months), 1))
+	booked := day(nextMonth(period), 1)
 	if period == invoiceMonth {
 		move := sub(total, monthly)
-		return journal(g, monthEnd(period), "Prepaid: unexpired portion", Posting{Account: "13", Debit: move}, Posting{Account: expense, Credit: move})
+		return journal(g, booked, "Close adjustment "+period+": prepaid, unexpired portion", Posting{Account: "13", Debit: move}, Posting{Account: expense, Credit: move})
 	}
-	return journal(g, monthEnd(period), "Prepaid: monthly expense", Posting{Account: expense, Debit: monthly}, Posting{Account: "13", Credit: monthly})
+	return journal(g, booked, "Close adjustment "+period+": prepaid, monthly expense", Posting{Account: expense, Debit: monthly}, Posting{Account: "13", Credit: monthly})
 }
 
 func monthsBetween(from, to string) int {

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -172,9 +173,6 @@ func (s *seeder) recordedModel() *llm.Client {
 		for _, item := range request.Input {
 			json.Unmarshal([]byte(item.Content), &given)
 		}
-		if request.Text.Format.Name == "evidence_selection" {
-			return reply(400, map[string]any{"error": map[string]string{"message": "the seed records no evidence selection"}}), nil
-		}
 		answer, ok := s.answers.Load(given.Primary)
 		if !ok {
 			return reply(400, map[string]any{"error": map[string]string{"message": "no recorded answer for evidence " + given.Primary}}), nil
@@ -191,6 +189,26 @@ func (s *seeder) recordedModel() *llm.Client {
 					text = strings.ReplaceAll(text, `"$source:`+file+`"`, strconv.Quote(id))
 				}
 			}
+		}
+		// A large close asks which evidence to read first: the recorded reading's own sources are the selection.
+		if request.Text.Format.Name == "evidence_selection" {
+			var recorded struct {
+				Sources []struct {
+					ID string `json:"id"`
+				} `json:"sources"`
+			}
+			json.Unmarshal([]byte(text), &recorded)
+			ids := []string{}
+			for _, source := range recorded.Sources {
+				if !strings.HasPrefix(source.ID, "$") {
+					ids = append(ids, source.ID)
+				}
+			}
+			if !slices.Contains(ids, given.Primary) {
+				ids = append([]string{given.Primary}, ids...)
+			}
+			selected, _ := json.Marshal(map[string]any{"selected_ids": ids})
+			text = string(selected)
 		}
 		return reply(200, map[string]any{"id": "seed-" + given.Primary, "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": text}}}}}), nil
 	})

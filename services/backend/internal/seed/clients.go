@@ -86,6 +86,10 @@ func (c *Client) TxnsFor(g *ids, period string, n int) []Txn {
 		txns = append(txns, Txn{Kind: "Purchase", ID: g.id(), Date: o.Day, Party: o.Payee, PartyID: "O1", Memo: o.Memo, Amount: Money(o.Amount),
 			Lines: []Posting{{Account: "77", Debit: Money(o.Amount)}, {Account: "10", Credit: Money(o.Amount)}}})
 	}
+	// The previous month's approved entries, booked on the first of this one.
+	if prior := previousMonth(period); prior != "" {
+		txns = append(txns, c.AdjustFor(g, prior)...)
+	}
 	// An accrual reverses on the first of the next month, and the vendor's bill arrives then.
 	if a, ok := c.Accruals[previousMonth(period)]; ok && a.Reverse {
 		amount := Money(a.Amount)
@@ -116,7 +120,8 @@ func previousMonth(period string) string {
 	return ""
 }
 
-// AdjustFor is the approved entries the bookkeeper posts for the month once it is signed off.
+// AdjustFor is the approved entries the bookkeeper posts for the month once it is signed off, dated the first of the
+// next month, where that month's capture shows them.
 func (c *Client) AdjustFor(g *ids, period string) []Txn {
 	var txns []Txn
 	for _, p := range c.Prepaids {
@@ -124,16 +129,17 @@ func (c *Client) AdjustFor(g *ids, period string) []Txn {
 			txns = append(txns, prepaidAdjust(g, period, p.Month, p.Amount, p.Months, p.Expense))
 		}
 	}
+	booked := day(nextMonth(period), 1)
 	if p := c.Payroll; p != nil {
 		gross, employer := Money(p.Gross), Money(p.EmployerTaxes)
-		txns = append(txns, journal(g, monthEnd(period), "Payroll: "+p.Provider+" summary", Posting{Account: "74", Debit: gross}, Posting{Account: "75", Debit: employer}, Posting{Account: "24", Credit: add(gross, employer)}))
+		txns = append(txns, journal(g, booked, "Close adjustment "+period+": payroll, "+p.Provider+" summary", Posting{Account: "74", Debit: gross}, Posting{Account: "75", Debit: employer}, Posting{Account: "24", Credit: add(gross, employer)}))
 	}
 	if a, ok := c.Accruals[period]; ok {
 		amount := Money(a.Amount)
-		txns = append(txns, journal(g, monthEnd(period), "Accrue: "+a.What, Posting{Account: a.Expense, Debit: amount}, Posting{Account: "22", Credit: amount}))
+		txns = append(txns, journal(g, booked, "Close adjustment "+period+": accrue "+a.What, Posting{Account: a.Expense, Debit: amount}, Posting{Account: "22", Credit: amount}))
 	}
 	if o, ok := c.Owners[period]; ok {
-		txns = append(txns, journal(g, monthEnd(period), "Owner reclass: "+o.Payee, Posting{Account: "41", Debit: Money(o.Amount)}, Posting{Account: "77", Credit: Money(o.Amount)}))
+		txns = append(txns, journal(g, booked, "Close adjustment "+period+": owner reclass, "+o.Payee, Posting{Account: "41", Debit: Money(o.Amount)}, Posting{Account: "77", Credit: Money(o.Amount)}))
 	}
 	return txns
 }
