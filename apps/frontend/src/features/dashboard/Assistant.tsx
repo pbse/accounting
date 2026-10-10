@@ -148,6 +148,9 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
   // load shows one chat: the id given, or the scope's current one (a chat less than 12 hours quiet), else a fresh one.
   function load(id?: string) {
     const asked = ++generation.current;
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setAnswering(false);
     setPicked(!!id);
     setRenaming(null);
     // Nothing of the chat shown before stays while the selected one loads, not even an answer still arriving (its
@@ -183,6 +186,9 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
   // startNew leaves the current chat where it is and opens a fresh one; nothing is saved until its first question.
   function startNew() {
     ++generation.current;
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setAnswering(false);
     setMessages([]);
     setSession(null);
     setText("");
