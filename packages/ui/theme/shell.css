@@ -561,7 +561,12 @@ body {
   line-height: 20px;
   transition: box-shadow 160ms var(--ease);
 }
-.app-shell button.ks-stat:hover:not(:disabled) {
+.app-shell a.ks-stat {
+  color: var(--ink);
+  text-decoration: none;
+}
+.app-shell button.ks-stat:hover:not(:disabled),
+.app-shell a.ks-stat:hover {
   background: var(--surface);
   box-shadow: var(--lift);
 }
