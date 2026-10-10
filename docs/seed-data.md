@@ -32,7 +32,7 @@ cd services/backend
 go run ./cmd/seed -database "$DATABASE_URL" -organization local-development -subject local-development -members user_demo_rosa
 ```
 
-`-members` names other subjects who own some clients; without it, every other current member of the firm owns some.
+`-members` names other members, who may work closes, to own some clients; without it every close is the administrator's (the seed cannot tell which members may work a close, so it names none itself).
 
 The hosted firm, from your own terminal with the owner connection string (the one Deploy production migrates with). The seed refuses a database that is not on this machine unless `-hosted` is given, and then needs `-yes`:
 
@@ -48,7 +48,7 @@ To take it out again, keeping the firm and its members:
 go run ./cmd/seed -database "$MIGRATION_DATABASE_URL" -domain getkrith.com -hosted -yes -remove
 ```
 
-The seed records what it did in `demonstration_seeds` (migration 140): who ran it, the firm's policy as it found it, and, as each is made, the IDs of the closes, chats, inbox marks, invitations, agent access and procedures it added. A run that stops partway is removed the same way. The seed writes no usage of its own; the model calls the pipeline counted while reading the documents stay as usage, since they happened. Removal deletes exactly those, with the demonstration clients' roster entries, aliases, budgets, obligations, scenarios, open-item decisions and connections, and sets the firm's policy back to what it was (recorded as one more policy change by the person who ran the seed; the policy history itself stays; a member's own conversation that mentions a demonstration close keeps its messages, detached from it), and takes out the time zone and notification preferences it set for the administrator when they had none. Seeding again afterwards works.
+The seed records what it did in `demonstration_seeds` (migration 140): who ran it, the firm's policy as it found it, and, as each is made, the IDs of the closes, chats, inbox marks, invitations, agent access and procedures it added. A run that stops partway is removed the same way. The seed writes no usage of its own; the model calls the pipeline counted while reading the documents stay as usage, since they happened. Removal refuses while a legal hold or a retention date still to come protects any demonstration close, receipts each deletion as the deletion route does, and deletes exactly those rows, with the demonstration clients' roster entries, aliases, budgets, obligations, scenarios, open-item decisions and connections, and sets the firm's policy back to what it was (recorded as one more policy change by the person who ran the seed; the policy history itself stays; a member's own conversation that mentions a demonstration close keeps its messages, detached from it), and takes out the time zone and notification preferences it set for the administrator when they had none. Seeding again afterwards works.
 
 ## What the seed will not do
 

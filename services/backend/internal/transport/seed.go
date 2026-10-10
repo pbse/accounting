@@ -1584,8 +1584,21 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		ordered = append(ordered, id)
 	}
 	rows.Close()
+	// A legal hold or a retention date still to come protects a close, demonstration or not.
+	var held []string
+	if rows, err := db.QueryContext(ctx, `SELECT entity||' '||period FROM client_closes WHERE organization_id=$1 AND id::text=ANY($2) AND (legal_hold OR retain_until>CURRENT_DATE) ORDER BY entity,period`, o.Organization, ordered); err == nil {
+		for rows.Next() {
+			var name string
+			rows.Scan(&name)
+			held = append(held, name)
+		}
+		rows.Close()
+	}
+	if len(held) > 0 {
+		return fmt.Errorf("a legal hold or retention date protects %s; lift it under the close's Settings before removing the demonstration", strings.Join(held, ", "))
+	}
 	for _, id := range ordered {
-		if err := removeClose(ctx, db, id, chats); err != nil {
+		if err := removeClose(ctx, db, id, chats, subject); err != nil {
 			return fmt.Errorf("close %s: %w", id, err)
 		}
 	}
@@ -1642,8 +1655,9 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		if restore != nil {
 			s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
 		}
-		if stopped, ok := before["agent_chat_stopped"].(bool); ok {
-			// The notice that the agent was stopped by a migration is not a policy the route sets; it is put back as found.
+		if stopped, ok := before["agent_chat_stopped"].(bool); ok && fmt.Sprint(now["agent_chat"]) == fmt.Sprint(seedPolicy["agent_chat"]) {
+			// The notice that the agent was stopped by a migration is not a policy the route sets; it is put back as found,
+			// unless the firm has since chosen an agent level of its own.
 			db.ExecContext(ctx, `UPDATE organizations SET agent_chat_stopped=$2 WHERE id=$1`, o.Organization, stopped)
 		}
 		// A monthly template, once set, has a due date of 1–60 days: a firm that had none keeps the demonstration's
@@ -1664,12 +1678,22 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 }
 
 // removeClose deletes one close and everything that hangs off it, in the order the deletion route uses.
-func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions []int64) error {
+func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions []int64, actor string) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	// The deletion is receipted as the deletion route receipts one: the demonstration's relationship with the client ends.
+	var org, entity, period, client, plainClient string
+	var postings int
+	if err := tx.QueryRowContext(ctx, `SELECT organization_id,entity,period,client_identity(organization_id,entity),trim(regexp_replace(client_identity(organization_id,entity),'[^[:alnum:]]+',' ','g')),(SELECT count(*) FROM production_postings WHERE close_id=client_closes.id) FROM client_closes WHERE id::text=$1`, closeID).Scan(&org, &entity, &period, &client, &plainClient, &postings); err != nil {
+		return fmt.Errorf("read the close: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,$2::bigint,$3,$4,$5,$6,'contract_termination',$7,$8)`,
+		org, closeID, preparation.Digest([]byte(org+"\x00"+strings.ToLower(entity)+"\x00"+period)), period, postings, actor, preparation.Digest([]byte(org+"\x00"+client+"\x00"+period)), preparation.Digest([]byte(org+"\x00"+plainClient+"\x00"+period))); err != nil {
+		return fmt.Errorf("receipt: %w", err)
+	}
 	// A member's own conversation that mentions the close keeps its messages, detached from it; only the seed's chats
 	// and the chats held inside the close go with it.
 	// An action card the agent offered on the close cannot stand without it (chat_action_scope), so it goes with the close.

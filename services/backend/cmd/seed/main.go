@@ -27,7 +27,7 @@ func main() {
 	domain := flag.String("domain", "", "the firm's email domain, to find its organization")
 	subject := flag.String("subject", "", "the administrator's subject (WorkOS user ID)")
 	email := flag.String("email", "", "the administrator's email, to find their subject from their sign-ins")
-	members := flag.String("members", "", "comma-separated subjects of other members who own some clients; default: every other current member")
+	members := flag.String("members", "", "comma-separated subjects of other members, who may work closes, to own some clients; without it every close is the administrator's")
 	firmName := flag.String("firm-name", "Demonstration firm", "the firm's name when the seed has to create it")
 	hosted := flag.Bool("hosted", false, "allow a database that is not on this machine")
 	yes := flag.Bool("yes", false, "with -hosted: proceed without asking")
@@ -63,23 +63,11 @@ func main() {
 			log.Fatalf("%s has not signed in to this firm, so their subject is unknown: %v (pass -subject)", *email, err)
 		}
 	}
+	// Other members own some clients only when named: the seed cannot tell which members may work a close.
 	var others []string
-	if *members != "" {
-		for _, m := range strings.Split(*members, ",") {
-			if m = strings.TrimSpace(m); m != "" && m != sub {
-				others = append(others, m)
-			}
-		}
-	} else {
-		rows, err := db.QueryContext(ctx, `SELECT subject FROM current_organization_members WHERE organization_id=$1 AND granted AND subject<>$2 ORDER BY subject`, org, sub)
-		if err == nil {
-			for rows.Next() {
-				var m string
-				if rows.Scan(&m) == nil {
-					others = append(others, m)
-				}
-			}
-			rows.Close()
+	for _, m := range strings.Split(*members, ",") {
+		if m = strings.TrimSpace(m); m != "" && m != sub {
+			others = append(others, m)
 		}
 	}
 	firm := seed.Build()
