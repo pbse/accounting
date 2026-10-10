@@ -218,6 +218,15 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if connections := call("user_c", []string{"workpapers:review"}, "/v1/closes/roster", 200)["connections"].(map[string]any); len(connections) != 0 {
 		t.Fatalf("Cy, assigned to the alias alone, is not shown the client's connections: %v", connections)
 	}
+	// A client whose only month left was opened under its alias is still named, and added to the roster, by its own
+	// name, which its confirmed alias records.
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Delta Fitness','delta gym','fixture',now()-interval '3 days')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Delta Gym',$2)`, org, last)
+	must(err)
+	if delta := call("user_a", admin, page("Delta Gym"), 200); delta["entity"] != "Delta Fitness" {
+		t.Fatalf("the client's own name, as its alias records it: %v", delta["entity"])
+	}
 	// A client on the roster with no month yet can be assigned to a member.
 	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Corvid Labs',true,$2,'Synthetic','fixture')`, org, now)
 	must(err)
