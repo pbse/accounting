@@ -622,17 +622,7 @@ aside.assistant {
   display: flex;
   gap: var(--space-8);
   align-items: flex-start;
-  animation: assistant-rise 160ms ease-out;
-}
-@keyframes assistant-rise {
-  from {
-    transform: translateY(4px);
-    opacity: 0;
-  }
-  to {
-    transform: none;
-    opacity: 1;
-  }
+  animation: ks-rise 220ms var(--ease) both;
 }
 .assistant-messages > li .agent-mark {
   flex: 0 0 auto;
@@ -690,33 +680,6 @@ aside.assistant {
   gap: var(--space-8);
   color: var(--ink-2);
   font-size: 13px;
-}
-.dots {
-  display: inline-flex;
-  gap: 3px;
-}
-.dots i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ink-2);
-  animation: assistant-dot 1s infinite ease-in-out;
-}
-.dots i:nth-child(2) {
-  animation-delay: 160ms;
-}
-.dots i:nth-child(3) {
-  animation-delay: 320ms;
-}
-@keyframes assistant-dot {
-  0%,
-  80%,
-  100% {
-    opacity: 0.25;
-  }
-  40% {
-    opacity: 1;
-  }
 }
 .assistant-error {
   margin: 0;
@@ -786,46 +749,113 @@ aside.assistant {
   width: 100%;
   font: inherit;
 }
-/* What the agent is doing for an answer: each step as it runs, then collapsed to a line. */
+/* What the agent is doing for an answer (docs/design-system.md, Steps): each step slides in as it runs, its spinner
+   becomes a tick when it is done; finished, the steps fold to a line. */
 .assistant-steps {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-4);
   font-size: 13px;
 }
 .assistant-steps li {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   gap: var(--space-8);
-  animation: assistant-rise 160ms ease-out;
+  min-height: 20px;
+  color: var(--ink-2);
+  animation: ks-rise 220ms var(--ease) both;
+}
+.assistant-steps li > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
 }
 .assistant-steps li small {
-  color: var(--ink-2);
+  color: var(--ink-3);
   white-space: nowrap;
 }
-.assistant-steps li span::before {
-  display: inline-block;
-  width: 1.2em;
-  content: "·";
-  color: var(--ink-2);
+.ks-spin {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--line-2);
+  border-top-color: var(--ink);
+  animation: ks-spin 800ms linear infinite;
+  flex: none;
 }
-.assistant-steps li.step-running span::before {
-  content: "…";
+@keyframes ks-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
-.assistant-steps li.step-ok span::before,
-.assistant-steps li.step-proposed span::before {
-  content: "✓";
-  color: var(--blue);
+.ks-tick {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--pos-text);
+  color: var(--on-primary);
+  display: grid;
+  place-items: center;
+  flex: none;
+  animation: ks-pop 240ms var(--ease) both;
+}
+@keyframes ks-pop {
+  from {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.ks-dash {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink-4);
+  flex: none;
 }
 .assistant-steps-done {
   font-size: 12px;
-  color: var(--ink-2);
+  color: var(--ink-3);
 }
 .assistant-steps-done summary {
   cursor: pointer;
+}
+.assistant-steps-done[open] summary {
+  margin-bottom: var(--space-4);
+}
+/* While the agent works, the mark breathes and the line shimmers. */
+.assistant-messages > li.working .agent-mark {
+  animation: ks-breathe 1.6s ease-in-out infinite;
+}
+@keyframes ks-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(24 24 27 / 25%);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgb(24 24 27 / 0%);
+  }
+}
+.ks-thinking {
+  background: linear-gradient(90deg, #52525b 0%, #52525b 35%, #c4c6cc 50%, #52525b 65%, #52525b 100%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ks-shimmer 1.4s linear infinite;
+}
+@keyframes ks-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
 }
 /* On a phone the panel is a sheet: a back button leads, the composer sits at the bottom above the home indicator. */
 @media (max-width: 720px) {
@@ -857,9 +887,16 @@ aside.assistant {
 @media (prefers-reduced-motion: reduce) {
   aside.assistant,
   .assistant-messages > li,
+  .assistant-messages > li.working .agent-mark,
   .assistant-steps li,
-  .dots i {
+  .ks-spin,
+  .ks-tick,
+  .ks-thinking {
     animation: none;
+  }
+  .ks-thinking {
+    color: var(--ink-2);
+    background: none;
   }
 }
 .palette-backdrop {

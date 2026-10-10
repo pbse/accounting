@@ -575,19 +575,14 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
           <li className="assistant working">
             <AgentMark size="sm" />
             <div className="assistant-body">
-              {steps.length > 0 && <StepList steps={steps} done={false} />}
-              {pending ? (
-                <Prose text={pending} />
-              ) : (
+              {/* The mark breathes and the line shimmers while the agent works; each step slides in as it runs. */}
+              {!pending && (
                 <p className="assistant-working" role="status">
-                  <span className="dots" aria-hidden="true">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  {slow ? "Waiting for the agent…" : steps.length ? "Reading…" : "Thinking…"}
+                  <span className={slow ? "" : "ks-thinking"}>{slow ? "Waiting for the agent…" : steps.length ? "Reading your work" : closeId ? "Looking at this close" : "Looking at your closes"}</span>
                 </p>
               )}
+              {steps.length > 0 && <StepList steps={steps} done={false} />}
+              {pending && <Prose text={pending} />}
             </div>
           </li>
         )}
@@ -766,8 +761,22 @@ function bold(line: string): ReactNode {
 // StepList shows what the agent read for an answer: running steps with their state, finished ones collapsed to a line.
 const stepWords: Record<string, string> = { running: "reading", ok: "read", proposed: "proposed", refused: "refused", unavailable: "unavailable", omitted: "too large" };
 function StepList({ steps, done }: { steps: Step[]; done: boolean }) {
+  // A running step spins; a finished one ticks (the tick pops in); a refused or unavailable one shows a dash.
+  const mark = (status: string) =>
+    status === "running" ? (
+      <span className="ks-spin" aria-hidden="true" />
+    ) : status === "ok" || status === "proposed" ? (
+      <span className="ks-tick" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12.5l4.5 4.5L19 7.5" />
+        </svg>
+      </span>
+    ) : (
+      <span className="ks-dash" aria-hidden="true" />
+    );
   const items = steps.map((s) => (
     <li key={s.id} className={`step-${s.status}`}>
+      {mark(s.status)}
       <span>{done && s.link ? <Link to={s.link.href}>{s.title || s.tool}</Link> : s.title || s.tool}</span>
       <small>
         {stepWords[s.status] ?? s.status}
