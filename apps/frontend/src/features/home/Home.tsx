@@ -57,6 +57,7 @@ export default function Home() {
     entity: item.entity,
     due_on: item.due_on,
     text: item.state === "unknown" ? "Sign-off could not be rechecked" : "Changed since sign-off",
+    to: `/dashboard/closes/${item.close_id}?tab=signoff`,
   }));
   // Reopened sign-offs lead, as the decision list orders them.
   const week = [
@@ -64,7 +65,12 @@ export default function Home() {
     ...(counts?.inbox.groups ?? [])
       .map((g) => ({ ...g, events: g.events.filter((e) => e.yours && !e.snoozed_until) }))
       .filter((g) => g.events.length > 0)
-      .map((g) => ({ close_id: g.close_id, entity: g.entity, due_on: g.due_on, text: g.events[0].text })),
+      .map((g) => {
+        // The row opens the decision itself, as the decision list does: the draft, the job, the coverage work, or the close.
+        const e = g.events[0];
+        const to = e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : e.account_id || e.kind === "unanswered" ? "#coverage-work" : ""}`;
+        return { close_id: g.close_id, entity: g.entity, due_on: g.due_on, text: e.text, to };
+      }),
   ]
     .filter((item, i, all) => all.findIndex((other) => other.close_id === item.close_id) === i)
     .slice(0, 3);
@@ -95,7 +101,7 @@ export default function Home() {
             <>
               <div className="ks-cat">This week</div>
               {week.map((g) => (
-                <Link className="ks-row" key={g.close_id} to={`/dashboard/closes/${g.close_id}`}>
+                <Link className="ks-row" key={g.close_id} to={g.to}>
                   <div>
                     <b>{g.entity}</b> <span>· {g.text}</span>
                   </div>

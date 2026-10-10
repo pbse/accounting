@@ -2,7 +2,7 @@ import { Suspense, useEffect } from "react";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router";
 import { AccountMenu } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
-import { isHomePath, openSession } from "./assistantStore";
+import { closeOf, isHomePath, openSession } from "./assistantStore";
 import { SideChats } from "./SideChats";
 import { SideNotices } from "./SideNotices";
 import { PageComposer } from "./PageComposer";
@@ -51,7 +51,7 @@ export default function WorkspaceLayout() {
     if (executive && !location.pathname.startsWith("/dashboard/executive")) navigate("/dashboard/executive", { replace: true });
   }, [executive, location.pathname, navigate]);
   useShellThemeColor();
-  const closeId = executive ? "" : (/^\/dashboard\/closes\/(\d+)/.exec(location.pathname)?.[1] ?? "");
+  const closeId = executive ? "" : closeOf(location.pathname, location.search).closeId;
   const newChat = () => {
     openSession("new", closeId);
   };

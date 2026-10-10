@@ -6,7 +6,7 @@ import { useUnlocked, workspaceRequest, type AgentEvent } from "../closes/worksp
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
 import { RequestCard } from "./RequestCard";
 import { ProposalCard } from "./ProposalCard";
-import { askAssistant, bumpSessions, clearSessionRequest, isHomePath, loadSessions, nextReview, openSession, starterCommands, starters, takePending, useOpenRequests, usePending, useSessionRequest, useSessionsVersion, type ChatSession } from "./assistantStore";
+import { askAssistant, bumpSessions, clearSessionRequest, closeOf, isHomePath, loadSessions, nextReview, openSession, starterCommands, starters, takePending, useOpenRequests, usePending, useSessionRequest, useSessionsVersion, type ChatSession } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand, type Ask } from "./commands";
 import { AgentMark } from "@close/ui/components/AgentMark";
@@ -46,9 +46,7 @@ export function Assistant({ executive = false }: { executive?: boolean }) {
 
 function Panel({ executive }: { executive: boolean }) {
   const location = useLocation();
-  const match = /^\/dashboard\/closes\/(\d+)(?:\/workpapers\/(\d+))?/.exec(location.pathname);
-  const closeId = match?.[1] ?? "";
-  const paperId = match?.[2] ?? "";
+  const { closeId, paperId } = closeOf(location.pathname, location.search);
   // On Home the firm's conversation is the page's stage (home/Home.tsx), so the drawer stays closed there.
   const stage = !executive && isHomePath(location.pathname);
   // Closed on the server and in the browser's first render alike; a panel left open is reopened once hydrated.
@@ -325,17 +323,14 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
     setSteps([]);
     setAsking("");
     setError("Stopped.");
+    // The chat list reads again: a first answer the server saved before the stop appears there, under its own
+    // chat, and this new chat stays the empty one it was (only a session the server named is continued here).
     bumpSessions();
-    // What was saved before the stop is read back. A chat not yet saved here may have been saved by the server
-    // before the stop: the scope's current chat is adopted only if it ends with the question just asked; otherwise
-    // the new chat stays the empty one it was.
-    const question = asking;
-    workspaceRequest(session ? `${path}?session=${encodeURIComponent(session.id)}` : path).then((data) => {
+    if (!session) return;
+    // What was saved before the stop is read back, with the chat it was saved in.
+    workspaceRequest(`${path}?session=${encodeURIComponent(session.id)}`).then((data) => {
       if (asked !== generation.current) return;
-      const saved = (data.messages as Message[]) ?? [];
-      const lastAsked = [...saved].reverse().find((m) => m.role === "user")?.body;
-      if (!session && !(data.session && question && lastAsked === question)) return;
-      setMessages(saved);
+      setMessages(data.messages);
       if (data.session) setSession({ id: data.session.id, title: data.session.title });
     }, () => undefined);
   }

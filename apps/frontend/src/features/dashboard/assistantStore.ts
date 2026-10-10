@@ -2,6 +2,15 @@ import { useSyncExternalStore } from "react";
 import { workspaceRequest } from "../closes/workspace";
 import type { Ask } from "./commands";
 
+// The close a page is about: a close's own pages, and a preparation form opened for a close (?close=). A chat asked
+// from the page goes to that close's conversation; the drawer shows the same.
+export function closeOf(pathname: string, search: string): { closeId: string; paperId: string } {
+  const match = /^\/dashboard\/closes\/(\d+)(?:\/workpapers\/(\d+))?/.exec(pathname);
+  if (match) return { closeId: match[1], paperId: match[2] ?? "" };
+  if (/^\/dashboard\/[a-z]+\/new\/?$/.test(pathname)) return { closeId: new URLSearchParams(search).get("close") ?? "", paperId: "" };
+  return { closeId: "", paperId: "" };
+}
+
 // Home, with or without a trailing slash, is the stage: the firm's conversation on the page, never the drawer.
 export const isHomePath = (pathname: string) => pathname.replace(/\/+$/, "") === "/dashboard";
 
