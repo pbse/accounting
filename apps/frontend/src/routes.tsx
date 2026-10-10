@@ -64,6 +64,12 @@ async function homeLoader({ context }: LoaderFunctionArgs) {
   return null;
 }
 
+// Closes reads the counts and the decisions in their snapshot, as Home does.
+async function closesLoader({ context }: LoaderFunctionArgs) {
+  await prefetch(context, "/home");
+  return null;
+}
+
 // Clients reads the recent closes and the roster, and a search's matches.
 async function clientsLoader({ context, request }: LoaderFunctionArgs) {
   if (!prefetching) return null;
@@ -167,7 +173,8 @@ export const routes: RouteObject[] = createRoutesFromElements(
       <Route index loader={homeLoader} lazy={page(() => import("./features/dashboard/Dashboard"), { view: "work" as const })} />
       <Route path="close" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "close" as const })} />
       <Route path="review" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "review" as const })} />
-      <Route path="closes" loader={clientsLoader} lazy={page(() => import("./features/closes/ClosesList"))} />
+      <Route path="clients" loader={clientsLoader} lazy={page(() => import("./features/closes/ClosesList"))} />
+      <Route path="closes" loader={closesLoader} lazy={page(() => import("./features/closes/Closes"))} />
       <Route path="closes/:id" loader={closeLoader} lazy={page(() => import("./features/closes/ClientClose"))} />
       <Route path="closes/:id/workpapers/:paperId" loader={workpaperLoader} lazy={page(() => import("./features/closes/WorkpaperView"))} />
       <Route path="firm" element={<Navigate to="/dashboard/settings?tab=firm" replace />} />

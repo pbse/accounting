@@ -43,7 +43,7 @@ export function SaveDraft({
     return (
       <p>
         To save drafts,{" "}
-        <Link to="/dashboard/closes">open a private client close</Link> and
+        <Link to="/dashboard/clients">open a private client close</Link> and
         start preparation there. Export this draft before leaving.
       </p>
     );

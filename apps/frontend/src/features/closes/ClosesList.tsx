@@ -4,9 +4,10 @@ import { workspaceQuery } from "../../data/queries";
 import { monthShort, useToday } from "../../data/time";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { authKitClientId } from "../auth/Auth";
+import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { Icon } from "@close/ui/components/Icon";
+import { Mark } from "@close/ui/components/Mark";
 import { PageHeader } from "@close/ui/components/PageHeader";
-import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { FirmEnrollment } from "./Enterprise";
 import { PlanChips } from "./Planning";
 import { workspaceRequest } from "./workspace";
@@ -23,8 +24,9 @@ type ClientRow = { entity: string; active?: boolean; since?: string; closes: Lis
 
 const monthName = monthShort;
 
-// Clients: every client the reader can work on, with the months it owes that nobody opened (one tap opens one) and
-// its open closes. A firm administrator adds a client by name; nothing else is asked.
+// Clients, the records page (docs/design-system.md, A records page): every client the reader can work on, one row
+// each with its months (owed and not opened, open, signed off), the search in the title row and Add client as its one
+// action, made in a dialog. A firm administrator adds a client by name; nothing else is asked.
 export default function ClosesList() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -109,7 +111,7 @@ export default function ClosesList() {
       setAdding(false);
       reread();
     } catch (e) {
-      // The form stays, with what was typed, so the person corrects it rather than starting over.
+      // The dialog stays, with what was typed, so the person corrects it rather than starting over.
       setAdding(true);
       setError(e instanceof Error ? e.message : "The client could not be added.");
     } finally {
@@ -118,37 +120,51 @@ export default function ClosesList() {
   }
   // Empty only when the roster was read: a failed read says nothing about whether there are clients.
   const empty = !loading && !!roster && rows.size === 0 && !query;
+  const open_ = (r: ClientRow) => r.closes.filter((c) => !c.signed_off && !c.unchecked).length;
+  const waiting = shown.filter((r) => r.owed.length > 0 || open_(r) > 0).length;
+  const context = loading ? "Reading your clients…" : roster ? `${n(rows.size, "client")}${waiting ? ` · ${waiting} with a month open or owed` : ""}` : "";
+  // A client's state in a word: former, owing a month, a month open, or all signed off.
+  const state = (r: ClientRow) => {
+    if (r.active === false) return <span className="pill neutral">Former client</span>;
+    if (r.owed.length) return <span className="pill muted">{n(r.owed.length, "month")} to open</span>;
+    if (open_(r)) return <span className="pill muted">{n(open_(r), "month")} open</span>;
+    if (r.closes.some((c) => c.unchecked)) return <span className="pill danger">Sign-off not checked</span>;
+    if (r.closes.length) return <span className="pill">Signed off</span>;
+    return <span className="pill neutral">New</span>;
+  };
   return (
     <>
       <PageHeader
-        icon="clients"
         title="Clients"
         actions={
-          <div className="title-actions">
+          <div className="ks-tools">
             <form
               role="search"
+              className="ks-search"
               onSubmit={(event) => {
                 event.preventDefault();
                 const next = String(new FormData(event.currentTarget).get("q") ?? "").trim();
                 setParams(next ? { q: next } : {});
               }}
             >
+              <Icon name="search" />
               <input name="q" aria-label="Search clients" placeholder="Client or YYYY-MM" maxLength={200} defaultValue={query} key={query} />
             </form>
             {roster?.can_manage && (
-              <button type="button" className="primary" onClick={() => setAdding((v) => !v)}>
-                Add a client
+              <button type="button" className="primary" onClick={() => setAdding(true)}>
+                <Icon name="plus" /> Add client
               </button>
             )}
           </div>
         }
       >
-        Each client's months: owed, open or signed off.
+        {context}
       </PageHeader>
-      {error && <p role="alert">{error}</p>}
+      {error && !adding && <p role="alert">{error}</p>}
       {isEnrollmentError(error) && <FirmEnrollment onEnrolled={reread} />}
-      {roster?.can_manage && (adding || empty) && (
-        <form className="add-client" onSubmit={add} aria-label="Add a client">
+      <Dialog open={adding} onClose={() => setAdding(false)} title="Add a client" description="Name the client and its first month to close. The agent takes it from there.">
+        <form onSubmit={add} aria-label="Add a client">
+          {error && <p role="alert">{error}</p>}
           <label>
             Client name
             <input name="entity" required maxLength={200} autoFocus placeholder="Acme Services" />
@@ -157,44 +173,55 @@ export default function ClosesList() {
             First month to close
             <input name="since" type="month" defaultValue={thisMonth} />
           </label>
-          <button className="primary" disabled={busy === "add"}>
-            {busy === "add" ? "Adding…" : "Add client"}
-          </button>
-          {!empty && (
+          <DialogActions>
             <button type="button" disabled={busy === "add"} onClick={() => setAdding(false)}>
               Cancel
             </button>
-          )}
+            <button className="primary" disabled={busy === "add"}>
+              {busy === "add" ? "Adding…" : "Add client"}
+            </button>
+          </DialogActions>
         </form>
-      )}
-      <RowList label="Clients">
-        {loading && <p role="status" className="empty">Loading clients…</p>}
-        {empty && <p className="empty">{roster?.can_manage ? "No clients yet. Add your first client above; the agent takes it from there." : "No client is assigned to you yet."}</p>}
-        {!loading && query && shown.length === 0 && <p className="empty">No client or month matches “{query}”.</p>}
+      </Dialog>
+      <div className="ks-table" role="table" aria-label="Clients">
+        <div className="ks-tr head" role="row">
+          <span>Client</span>
+          <span>Months</span>
+          <span>Status</span>
+          <span></span>
+        </div>
+        {loading && (
+          <div className="ks-tr" role="row">
+            <p className="ks-empty-row" role="status">
+              Loading clients…
+            </p>
+          </div>
+        )}
+        {empty && (
+          <div className="ks-tr" role="row">
+            <p className="ks-empty-row">{roster?.can_manage ? "No clients yet. Add your first client; the agent takes it from there." : "No client is assigned to you yet."}</p>
+          </div>
+        )}
+        {!loading && query && shown.length === 0 && (
+          <div className="ks-tr" role="row">
+            <p className="ks-empty-row">No client or month matches “{query}”.</p>
+          </div>
+        )}
         {shown.map((r) => (
-          <div className="row client-row" key={r.entity}>
-            <EntityCell
-              name={r.entity}
-              title={r.entity}
-              detail={[
-                r.active === false ? "No longer a client" : r.since ? `Closes each month from ${monthName(r.since)}` : "",
-                r.closes.filter((c) => !c.signed_off && !c.unchecked).length ? `${r.closes.filter((c) => !c.signed_off && !c.unchecked).length} open` : "",
-                r.closes.filter((c) => c.unchecked).length ? `${r.closes.filter((c) => c.unchecked).length} whose sign-off could not be checked` : "",
-                r.closes.filter((c) => c.signed_off && c.rechecked !== false).length ? `${r.closes.filter((c) => c.signed_off && c.rechecked !== false).length} signed off` : "",
-                r.closes.filter((c) => c.signed_off && c.rechecked === false).length ? `${r.closes.filter((c) => c.signed_off && c.rechecked === false).length} older, sign-off not rechecked here` : "",
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            />
-            <span className="client-months">
+          <div className="ks-tr" role="row" key={r.entity}>
+            <span className="ks-who">
+              <Mark label={r.entity} />
+              <span title={r.active === false ? "No longer a client" : r.since ? `Closes each month from ${monthName(r.since)}` : undefined}>{r.entity}</span>
+            </span>
+            <span className="ks-months">
               {r.owed.map((period) => (
-                <button type="button" className="chip owed" key={period} disabled={busy !== ""} onClick={() => void open(r.entity, period)}>
+                <button type="button" className="ks-month owed" key={period} disabled={busy !== ""} onClick={() => void open(r.entity, period)}>
                   {busy === `${r.entity}:${period}` ? "Opening…" : `Open ${monthName(period)}`}
                 </button>
               ))}
               {r.closes.map((c) => (
                 <Link
-                  className={c.signed_off && c.rechecked !== false ? "chip signed" : "chip"}
+                  className={c.signed_off && c.rechecked !== false ? "ks-month signed" : "ks-month"}
                   key={c.id}
                   to={`/dashboard/closes/${c.id}`}
                   title={c.signed_off && c.rechecked === false ? "A sign-off is recorded but not rechecked here; open the close to see whether it still stands" : undefined}
@@ -207,24 +234,29 @@ export default function ClosesList() {
                 </Link>
               ))}
             </span>
-            {r.active !== false && (
-            <details className="open-month">
-              <summary>Another month</summary>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void open(r.entity, String(new FormData(event.currentTarget).get("period")));
-                }}
-              >
-                <input name="period" type="month" required aria-label={`Month to open for ${r.entity}`} />
-                <button disabled={busy !== ""}>Open</button>
-              </form>
-            </details>
+            <span>{state(r)}</span>
+            {r.active !== false ? (
+              <details className="ks-another">
+                <summary>Another month</summary>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void open(r.entity, String(new FormData(event.currentTarget).get("period")));
+                  }}
+                >
+                  <input name="period" type="month" required aria-label={`Month to open for ${r.entity}`} />
+                  <button disabled={busy !== ""}>Open</button>
+                </form>
+              </details>
+            ) : (
+              <span />
             )}
           </div>
         ))}
-      </RowList>
+      </div>
       {more && <p className="note">Showing the 100 most recent closes. Search by client or YYYY-MM to find older ones.</p>}
     </>
   );
 }
+
+const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;

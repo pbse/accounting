@@ -75,7 +75,7 @@ export default function PreparePayroll() {
   const amount = (name: string, label: string, hint?: string) => field(name, `${label} (${currency})`, "text", hint);
   return (
     <>
-      <PageHeader icon="book" title="Payroll">
+      <PageHeader title="Payroll">
         Record a month's payroll from the provider's approved summary. The entry ties the summary's own figures and the provider's bank debits to the ledger, and leaves
         anything not yet paid as a liability. It never runs payroll.
       </PageHeader>

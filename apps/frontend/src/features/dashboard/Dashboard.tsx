@@ -41,7 +41,6 @@ export default function Dashboard({
   return (
     <>
       <PageHeader
-        icon="book"
         title={view === "close" ? "Example close: Acme Services · September" : "Example review"}
         actions={<span className="pill neutral">Synthetic reference · September 2026</span>}
       >

@@ -133,7 +133,7 @@ export default function ClientRequest() {
   return (
     <div className="app-shell standalone">
       <main id="main" className="page request-page">
-        <PageHeader icon="file" title={request?.status === "received" ? "Your reply has been received." : "Help complete your close"}>
+        <PageHeader title={request?.status === "received" ? "Your reply has been received." : "Help complete your close"}>
           Private client request
         </PageHeader>
         <section>

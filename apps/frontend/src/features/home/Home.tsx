@@ -20,7 +20,7 @@ import { DailyBooks } from "./DailyBooks";
 import { Dependencies } from "./Dependencies";
 import { Goals } from "./Goals";
 
-type HomeCounts = {
+export type HomeCounts = {
   as_of: string;
   closes: number;
   can_add: boolean;
@@ -42,7 +42,7 @@ type HomeCounts = {
 };
 
 const views = { all: "All", unread: "New", mine: "Assigned to me", snoozed: "Snoozed" } as const;
-type View = keyof typeof views;
+export type View = keyof typeof views;
 
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 // A collapsed list opens before it scrolls into view, so a card reaches what it counted.
@@ -118,7 +118,7 @@ export default function Home() {
   );
   return (
     <section className="bare" aria-label="Home">
-      <PageHeader icon="work" title="Home">
+      <PageHeader title="Home">
         {counts ? (waiting.length ? `${waiting.join(" · ")}.` : "Nothing is waiting on you right now.") : "Your clients' closes at a glance."}
       </PageHeader>
       {error && <p role="alert">{error}</p>}
@@ -191,7 +191,7 @@ export default function Home() {
               <h2>Add your first client</h2>
               <p>Name the client and open its month. The agent reads the books and the documents you give it and prepares the close; you decide.</p>
             </span>
-            <Link className="button primary" to="/dashboard/closes">
+            <Link className="button primary" to="/dashboard/clients">
               Add a client
             </Link>
           </section>
@@ -199,7 +199,7 @@ export default function Home() {
           <section aria-label="No month open yet">
             <h2>No month is open for your clients yet</h2>
             <p>
-              Open one from <Link to="/dashboard/closes">Clients</Link> when a client is assigned to you; a firm administrator assigns clients in the Security center.
+              Open one from <Link to="/dashboard/clients">Clients</Link> when a client is assigned to you; a firm administrator assigns clients in the Security center.
             </p>
           </section>
         )
@@ -341,7 +341,7 @@ type Reopened = HomeCounts["owed"][number];
 
 // The default list (every decision, page one) comes with the counts, read in their snapshot; another view or page is
 // read on its own, and any action re-reads the counts, which bring the list again.
-function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view, onView, onChange }: { today: string; tick: number; snapshot?: AttentionInbox; reopened: Reopened[]; canReview: boolean; teamTotal: number; view: View; onView: (view: View) => void; onChange: () => void }) {
+export function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view, onView, onChange }: { today: string; tick: number; snapshot?: AttentionInbox; reopened: Reopened[]; canReview: boolean; teamTotal: number; view: View; onView: (view: View) => void; onChange: () => void }) {
   const dates = useDates();
   const [page, setPage] = useState(0);
   const [read, setRead] = useState<AttentionInbox>();

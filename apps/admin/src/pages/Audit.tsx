@@ -47,7 +47,6 @@ export function Audit() {
   return (
     <>
       <PageHeader
-        icon="shield"
         title="Staff audit"
         actions={
           <div className="title-actions">

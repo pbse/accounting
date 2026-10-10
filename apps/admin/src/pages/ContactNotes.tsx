@@ -11,7 +11,7 @@ export function ContactNotes() {
   const notes = useResource<{ notes: Note[]; next_before: number | null }>(`/v1/admin/contact-notes${before ? `?before=${before}` : ""}`);
   return (
     <>
-      <PageHeader icon="file" title="Contact notes">
+      <PageHeader title="Contact notes">
         Notes from the contact page on getkrith.com, newest first. Each is forwarded to the team inbox; reply from here if one never arrived.
       </PageHeader>
       {notes.error && <p role="alert">{notes.error}</p>}

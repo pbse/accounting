@@ -46,7 +46,6 @@ export function Runs() {
   return (
     <>
       <PageHeader
-        icon="run"
         title="Runs"
         actions={
           <div className="title-actions">

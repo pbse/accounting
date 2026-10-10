@@ -331,7 +331,7 @@ export default function Prepare() {
   }
   return (
     <>
-      <PageHeader icon="reconcile" title="Statement reconciliation">
+      <PageHeader title="Statement reconciliation">
         Import one full month of a {currency} bank or credit-card account. Bank deposits increase cash; card charges increase the liability. Bank
         withdrawals, card payments and card credits decrease it. Normalize both CSVs to the selected sign convention before review.
       </PageHeader>

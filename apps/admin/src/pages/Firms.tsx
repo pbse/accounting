@@ -30,7 +30,6 @@ export function Firms() {
   return (
     <>
       <PageHeader
-        icon="firm"
         title="Firms"
         actions={
           <form

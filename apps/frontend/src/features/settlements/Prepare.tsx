@@ -684,7 +684,7 @@ export default function Prepare() {
   };
   return (
     <>
-      <PageHeader icon="stripe" title="Stripe payouts">
+      <PageHeader title="Stripe payouts">
         Stripe deposits charges, refunds, disputes and fees as one net payout. Bring Stripe's itemized payout export and the bank account's CSV; each
         payout is matched to its deposit, and anything unresolved stays visible.
       </PageHeader>

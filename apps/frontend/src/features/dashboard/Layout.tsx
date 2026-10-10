@@ -17,7 +17,8 @@ import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
 // example (see examples.go), and sees it here.
 const firmNav: SidebarItem[] = [
   { to: "/dashboard", label: "Home", icon: "home", end: true },
-  { to: "/dashboard/closes", label: "Clients", icon: "clients" },
+  { to: "/dashboard/clients", label: "Clients", icon: "clients" },
+  { to: "/dashboard/closes", label: "Closes", icon: "check", end: true },
 ];
 const exampleNav: SidebarItem = { to: "/dashboard/close", label: "Example", icon: "book" };
 
@@ -92,8 +93,8 @@ export default function WorkspaceLayout() {
   // An executive's line names the client whose results the links open: the one they chose, else the first.
   const executiveCloses = executiveRead.data?.closes ?? [];
   const client = (executiveCloses.find((c) => c.id === chosen) ?? executiveCloses[0])?.entity ?? "Your business";
-  // Home carries the count of what needs the person, until the Closes page takes it.
-  const withCount = items.map((item) => ("end" in item && item.to === "/dashboard" && !executive && signedIn ? { ...item, count: <AttentionBadge /> } : item));
+  // Closes carries the count of what needs the person.
+  const withCount = items.map((item) => ("to" in item && item.to === "/dashboard/closes" && !executive && signedIn ? { ...item, count: <AttentionBadge /> } : item));
   // The firm is known by its sign-in domain until the firm's own name is kept; local development has none.
   const firm = session?.user ? session.user.email.split("@")[1] : signedIn ? "Local development" : "";
   return (

@@ -179,7 +179,7 @@ export default function PrepareLoan() {
   );
   return (
     <>
-      <PageHeader icon="loan" title="Loan schedule">
+      <PageHeader title="Loan schedule">
         Check a month of loan activity against the lender's statement. The lender's principal/interest split is used as stated; interest recomputed from
         the note only raises questions. Needs the firm's approved loan procedure for this client to save.
       </PageHeader>

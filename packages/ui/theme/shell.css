@@ -161,47 +161,59 @@ body {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
-/* A section is a white card on the grey ground; a section inside it is a tile with a hairline ring. */
+/* A section is a card: white with a hairline ring, no shadow; a section inside it is a tile with the same ring. */
 .app-shell section {
   background: var(--surface);
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: var(--space-20);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .app-shell section section {
   background: var(--surface);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   padding: var(--space-16);
-  box-shadow: var(--shadow-tile);
+  box-shadow: var(--ring);
 }
-/* Buttons are pills: white with a hairline ring, or solid blue for the one primary action. */
+/* Buttons: white with a hairline ring, or graphite for the one primary action on a view. */
 .app-shell button,
 .app-shell .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  min-height: var(--control);
   border: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--surface);
-  box-shadow: var(--shadow-raised);
+  box-shadow: var(--ring);
   color: var(--ink);
-  padding: var(--space-8) 14px;
+  padding: 0 var(--space-12);
   font-weight: 500;
   font-size: 13px;
-  line-height: 16px;
+  line-height: 18px;
+  text-decoration: none;
+  transition: box-shadow 140ms var(--ease), background 120ms;
 }
 .app-shell button:hover:not(:disabled),
 .app-shell .button:hover {
   background: var(--hover);
+  box-shadow: var(--ring-strong);
 }
 .app-shell .primary,
 .app-shell button.primary {
-  background: var(--blue);
+  background: var(--primary);
   box-shadow: none;
-  color: var(--on-chip);
-  padding: 9px var(--space-16);
+  color: var(--on-primary);
 }
 .app-shell .primary:hover:not(:disabled),
 .app-shell .button.primary:hover {
-  background: var(--blue-hover);
+  background: #27272a;
+  box-shadow: none;
+}
+.app-shell button.danger,
+.app-shell .button.danger {
+  color: var(--neg-text);
 }
 .app-shell label {
   display: block;
@@ -216,31 +228,35 @@ body {
   width: 100%;
   max-width: 44rem;
   margin-top: 6px;
-  border: 1px solid var(--line-strong);
+  border: 0;
   border-radius: var(--radius-sm);
-  padding: var(--space-8) var(--space-12);
+  box-shadow: var(--ring);
+  padding: var(--space-8) var(--space-10);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 18px;
   color: inherit;
   background: var(--surface);
 }
+.app-shell input::placeholder,
+.app-shell textarea::placeholder {
+  color: var(--ink-3);
+}
 .app-shell input[type="checkbox"],
 .app-shell input[type="radio"] {
-  accent-color: var(--blue);
+  accent-color: var(--primary);
   margin-right: 0.45rem;
 }
 .app-shell table {
   font-size: 13px;
 }
 .app-shell thead th {
-  color: var(--ink-2);
+  color: var(--ink-3);
   font-weight: 500;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: 12px;
 }
 .app-shell .note {
-  background: var(--tile);
+  background: var(--fill);
   border: 0;
   border-radius: var(--radius-sm);
   box-shadow: none;
@@ -248,37 +264,41 @@ body {
   font-size: 13px;
 }
 .app-shell .form-error {
-  padding: var(--space-16);
+  padding: var(--space-12) var(--space-16);
   border-radius: var(--radius-sm);
-  border-left: 3px solid var(--red);
-  background: var(--negative-tint);
-  color: var(--negative-text);
+  background: var(--neg-tint);
+  color: var(--neg-text);
 }
-/* Pills: tinted, rounded, with words that pass AA on their tint. */
+/* Chips: a word on its tint. Green for done and ready, amber for waiting, red for a problem, a ring for neutral. */
 .app-shell .pill {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 22px;
   border-radius: var(--radius-full);
-  padding: 2px var(--space-8);
+  padding: 0 var(--space-8);
   font-size: 11px;
   font-weight: 500;
   line-height: 16px;
-  background: var(--positive-tint);
-  color: var(--positive-text);
+  white-space: nowrap;
+  background: var(--pos-tint);
+  color: var(--pos-text);
 }
 .app-shell .pill.muted {
-  background: var(--attention-tint);
-  color: var(--attention-text);
+  background: var(--att-tint);
+  color: var(--att-text);
 }
 .app-shell .pill.danger {
-  background: var(--negative-tint);
-  color: var(--negative-text);
+  background: var(--neg-tint);
+  color: var(--neg-text);
 }
 .app-shell .pill.info {
-  background: var(--blue-tint);
-  color: var(--blue-text);
+  background: var(--accent-tint);
+  color: var(--accent-text);
 }
 .app-shell .pill.neutral {
-  background: var(--fill);
+  background: none;
+  box-shadow: var(--ring);
   color: var(--ink-2);
 }
 
@@ -475,4 +495,262 @@ body {
 }
 .table-scroll td {
   white-space: nowrap;
+}
+
+/* A records page (docs/design-system.md, The shell): its title row is the PageHeader; a filter row, then the table. */
+.ks-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+}
+.app-shell .ks-search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  height: var(--control);
+  width: 240px;
+  margin: 0;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--ring);
+  color: var(--ink-4);
+  font-weight: 400;
+}
+.app-shell .ks-search:focus-within {
+  box-shadow: var(--focus);
+}
+.app-shell .ks-search input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  outline: none;
+  background: none;
+  font-size: 13px;
+  color: var(--ink);
+}
+.ks-search kbd {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  box-shadow: var(--ring);
+  color: var(--ink-3);
+}
+.ks-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-12);
+  margin: 0 0 var(--space-20);
+}
+.app-shell .ks-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-8);
+  padding: var(--space-14) var(--space-16);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--ring);
+  background: var(--surface);
+  text-align: left;
+  font-weight: 400;
+  min-height: 0;
+  line-height: 20px;
+  transition: box-shadow 160ms var(--ease);
+}
+.app-shell button.ks-stat:hover:not(:disabled) {
+  background: var(--surface);
+  box-shadow: var(--lift);
+}
+.ks-stat .ks-l {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.ks-stat .ks-v {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+.ks-stat .ks-v b {
+  font-size: 22px;
+  line-height: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.ks-stat .ks-v b small {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.ks-stat .ks-c {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.ks-table {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--ring);
+  overflow: hidden;
+  background: var(--surface);
+}
+.ks-tr {
+  display: grid;
+  grid-template-columns: var(--ks-columns, 2fr 3fr 1fr 32px);
+  align-items: center;
+  gap: var(--space-12);
+  min-height: 46px;
+  padding: var(--space-8) var(--space-16);
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.ks-tr.head {
+  min-height: 36px;
+  padding: 0 var(--space-16);
+  font-size: 12px;
+  color: var(--ink-3);
+  border-top: 0;
+  background: var(--surface-side);
+}
+.ks-tr:hover:not(.head) {
+  background: var(--hover);
+}
+.ks-tr .ks-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  font-weight: 500;
+  min-width: 0;
+}
+.ks-tr .ks-who > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ks-tr .ks-mut {
+  color: var(--ink-2);
+}
+.ks-tr .ks-go {
+  width: 16px;
+  height: 16px;
+  color: var(--ink-4);
+  opacity: 0;
+  transition: opacity 140ms;
+  justify-self: end;
+}
+.ks-tr:hover .ks-go,
+.ks-tr:focus-within .ks-go {
+  opacity: 1;
+}
+.ks-tr .ks-empty-row {
+  grid-column: 1 / -1;
+  padding: var(--space-16) 0;
+  color: var(--ink-3);
+  text-align: center;
+}
+.ks-mark {
+  width: var(--mark);
+  height: var(--mark);
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: var(--on-client);
+  font-size: 11px;
+  font-weight: 600;
+  flex: none;
+}
+.ks-mark.teal { background: var(--client-teal); }
+.ks-mark.violet { background: var(--client-violet); }
+.ks-mark.amber { background: var(--client-amber); }
+.ks-mark.pink { background: var(--client-pink); }
+.ks-mark.blue { background: var(--client-blue); }
+.ks-mark.green { background: var(--client-green); }
+.ks-mark.slate { background: var(--client-slate); }
+/* A client's months in its row: a month to open, an open month, a signed-off month. */
+.ks-months {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  min-width: 0;
+}
+.app-shell .ks-month {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 26px;
+  min-height: 0;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-full);
+  box-shadow: var(--ring);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.app-shell .ks-month:hover {
+  box-shadow: var(--ring-strong);
+  background: var(--surface);
+}
+.app-shell .ks-month.owed {
+  box-shadow: none;
+  background: var(--att-tint);
+  color: var(--att-text);
+}
+.app-shell .ks-month.signed {
+  box-shadow: none;
+  background: var(--pos-tint);
+  color: var(--pos-text);
+}
+.app-shell .ks-month .pill {
+  height: 18px;
+  padding: 0 var(--space-6);
+}
+.ks-tr details.ks-another {
+  justify-self: end;
+}
+.ks-tr details.ks-another > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.ks-tr details.ks-another > summary::-webkit-details-marker {
+  display: none;
+}
+.ks-tr details.ks-another > summary:hover {
+  color: var(--ink);
+}
+.ks-tr details.ks-another[open] > form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-top: var(--space-6);
+}
+.ks-tr details.ks-another[open] > form input {
+  width: 150px;
+  margin: 0;
+}
+@media (max-width: 860px) {
+  .ks-tr {
+    grid-template-columns: 1fr;
+    gap: var(--space-6);
+  }
+  .ks-tr.head,
+  .ks-tr .ks-go {
+    display: none;
+  }
+  .ks-tr details.ks-another {
+    justify-self: start;
+  }
+  .app-shell .ks-search {
+    width: 100%;
+  }
 }

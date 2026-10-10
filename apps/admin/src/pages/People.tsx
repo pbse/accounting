@@ -35,7 +35,6 @@ export function People() {
   return (
     <>
       <PageHeader
-        icon="clients"
         title="People"
       >
         Find one person across every firm by their WorkOS user ID or email address.

@@ -1,3 +1,4 @@
+/* A settings page's sections (docs/design-system.md, SectionNav) beside the selected section's cards. */
 .vertical-tabs-layout {
   display: grid;
   grid-template-columns: 232px minmax(0, 1fr);
@@ -18,9 +19,9 @@
 .vertical-tabs-group {
   display: block;
   padding: var(--space-16) var(--space-12) var(--space-4);
-  color: var(--ink-2);
+  color: var(--ink-3);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.06em;
   line-height: 16px;
   text-transform: uppercase;
@@ -32,32 +33,32 @@
   display: flex;
   align-items: center;
   gap: var(--space-10);
-  height: var(--control);
-  padding: 0 var(--space-12);
-  border-radius: var(--radius-full);
+  height: 30px;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-sm);
   color: var(--ink-2);
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 400;
   text-decoration: none;
 }
 .vertical-tabs svg {
-  color: var(--ink-3);
+  color: var(--ink-4);
   flex-shrink: 0;
 }
 .app-shell .vertical-tabs a:hover {
-  background: var(--fill);
+  background: var(--hover);
   color: var(--ink);
 }
 .app-shell .vertical-tabs a[aria-current="page"],
 .app-shell .vertical-tabs a[aria-current="page"]:hover {
-  background: var(--blue);
-  color: var(--on-chip);
-}
-.vertical-tabs a:hover svg {
+  background: var(--surface);
+  box-shadow: var(--ring);
   color: var(--ink);
+  font-weight: 500;
 }
+.vertical-tabs a:hover svg,
 .vertical-tabs a[aria-current="page"] svg {
-  color: var(--on-chip);
+  color: var(--ink);
 }
 .vertical-tabs-panel {
   display: flex;
@@ -77,10 +78,9 @@
     flex-direction: row;
     gap: 2px;
     position: static;
-    padding: var(--space-4);
-    border-radius: var(--radius-full);
-    background: var(--surface);
-    box-shadow: var(--shadow-raised);
+    padding: 3px;
+    border-radius: 9px;
+    background: var(--fill);
     overflow-x: auto;
     scrollbar-width: thin;
   }
