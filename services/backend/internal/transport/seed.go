@@ -571,6 +571,7 @@ func (s *seeder) policies(ctx context.Context) {
 		{"link_passcode": true, "reason": "Clients asked for a passcode on upload links after the phishing drill"},
 		{"reminder_after_days": 3, "reminder_max": 2, "reason": "Two reminders, three days apart, then a phone call"},
 	}
+	defer s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||jsonb_build_object('policy_set_at',now()) WHERE organization_id=$1`, s.o.Organization)
 	for _, change := range changes {
 		if _, ok := s.must(ctx, "policy", "POST", "/v1/closes/organization/policy", change); !ok {
 			continue
@@ -744,12 +745,16 @@ func (s *seeder) client(ctx context.Context, c *seed.Client, index int) error {
 		}
 		signed := s.signOff(ctx, closeID, c, period)
 		if signed {
+			// Sign-off carried the schedules into the next month and opened it: recorded before anything else runs, so a
+			// run that stops here can still be removed; then worked, and given its owner and due date.
+			next := s.closeFor(ctx, c.Name, nextPeriod(period))
+			if next != "" {
+				s.recordClose(ctx, next)
+			}
 			if err := s.settle(ctx); err != nil {
 				return err
 			}
-			// Sign-off carried the schedules into the next month and opened it; it gets its owner and due date too.
-			if next := s.closeFor(ctx, c.Name, nextPeriod(period)); next != "" {
-				s.recordClose(ctx, next)
+			if next != "" {
 				s.plan(ctx, c, next, nextPeriod(period), n+1, false)
 			}
 		}
@@ -2054,7 +2059,8 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		}
 		// A policy change recorded after the run is the firm's decision, whatever it chose: then nothing is put back.
 		var later int
-		tx.QueryRowContext(ctx, `SELECT count(*) FROM organization_policy_changes WHERE organization_id=$1 AND created_at>COALESCE((SELECT finished_at FROM demonstration_seeds WHERE organization_id=$1),now())`, o.Organization).Scan(&later)
+		// Changes after the seed's own (its finish, or the moment its policy was set if the run stopped early).
+		tx.QueryRowContext(ctx, `SELECT count(*) FROM organization_policy_changes WHERE organization_id=$1 AND created_at>COALESCE((SELECT finished_at FROM demonstration_seeds WHERE organization_id=$1),(SELECT (policy->>'policy_set_at')::timestamptz FROM demonstration_seeds WHERE organization_id=$1),(SELECT started_at FROM demonstration_seeds WHERE organization_id=$1))`, o.Organization).Scan(&later)
 		restore := map[string]any{}
 		for field, set := range seedPolicy {
 			if later == 0 && changed[field] && fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
