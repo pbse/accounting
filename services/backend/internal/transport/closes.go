@@ -200,8 +200,14 @@ func openClose(ctx context.Context, tx *sql.Tx, org, entity, period string, role
 }
 
 // The authenticated organization owns every close and its child records.
-func savedCloses(db *sql.DB, token string) http.Handler {
+// sessionStore, when given, is the pool that holds sign-in sessions (apiWithStores keeps it apart from the firm's);
+// the attention stream rechecks a session on it. Without one the firm's pool serves, as tests and tools do.
+func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler {
 	verifier := workspaceVerifier()
+	sessionDB := db
+	if len(sessionStore) > 0 && sessionStore[0] != nil {
+		sessionDB = sessionStore[0]
+	}
 	mux := http.NewServeMux()
 	registerPosting(mux, db)
 	registerVendorCredit(mux, db)
@@ -254,7 +260,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerDrive(mux)
 	registerDaily(mux, db)
 	registerChat(mux, db)
-	registerAttention(mux, db)
+	registerAttention(mux, db, sessionDB)
 	registerMe(mux, db)
 	registerHome(mux, db)
 	registerSecurity(mux, db)

@@ -223,7 +223,8 @@ func attentionPreferences(ctx context.Context, db reader, r *http.Request) ([]st
 var attentionStreamEvery = 10 * time.Second
 var attentionStreamFor = 2 * time.Minute
 
-func registerAttention(mux *http.ServeMux, db *sql.DB) {
+// sessionDB holds the sign-in sessions (the firm pool itself when there is no separate one), for the stream's recheck.
+func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 	// One list per person of what needs them, grouped by close; marks and preferences are theirs alone.
 	mux.HandleFunc("GET /v1/closes/attention", func(w http.ResponseWriter, r *http.Request) {
 		events, err := attentionEvents(r.Context(), db, r)
@@ -282,7 +283,7 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 				// The session rows are the system's, not a firm's: the lookup runs without this request's actor, as it
 				// does when a request enters, on a context of its own.
 				lookup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_, _, status := sessions.accessToken(lookup, db, firmSession, verifier, cookie.Value)
+				_, _, status := sessions.accessToken(lookup, sessionDB, firmSession, verifier, cookie.Value)
 				cancel()
 				if status != 0 {
 					return false

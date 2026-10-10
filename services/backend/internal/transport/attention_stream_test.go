@@ -46,7 +46,7 @@ func TestAttentionStreamFollowsTheInbox(t *testing.T) {
 	attentionStreamEvery, attentionStreamFor = 20*time.Millisecond, 400*time.Millisecond
 	defer func() { attentionStreamEvery, attentionStreamFor = every, long }()
 	mux := http.NewServeMux()
-	registerAttention(mux, db)
+	registerAttention(mux, db, db)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	r := httptest.NewRequest("GET", "/v1/closes/attention/stream", nil).WithContext(auth.WithActor(ctx, &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org}))
