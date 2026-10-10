@@ -16,6 +16,12 @@ type Line = { area: string; state: "done" | "attention" | "waiting" | "info" | "
 type Brief = { headline: string; lines: Line[] };
 
 const area = (line: Line) => line.area[0].toUpperCase() + line.area.slice(1);
+// Sign-off is the page's one action: available when the brief's sign-off line says the close is ready (readiness
+// with no blockers), never while blockers wait or once it is signed off.
+export function signOffAvailable(brief: Brief | undefined) {
+  const line = brief?.lines.find((l) => l.area === "sign-off");
+  return !!line && line.state === "attention" && /ready/i.test(line.text);
+}
 // What needs the person: the areas whose line needs attention, which are the tasks shown, so the sentence and the
 // list always agree. A section that could not be read is said so, never counted as the person's work.
 export function needsOf(brief: Brief) {
