@@ -381,7 +381,7 @@ func (s *seeder) record(ctx context.Context, column string, value any) {
 // manifest records what removal needs: the closes (every close of the demonstration's clients, which had none
 // before), the chats, marks and rows no client name identifies.
 func (s *seeder) manifest(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=(SELECT COALESCE(array_agg(id),'{}') FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2)),finished_at=now() WHERE organization_id=$1`, s.o.Organization, s.clientNames())
+	_, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=(SELECT COALESCE(array_agg(id),'{}') FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2) AND created_at>=demonstration_seeds.started_at),finished_at=now() WHERE organization_id=$1`, s.o.Organization, s.clientNames())
 	return err
 }
 
@@ -463,6 +463,13 @@ var policyInputs = map[string]string{"agent_chat": "agent_chat", "materiality_am
 // policies are the firm's rules as a careful small firm sets them, each change recorded with its reason. The review
 // rules are never touched.
 func (s *seeder) policies(ctx context.Context) {
+	// A firm with clients of its own keeps its policy: a change would reach their work too.
+	var others bool
+	s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM client_closes WHERE organization_id=$1 AND NOT lower(entity)=ANY($2)) OR EXISTS(SELECT 1 FROM client_roster WHERE organization_id=$1 AND NOT lower(client_entity)=ANY($2))`, s.o.Organization, s.clientNames()).Scan(&others)
+	if others {
+		s.log("  the firm has clients of its own, so its policy is left as it is")
+		return
+	}
 	changes := []map[string]any{
 		{"agent_chat": "firm", "reason": "Turn the agent on for the whole firm after the June pilot with two clients"},
 		{"materiality_amount": "250.00", "reason": "Differences under $250 are noted, not chased, for our client sizes"},
@@ -633,6 +640,7 @@ func (s *seeder) client(ctx context.Context, c *seed.Client, index int) error {
 			}
 			// Sign-off carried the schedules into the next month and opened it; it gets its owner and due date too.
 			if next := s.closeFor(ctx, c.Name, nextPeriod(period)); next != "" {
+				s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=array_append(close_ids,$2::bigint) WHERE organization_id=$1 AND NOT $2::bigint=ANY(close_ids)`, s.o.Organization, next)
 				s.plan(ctx, c, next, nextPeriod(period), n+1, false)
 			}
 		}
@@ -1140,8 +1148,10 @@ func (s *seeder) cover(ctx context.Context, closeID string, b seed.Books) {
 			body["jobs"], body["reason"] = jobs, "Supported by the prepaid schedules prepared from the invoices."
 		case item.Kind == "accrual" && len(jobs) > 0:
 			body["jobs"], body["reason"] = jobs, "Supported by the accrual prepared from the vendor's estimate."
+		case item.Kind == "reconciliation" && len(jobs) > 0:
+			body["jobs"], body["reason"] = jobs, "Supported by the reconciliation of the account to the bank's export."
 		case item.Kind == "reconciliation":
-			body["excluded"], body["reason"] = true, "Reconciled by hand to the bank statement this month (see the reconciliation draft)."
+			body["excluded"], body["reason"] = true, "Not reconciled this month: the card is paid in full and reviewed from its statement in the aging."
 		default:
 			body["excluded"], body["reason"] = true, coverageReason(item.Name)
 		}
@@ -1632,7 +1642,16 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	// Every close of the demonstration's clients is the seed's (the firm had none under those names), so a run that
 	// stopped before it recorded them is still taken out whole. Newest first, so a connection's later months go before
 	// the month that holds it.
-	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND (id=ANY($2) OR lower(entity)=ANY($3)) ORDER BY period DESC,id DESC`, o.Organization, closes, names)
+	// The recorded closes, and any the run opened by sign-off before it could record them (within the run's own time);
+	// a close someone opened under a demonstration name afterwards is theirs and stays.
+	var started, finished time.Time
+	var finishedAt sql.NullTime
+	db.QueryRowContext(ctx, `SELECT started_at,finished_at FROM demonstration_seeds WHERE organization_id=$1`, o.Organization).Scan(&started, &finishedAt)
+	finished = time.Now()
+	if finishedAt.Valid {
+		finished = finishedAt.Time
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND (id=ANY($2) OR (lower(entity)=ANY($3) AND created_at BETWEEN $4 AND $5)) ORDER BY period DESC,id DESC`, o.Organization, closes, names, started, finished)
 	if err != nil {
 		return err
 	}
@@ -1672,19 +1691,20 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		sql  string
 		args []any
 	}
-	byClient := func(sql string) statement { return statement{sql, []any{o.Organization, names}} }
+	// The demonstration clients' own rows, made while the run ran; what someone added under those names afterwards stays.
+	byClient := func(sql string) statement { return statement{sql, []any{o.Organization, names, started, finished}} }
 	statements := []statement{
-		byClient(`DELETE FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM client_access WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM budget_versions WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM open_item_actions WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM collection_contact_preferences WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM close_routines WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
-		byClient(`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND confirmed_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM client_access WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM budget_versions WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM open_item_actions WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM collection_contact_preferences WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND recorded_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND recorded_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM close_routines WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
+		byClient(`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4 AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id)`),
 		{`DELETE FROM procedure_versions WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, procedures}},
 		{`DELETE FROM chat_messages WHERE session_id=ANY($1)`, []any{chats}},
 		{`DELETE FROM chat_sessions WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, chats}},
