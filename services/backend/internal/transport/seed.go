@@ -433,10 +433,21 @@ func (s *seeder) recordRow(ctx context.Context, table string, id string) {
 	s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||jsonb_build_object('rows',COALESCE(policy->'rows','{}'::jsonb)||jsonb_build_object($2::text,COALESCE(policy->'rows'->$2::text,'[]'::jsonb)||to_jsonb($3::text))) WHERE organization_id=$1`, s.o.Organization, table, id)
 }
 
-// recordNewest records the row a route just made for a client: the newest of that client's in the table.
-func (s *seeder) recordNewest(ctx context.Context, table, entity string) {
+// rowActor is the column that names who made a row, for the tables whose routes do not return the row's ID.
+var rowActor = map[string]string{"client_roster": "actor", "client_access": "actor", "cash_scenarios": "created_by", "open_item_actions": "actor", "collection_contact_preferences": "recorded_by", "close_routines": "author"}
+
+// watermark is the newest ID a table holds for a client before a route call, so the call's own row can be told apart.
+func (s *seeder) watermark(ctx context.Context, table, entity string) int64 {
+	var id sql.NullInt64
+	s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT max(id) FROM %s WHERE organization_id=$1 AND lower(client_entity)=lower($2)`, table), s.o.Organization, entity).Scan(&id)
+	return id.Int64
+}
+
+// recordNewest records the row a route just made for a client: the one above the watermark that names the seed's
+// administrator as its maker.
+func (s *seeder) recordNewest(ctx context.Context, table, entity string, before int64) {
 	var id string
-	s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT max(id)::text FROM %s WHERE organization_id=$1 AND lower(client_entity)=lower($2)`, table), s.o.Organization, entity).Scan(&id)
+	s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT min(id)::text FROM %s WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND id>$3 AND %s=$4`, table, rowActor[table]), s.o.Organization, entity, before, s.o.Subject).Scan(&id)
 	s.recordRow(ctx, table, id)
 }
 
@@ -576,12 +587,13 @@ func (s *seeder) roster(ctx context.Context) {
 		if c.Since > seed.Months[0] {
 			entry["reason"] = "New client; first month to close is " + c.Since
 		}
+		before := s.watermark(ctx, "client_roster", c.Name)
 		code, out := s.call(ctx, "POST", "/v1/closes/roster", entry)
 		if code != 200 && !strings.Contains(string(out), "already on the roster") {
 			s.problem("roster %s: %d %s", c.Name, code, out)
 		}
 		if code == 200 {
-			s.recordNewest(ctx, "client_roster", c.Name)
+			s.recordNewest(ctx, "client_roster", c.Name, before)
 		}
 	}
 	// Names clients are also known by on their documents.
@@ -753,8 +765,9 @@ func (s *seeder) leave(ctx context.Context, c *seed.Client) {
 	json.Unmarshal(out, &roster)
 	for _, r := range roster.Clients {
 		if r.Entity == c.Name {
+			before := s.watermark(ctx, "client_roster", c.Name)
 			if _, ok := s.must(ctx, "roster leave", "POST", "/v1/closes/roster", map[string]any{"entity": c.Name, "active": false, "since": c.Since, "reason": "Hired an in-house bookkeeper; July was the last month we closed", "rev": r.Rev}); ok {
-				s.recordNewest(ctx, "client_roster", c.Name)
+				s.recordNewest(ctx, "client_roster", c.Name, before)
 			}
 		}
 	}
@@ -786,8 +799,9 @@ func (s *seeder) openClose(ctx context.Context, c *seed.Client, period string) (
 		s.clientProcedures(ctx, c)
 		// A named teammate who will own the client is assigned it, so its work is theirs to open.
 		if owner := s.owner(c); owner != s.o.Subject {
+			before := s.watermark(ctx, "client_access", c.Name)
 			if _, ok := s.must(ctx, "assign "+c.Name, "POST", "/v1/closes/access", map[string]any{"subject": owner, "entity": c.Name, "granted": true, "reason": "Assigned " + c.Name + " at onboarding", "confirmed": true}); ok {
-				s.recordNewest(ctx, "client_access", c.Name)
+				s.recordNewest(ctx, "client_access", c.Name, before)
 			}
 		}
 	}
@@ -1450,8 +1464,9 @@ func (s *seeder) september(ctx context.Context, c *seed.Client, closeID string, 
 		s.must(ctx, "goal", "POST", "/v1/closes/"+closeID+"/goal", map[string]any{"confirmed": true, "due_on": s.today.AddDate(0, 0, 6).Format("2006-01-02"), "finish": "review"})
 	}
 	if c.Routine {
+		before := s.watermark(ctx, "close_routines", c.Name)
 		if _, ok := s.must(ctx, "routine", "POST", "/v1/closes/"+closeID+"/goal", map[string]any{"confirmed": true, "due_on": s.today.AddDate(0, 0, 9).Format("2006-01-02"), "finish": "signoff", "every_month": true}); ok {
-			s.recordNewest(ctx, "close_routines", c.Name)
+			s.recordNewest(ctx, "close_routines", c.Name, before)
 		}
 	}
 }
@@ -1567,8 +1582,9 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 			name, changes = "Replace the cardio equipment in November", []map[string]any{{"kind": "add", "label": "Treadmills and rowers, Rogue Fitness quote", "direction": "out", "amount": "18400.00", "first_on": "2026-11-12", "every": "once"}}
 		}
 		if len(changes) > 0 {
+			before := s.watermark(ctx, "cash_scenarios", c.Name)
 			if _, ok := s.must(ctx, "scenario", "POST", path+"/cash-scenarios", map[string]any{"action": "add", "name": name, "changes": changes}); ok {
-				s.recordNewest(ctx, "cash_scenarios", c.Name)
+				s.recordNewest(ctx, "cash_scenarios", c.Name, before)
 			}
 		}
 	}
@@ -1607,15 +1623,17 @@ func (s *seeder) afterwards(ctx context.Context) {
 					if expected != "" {
 						body["expected_on"] = expected
 					}
+					before := s.watermark(ctx, "open_item_actions", "Larkspur Landscaping Inc.")
 					if code, _ := s.call(ctx, "POST", "/v1/closes/"+closeID+"/open-items", body); code == 200 {
-						s.recordNewest(ctx, "open_item_actions", "Larkspur Landscaping Inc.")
+						s.recordNewest(ctx, "open_item_actions", "Larkspur Landscaping Inc.", before)
 					}
 					break
 				}
 			}
 		}
+		before := s.watermark(ctx, "collection_contact_preferences", "Larkspur Landscaping Inc.")
 		if _, ok := s.must(ctx, "contact preference", "POST", "/v1/closes/"+closeID+"/collections", map[string]any{"action": "preference", "recipient": "ap@fairview.example", "do_not_contact": true, "reason": "Tom handles the city himself; the contract forbids vendor contact with Parks staff about invoices.", "confirmed": true}); ok {
-			s.recordNewest(ctx, "collection_contact_preferences", "Larkspur Landscaping Inc.")
+			s.recordNewest(ctx, "collection_contact_preferences", "Larkspur Landscaping Inc.", before)
 		}
 	}
 	// Daily book reviews: the September captures with exceptions were looked at.
@@ -1750,7 +1768,9 @@ func (s *seeder) openCount(ctx context.Context) string {
 // ownershipAnswer says, from the open closes as they are owned, which September closes are the administrator's.
 func (s *seeder) ownershipAnswer(ctx context.Context) string {
 	var mine, others []string
-	rows, err := s.db.QueryContext(ctx, `SELECT entity,owner=$2 FROM client_closes c WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($3) AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off' ORDER BY entity`, s.o.Organization, s.o.Subject, s.clientNames())
+	rows, err := s.db.QueryContext(ctx, `SELECT entity,owner=$2 FROM client_closes c WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($3)
+ AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+  OR EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=c.id AND e.superseded_by IS NOT NULL AND e.replaced_at>COALESCE((SELECT created_at FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'-infinity'))) ORDER BY entity`, s.o.Organization, s.o.Subject, s.clientNames())
 	if err == nil {
 		for rows.Next() {
 			var entity string
@@ -1831,6 +1851,17 @@ func (s *seeder) chats(ctx context.Context) {
 type seedStatement struct {
 	sql  string
 	args []any
+}
+
+func toFloat(v any) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case int:
+		return float64(t)
+	}
+	f, _ := strconv.ParseFloat(fmt.Sprint(v), 64)
+	return f
 }
 
 // RemoveSeed takes the demonstration out of the firm by its record: the closes it made with what hangs off them, the
@@ -1929,52 +1960,6 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	if dependents > 0 {
 		return fmt.Errorf("%d budget(s) or goal(s) outside the demonstration build on its rows; remove those first", dependents)
 	}
-	// The firm's policy as the seed found it, recorded as a change by the person who ran the seed; the review rules
-	// were never changed, and the local firm cannot take them.
-	if before != nil {
-		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
-		// Only what the seed set, and only where the firm has left it as the seed set it: a later decision stands.
-		var now map[string]any
-		var raw []byte
-		if db.QueryRowContext(ctx, `SELECT to_jsonb(o) FROM (SELECT require_link_passcode,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat FROM organizations WHERE id=$1) o`, o.Organization).Scan(&raw) == nil {
-			json.Unmarshal(raw, &now)
-		}
-		restore := map[string]any{"reason": "The demonstration was removed; the firm's policy is as it was before it"}
-		changed := map[string]bool{}
-		if list, ok := before["changed"].([]any); ok {
-			for _, field := range list {
-				changed[fmt.Sprint(field)] = true
-			}
-		}
-		for field, set := range seedPolicy {
-			if changed[field] && fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
-				restore[policyInputs[field]] = before[field]
-			}
-		}
-		if len(restore) == 1 {
-			restore = nil
-		}
-		if restore != nil {
-			s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
-		}
-		if stopped, ok := before["agent_chat_stopped"].(bool); ok && changed["agent_chat"] && fmt.Sprint(now["agent_chat"]) == fmt.Sprint(seedPolicy["agent_chat"]) {
-			// The notice that the agent was stopped by a migration is not a policy the route sets; it is put back as found,
-			// unless the firm has since chosen an agent level of its own.
-			db.ExecContext(ctx, `UPDATE organizations SET agent_chat_stopped=$2 WHERE id=$1`, o.Organization, stopped)
-		}
-		// A monthly template, once set, has a due date of 1–60 days: a firm that had none keeps the demonstration's
-		// 15 days until it chooses its own (docs/seed-data.md says so).
-		// The settings the seed made for the administrator go only while they still hold the seed's values.
-		if set, _ := before["set_time_zone"].(bool); set {
-			db.ExecContext(ctx, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2 AND time_zone='America/New_York'`, o.Organization, subject)
-		}
-		if set, _ := before["set_preferences"].(bool); set {
-			db.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2 AND NOT browser AND kinds <@ $3::text[] AND kinds @> $3::text[]`, o.Organization, subject, seedKinds)
-		}
-		if len(s.problems) > 0 {
-			return errors.New(s.problems[0])
-		}
-	}
 	var seedMessages []int64
 	for _, id := range recorded["chat_messages"] {
 		if n, err := strconv.ParseInt(id, 10, 64); err == nil {
@@ -2032,6 +2017,56 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	for _, st := range statements {
 		if _, err := tx.ExecContext(ctx, st.sql, st.args...); err != nil {
 			return fmt.Errorf("%s: %w", st.sql[:40], err)
+		}
+	}
+	// The firm's policy as the seed found it, in the same transaction: only what the seed set, and only where the firm
+	// has left it as the seed set it; a later decision stands. The change is recorded as the route records one, by the
+	// person who ran the seed.
+	if before != nil {
+		var raw []byte
+		var now map[string]any
+		if err := tx.QueryRowContext(ctx, `SELECT to_jsonb(o) FROM (SELECT require_link_passcode,COALESCE(materiality_amount::text,'') AS materiality_amount,reminder_after_days,reminder_max,agent_chat FROM organizations WHERE id=$1 FOR UPDATE) o`, o.Organization).Scan(&raw); err != nil {
+			return err
+		}
+		json.Unmarshal(raw, &now)
+		changed := map[string]bool{}
+		if list, ok := before["changed"].([]any); ok {
+			for _, field := range list {
+				changed[fmt.Sprint(field)] = true
+			}
+		}
+		restore := map[string]any{}
+		for field, set := range seedPolicy {
+			if changed[field] && fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
+				restore[field] = before[field]
+			}
+		}
+		if len(restore) > 0 {
+			value := func(field string) any {
+				if v, ok := restore[field]; ok {
+					return v
+				}
+				return now[field]
+			}
+			stopped := false
+			if v, ok := before["agent_chat_stopped"].(bool); ok && changed["agent_chat"] && restore["agent_chat"] != nil {
+				stopped = v
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE organizations SET require_link_passcode=$2,materiality_amount=NULLIF($3,'')::numeric,reminder_after_days=$4,reminder_max=$5,agent_chat=$6,agent_chat_stopped=$7 WHERE id=$1`,
+				o.Organization, value("require_link_passcode"), fmt.Sprint(value("materiality_amount")), int(toFloat(value("reminder_after_days"))), int(toFloat(value("reminder_max"))), fmt.Sprint(value("agent_chat")), stopped); err != nil {
+				return fmt.Errorf("restore policy: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO organization_policy_changes(organization_id,independent_review,link_passcode,independent_review_min_amount,materiality_amount,reminder_after_days,reminder_max,agent_chat,assistant_model_answers,reason,actor,ledger_writes)
+ SELECT id,require_independent_review,require_link_passcode,independent_review_min_amount,materiality_amount,reminder_after_days,reminder_max,agent_chat,assistant_model_answers,$2,$3,allow_ledger_writes FROM organizations WHERE id=$1`,
+				o.Organization, "The demonstration was removed; the firm's policy is as it was before it", subject); err != nil {
+				return fmt.Errorf("record policy: %w", err)
+			}
+		}
+		if set, _ := before["set_time_zone"].(bool); set {
+			tx.ExecContext(ctx, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2 AND time_zone='America/New_York'`, o.Organization, subject)
+		}
+		if set, _ := before["set_preferences"].(bool); set {
+			tx.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2 AND NOT browser AND kinds <@ $3::text[] AND kinds @> $3::text[]`, o.Organization, subject, seedKinds)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM demonstration_seeds WHERE organization_id=$1`, o.Organization); err != nil {
