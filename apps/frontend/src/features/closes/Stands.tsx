@@ -48,6 +48,7 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
   const { count } = brief ? needsOf(brief) : { count: 0 };
   const waiting = lines.filter((l) => l.state === "waiting");
   const done = lines.filter((l) => l.state === "done");
+  const unchecked = lines.filter((l) => l.state === "unknown");
   const sentence = !brief
     ? read.isError
       ? `${close.entity}’s close could not be read.`
@@ -66,6 +67,8 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
     brief ? `${done.length} of ${lines.length} done` : "",
     close.priority && close.priority !== "normal" ? `${close.priority} priority` : "",
     close.owned_by_me ? "yours" : close.assigned ? "held by a colleague" : "",
+    // A section that could not be read is said here on every tab, not only where the tasks show it.
+    unchecked.length ? `not checked: ${unchecked.map((l) => l.area).join(", ")}` : "",
   ].filter(Boolean);
   return (
     <div className="ks-lede">
