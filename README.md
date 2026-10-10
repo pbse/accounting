@@ -38,6 +38,8 @@ npm run dev:frontend
 HTTP_ADDR=127.0.0.1:8081 go run ./cmd/worker
 ```
 
+To see the workspace with a firm in it, seed the local database with the demonstration firm (`docs/seed-data.md`): `go run ./cmd/seed -database "$DATABASE_URL" -organization local-development -subject local-development`.
+
 Restart Go after changes in native mode. Start only Postgres when needed: `docker compose up -d postgres`. No database reset or production credentials are part of startup.
 
 ## Layout

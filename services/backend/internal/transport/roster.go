@@ -151,7 +151,7 @@ func owedMonthsThrough(ctx context.Context, tx *sql.Tx, through, org string, fir
  done AS (SELECT n.client,d.period FROM close_deletion_receipts d JOIN names n ON d.client_digest IN (encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.client,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex'),encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex'))
    OR (n.alias AND d.plain_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex'))
    OR (d.client_digest IS NULL AND d.entity_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex'))
-  WHERE d.organization_id=$1 AND d.period>=(SELECT min(since) FROM current_client_roster WHERE organization_id=$1 AND active))
+  WHERE d.organization_id=$1 AND d.reason_code<>'demonstration_reset' AND d.period>=(SELECT min(since) FROM current_client_roster WHERE organization_id=$1 AND active))
  SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
   EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND client_identity(h.organization_id,h.client_entity)=client_identity(r.organization_id,r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)
  FROM current_client_roster r `+rosterTemplate+`

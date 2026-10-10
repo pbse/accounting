@@ -245,7 +245,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	defer tx.Rollback()
 	var id, closeID string
 	var raw []byte
-	err = tx.QueryRowContext(ctx, `SELECT id::text,close_id::text,plans FROM preparation_jobs WHERE state='queued' AND close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY preparation_jobs.id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &raw)
+	err = tx.QueryRowContext(ctx, `SELECT id::text,close_id::text,plans FROM preparation_jobs WHERE state='queued' AND close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled AND ($1::bigint[] IS NULL OR c.id=ANY($1::bigint[]))) ORDER BY preparation_jobs.id FOR UPDATE SKIP LOCKED LIMIT 1`, CloseScope(ctx)).Scan(&id, &closeID, &raw)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

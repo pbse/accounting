@@ -212,7 +212,7 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	defer tx.Rollback()
 	var id, closeID, entity, period string
-	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.state='waiting_evidence' AND (e.extraction_state IN ('ready','failed') OR e.superseded_by IS NOT NULL) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`).Scan(&id, &closeID)
+	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.state='waiting_evidence' AND (e.extraction_state IN ('ready','failed') OR e.superseded_by IS NOT NULL) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled AND ($1::bigint[] IS NULL OR c.id=ANY($1::bigint[]))) ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`, CloseScope(ctx)).Scan(&id, &closeID)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -258,4 +258,21 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	return true, tx.Commit()
+}
+
+type scopeKey struct{}
+
+// WithinCloses limits the work a queue step takes to the given closes; without it a step takes the next job of any
+// enabled firm. The demonstration seed works its own closes' queue this way.
+func WithinCloses(ctx context.Context, closes []int64) context.Context {
+	return context.WithValue(ctx, scopeKey{}, closes)
+}
+
+// CloseScope is the closes a step is limited to, or NULL for every close.
+func CloseScope(ctx context.Context) any {
+	closes, _ := ctx.Value(scopeKey{}).([]int64)
+	if len(closes) == 0 {
+		return nil
+	}
+	return closes
 }
