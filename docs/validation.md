@@ -4000,7 +4000,8 @@ Checked on a fresh local PostgreSQL 18 with all migrations:
     - the firm's settle route refuses it, since only Krith's team can read Krith's records;
     - staff settling it with a message ID that another connection of Krith's sender already holds are refused;
     - a fresh ID settles it.
-  - A server without Krith's address records nothing new and says so.
+  - A server without Krith's address stops Krith's sender. The firm then has no sender, nothing is approved through the old one, and Krith's sender returns with the address, its old records kept.
+  - A request through Krith's sender carries the reply address back to the close, and without one it is refused.
 - **`TestCollectionMessagesThroughKrithNameWhereRepliesGo` (new).**
   - Through Krith's sender, a collection draft without a reply-to address is refused.
   - The client's authority names Krith's sender in the firm's name, and the message goes with its reply-to.
@@ -4011,7 +4012,7 @@ Checked on a fresh local PostgreSQL 18 with all migrations:
   - Krith's sender is ready only with its address and key, and never sends from another address.
   - A provider this server lacks is refused.
 - **Existing tests.** `TestApprovedEmailDurableRetryAndScope`, `TestCollectionMessagesNeedTheClientsAuthorityAndAWillingAddress`, the settle, reply and webhook tests, and the rest of the backend pass. The exceptions are the PDF test that needs Poppler, which isn't installed locally, and one open-items test, which failed once and passed on every rerun.
-- **Deploy and app checks.** The deploy checks refuse `CLIENT_EMAIL_ADDRESS` without the API's `CLIENT_EMAIL_WEBHOOK_SECRET` or the worker's `PLATFORM_EMAIL_KEY`, and the credential installer takes only a `whsec_` secret. Both apps typecheck.
+- **Deploy and app checks.** The deploy checks refuse `CLIENT_EMAIL_ADDRESS` without the API's `CLIENT_EMAIL_WEBHOOK_SECRET`, the worker's `PLATFORM_EMAIL_KEY` or `EMAIL_INTAKE_ADDRESS`, and the credential installer takes only a `whsec_` secret. Both apps typecheck.
 
 Not verified:
 - a real send through Krith's sender and its webhook in production, which needs the webhook created in Resend and its secret installed by the user, then `CLIENT_EMAIL_ADDRESS` set.

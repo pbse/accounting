@@ -142,19 +142,13 @@ export function EmailSettings() {
       ) : !data.hosted ? (
         <p className="note">Live sending needs the firm's hosted sign-in, which local development does not have. Share links by hand instead.</p>
       ) : !connection ? (
-        <p className="empty">No email sender. Krith's sender is not set up on this server; connect the firm's own, or share private links by hand.</p>
+        <p className="empty">No email sender: Krith's sender is not set up on this server. Connect the firm's own, or share private links by hand.</p>
       ) : (
         <RowList>
           <div className="row">
             <span>
               <strong>{connection.sender}</strong>
-              <small>
-                {krith
-                  ? data.krith
-                    ? "Krith's sender, in the firm's name. Clients' replies to requests come back to the close."
-                    : "Krith's sender, which is not set up on this server: nothing goes out until it is, or until the firm connects its own."
-                  : `Domain last checked ${dates.dateTime(connection.verified_at)}`}
-              </small>
+              <small>{krith ? "Krith's sender, in the firm's name. Clients' replies to requests come back to the close." : `Domain last checked ${dates.dateTime(connection.verified_at)}`}</small>
             </span>
             <span className={`pill ${connection.tracking_configured ? "" : "muted"}`}>{connection.tracking_configured ? "Delivery tracked" : "Tracking not set up"}</span>
             {!krith && (

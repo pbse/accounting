@@ -86,6 +86,8 @@ if (process.argv.includes('--check')) {
  // (docs/email-delivery.md#senders).
  if (app === 'queue' && process.env.CLIENT_EMAIL_ADDRESS) required.push('PLATFORM_EMAIL_KEY');
  if (app === 'edge' && process.env.CLIENT_EMAIL_ADDRESS) required.push('CLIENT_EMAIL_WEBHOOK_SECRET');
+ // Krith's address takes no replies, so a client's reply needs the reply address.
+ if (app === 'edge' && process.env.CLIENT_EMAIL_ADDRESS && !process.env.EMAIL_INTAKE_ADDRESS) throw new Error("CLIENT_EMAIL_ADDRESS needs EMAIL_INTAKE_ADDRESS: replies to Krith's address reach no one");
  if (app !== 'scanner') {
   for (const [id,secret,redirect] of [['QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI'],['QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI'],['XERO_CLIENT_ID','XERO_CLIENT_SECRET','XERO_REDIRECT_URI']]) {
    if (!process.env[id] && !process.env[redirect]) continue;

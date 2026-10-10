@@ -143,10 +143,13 @@ test('metadata preflight preserves optional features and checks configured integ
   names(['DATABASE_URL','UPLOAD_SCAN_KEY','XERO_CLIENT_SECRET','SECRETS_KEY','EMAIL_INTAKE_KEY','CONTEXT_MACHINE_TOKEN']);
   assert.equal(f.run('edge',['--check'],{XERO_CLIENT_ID:'client',XERO_REDIRECT_URI:'https://host/callback',EMAIL_INTAKE_ADDRESS:'evidence@host.example',CONTEXT_MACHINE_ENABLED:'true'}).status,0);
   // Krith's sender needs Krith's webhook secret on the API and Krith's key on the worker.
-  assert.notEqual(f.run('edge',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
+  const krith={CLIENT_EMAIL_ADDRESS:'requests@mail.host.example',EMAIL_INTAKE_ADDRESS:'replies@in.host.example'};
+  assert.notEqual(f.run('edge',['--check'],krith).status,0);
   assert.notEqual(f.run('queue',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
-  names(['DATABASE_URL','UPLOAD_SCAN_KEY','CLIENT_EMAIL_WEBHOOK_SECRET','PLATFORM_EMAIL_KEY']);
-  assert.equal(f.run('edge',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
+  names(['DATABASE_URL','UPLOAD_SCAN_KEY','CLIENT_EMAIL_WEBHOOK_SECRET','PLATFORM_EMAIL_KEY','EMAIL_INTAKE_KEY']);
+  assert.equal(f.run('edge',['--check'],krith).status,0);
+  // ...and the reply address, since Krith's own address takes no replies.
+  assert.notEqual(f.run('edge',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
   assert.equal(f.run('queue',['--check'],{CLIENT_EMAIL_ADDRESS:'requests@mail.host.example'}).status,0);
   assert.equal(f.run('edge',[],{UPLOAD_SCAN_HOST:'staging.example'}).status,0);
   assert.ok(JSON.parse(readFileSync(join(f.dir,'upload.json'),'utf8')).args.includes('staging.example/*'));

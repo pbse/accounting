@@ -41,6 +41,16 @@ const reminderFollow = `(SELECT CASE
  ELSE '' END
  FROM (SELECT ` + reminderStatus + ` AS s) x LEFT JOIN LATERAL (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m ON true)`
 
+// replyAddress is where a client's reply to the outbox's email comes back into its close, or "" when this server
+// takes no email replies (EMAIL_INTAKE_ADDRESS and EMAIL_INTAKE_KEY).
+func replyAddress(outbox string) string {
+	intake := strings.Split(os.Getenv("EMAIL_INTAKE_ADDRESS"), "@")
+	if len(intake) != 2 || intake[0] == "" || intake[1] == "" || len(os.Getenv("EMAIL_INTAKE_KEY")) < 32 {
+		return ""
+	}
+	return intake[0] + "+reply-" + strings.ToLower(outbox) + "@" + intake[1]
+}
+
 // currentSender is the firm's current sender in a transaction of its own (firmSender).
 func currentSender(ctx context.Context, db *sql.DB, org string) (id, sender, provider string, err error) {
 	tx, err := db.BeginTx(ctx, nil)
@@ -48,8 +58,11 @@ func currentSender(ctx context.Context, db *sql.DB, org string) (id, sender, pro
 		return "", "", "", err
 	}
 	defer tx.Rollback()
-	if id, sender, provider, err = firmSender(ctx, tx, org); err == nil {
-		err = tx.Commit()
+	// A sender stopped for want of Krith's address stays stopped even though the firm then has none.
+	if id, sender, provider, err = firmSender(ctx, tx, org); err == nil || err == sql.ErrNoRows {
+		if e := tx.Commit(); e != nil {
+			return "", "", "", e
+		}
 	}
 	return id, sender, provider, err
 }
@@ -276,8 +289,14 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, err.Error())
 			return
 		}
-		if connection, sender, _, err = firmSender(r.Context(), tx, org); err != nil || connection != in.ConnectionID {
+		var provider string
+		if connection, sender, provider, err = firmSender(r.Context(), tx, org); err != nil || connection != in.ConnectionID {
 			problem(w, 409, "Verify and select the current firm sender before approving delivery.")
+			return
+		}
+		// Krith's sending address takes no replies: a client who replies must reach the close through the reply address.
+		if provider == delivery.Krith && replyAddress("") == "" {
+			problem(w, 409, "Krith's sender needs this server's reply address (EMAIL_INTAKE_ADDRESS), or a client's reply would reach no one. Share the private link by hand, or connect the firm's own sender.")
 			return
 		}
 		id, token := rand.Text(), rand.Text()
@@ -294,8 +313,7 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		message := delivery.Email{From: sender, To: []string{recipient}, Subject: "A secure request from your accounting team", Text: "Your accounting team has requested information. Review the request and reply using this private link:\n\n" + strings.TrimRight(origin.String(), "/") + "/request#" + token + "\n\nThis link expires in seven days. Do not forward it. Contact your accounting team if you were not expecting this request."}
-		if intake := strings.Split(os.Getenv("EMAIL_INTAKE_ADDRESS"), "@"); len(intake) == 2 && intake[0] != "" && intake[1] != "" && len(os.Getenv("EMAIL_INTAKE_KEY")) >= 32 {
-			message.ReplyTo = intake[0] + "+reply-" + strings.ToLower(id) + "@" + intake[1]
+		if message.ReplyTo = replyAddress(id); message.ReplyTo != "" {
 			message.Text += "\n\nYou may also reply to this email with text. Your accounting team will review the sender and answer before using it; use the secure link for attachments."
 		}
 		if passcode != "" {

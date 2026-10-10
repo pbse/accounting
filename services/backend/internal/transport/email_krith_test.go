@@ -84,6 +84,8 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 	t.Setenv("CLIENT_EMAIL_ADDRESS", "requests@mail.krith.test")
 	t.Setenv("CLIENT_EMAIL_WEBHOOK_SECRET", secret)
 	t.Setenv("PLATFORM_EMAIL_KEY", "re_platform_synthetic")
+	t.Setenv("EMAIL_INTAKE_ADDRESS", "replies@in.krith.test")
+	t.Setenv("EMAIL_INTAKE_KEY", strings.Repeat("k", 32))
 	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_sender", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))}, Organization: org, Permissions: []string{"clients:all", "integrations:manage", "requests:send", "workpapers:review"}}
 	mux := http.NewServeMux()
 	registerEmail(mux, db)
@@ -196,6 +198,15 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 	if s, e := state(id); s != "accepted" || len(sent) != 1 || keys[0] != "Bearer re_platform_synthetic" || sent[0].From != krith.Sender || len(sent[0].Tags) != 1 || sent[0].Tags[0] != (delivery.Tag{Name: delivery.OutboxTag, Value: id}) {
 		t.Fatalf("Krith's sender sends with Krith's key and the outbox's tag: %s %s %+v %v", s, e, sent, keys)
 	}
+	if sent[0].ReplyTo != "replies+reply-"+strings.ToLower(id)+"@in.krith.test" {
+		t.Fatalf("a client's reply comes back to the close: %s", sent[0].ReplyTo)
+	}
+	// Krith's address takes no replies, so without the reply address a request is not sent through it.
+	t.Setenv("EMAIL_INTAKE_ADDRESS", "")
+	if job, request := makeRequest("no-replies"); !strings.Contains(string(call("POST", "/v1/closes/"+closeID+"/work/"+job+"/requests/"+request+"/email", map[string]any{"confirmed": true, "revision": 1, "connection_id": krith.ID}, 409)), "reply address") {
+		t.Fatal("a request through Krith's sender needs the reply address")
+	}
+	t.Setenv("EMAIL_INTAKE_ADDRESS", "replies@in.krith.test")
 	var stored []byte
 	must(db.QueryRow(`SELECT payload FROM email_outbox WHERE id=$1`, id).Scan(&stored))
 	for _, event := range []struct {
@@ -289,14 +300,20 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 	if s, _ := state(queued); s != "accepted" {
 		t.Fatalf("Krith's team settles it: %s", s)
 	}
+	// Without Krith's address the server cannot send through Krith's sender: it stops, and the firm has no sender (and
+	// approves nothing through the old one) until the address is back.
 	t.Setenv("CLIENT_EMAIL_ADDRESS", "")
-	if still, extra := current(); still.ID != back.ID || extra["krith"] != false {
-		t.Fatalf("a server without Krith's address keeps the firm's record and says so: %+v %v", still, extra)
+	if none, extra := current(); none.ID != "" || extra["krith"] != false {
+		t.Fatalf("a server without Krith's address has no sender for the firm and says so: %+v %v", none, extra)
 	}
-	_, err = db.Exec(`UPDATE email_connections SET enabled=false WHERE organization_id=$1`, org)
-	must(err)
-	if none, _ := current(); none.ID != "" {
-		t.Fatalf("no sender is made without Krith's address: %+v", none)
+	if job, request := makeRequest("no-address"); !strings.Contains(string(call("POST", "/v1/closes/"+closeID+"/work/"+job+"/requests/"+request+"/email", map[string]any{"confirmed": true, "revision": 1, "connection_id": back.ID}, 409)), "current firm sender") {
+		t.Fatal("nothing is approved through a stopped sender")
+	}
+	var history int
+	must(db.QueryRow(`SELECT count(*) FROM email_connections WHERE organization_id=$1 AND provider='krith' AND NOT enabled`, org).Scan(&history))
+	t.Setenv("CLIENT_EMAIL_ADDRESS", "requests@mail.krith.test")
+	if restored, _ := current(); restored.Provider != "krith" || restored.ID == back.ID || restored.Sender != back.Sender || history < 2 {
+		t.Fatalf("Krith's sender returns with the address, its old records kept: %+v %d", restored, history)
 	}
 }
 
