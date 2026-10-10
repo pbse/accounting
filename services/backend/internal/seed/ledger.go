@@ -80,8 +80,18 @@ type Books struct {
 	Accounts []Account
 	Opening  map[string]*big.Rat // net (debit positive) balance by account at the start of the month
 	Txns     []Txn
+	// Posted are the previous month's approved close entries, posted by the client's bookkeeper after that month's
+	// capture and dated its month-end: already in Opening, and read back by this month's transaction capture, which
+	// picks up every transaction changed since the last one.
+	Posted []Txn
 	// Settled are the earlier months' invoices paid by the end of this month, which its open items leave out.
 	Settled map[string]bool
+}
+
+// Captured is every transaction this month's capture reads back: the entries posted since the last capture, then
+// the month's own.
+func (b Books) Captured() []Txn {
+	return append(append([]Txn{}, b.Posted...), b.Txns...)
 }
 
 // Closing is the net balance by account at the end of the month.
@@ -353,7 +363,7 @@ func (b Books) CashFlow() json.RawMessage {
 // TransactionList is the month's transactions as the report lists them.
 func (b Books) TransactionList() json.RawMessage {
 	rows := []map[string]any{}
-	for _, t := range b.Txns {
+	for _, t := range b.Captured() {
 		rows = append(rows, map[string]any{"type": "Data", "ColData": []map[string]string{{"value": t.Date}, {"value": t.Kind, "id": t.ID}, {"value": t.Number}, {"value": t.Party, "id": t.PartyID}, {"value": t.Memo}, {"value": show(t.Amount)}}})
 	}
 	report := map[string]any{"Header": header("TransactionList", b.Period, b.Currency), "Columns": map[string]any{"Column": []map[string]string{{"ColTitle": "Date", "ColType": "Date"}, {"ColTitle": "Transaction Type", "ColType": "String"}, {"ColTitle": "Num", "ColType": "String"}, {"ColTitle": "Name", "ColType": "String"}, {"ColTitle": "Memo/Description", "ColType": "String"}, {"ColTitle": "Amount", "ColType": "Money"}}}, "Rows": map[string]any{"Row": rows}}
@@ -470,7 +480,7 @@ func (b Books) Counts() map[string]int {
 	for _, kind := range []string{"Bill", "BillPayment", "CreditMemo", "Deposit", "Invoice", "JournalEntry", "Payment", "Purchase", "RefundReceipt", "SalesReceipt", "Transfer", "VendorCredit"} {
 		counts[kind] = 0
 	}
-	for _, t := range b.Txns {
+	for _, t := range b.Captured() {
 		counts[t.Kind]++
 	}
 	return counts

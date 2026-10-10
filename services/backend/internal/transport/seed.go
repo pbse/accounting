@@ -762,6 +762,10 @@ func (s *seeder) client(ctx context.Context, c *seed.Client, index int) error {
 				s.plan(ctx, c, next, nextPeriod(period), n+1, false)
 			}
 		}
+		if !signed && !final {
+			// The months after this one open on this month's approved entries; without its sign-off they would not tie.
+			return fmt.Errorf("%s %s could not be signed off, so the months after it were not seeded", c.Name, period)
+		}
 		if signed && c.Publish {
 			s.publish(ctx, closeID, c, period)
 		}
@@ -921,7 +925,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 	// The transaction capture.
 	records := map[string][]json.RawMessage{}
 	var all []string
-	for _, t := range b.Txns {
+	for _, t := range b.Captured() {
 		raw := b.Record(t)
 		records[t.Kind] = append(records[t.Kind], raw)
 		all = append(all, string(raw))
@@ -934,7 +938,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 		return "", err
 	}
 	var rows []quickbooks.TransactionRow
-	for _, t := range b.Txns {
+	for _, t := range b.Captured() {
 		rows = append(rows, quickbooks.TransactionRow{Kind: t.Kind, ProviderID: t.ID, Date: t.Date, Currency: "USD", Amount: t.Amount.FloatString(2), Record: b.Record(t)})
 	}
 	exceptions := append(quickbooks.FindExceptions(rows), quickbooks.OpenItemExceptions(open, monthEndTime(b.Period))...)
@@ -948,7 +952,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 		closeID, connection, b.Period, indexID, captured.Add(-3*time.Minute), captured, string(summary), preparation.Digest(allRaw), string(exceptionsRaw)).Scan(&syncID); err != nil {
 		return "", err
 	}
-	for _, t := range b.Txns {
+	for _, t := range b.Captured() {
 		if _, err = s.db.ExecContext(ctx, `INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,$2,$3,'0',$4,$5,'USD',$6,$7)`,
 			syncID, t.Kind, t.ID, t.Date, t.Date+"T14:00:00Z", t.Amount.FloatString(2), string(b.Record(t))); err != nil {
 			return "", err
@@ -2149,6 +2153,13 @@ func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions, 
 	}
 	if held {
 		return fmt.Errorf("a legal hold or retention date now protects %s %s", entity, period)
+	}
+	var inFlight int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM email_outbox m WHERE m.state IN ('queued','sending','unknown') AND (m.request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1::bigint) OR m.collection_id IN (SELECT id FROM collection_messages WHERE close_id=$1::bigint))`, closeID).Scan(&inFlight); err != nil {
+		return fmt.Errorf("check mail: %w", err)
+	}
+	if inFlight > 0 {
+		return fmt.Errorf("an email from %s %s is now being sent; wait for its outcome", entity, period)
 	}
 	// The deletion is receipted as the deletion route receipts one: the demonstration's relationship with the client ends.
 	if _, err := tx.ExecContext(ctx, `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,$2::bigint,$3,$4,$5,$6,'contract_termination',$7,$8)`,

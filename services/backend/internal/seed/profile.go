@@ -346,10 +346,10 @@ func BooksFor(c *Client, last string) []Books {
 	for id, v := range c.Opening {
 		opening[id] = Money(v)
 	}
-	var priorTxns []Txn
+	var priorTxns, posted []Txn
 	settled := map[string]bool{}
 	for n, period := range Months {
-		b := Books{Period: period, Currency: "USD", Accounts: c.Accounts, Opening: opening}
+		b := Books{Period: period, Currency: "USD", Accounts: c.Accounts, Opening: opening, Posted: posted}
 		g := &ids{next: 1000 + n*200}
 		txns := c.TxnsFor(g, period, n)
 		if len(priorTxns) > 0 {
@@ -375,11 +375,15 @@ func BooksFor(c *Client, last string) []Books {
 			break
 		}
 		// The capture is taken before the firm's entries are posted, as the product captures a month; once the month is
-		// signed off, its approved entries are posted dated month-end, so the next month opens on this closing plus
-		// them. The drafts in the signed close are the record of those postings.
+		// signed off, its approved entries are posted by the client's bookkeeper dated month-end, so the next month
+		// opens on this closing plus them, and its transaction capture reads those postings back (Posted).
 		closing := b.Closing()
 		adjust := Books{Period: period, Currency: "USD", Accounts: c.Accounts, Opening: closing, Txns: c.AdjustFor(&ids{next: 9000 + n*100}, period)}
+		for i := range adjust.Txns {
+			adjust.Txns[i].Currency = "USD"
+		}
 		opening = adjust.Closing()
+		posted = adjust.Txns
 		priorTxns = b.Txns
 	}
 	return out
