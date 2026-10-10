@@ -1,6 +1,6 @@
 # Workspace design system (Tray) — archived 2026-10-10
 
-Tray was the workspace look from 2026-10-01 to 2026-10-10. It is superseded by [Krith](../design-system.md); nothing new takes a value from it. This page is kept so the pages that still use Tray can be read against it while they migrate.
+Tray was the workspace look from 2026-10-01 to 2026-10-10. It is superseded by [Krith](../design-system.md); nothing new takes a value from it: no new Tray-only token or class, though a screen added while the rollout is under way may still use a Tray component where Krith has none yet. This page is kept so the pages that still use Tray can be read against it while they migrate.
 
 The product (everything under `/dashboard`, and the client request page at `/request`) uses **Tray**: a light-only look with a light grey ground, white cards with soft shadows and 16px corners, pills for navigation, buttons and status, icons in tinted circles, Inter Display type and Hugeicons. Marketing and legal pages keep their own styles; Tray is scoped to `.app-shell`, the workspace layout's root. The client request page uses `.app-shell.standalone`, a single centred column without the top bar.
 
