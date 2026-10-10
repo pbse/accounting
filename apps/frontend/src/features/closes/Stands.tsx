@@ -1,0 +1,210 @@
+import { useState } from "react";
+import { Link } from "react-router";
+import { useQuery } from "@tanstack/react-query";
+import { Dialog } from "@close/ui/components/Dialog";
+import { Icon } from "@close/ui/components/Icon";
+import { workspaceQuery } from "../../data/queries";
+import { monthName, useDates, useToday } from "../../data/time";
+import { PlanningControls, type Plan } from "./Planning";
+import type { Close } from "./WorkpaperView";
+
+// A close's page says where the close stands in one sentence (docs/design-system.md, Lede): the areas that need the
+// person, counted as the tasks beneath count them (an area's task names every action in it), or what the close waits
+// on, or that it is ready. Then only what is left for the person shows, as numbered tasks (Task), with what is done
+// folded to a line beneath (DoneLine).
+// Both read the close's brief: each area's state, the text that says why, and the tab that holds it.
+
+type Line = { area: string; state: "done" | "attention" | "waiting" | "info" | "unknown"; text: string; tab?: string };
+type Brief = { headline: string; lines: Line[] };
+
+const area = (line: Line) => line.area[0].toUpperCase() + line.area.slice(1);
+// Sign-off is the page's one action: available when the brief's sign-off line says the close is ready (readiness
+// with no blockers), never while blockers wait or once it is signed off.
+export function signOffAvailable(brief: Brief | undefined) {
+  const line = brief?.lines.find((l) => l.area === "sign-off");
+  return !!line && line.state === "attention" && /ready/i.test(line.text);
+}
+// What needs the person: the areas whose line needs attention, which are the tasks shown, so the sentence and the
+// list always agree. A section that could not be read is said so, never counted as the person's work.
+export function needsOf(brief: Brief) {
+  // Signing off is the page's own action, not a task: a sign-off line that says the close is ready leaves the list.
+  const needs = brief.lines.filter((l) => l.state === "attention" && !(l.area === "sign-off" && /ready/i.test(l.text)));
+  return { needs, count: needs.length };
+}
+const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+
+// Read with the page, again every 30 seconds and on returning to the tab, and after any change made through the
+// workspace client (which marks every workspace read stale), so the sentence and the action follow the close.
+export function useBrief(closeId: string) {
+  return useQuery({ ...workspaceQuery<Brief>(`/${closeId}/brief`), refetchInterval: 30_000, refetchOnWindowFocus: true });
+}
+
+// The sentence: how many steps are left for the person, or what the close waits on, or that it is ready. Under it,
+// the due date, the agent's share, and the plan (due date, priority, who holds it), which opens to be changed.
+export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanSaved: () => void }) {
+  const dates = useDates();
+  const today = useToday();
+  const read = useBrief(close.id);
+  const brief = read.data;
+  const [planning, setPlanning] = useState(false);
+  const lines = brief?.lines ?? [];
+  // Ready to sign off is its own state; signing off is the page's action, never a step (needsOf).
+  const ready = signOffAvailable(brief);
+  const { count } = brief ? needsOf(brief) : { count: 0 };
+  const waiting = lines.filter((l) => l.state === "waiting");
+  const done = lines.filter((l) => l.state === "done");
+  const named = brief ? /Not checked: (.+?)\.?$/.exec(brief.headline)?.[1] : "";
+  const notChecked = named || lines.filter((l) => l.state === "unknown").map((l) => l.area).join(", ");
+  const sentence = !brief
+    ? read.isError
+      ? `${close.entity}’s close could not be read.`
+      : `${close.entity}, ${monthName(close.period)}.`
+    : brief.headline.startsWith("Signed off.")
+      ? `${close.entity} is signed off.`
+      : count
+        ? `${close.entity} needs you in ${count === 1 ? "one area" : n(count, "area")}.`
+        : ready
+          ? `${close.entity} is ready to sign off.`
+          : waiting.length
+            ? `${close.entity} is waiting on ${waiting.map((l) => l.area).join(" and ")}.`
+            : `${close.entity} could not be fully checked.`;
+  const context = [
+    close.due_on ? (close.due_on < today ? `Overdue since ${dates.calendarDay(close.due_on)}` : `Due ${dates.calendarDay(close.due_on)}`) : "No due date",
+    brief ? `${done.length} of ${lines.length} done` : "",
+    close.priority && close.priority !== "normal" ? `${close.priority} priority` : "",
+    close.owned_by_me ? "yours" : close.assigned ? "held by a colleague" : "",
+    // What could not be checked is said here on every tab, not only where the tasks show it: the brief names it in
+    // its headline ("Not checked: …"), which covers a check that failed inside an area that still needs the person
+    // as well as a section that could not be read. So is a status that could not be refreshed, which stays as last read.
+    notChecked ? `not checked: ${notChecked}` : "",
+    read.error && brief ? `not refreshed since ${dates.time(read.dataUpdatedAt)}` : "",
+  ].filter(Boolean);
+  return (
+    <div className="ks-lede">
+      <h1>{sentence}</h1>
+      <p>
+        {context.join(" · ")}
+        {" · "}
+        <button type="button" className="ks-link" onClick={() => setPlanning(true)}>
+          Plan
+        </button>
+      </p>
+      <Dialog open={planning} onClose={() => setPlanning(false)} title="Plan this close" description="Its due date, priority, and who holds it.">
+        <PlanningControls
+          key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}-${close.can_assign}-${close.can_take_over}`}
+          closeId={close.id}
+          plan={close}
+          onSaved={() => {
+            setPlanning(false);
+            onPlanSaved();
+          }}
+        />
+      </Dialog>
+    </div>
+  );
+}
+
+// What is left for the person, in order, one card each with one button; then what waits on someone else; then what
+// the agent did, folded to a line that opens to the list.
+export function CloseTasks({ closeId, base }: { closeId: string; base: string }) {
+  const dates = useDates();
+  const read = useBrief(closeId);
+  const brief = read.data;
+  const error = read.error ? read.error.message || "The close brief is unavailable." : "";
+  if (!brief) return error ? <p role="alert">{error}</p> : null;
+  const { needs } = needsOf(brief);
+  const waiting = brief.lines.filter((l) => l.state === "waiting");
+  const unchecked = brief.lines.filter((l) => l.state === "unknown");
+  const rest = brief.lines.filter((l) => l.state === "done" || l.state === "info");
+  const done = rest.filter((l) => l.state === "done");
+  return (
+    <div className="ks-tasks" aria-label="Where this close stands">
+      {error && <p role="alert">{error} Showing the last read.</p>}
+      {needs.map((line, i) => (
+        <div className="ks-task" key={line.area}>
+          <span className="ks-numeral">{i + 1}</span>
+          <div>
+            <b>{area(line)}</b>
+            <p>{line.text}</p>
+          </div>
+          {line.tab ? (
+            <Link className="button" to={`${base}?tab=${line.tab}`}>
+              Open
+            </Link>
+          ) : (
+            <span />
+          )}
+        </div>
+      ))}
+      {unchecked.map((line) => (
+        <div className="ks-task unchecked" key={line.area}>
+          <span className="ks-numeral">
+            <Icon name="blocked" size={14} />
+          </span>
+          <div>
+            <b>{area(line)} · not checked</b>
+            <p>{line.text}</p>
+          </div>
+          {line.tab ? (
+            <Link className="button" to={`${base}?tab=${line.tab}`}>
+              Open
+            </Link>
+          ) : (
+            <span />
+          )}
+        </div>
+      ))}
+      {waiting.map((line) => (
+        <div className="ks-task waiting" key={line.area}>
+          <span className="ks-numeral">
+            <Icon name="waiting" size={14} />
+          </span>
+          <div>
+            <b>{area(line)}</b>
+            <p>{line.text}</p>
+          </div>
+          {line.tab ? (
+            <Link className="button" to={`${base}?tab=${line.tab}`}>
+              Open
+            </Link>
+          ) : (
+            <span />
+          )}
+        </div>
+      ))}
+      <details className="ks-done">
+        <summary className="ks-done-line">
+          <Icon name="check" />
+          {done.length ? `${done.length} done · ${done.map((l) => l.area).join(", ")}` : rest.length ? `${n(rest.length, "note")}` : "Nothing done yet"}
+          <small>
+            As of {dates.time(read.dataUpdatedAt)}
+            {" · "}
+            <button
+              type="button"
+              className="ks-link"
+              disabled={read.isFetching}
+              onClick={(event) => {
+                event.preventDefault();
+                void read.refetch();
+              }}
+            >
+              Refresh
+            </button>
+          </small>
+          <Icon name="chevron" className="ks-chev" size={14} />
+        </summary>
+        <div className="ks-done-list">
+          {rest.map((line) => (
+            <div className="ks-done-row" key={line.area}>
+              <span className={`status ${line.state === "done" ? "ok" : "info"}`}>{line.state === "done" ? "Done" : "Note"}</span>
+              <b>{area(line)}</b>
+              <span>{line.text}</span>
+              {line.tab ? <Link to={`${base}?tab=${line.tab}`}>Open</Link> : <span />}
+            </div>
+          ))}
+          {rest.length === 0 && <p className="empty">Nothing yet.</p>}
+        </div>
+      </details>
+    </div>
+  );
+}

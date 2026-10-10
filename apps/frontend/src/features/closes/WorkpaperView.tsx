@@ -79,7 +79,9 @@ export function readyForReview(paper: Paper) {
 }
 
 export function useClose(id: string | undefined) {
-  // The close and its latest drafts, read with the page (its loader) and again after any change.
+  // The close and its latest drafts, read with the page (its loader) and again after any change; the close's brief
+  // (its sentence and its Sign off action) follows every reload.
+  const queryClient = useQueryClient();
   const read = useQuery({ ...workspaceQuery<{ close: Close; workpapers?: Paper[]; has_more?: boolean }>(`/${encodeURIComponent(id ?? "")}`), enabled: !!id });
   const failed = read.error ? read.error.message || "Could not open the close." : "";
   return {
@@ -91,7 +93,10 @@ export function useClose(id: string | undefined) {
     refreshError: read.data ? failed : "",
     // Only the first read: a read again in the background keeps the page as it is.
     loading: read.isPending && !!id,
-    reload: async () => void (await read.refetch()),
+    reload: async () => {
+      void queryClient.invalidateQueries({ queryKey: workspaceKey(`/${id}/brief`) });
+      await read.refetch();
+    },
   };
 }
 

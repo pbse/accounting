@@ -2,7 +2,7 @@ import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 import { daysBetween, useDates, useToday } from "../../data/time";
 
-export type Plan = { due_on?: string; priority?: string; owned_by_me?: boolean; assigned?: boolean; can_assign?: boolean; can_take_over?: boolean; handed?: { by: string; note: string; at: string } };
+export type Plan = { due_on?: string; priority?: string; owned_by_me?: boolean; assigned?: boolean; can_assign?: boolean; can_take_over?: boolean; can_sign_off?: boolean; handed?: { by: string; note: string; at: string } };
 type Person = { subject: string; name: string };
 
 export function PlanChips({ plan }: { plan: Plan }) {

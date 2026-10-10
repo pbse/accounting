@@ -91,7 +91,7 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   const id = params.id;
   const tab = closeTab(url.searchParams.get("tab"));
   const reads: Partial<Record<CloseTab, string[]>> = {
-    overview: [`/${id}/goal?verify=1`, `/${id}/brief`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")],
+    overview: [`/${id}/brief`, `/${id}/goal?verify=1`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")],
     books: [`/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/coverage`, `/${id}/aging`, `/${id}/open-items`],
     evidence: [`/${id}/evidence?checks=1`, `/${id}/preparations`, `/${id}/jobs`, `/${id}/quickbooks`, `/${id}/quickbooks/entities`, `/${id}/xero`, `/${id}/stripe`],
     requests: [`/${id}/requests`, `/${id}/email-replies`],
@@ -99,8 +99,10 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
     signoff: [`/${id}/takeover-setup`, `/${id}/opening-baseline`, `/${id}/readiness`, `/${id}/effort`],
     settings: [`/${id}/memory`, `/${id}/replay`],
   };
-  // The cash plan's three reads are one view (data/cashPlan.ts).
+  // The cash plan's three reads are one view (data/cashPlan.ts). The brief, the page's sentence and its one action,
+  // is Overview's to wait for; another tab starts it without waiting, and the sentence names the close until it comes.
   const { queryClient, read } = context.get(appData);
+  if (tab !== "overview") prefetchLater(context, `/${id}/brief`);
   await Promise.all([
     prefetch(context, `/${encodeURIComponent(id)}`, ...(reads[tab] ?? [])),
     tab === "cash" ? queryClient.prefetchQuery(cashPlanQuery(id, "", false, read)) : null,

@@ -38,7 +38,11 @@ export function Readiness({
   const read = useQuery(workspaceQuery<Status>(`/${closeId}/readiness`));
   const status = read.data;
   // An action or a refresh answers with the readiness itself, which replaces the read one.
-  const setStatus = (next: Status) => queryClient.setQueryData(workspaceKey(`/${closeId}/readiness`), next);
+  // The brief, which the page's sentence and its Sign off action read, follows every readiness decision.
+  const setStatus = (next: Status) => {
+    queryClient.setQueryData(workspaceKey(`/${closeId}/readiness`), next);
+    void queryClient.invalidateQueries({ queryKey: workspaceKey(`/${closeId}/brief`) });
+  };
   const [scope, setScope] = useState<Scope>();
   const [editing, setEditing] = useState(false);
   const [actionError, setError] = useState("");
