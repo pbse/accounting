@@ -6,7 +6,7 @@ The [build plan](agent-first-build-plan.md#seamless-agent-first-experience) and 
 
 ## The look
 
-The workspace keeps the Tray system ([design system](design-system.md)) and takes its colours, edges and layout from a cleaner reference: a light grey ground, white cards with 16px corners and a soft shadow, a top bar with the navigation as pills and the current page in solid blue, tinted status pills, icons in tinted circles, and one large page title. The sidebar is gone; the page is one centred column. Both apps share the change through `packages/ui`.
+The workspace keeps the Tray system (archived on 2026-10-10 at [design-system-tray.md](archive/design-system-tray.md); the current system is [Krith](design-system.md)) and takes its colours, edges and layout from a cleaner reference: a light grey ground, white cards with 16px corners and a soft shadow, a top bar with the navigation as pills and the current page in solid blue, tinted status pills, icons in tinted circles, and one large page title. The sidebar is gone; the page is one centred column. Both apps share the change through `packages/ui`.
 
 ## Sequence
 
