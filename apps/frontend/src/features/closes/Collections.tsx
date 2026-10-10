@@ -24,7 +24,7 @@ type State = {
 // client asked us not to email or one that bounced, each message read and approved by a person before it is sent.
 export function Collections({ closeId, invoices, refresh }: { closeId: string; invoices: Invoice[]; refresh: number }) {
   const [state, setState] = useState<State>();
-  const [sender, setSender] = useState<{ id: string; sender: string } | null>(null);
+  const [sender, setSender] = useState<{ id: string; sender: string; provider?: string } | null>(null);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
@@ -121,8 +121,8 @@ export function Collections({ closeId, invoices, refresh }: { closeId: string; i
                 <input name="recipient" type="email" required maxLength={320} />
               </label>
               <label>
-                Reply-to address (optional, for example the client's own)
-                <input name="reply_to" type="email" maxLength={320} />
+                {sender?.provider === "krith" ? "Reply-to address (Krith's sender takes no replies), for example the client's own" : "Reply-to address (optional, for example the client's own)"}
+                <input name="reply_to" type="email" maxLength={320} required={sender?.provider === "krith"} />
               </label>
               <label>
                 Subject (optional; a plain one is written for you)

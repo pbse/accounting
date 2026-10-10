@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 // Credentials are installed out of band. Deployments must never include these
 // names, even with an empty value, in their configuration payloads.
 export const credentials = {
- edge: ['DATABASE_URL','UPLOAD_SCAN_KEY','EMAIL_INTAKE_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','XERO_WEBHOOK_KEY','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','QBO_SANDBOX_ACCESS_TOKEN'],
+ edge: ['DATABASE_URL','UPLOAD_SCAN_KEY','EMAIL_INTAKE_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','XERO_WEBHOOK_KEY','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','QBO_SANDBOX_ACCESS_TOKEN','CLIENT_EMAIL_WEBHOOK_SECRET'],
  queue: ['DATABASE_URL','UPLOAD_SCAN_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','OPERATIONS_ALERT_WEBHOOK_URL','OPERATIONS_ALERT_WEBHOOK_TOKEN','PLATFORM_EMAIL_KEY','GEMINI_API_KEY','GEMINI_PAID_SERVICE'],
  scanner: ['UPLOAD_SCAN_KEY'],
  'context-machine': ['CONTEXT_MACHINE_TOKEN','CONTEXT_MACHINE_DATABASE_URL','OPENAI_API_KEY','ANTHROPIC_API_KEY','CODEX_ACCESS_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','CODEX_AUTH_JSON'],
@@ -43,6 +43,8 @@ export function validateCredential(name, input) {
  if (name === 'GEMINI_PAID_SERVICE' && value !== 'confirmed') throw new Error('GEMINI_PAID_SERVICE is installed with GEMINI_API_KEY by --paid-service');
  if (name === 'GEMINI_API_KEY' && !/^[\x21-\x7e]{20,200}$/.test(value)) throw new Error('GEMINI_API_KEY must be a single printable token of 20 to 200 characters');
  if (name === 'SECRETS_KEY' && !/^[a-f0-9]{64}$/i.test(value)) throw new Error('SECRETS_KEY requires 32 hex-encoded bytes');
+ // The signing secret of Krith's own Resend webhook, as Resend shows it (docs/email-delivery.md#senders).
+ if (name === 'CLIENT_EMAIL_WEBHOOK_SECRET' && !/^whsec_[A-Za-z0-9+/]{22,}={0,2}$/.test(value)) throw new Error('CLIENT_EMAIL_WEBHOOK_SECRET must be the whsec_ signing secret Resend shows for the webhook');
  if (['DATABASE_URL','CONTEXT_MACHINE_DATABASE_URL'].includes(name)) {
   let db; try { db = new URL(value); } catch { throw new Error(`Invalid ${name}`); }
   if (!['postgres:','postgresql:'].includes(db.protocol) || !db.username || !db.password || !['require','verify-ca','verify-full'].includes(db.searchParams.get('sslmode')) || db.hostname.includes('-pooler')) throw new Error(`${name} requires an authenticated direct PostgreSQL endpoint with TLS`);

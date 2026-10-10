@@ -4,13 +4,46 @@ Email is optional. Local development works without Resend: approve a request and
 
 This page covers a firm's mail to its clients. Krith's own mail is separate: getkrith.com's addresses, hello@getkrith.com among them, are hosted by Google Workspace, and notes from the public contact page are delivered there by Cloudflare's send binding, never through a firm's Resend connection ([public site](marketing-site.md#where-kriths-mail-goes)). Client replies use the subdomain `in.getkrith.com`, whose MX records stay Cloudflare's.
 
+## Senders
+
+Every firm can email its clients from the day it signs up: **Krith's sender** is every firm's default (migration `142_email_providers.sql`). A firm may connect a sender of its own instead, in **Settings → Firm → Email sender**, and go back to Krith's whenever it disconnects its own. Whichever sends, each email is still approved by a person, and the outbox, reminders, delivery tracking and settling work the same way.
+
+- **Krith's sender.** Email goes from Krith's verified domain in the firm's name, `"<Firm> via Krith" <CLIENT_EMAIL_ADDRESS>`, with Krith's Resend key (`PLATFORM_EMAIL_KEY`, the key Krith's own [welcome and invitation emails](sign-in.md#welcome-emails) use). The firm has no account, key, domain or DNS to set up. Replies to a client request still come back to the close through the `+reply-<outbox>` address on `EMAIL_INTAKE_ADDRESS`. Krith's address takes no replies, so a collection message through Krith's sender needs a reply-to address (the client's own, say): the draft asks for it, and approval refuses a message without one.
+  - **Recorded, not configured.** The firm's sender is a row of `email_connections` with `provider='krith'`, holding no credential, domain or signing secret (`delivery.KrithSender` writes its From). The API records it the first time the firm's sender is needed (`firmSender`: Settings, an approval, a client's collections authority) while the server has `CLIENT_EMAIL_ADDRESS`. On a server without it, Krith's sender cannot send, so it is stopped and the firm has no sender until the address is back.
+  - **Replies.** A client request through Krith's sender needs the server's reply address (`EMAIL_INTAKE_ADDRESS`): approval refuses one without it, and a deploy refuses `CLIENT_EMAIL_ADDRESS` without it.
+  - **Renaming.** It is recorded again when the firm's name or Krith's address changes. Like replacing any sender, that stops emails approved from the old one, and a client's collections authority has to be recorded again for the new sender.
+  - **Checks.** Krith's sender never reads Krith's domain before sending: Krith keeps `mail.getkrith.com` verified with click tracking off. The worker sends with Krith's key only from Krith's address.
+  - **Tracking.** All firms share Krith's Resend account, so its single webhook, `POST /v1/webhooks/resend/krith` (signing secret `CLIENT_EMAIL_WEBHOOK_SECRET`), tracks every firm's email. Each email goes out tagged with its outbox (`outbox=<id>`), and Resend returns tags with every event, so an event finds its firm's connection even before the send's answer is saved. Events without the tag (Krith's own welcome and invitation emails) and events for an outbox that is gone are ignored.
+  - **Settling.** An email through Krith's sender whose outcome is unknown is settled by Krith's team, who alone can read Krith's Resend records. They see it with every firm's stuck work in the admin console's Operations view. The firm's own settle form refuses it and says so. A message ID given there is checked against every firm's email through Krith's sender, not just one connection's.
+- **The firm's own sender.** An integration the firm connects, Resend today ([configure a hosted firm](#configure-a-hosted-firm)): its own account, a domain it verified there, and a key. It replaces Krith's sender until the firm disconnects it.
+- **Adding an integration.** Each integration is a `delivery.Provider` (`internal/delivery/sender.go`):
+  - `Connect` checks what the firm entered and returns its sender, a public reference and the settings to encrypt (sealed under `<firm>/<provider>`);
+  - `Open` makes the sender the worker uses to check readiness and send.
+
+  A new one adds:
+  - its `Provider` to `delivery.Providers`;
+  - its name to the `email_connections` provider check;
+  - its fields to `providerFields` in `apps/frontend/src/features/closes/Email.tsx`;
+  - its line to `cmd/rotate-secrets`, which refuses to run while an integration's settings are not covered;
+  - and, if it reports delivery, a webhook that records events with `recordDeliveryEvent`.
+
+  Approval, the outbox, reminders and the history need no change. Settings offers the integrations the server lists.
+
+### Turning on Krith's sender
+
+1. **Keep the domain ready.** In Resend, Krith's sending domain (production: `mail.getkrith.com`) stays verified, with click tracking off.
+2. **Set up the webhook.** Add a Resend webhook at `<API origin>/v1/webhooks/resend/krith` for the seven events listed under [configure a hosted firm](#configure-a-hosted-firm). Install its signing secret on the API without it passing through anyone's chat or shell history: `node scripts/cloudflare-credentials.mjs CLIENT_EMAIL_WEBHOOK_SECRET production < secret-file`.
+3. **Set the address.** Set the GitHub variable `CLIENT_EMAIL_ADDRESS`, a bare address on `PLATFORM_EMAIL_FROM`'s domain (production: `requests@mail.getkrith.com`), and deploy.
+   - A deploy refuses the address without the API's `CLIENT_EMAIL_WEBHOOK_SECRET`, the worker's `PLATFORM_EMAIL_KEY` or `EMAIL_INTAKE_ADDRESS`, and refuses one on another domain.
+4. **Check it.** Every firm's **Settings → Firm → Email sender** then shows Krith's sender in its name, with "Delivery tracked".
+
 ## Configure a hosted firm
 
 1. Apply all migrations to the development/staging database using the migration steps in [onboarding](onboarding.md). Back up hosted data before migrations.
 2. Generate a private 32-byte encryption key (`openssl rand -hex 32`) and store it as `SECRETS_KEY` in both API and worker environments. Never commit it. Set API `PUBLIC_APP_URL` to the exact HTTPS SPA origin, without a path, query or fragment. The same key must be available after restarts and restores.
-3. In Resend, verify the firm's sending domain, enable sending and disable click tracking. The API key needs permission to read that domain and send email. Use a firm-specific key; never share one firm's credential with another firm.
-4. A hosted firm administrator needs `clients:all` and `integrations:manage`. In Client closes → Firm email, enter the sender address, Resend domain ID and key, then confirm firm ownership. The server verifies the exact domain before saving encrypted credentials. Responses never return the key.
-5. Configure delivery tracking before relying on reminders. In Resend, add an HTTPS webhook at `<API origin>/v1/webhooks/resend/<connection id>` for `email.sent`, `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed` and `email.suppressed`. The firm-email settings show the exact URL. Save its `whsec_...` signing secret there; it is encrypted and never returned. Use the same firm-specific account as the sender. In Cloudflare, allow provider POSTs to this route without browser challenges or Access login; signature verification protects it. Do not rewrite the body or strip `svix-id`, `svix-timestamp` or `svix-signature`. Keep server time synchronized. Rotate by saving the replacement secret; retained connections still accept signed late events after a sender is replaced.
+3. Krith's sender needs nothing per firm ([senders](#senders)). The rest of this list is for a firm that connects its own Resend account instead: in Resend, verify the firm's sending domain, enable sending and disable click tracking. The API key needs permission to read that domain and send email (Resend's "Full access"; a sending-only key cannot read the domain). Use a firm-specific key; never share one firm's credential with another firm.
+4. A hosted firm administrator needs `clients:all` and `integrations:manage`. In Settings → Firm → Email sender, choose **Use the firm's own sender**, enter the sender address, Resend domain ID and key, then confirm firm ownership. The server verifies the exact domain before saving encrypted credentials. Responses never return the key.
+5. Configure delivery tracking before relying on reminders (Krith's sender is tracked by Krith's webhook). In Resend, add an HTTPS webhook at `<API origin>/v1/webhooks/resend/<connection id>` for `email.sent`, `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed` and `email.suppressed`. The firm-email settings show the exact URL. Save its `whsec_...` signing secret there; it is encrypted and never returned. Use the same firm-specific account as the sender. In Cloudflare, allow provider POSTs to this route without browser challenges or Access login; signature verification protects it. Do not rewrite the body or strip `svix-id`, `svix-timestamp` or `svix-signature`. Keep server time synchronized. Rotate by saving the replacement secret; retained connections still accept signed late events after a sender is replaced.
 6. A reviewer needs `workpapers:review`, `requests:send` and access to the client. Give client accounting professionals an explicit client assignment; do not grant `clients:all` unless firm-wide access is intended. WorkOS membership and role setup are described in [onboarding](onboarding.md).
 
 Install optional `SECRETS_KEY` directly in Cloudflare using `node scripts/cloudflare-credentials.mjs SECRETS_KEY staging < private-file`; use `production` for production. GitHub variables derive `PUBLIC_APP_URL` from the environment origin. The API and queue worker containers both receive the encryption key. Configuration is not activation: verify the sender and send a separately authorized synthetic request after deployment.
@@ -47,7 +80,7 @@ The API and worker both require an unanswered, current request, current client a
 Local development needs no Resend account. Manual private links work with the workspace token; live approval requires a hosted firm session. With all migrations applied, run the focused synthetic check:
 
 ```sh
-TEST_DATABASE_URL="$DATABASE_URL" go -C services/backend test ./internal/delivery ./internal/transport -run 'TestWebhookOfficialVector|TestApprovedEmailDurableRetryAndScope' -count=1
+TEST_DATABASE_URL="$DATABASE_URL" go -C services/backend test ./internal/delivery ./internal/transport -run 'TestWebhookOfficialVector|TestApprovedEmailDurableRetryAndScope|Krith' -count=1
 ```
 
 Use a disposable development database and keep other workers stopped while running integration checks. The test injects a synthetic hosted actor and replaces the HTTP transport; it never sends real email. It covers two-job consolidated delivery, durable retries, forged and duplicate webhooks, early/out-of-order delivery, per-reminder approval, link reuse and a bounce cancelling a queued reminder.

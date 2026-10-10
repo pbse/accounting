@@ -26,6 +26,8 @@ export class PreparationWorker extends Container<Env> {
     WORKOS_API_KEY: this.env.WORKOS_API_KEY ?? "",
     PLATFORM_EMAIL_KEY: this.env.PLATFORM_EMAIL_KEY ?? "",
     PLATFORM_EMAIL_FROM: this.env.PLATFORM_EMAIL_FROM ?? "",
+    // Krith's sender for firms' client email: Krith's address, sent with PLATFORM_EMAIL_KEY.
+    CLIENT_EMAIL_ADDRESS: this.env.CLIENT_EMAIL_ADDRESS ?? "",
     // Google Gemini reads every PDF page when its key is installed (scripts/cloudflare-credentials.mjs); blank model: the default.
     GEMINI_API_KEY: this.env.GEMINI_API_KEY ?? "",
     GEMINI_OCR_MODEL: this.env.GEMINI_OCR_MODEL ?? "",
@@ -79,6 +81,7 @@ interface Env {
   WORKOS_API_KEY?: string;
   PLATFORM_EMAIL_KEY?: string;
   PLATFORM_EMAIL_FROM?: string;
+  CLIENT_EMAIL_ADDRESS?: string;
   GEMINI_API_KEY?: string;
   GEMINI_OCR_MODEL?: string;
   GEMINI_PAID_SERVICE?: string;

@@ -21,6 +21,10 @@ import (
 
 var emailAddress = regexp.MustCompile(`^[^@\s<>,;"]{1,64}@[^@\s<>,;"]+\.[^@\s<>,;"]{2,}$`)
 
+// krithReplies is why a collection message through Krith's sender needs a reply-to address: replies to Krith's
+// sending address reach no one, and only a client's request has a reply route back into the close.
+const krithReplies = "Krith's sending address takes no replies. Give the address replies should go to, for example the client's own, and draft the message again."
+
 // collectionBody is the plain default message about an open invoice; the accountant reads and may change it before it
 // is saved, and approves it before anything is sent.
 func collectionBody(entity string, item openItem) string {
@@ -119,7 +123,7 @@ func registerCollections(mux *http.ServeMux, db *sql.DB) {
 			}
 			sender := ""
 			if in.Granted {
-				if db.QueryRowContext(r.Context(), `SELECT sender FROM email_connections WHERE organization_id=$1 AND enabled`, org).Scan(&sender) != nil {
+				if _, sender, _, err = currentSender(r.Context(), db, org); err != nil {
 					problem(w, 409, "Connect the firm's sender first: the client authorizes contact from that sender.")
 					return
 				}
@@ -135,6 +139,10 @@ func registerCollections(mux *http.ServeMux, db *sql.DB) {
 			in.Subject, in.Body = strings.TrimSpace(in.Subject), strings.TrimSpace(in.Body)
 			if !emailAddress.MatchString(in.Recipient) || (in.ReplyTo != "" && !emailAddress.MatchString(in.ReplyTo)) || utf8.RuneCountInString(in.Subject) > 200 || (in.Body != "" && (utf8.RuneCountInString(in.Body) < 10 || utf8.RuneCountInString(in.Body) > 5000)) {
 				problem(w, 422, "Give the customer contact's email address the client provided, and optionally a reply-to address, a subject (up to 200 characters) and a message (10–5,000 characters).")
+				return
+			}
+			if _, _, provider, e := currentSender(r.Context(), db, org); e == nil && provider == delivery.Krith && in.ReplyTo == "" {
+				problem(w, 422, krithReplies)
 				return
 			}
 			receivables, _, meta, e := latestOpenItems(r, db)
@@ -245,8 +253,13 @@ func approve(w http.ResponseWriter, r *http.Request, db *sql.DB, org, entity, wh
 		problem(w, 409, "This invoice is no longer open for the drafted amount. Draft it again from the current open invoices.")
 		return
 	}
-	if err = tx.QueryRowContext(r.Context(), `SELECT id::text,sender FROM email_connections WHERE organization_id=$1 AND enabled`, org).Scan(&connection, &sender); err != nil || connection != connectionID {
+	var provider string
+	if connection, sender, provider, err = firmSender(r.Context(), tx, org); err != nil || connection != connectionID {
 		problem(w, 409, "Verify and select the current firm sender before approving delivery.")
+		return
+	}
+	if provider == delivery.Krith && m.replyTo == "" {
+		problem(w, 409, krithReplies)
 		return
 	}
 	if sender != authorized {

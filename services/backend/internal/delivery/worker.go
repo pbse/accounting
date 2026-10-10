@@ -21,15 +21,15 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	var id, requestID, collectionID, closeID, org string
+	var id, requestID, collectionID, closeID, org, provider string
 	var encrypted, credential []byte
 	var attempts int
 	var valid bool
 	var until time.Time
-	err = tx.QueryRowContext(ctx, `SELECT m.id,COALESCE(m.request_id::text,''),COALESCE(m.collection_id::text,''),c.id::text,c.organization_id,m.payload,x.credential,m.attempts,m.approved_until
+	err = tx.QueryRowContext(ctx, `SELECT m.id,COALESCE(m.request_id::text,''),COALESCE(m.collection_id::text,''),c.id::text,c.organization_id,m.payload,x.provider,x.credential,m.attempts,m.approved_until
  FROM email_outbox m JOIN email_connections x ON x.id=m.connection_id LEFT JOIN work_requests q ON q.id=m.request_id LEFT JOIN request_drafts d ON d.id=q.draft_id
  LEFT JOIN collection_messages cm ON cm.id=m.collection_id JOIN client_closes c ON c.id=COALESCE(d.close_id,cm.close_id)
- WHERE (m.state='queued' AND m.next_attempt_at<=now()) OR (m.state='sending' AND m.claimed_at<now()-interval '2 minutes') ORDER BY m.created_at FOR UPDATE OF m SKIP LOCKED LIMIT 1`).Scan(&id, &requestID, &collectionID, &closeID, &org, &encrypted, &credential, &attempts, &until)
+ WHERE (m.state='queued' AND m.next_attempt_at<=now()) OR (m.state='sending' AND m.claimed_at<now()-interval '2 minutes') ORDER BY m.created_at FOR UPDATE OF m SKIP LOCKED LIMIT 1`).Scan(&id, &requestID, &collectionID, &closeID, &org, &encrypted, &provider, &credential, &attempts, &until)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -72,14 +72,14 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		}
 		return true, tx.Commit()
 	}
-	plaintext, err := secrets.Open(org+"/resend", credential)
-	var connection Connection
-	var payload []byte
-	if err == nil && json.Unmarshal(plaintext, &connection) != nil {
-		err = fmt.Errorf("Invalid encrypted sender configuration")
-	}
+	// The sender is Krith's own or the integration the firm connected; either sends the same approved email.
+	sender, err := Open(org, provider, credential)
+	var email Email
 	if err == nil {
-		payload, err = secrets.Open(org+"/email/"+id, encrypted)
+		var payload []byte
+		if payload, err = secrets.Open(org+"/email/"+id, encrypted); err == nil && json.Unmarshal(payload, &email) != nil {
+			err = fmt.Errorf("Invalid encrypted approved email")
+		}
 	}
 	if err != nil {
 		if _, e := tx.ExecContext(ctx, `UPDATE email_outbox SET state='queued',claim=NULL,error=$2,next_attempt_at=now()+interval '1 minute' WHERE id=$1`, id, err.Error()); e != nil {
@@ -97,11 +97,11 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	var providerID string
 	status := 0
-	sendErr := VerifySender(ctx, connection)
+	sendErr := sender.Ready(ctx)
 	called := false
 	if sendErr == nil && time.Now().Before(until) {
 		called = true
-		providerID, status, sendErr = Send(ctx, connection.Key, payload, id)
+		providerID, status, sendErr = sender.Send(ctx, email, id)
 	} else if sendErr == nil {
 		sendErr = fmt.Errorf("Email approval expired before sending")
 	}

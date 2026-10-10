@@ -3979,3 +3979,46 @@ Rollout (2026-10-09):
 
 Not verified: the hosted firm itself (the user runs the seed with the owner connection string); the production worker racing the seed for intake jobs is described in the document, not observed.
 
+
+## 2026-10-10: Krith's sender is every firm's default
+
+[Senders](email-delivery.md#senders), migration 142.
+- **The default.** A firm with no sender of its own emails clients from Krith's: `"<Firm> via Krith" <CLIENT_EMAIL_ADDRESS>`, sent with Krith's key.
+- **Tracking.** Krith's webhook (`/v1/webhooks/resend/krith`) tracks delivery, matching each event to its firm by the outbox tag on the email.
+- **The firm's own sender.** A firm may connect its own integration instead (Resend today), and goes back to Krith's when it disconnects it.
+- **Integrations.** Each is a `delivery.Provider`: it checks what the firm enters, stores encrypted settings under `<firm>/<provider>`, checks readiness and sends.
+
+Checked on a fresh local PostgreSQL 18 with all migrations:
+- **`TestKrithSendsAFirmsEmailUntilItConnectsItsOwn` (new).**
+  - A firm's first read records Krith's sender once, in its name, as tracked.
+  - Krith's sender cannot be disconnected or given a firm webhook secret.
+  - Approval and the worker send with Krith's key and the outbox tag.
+  - On Krith's webhook:
+    - an event arriving before the send's answer is kept and linked to its email;
+    - a list-shaped tag also works;
+    - an untagged event (a welcome email) and one for an outbox that is gone are ignored;
+    - an event under another secret is refused.
+  - Renaming the firm records Krith's sender again in its new name, and an approval naming the old one is refused.
+  - Connecting the firm's own Resend sends with the firm's key and no tag. Disconnecting it brings back Krith's.
+  - A worker without Krith's key fails the email: "not set up".
+  - An unknown email through Krith's sender:
+    - the firm's settle route refuses it, since only Krith's team can read Krith's records;
+    - staff settling it with a message ID that another connection of Krith's sender already holds are refused, including one of another firm's, through the tenant connection as a role that cannot bypass row-level security (the test fails without the cross-firm read);
+    - a fresh ID settles it.
+  - A server without Krith's address stops Krith's sender. The firm then has no sender, nothing is approved through the old one, and Krith's sender returns with the address, its old records kept.
+  - A request through Krith's sender carries the reply address back to the close, and without one it is refused.
+  - Security, read before anyone opened the firm's email settings, shows Krith's sender, and says Resend sends from Krith's account.
+- **`TestCollectionMessagesThroughKrithNameWhereRepliesGo` (new).**
+  - Through Krith's sender, a collection draft without a reply-to address is refused.
+  - The client's authority names Krith's sender in the firm's name, and the message goes with its reply-to.
+  - A draft made without a reply-to address under the firm's own sender is refused at approval once Krith's sender is back.
+- **`delivery` tests (new).**
+  - `KrithSender` keeps the header to one parseable address: quotes, angle brackets and line breaks are dropped, a long name is shortened, and an empty one becomes "Your accounting team".
+  - `KrithAddress` takes only a bare address.
+  - Krith's sender is ready only with its address and key, and never sends from another address.
+  - A provider this server lacks is refused.
+- **Existing tests.** `TestApprovedEmailDurableRetryAndScope`, `TestCollectionMessagesNeedTheClientsAuthorityAndAWillingAddress`, the settle, reply and webhook tests, and the rest of the backend pass. The exceptions are the PDF test that needs Poppler, which isn't installed locally, and one open-items test, which failed once and passed on every rerun.
+- **Deploy and app checks.** The deploy checks refuse `CLIENT_EMAIL_ADDRESS` without the API's `CLIENT_EMAIL_WEBHOOK_SECRET`, the worker's `PLATFORM_EMAIL_KEY` or `EMAIL_INTAKE_ADDRESS`, and the credential installer takes only a `whsec_` secret. Both apps typecheck.
+
+Not verified:
+- a real send through Krith's sender and its webhook in production, which needs the webhook created in Resend and its secret installed by the user, then `CLIENT_EMAIL_ADDRESS` set.

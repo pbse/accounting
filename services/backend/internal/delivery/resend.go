@@ -25,6 +25,49 @@ type Email struct {
 	Subject string   `json:"subject"`
 	Text    string   `json:"text"`
 	HTML    string   `json:"html,omitempty"`
+	// Tags are added as the email goes out (OutboxTag), never stored with the approved email.
+	Tags []Tag `json:"tags,omitempty"`
+}
+type Tag struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// resendProvider is a firm's own Resend account: a sender on a domain verified there, the domain's ID, and a key that
+// can read that domain and send from it.
+var resendProvider = Provider{
+	Name:  "resend",
+	Label: "Resend",
+	Connect: func(ctx context.Context, fields map[string]string) (string, string, []byte, error) {
+		c := Connection{Key: strings.TrimSpace(fields["key"]), From: strings.TrimSpace(fields["from"]), DomainID: strings.TrimSpace(fields["domain_id"])}
+		if err := VerifySender(ctx, c); err != nil {
+			return "", "", nil, err
+		}
+		settings, err := json.Marshal(c)
+		return c.From, c.DomainID, settings, err
+	},
+	Open: func(settings []byte) (Sender, error) {
+		var c Connection
+		if json.Unmarshal(settings, &c) != nil {
+			return nil, fmt.Errorf("Invalid encrypted sender configuration")
+		}
+		return resendSender(c), nil
+	},
+}
+
+// resendSender sends through the firm's own Resend account, checking its domain before each email.
+type resendSender Connection
+
+func (s resendSender) Ready(ctx context.Context) error {
+	return VerifySender(ctx, Connection(s))
+}
+
+func (s resendSender) Send(ctx context.Context, message Email, outbox string) (string, int, error) {
+	payload, err := json.Marshal(message)
+	if err != nil {
+		return "", 0, err
+	}
+	return send(ctx, s.Key, payload, "close-request/"+outbox)
 }
 
 // resendAPI is Resend's API; tests point it at a fake.
@@ -82,9 +125,6 @@ func VerifySender(ctx context.Context, c Connection) error {
 		return fmt.Errorf("Disable domain click tracking before sending private request links.")
 	}
 	return nil
-}
-func Send(ctx context.Context, key string, payload []byte, id string) (string, int, error) {
-	return send(ctx, key, payload, "close-request/"+id)
 }
 
 // send posts one email under an idempotency key, which Resend honours for 24 hours.
