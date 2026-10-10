@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"fmt"
+	"crypto/sha256"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -316,7 +318,9 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 			shown, _ := json.Marshal(inbox["groups"])
 			fingerprint := strings.Join(keys, "\n") + "\n" + string(shown)
 			if first || fingerprint != last {
-				if !send(map[string]any{"type": "attention", "unread": len(keys), "unread_keys": keys}) {
+				// The version names this reading of the inbox, so the sidebar can tell a change from a repeat.
+				version := fmt.Sprintf("%x", sha256.Sum256([]byte(fingerprint)))[:16]
+				if !send(map[string]any{"type": "attention", "unread": len(keys), "unread_keys": keys, "version": version}) {
 					return
 				}
 				last = fingerprint

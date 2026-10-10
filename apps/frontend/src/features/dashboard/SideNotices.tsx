@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Icon, type IconName } from "@close/ui/components/Icon";
@@ -23,18 +23,31 @@ export function SideNotices() {
   // Live: one long-lived request says when the person's unread items change, and the inbox is read again then. The
   // request ends on the server's schedule and is opened again; a failure waits a while before trying again. The
   // 60-second read above stands behind it.
+  // Each reading the stream sends carries a version; the one it opens with is a snapshot, read again only when it
+  // differs from what is held here, and a later one only when its version moved.
+  const seen = useRef("");
   useEffect(() => {
     const controller = new AbortController();
     let timer: number | undefined;
     const listen = async () => {
+      seen.current = "";
       try {
         await workspaceRequest(
           "/attention/stream",
           undefined,
           false,
           (event) => {
+            const change = event as { type: string; version?: string; unread_keys?: string[] };
+            if (change.type !== "attention") return;
+            const version = change.version ?? "";
+            if (seen.current === "") {
+              seen.current = version;
+              const held = queries.getQueryData<AttentionInbox>(workspaceQuery(attentionPath).queryKey)?.unread_keys ?? [];
+              if (held.join("\n") === (change.unread_keys ?? []).join("\n")) return;
+            } else if (version === seen.current) return;
+            else seen.current = version;
             // A change reaches the inbox and Home's and Closes' counts and decisions alike, which read /home.
-            if ((event as { type: string }).type === "attention") void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && /^\/(attention|home)\b/.test(String(q.queryKey[1])) });
+            void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && /^\/(attention|home)\b/.test(String(q.queryKey[1])) });
           },
           controller.signal,
         );
