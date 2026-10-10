@@ -63,7 +63,7 @@ function Layout() {
     { to: "/people", label: "People", icon: "clients" },
     { to: "/audit", label: "Staff audit", icon: "shield" },
     { to: "/contact-notes", label: "Contact notes", icon: "file" },
-    { label: "Workflows", icon: "run", pages: [{ to: "/workflows", label: "Catalog" }, { to: "/runs", label: "Runs", end: true }, ...(permissions.includes("platform:plans") ? [{ to: "/plans", label: "Plans" }] : [])] },
+    { label: "Workflows", icon: "run", pages: [{ to: "/workflows", label: "Catalog" }, { to: "/runs", label: "Runs" }, ...(permissions.includes("platform:plans") ? [{ to: "/plans", label: "Plans" }] : [])] },
     { label: "Operations", icon: "blocked", pages: [{ to: "/jobs", label: "Stuck work" }, { to: "/connections", label: "Connections" }] },
   ];
   return (

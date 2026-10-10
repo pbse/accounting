@@ -14,7 +14,10 @@ const kinds: Record<string, Kind> = { answered: "reply", handoff: "reply", fix: 
 const icons: Record<Kind, IconName> = { doc: "file", reply: "mail", wait: "waiting", done: "review" };
 
 export function SideNotices() {
-  const inbox = useQuery({ ...workspaceQuery<AttentionInbox>("/attention"), refetchInterval: 60000, refetchOnWindowFocus: true });
+  // The unread view by priority, so the four notices are the person's most pressing even when newer read or teammate
+  // events fill the inbox's first page; the count comes with it.
+  const path = "/attention?view=unread&order=priority";
+  const inbox = useQuery({ ...workspaceQuery<AttentionInbox>(path), refetchInterval: 60000, refetchOnWindowFocus: true });
   const navigate = useNavigate();
   const queries = useQueryClient();
   const [leaving, setLeaving] = useState<string[]>([]);
@@ -44,7 +47,7 @@ export function SideNotices() {
           setLeaving((l) => l.filter((k) => k !== key));
           setFailed(e instanceof Error ? e.message : "The notice could not be marked read.");
         })
-        .finally(() => void queries.invalidateQueries({ queryKey: workspaceQuery("/attention").queryKey }));
+        .finally(() => void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && String(q.queryKey[1]).startsWith("/attention") }));
     }, 220);
   }
   return (

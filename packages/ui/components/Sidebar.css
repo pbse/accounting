@@ -175,11 +175,14 @@
   overflow: hidden;
   max-height: 0;
   opacity: 0;
-  transition: max-height 240ms var(--ease), opacity 180ms var(--ease);
+  visibility: hidden;
+  transition: max-height 240ms var(--ease), opacity 180ms var(--ease), visibility 0s 240ms;
 }
 .ks-sub.open {
   max-height: 200px;
   opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
 }
 .app-shell .ks-sub .ks-nav {
   height: 30px;
