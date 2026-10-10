@@ -3924,3 +3924,14 @@ PR 6 of the [agentic chat plan](agent-chat.md): chats are sessions (`chat_sessio
 - Frontend `npm run check`: passes.
 
 Not verified: the rail's chats menu and the panel's list in a browser (no layout-check coverage was added; the rail keeps its width, the menu floats beside it).
+
+## 2026-10-09: the demonstration seed
+
+`cmd/seed` and `internal/seed` ([seed-data.md](seed-data.md)): ten clients, June to September 2026, written through the routes and the capture path.
+
+- `go test ./internal/seed`: pass (every client-month balances, its cash flow ends at the bank balance, and its Trial Balance, Profit and Loss, General Ledger ledger lines and snapshot read back through `quickbooks`).
+- Seeded a fresh local database twice (a hosted-style firm `org_01DEMOLOCAL` with two members, and `local-development`): `Done with 0 problems`; 36 closes, 29 signed off, 88 drafts, 643 coverage decisions, 9 takeovers with their opening baselines resolved, one request with its client link, one goal and one routine, 4 published packs, 2 budgets, 2 cash plans, 2 open-item decisions, 3 chats, 2 invitations. `-remove` emptied the firm's clients and a second seed of the same firm finished clean.
+- Browser, local firm (Edge, 1280 and 390 wide): Home shows 28 of 44 signed off, 14 decisions, the overdue close, the request waiting on a client, the sign-off that no longer stands, the month without books and the month not opened; Clients lists each client's months with their states; a close page shows its status, where it stands, coverage and the agent's work.
+
+Not verified: the hosted firm itself (the user runs the seed with the owner connection string); the production worker racing the seed for intake jobs is described in the document, not observed.
+

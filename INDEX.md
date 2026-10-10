@@ -24,6 +24,7 @@ Start here to find the governing plan, implementation details and acceptance evi
 | [Original product requirements](docs/product-requirements.md) | Original customer/problem definition, requirement IDs, boundaries and success targets. Read for provenance; the build plan extends its scope. |
 | [PRD review](docs/prd-review.md) | Earlier interpretation of the PRD and foundation design decisions; historical planning context. |
 | [Acceptance corpus](docs/acceptance-corpus.md) | The release corpus's case format, how to run it through the real pipeline and how a run is scored (phase A). The real corpus holds client data and stays outside the repository. |
+| [Demonstration seed](docs/seed-data.md) | `cmd/seed`: one firm with ten clients and four months of books, documents, agent work and decisions, written through the real routes, for seeing the workspace alive; how to run it against a local or the hosted firm and remove it again. |
 | [Provider capability inventory](docs/provider-capabilities.md) | Per integration-contract row, what each provider path does on main and how far it is proven (live, synthetic, untested or missing), with the gaps that remain (phase A). As of 2026-10-06, nothing is proven against a live provider. |
 | [Validation history](docs/validation.md) | Dated commands/results, exercised behavior and explicit unverified areas. Consult before claiming a feature is validated. |
 

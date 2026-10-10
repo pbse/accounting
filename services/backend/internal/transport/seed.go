@@ -1,0 +1,1434 @@
+package transport
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"close.local/backend/internal/auth"
+	"close.local/backend/internal/documents"
+	"close.local/backend/internal/llm"
+	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/seed"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// The demonstration seed (docs/seed-data.md) fills a firm with the clients, months, documents and decisions of
+// internal/seed, through the same routes a person uses and the capture path the acceptance run uses. It is a story
+// about one firm, so it runs once per firm; Remove takes it out again by client name.
+
+// SeedOptions name the firm and the people the seed works as.
+type SeedOptions struct {
+	// Organization is the firm; Subject the administrator every close is worked as and most closes are owned by.
+	Organization, Subject string
+	// Members are the firm's other members, who own some clients' closes; their subjects must already be members.
+	Members []string
+	// FirmName names a firm the seed has to create (a local database). An existing firm keeps its name.
+	FirmName string
+	// Log receives one line per step.
+	Log func(format string, args ...any)
+}
+
+// firmAdminPermissions is what the firm-admin role holds (docs/mcp.md).
+var firmAdminPermissions = []string{"clients:all", "workpapers:review", "posting:approve", "posting:execute", "members:manage", "org:manage", "requests:send", "integrations:manage", "close:signoff", "procedures:manage", "data:manage", "org:enroll"}
+
+type seeder struct {
+	db      *sql.DB
+	mux     http.Handler
+	o       SeedOptions
+	firm    seed.Firm
+	answers sync.Map // evidence ID → recorded proposal JSON
+	// closeOf is each document's close; captures each close's capture evidence (the snapshot and the transaction
+	// index), which a recorded answer names as "$ledger" and "$index".
+	closeOf  sync.Map
+	captures sync.Map
+	model    *llm.Client
+	// problems collects every refused step, so one client's trouble does not stop the others.
+	problems []string
+	today    time.Time
+}
+
+func (s *seeder) log(format string, args ...any) {
+	if s.o.Log != nil {
+		s.o.Log(format, args...)
+	}
+}
+
+func (s *seeder) problem(format string, args ...any) {
+	s.problems = append(s.problems, fmt.Sprintf(format, args...))
+	s.log("  ! "+format, args...)
+}
+
+// actor is the context of a request made as one of the firm's people.
+func (s *seeder) actor(ctx context.Context, subject string) context.Context {
+	return auth.WithActor(ctx, &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: s.o.Organization, Permissions: firmAdminPermissions})
+}
+
+// call makes one request in-process as the administrator and returns the status and body.
+func (s *seeder) call(ctx context.Context, method, path string, body any) (int, []byte) {
+	return s.callAs(ctx, s.o.Subject, method, path, body)
+}
+
+func (s *seeder) callAs(ctx context.Context, subject, method, path string, body any) (int, []byte) {
+	var reader io.Reader
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		reader = bytes.NewReader(raw)
+	}
+	r := httptest.NewRequestWithContext(s.actor(ctx, subject), method, path, reader)
+	if body != nil {
+		r.Header.Set("Content-Type", "application/json")
+	}
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, r)
+	if os.Getenv("SEED_TRACE") != "" {
+		s.log("    %s %s → %d %.300s", method, path, w.Code, w.Body.String())
+	}
+	return w.Code, w.Body.Bytes()
+}
+
+// must makes a request that has to succeed; a refusal is recorded as a problem and returns false.
+func (s *seeder) must(ctx context.Context, what, method, path string, body any) ([]byte, bool) {
+	code, out := s.call(ctx, method, path, body)
+	if code < 200 || code > 299 {
+		s.problem("%s: %s %s → %d %s", what, method, path, code, strings.TrimSpace(string(out)))
+		return out, false
+	}
+	return out, true
+}
+
+func field(raw []byte, path ...string) any {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	for _, p := range path {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = m[p]
+	}
+	return v
+}
+
+func str(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	}
+	return ""
+}
+
+// recordedModel answers each reading with the proposal recorded for the document being read, as the acceptance run's
+// recorded client does; a reading of a document with no answer is refused and the pipeline records a failed reading.
+func (s *seeder) recordedModel() *llm.Client {
+	reply := func(status int, body any) *http.Response {
+		raw, _ := json.Marshal(body)
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(raw))}
+	}
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		var request struct {
+			Input []struct {
+				Content string `json:"content"`
+			} `json:"input"`
+			Text struct {
+				Format struct {
+					Name string `json:"name"`
+				} `json:"format"`
+			} `json:"text"`
+		}
+		json.Unmarshal(raw, &request)
+		var given struct {
+			Primary string `json:"primary_source_id"`
+		}
+		for _, item := range request.Input {
+			json.Unmarshal([]byte(item.Content), &given)
+		}
+		if request.Text.Format.Name == "evidence_selection" {
+			return reply(400, map[string]any{"error": map[string]string{"message": "the seed records no evidence selection"}}), nil
+		}
+		answer, ok := s.answers.Load(given.Primary)
+		if !ok {
+			return reply(400, map[string]any{"error": map[string]string{"message": "no recorded answer for evidence " + given.Primary}}), nil
+		}
+		text := strings.ReplaceAll(answer.(string), `"$primary"`, strconv.Quote(given.Primary))
+		if closeID, ok := s.closeOf.Load(given.Primary); ok {
+			if c, ok := s.captures.Load(closeID); ok {
+				capture := c.([2]string)
+				text = strings.ReplaceAll(text, `"$ledger"`, strconv.Quote(capture[0]))
+				text = strings.ReplaceAll(text, `"$index"`, strconv.Quote(capture[1]))
+			}
+		}
+		return reply(200, map[string]any{"id": "seed-" + given.Primary, "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": text}}}}}), nil
+	})
+	client, err := llm.New(llm.Config{APIKey: "seed-recorded", Model: "recorded", HTTP: &http.Client{Transport: rt}})
+	if err != nil {
+		panic(err)
+	}
+	return client
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// answerFor is the recorded proposal for a document: the work's answer with its sources and empty lines.
+func answerFor(w seed.Work) string {
+	sources := map[string][]map[string]string{
+		"prepaid":        {{"id": "$primary", "role": "invoice"}},
+		"accrual":        {{"id": "$primary", "role": "invoice"}},
+		"loan":           {{"id": "$primary", "role": "statement"}, {"id": "$ledger", "role": "ledger"}, {"id": "$index", "role": "support"}},
+		"payroll":        {{"id": "$primary", "role": "support"}, {"id": "$ledger", "role": "ledger"}},
+		"owner":          {{"id": "$primary", "role": "support"}, {"id": "$ledger", "role": "ledger"}},
+		"reconciliation": {{"id": "$primary", "role": "support"}},
+		"unsupported":    {{"id": "$primary", "role": "support"}},
+	}[w.Kind]
+	answer := map[string]any{"lines": []any{}, "sources": sources}
+	for k, v := range w.Answer {
+		answer[k] = v
+	}
+	raw, _ := json.Marshal(answer)
+	return string(raw)
+}
+
+// settle works the queue as the worker does, one step of each kind at a time, until a round finds nothing to do.
+func (s *seeder) settle(ctx context.Context) error {
+	reading := llm.WithClient(ctx, s.model)
+	for round := 0; ; round++ {
+		if round == 500 {
+			return errors.New("the queue did not settle in 500 rounds")
+		}
+		extracted, e1 := documents.ProcessOne(ctx, s.db)
+		read, e2 := preparation.ProcessIntake(reading, s.db)
+		prepared, e3 := preparation.ProcessOne(ctx, s.db)
+		if err := errors.Join(e1, e2, e3); err != nil {
+			return err
+		}
+		if !extracted && !read && !prepared {
+			return nil
+		}
+	}
+}
+
+// SeedFirm writes the demonstration firm into db. The firm row is created when missing; its administrator and members
+// are granted membership when they lack it.
+func SeedFirm(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) ([]string, error) {
+	if o.Organization == "" || o.Subject == "" {
+		return nil, errors.New("the seed needs the firm's organization ID and its administrator's subject")
+	}
+	s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: o, firm: firm, today: time.Now().UTC()}
+	s.model = s.recordedModel()
+	if err := s.firmRow(ctx); err != nil {
+		return nil, err
+	}
+	s.people(ctx)
+	s.policies(ctx)
+	s.roster(ctx)
+	s.procedures(ctx)
+	for i := range firm.Clients {
+		c := &firm.Clients[i]
+		if c.Scenario == seed.NotOpened {
+			continue
+		}
+		if err := s.client(ctx, c, i); err != nil {
+			return s.problems, fmt.Errorf("%s: %w", c.Name, err)
+		}
+	}
+	s.afterwards(ctx)
+	return s.problems, nil
+}
+
+func (s *seeder) firmRow(ctx context.Context) error {
+	name := s.o.FirmName
+	if name == "" {
+		name = s.firm.Name
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO organizations(id,name) VALUES($1,$2) ON CONFLICT (id) DO NOTHING`, s.o.Organization, name)
+	return err
+}
+
+// people makes sure the administrator and the members are current members and have their own settings.
+func (s *seeder) people(ctx context.Context) {
+	for _, subject := range append([]string{s.o.Subject}, s.o.Members...) {
+		var granted sql.NullBool
+		s.db.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, s.o.Organization, subject).Scan(&granted)
+		if !granted.Valid || !granted.Bool {
+			s.db.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,'Joined the firm (demonstration seed)',$3)`, s.o.Organization, subject, s.o.Subject)
+		}
+	}
+	s.must(ctx, "time zone", "POST", "/v1/closes/me", map[string]any{"time_zone": "America/New_York"})
+	s.must(ctx, "notification preferences", "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"answered", "confirm", "failed", "approve", "changed", "fix", "send", "unanswered", "goal", "handoff"}, "browser": false})
+	// Invitations: one accepted in July, one still pending; and the role history a growing firm has.
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at,decided_at)
+ VALUES($1,'r.castillo@example.com','member','Member','invitation_01SEEDACCEPTED'||right($1,8),'accepted',$2,'Joins as a staff accountant for the dental and landscaping clients',$3,$4,$5)
+ ON CONFLICT DO NOTHING`, s.o.Organization, s.o.Subject, s.today.AddDate(0, 0, -80), s.today.AddDate(0, 0, -87), s.today.AddDate(0, 0, -86)); err != nil {
+		s.problem("invitation: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at)
+ VALUES($1,'j.okonkwo@example.com','member','Member','invitation_01SEEDPENDING'||right($1,8),'pending',$2,'Seasonal help for the September and October closes',$3,$4)
+ ON CONFLICT DO NOTHING`, s.o.Organization, s.o.Subject, s.today.AddDate(0, 0, 5), s.today.AddDate(0, 0, -2)); err != nil {
+		s.problem("invitation: %v", err)
+	}
+	for _, m := range s.o.Members {
+		s.db.ExecContext(ctx, `INSERT INTO member_role_changes(organization_id,subject,from_role,to_role,reason,actor,created_at) VALUES($1,$2,'member','firm-admin','Second administrator so sign-offs do not wait on one person',$3,$4)`, s.o.Organization, m, s.o.Subject, s.today.AddDate(0, 0, -60))
+	}
+	// The administrator's own agent connection, approved when the firm turned the agent on.
+	if code, out := s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "request", "scope": "prepare", "reason": "Use the agent from my editor for the monthly preparation work", "confirmed": true}); code == 200 {
+		s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "approve", "subject": s.o.Subject, "scope": "prepare", "previous_id": str(field(out, "id")), "reason": "Approved for the firm's administrator", "confirmed": true})
+	}
+}
+
+// policies are the firm's rules as a careful small firm sets them, each change recorded with its reason.
+func (s *seeder) policies(ctx context.Context) {
+	var independent bool
+	s.db.QueryRowContext(ctx, `SELECT require_independent_review OR independent_review_min_amount IS NOT NULL FROM organizations WHERE id=$1`, s.o.Organization).Scan(&independent)
+	if independent && s.o.Organization != "local-development" {
+		s.must(ctx, "policy", "POST", "/v1/closes/organization/policy", map[string]any{"independent_review": false, "independent_review_min_amount": "", "reason": "Paused while the firm's history is loaded; turned on again at the end"})
+	}
+	changes := []map[string]any{
+		{"agent_chat": "firm", "reason": "Turn the agent on for the whole firm after the June pilot with two clients"},
+		{"materiality_amount": "250.00", "reason": "Differences under $250 are noted, not chased, for our client sizes"},
+		{"link_passcode": true, "reason": "Clients asked for a passcode on upload links after the phishing drill"},
+		{"reminder_after_days": 3, "reminder_max": 2, "reason": "Two reminders, three days apart, then a phone call"},
+	}
+	for _, change := range changes {
+		s.must(ctx, "policy", "POST", "/v1/closes/organization/policy", change)
+	}
+}
+
+// roster puts every client on the roster with the firm's monthly template; a client who left is marked inactive
+// after its last month (in client()).
+func (s *seeder) roster(ctx context.Context) {
+	out, ok := s.must(ctx, "roster", "GET", "/v1/closes/roster", nil)
+	if !ok {
+		return
+	}
+	rev := str(field(out, "template", "rev"))
+	s.must(ctx, "template", "POST", "/v1/closes/close-template", map[string]any{"due_days": s.firm.Template.DueDays, "owner": "", "reason": "Every month is due on the 15th of the next; owners are set per client", "rev": rev})
+	for _, c := range s.firm.Clients {
+		entry := map[string]any{"entity": c.Name, "active": true, "since": c.Since, "reason": "Engaged for monthly close and management reporting", "rev": ""}
+		if c.DueDays > 0 {
+			entry["due_days"] = c.DueDays
+			entry["reason"] = fmt.Sprintf("Engaged for monthly close; the client wants its month closed within %d days", c.DueDays)
+		}
+		if c.Since > seed.Months[0] {
+			entry["reason"] = "New client; first month to close is " + c.Since
+		}
+		code, out := s.call(ctx, "POST", "/v1/closes/roster", entry)
+		if code != 200 && !strings.Contains(string(out), "already on the roster") {
+			s.problem("roster %s: %d %s", c.Name, code, out)
+		}
+	}
+	// Names clients are also known by on their documents.
+	for _, alias := range [][2]string{{"Harbor Fixture LLC", "harbor fixture"}, {"Cedar & Pine Coffee Co.", "cedar pine coffee"}, {"Meridian Physical Therapy PC", "meridian pt"}, {"Bluegrass Dental PLLC", "bluegrass dental"}} {
+		s.db.ExecContext(ctx, `INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, s.o.Organization, alias[0], alias[1], s.o.Subject)
+	}
+}
+
+// procedures are the firm's approved methods: firm-wide for payroll, loans, owner items, accruals and bank
+// reconciliations, and per client for prepaids (each client's expense account differs).
+func (s *seeder) procedures(ctx context.Context) {
+	publish := s.publishProcedure(ctx)
+	publish("", "basis", "accrual", "Every client keeps its books on the accrual basis; the month-end capture is read on that basis.", "", "")
+	publish("", "payroll", "payroll_summary_v1", "Record payroll from the provider's monthly summary: wages and employer taxes to expense, the provider's debits cleared through Payroll Clearing.", "", "")
+	publish("", "loan", "lender_statement_v1", "Take principal, interest and the closing balance from the lender's statement; accrue interest from the last payment to month-end when the note is paid mid-month.", "", "")
+	publish("", "owner", "", "Personal purchases paid by the business are reclassified to the owner's distributions once the owner confirms in writing.", "", "")
+	publish("", "accrual", "", "Accrue services incurred but not yet invoiced from the vendor's estimate, reversing on the first of the next month.", "", "")
+	publish("", "reconciliation", "", "Reconcile each bank account to the statement every month; timing items need their clearing reference.", "", "")
+}
+
+// clientProcedures are a client's own rules, published once its first month exists: its entity type for owner items
+// and the accounts its prepaids use.
+func (s *seeder) clientProcedures(ctx context.Context, c *seed.Client) {
+	publish := s.publishProcedure(ctx)
+	if len(c.Owners) > 0 {
+		publish(c.Name, "owner", c.EntityType, "Owner items for "+c.Name+" follow the firm's rule; the entity type decides the treatment.", "", "")
+	}
+	if len(c.Prepaids) > 0 {
+		publish(c.Name, "prepaid", "", "Spread annual policies and subscriptions over equal full months from the first month of service.", seed.ExpenseName(c.Prepaids[0].Expense), "Prepaid Expenses")
+		// The equal-full-months rule is the method procedure learning records on a prepaid procedure; the route itself
+		// records only the accounts and the instructions.
+		s.db.ExecContext(ctx, `UPDATE procedure_versions SET method='equal_full_months_v1' WHERE organization_id=$1 AND kind='prepaid' AND method='' AND client_entity=$2`, s.o.Organization, c.Name)
+	}
+}
+
+func (s *seeder) publishProcedure(ctx context.Context) func(client, kind, method, instructions, expense, prepaid string) {
+	return func(client, kind, method, instructions, expense, prepaid string) {
+		query := url.Values{"impact_kind": {kind}}
+		if client != "" {
+			query.Set("client_entity", client)
+		}
+		out, ok := s.must(ctx, "procedure impact "+kind, "GET", "/v1/closes/procedures?"+query.Encode(), nil)
+		if !ok {
+			return
+		}
+		body := map[string]any{"client_entity": client, "kind": kind, "method": method, "instructions": instructions, "enabled": true, "reason": "Firm procedure adopted at onboarding", "confirmed": true, "impact_digest": str(field(out, "impact_digest")), "previous_id": str(field(out, "previous_id"))}
+		if expense != "" {
+			body["expense_account"], body["prepaid_account"] = expense, prepaid
+		}
+		s.must(ctx, "procedure "+kind+" "+client, "POST", "/v1/closes/procedures", body)
+	}
+}
+
+// owner is the member who owns a client's closes.
+func (s *seeder) owner(c *seed.Client) string {
+	people := append([]string{s.o.Subject}, s.o.Members...)
+	return people[c.OwnerSlot%len(people)]
+}
+
+// client works one client through its months.
+func (s *seeder) client(ctx context.Context, c *seed.Client, index int) error {
+	last := seed.Months[len(seed.Months)-1]
+	if c.LeftIn != "" {
+		last = previous(c.LeftIn)
+	}
+	books := seed.BooksFor(c, last)
+	s.log("%s: %s through %s (%s)", c.Name, seed.Months[0], last, c.Scenario)
+	var connection string
+	var earlier []seed.Books
+	for n, b := range books {
+		period := b.Period
+		if period > last {
+			break
+		}
+		final := period == last && c.LeftIn == ""
+		closeID, err := s.openClose(ctx, c, period)
+		if err != nil {
+			return err
+		}
+		s.plan(ctx, c, closeID, period, n, final)
+		if !(final && c.Scenario == seed.Uncaptured) {
+			if connection, err = s.capture(ctx, c, closeID, connection, b, earlier, n); err != nil {
+				return fmt.Errorf("%s capture: %w", period, err)
+			}
+		}
+		work := c.WorkFor(period, b)
+		jobs, evidenceIDs := s.documents(ctx, closeID, work)
+		if err := s.settle(ctx); err != nil {
+			return err
+		}
+		s.decide(ctx, c, closeID, period, work, jobs, evidenceIDs, final)
+		if !(final && c.Scenario == seed.Uncaptured) {
+			s.recurring(ctx, c, closeID, period)
+		}
+		s.effort(ctx, c, closeID, period, final)
+		if final && c.Scenario != seed.Signed && c.Scenario != seed.Reopened {
+			s.september(ctx, c, closeID, work, jobs)
+			earlier = append(earlier, b)
+			continue
+		}
+		s.review(ctx, closeID, c, period, final)
+		s.cover(ctx, closeID, b)
+		if n == 0 {
+			// The opening baseline is reviewed once the first month's drafts stand, as its tie-out shows them.
+			s.takeover(ctx, closeID)
+		}
+		s.scope(ctx, closeID, c, period)
+		if c.LeftIn != "" && period == last {
+			s.leave(ctx, c)
+		}
+		signed := s.signOff(ctx, closeID, c, period)
+		if signed {
+			if err := s.settle(ctx); err != nil {
+				return err
+			}
+			// Sign-off carried the schedules into the next month and opened it; it gets its owner and due date too.
+			if next := s.closeFor(ctx, c.Name, nextPeriod(period)); next != "" {
+				s.plan(ctx, c, next, nextPeriod(period), n+1, false)
+			}
+		}
+		if signed && c.Publish {
+			s.publish(ctx, closeID, c, period)
+		}
+		if final && c.Scenario == seed.Reopened && signed {
+			s.reopen(ctx, closeID, work)
+		}
+		earlier = append(earlier, b)
+	}
+	if c.Budget {
+		s.budget(ctx, c, books)
+	}
+	if c.CashPlan {
+		s.cashPlan(ctx, c)
+	}
+	return nil
+}
+
+// leave marks a client inactive on the roster, so no further month is owed or opened.
+func (s *seeder) leave(ctx context.Context, c *seed.Client) {
+	_, out := s.call(ctx, "GET", "/v1/closes/roster", nil)
+	var roster struct {
+		Clients []struct {
+			Entity string `json:"entity"`
+			Rev    string `json:"rev"`
+		} `json:"clients"`
+	}
+	json.Unmarshal(out, &roster)
+	for _, r := range roster.Clients {
+		if r.Entity == c.Name {
+			s.must(ctx, "roster leave", "POST", "/v1/closes/roster", map[string]any{"entity": c.Name, "active": false, "since": c.Since, "reason": "Hired an in-house bookkeeper; July was the last month we closed", "rev": r.Rev})
+		}
+	}
+}
+
+func nextPeriod(period string) string {
+	t, _ := time.Parse("2006-01", period)
+	return t.AddDate(0, 1, 0).Format("2006-01")
+}
+
+func previous(period string) string {
+	t, _ := time.Parse("2006-01", period)
+	return t.AddDate(0, -1, 0).Format("2006-01")
+}
+
+// openClose opens the client's month, or finds the one carry-forward opened.
+func (s *seeder) openClose(ctx context.Context, c *seed.Client, period string) (string, error) {
+	out, ok := s.must(ctx, "open "+period, "POST", "/v1/closes", map[string]any{"entity": c.Name, "period": period})
+	if !ok {
+		return "", fmt.Errorf("could not open %s", period)
+	}
+	id := str(field(out, "id"))
+	if id == "" {
+		return "", fmt.Errorf("no close ID for %s", period)
+	}
+	if period == seed.Months[0] {
+		s.clientProcedures(ctx, c)
+	}
+	// The client's approved prepaid procedure is applied to the close as evidence, so the agent can prepare
+	// straight through.
+	if len(c.Prepaids) > 0 {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err == nil {
+			procedure, err := preparation.CurrentProcedure(ctx, tx, id, "prepaid")
+			if err == nil {
+				_, err = preparation.AttachProcedure(ctx, tx, id, procedure, false, s.o.Subject)
+			}
+			if err == nil {
+				err = tx.Commit()
+			}
+			if err != nil {
+				tx.Rollback()
+				s.problem("%s %s: apply prepaid procedure: %v", c.Name, period, err)
+			}
+		}
+	}
+	return id, nil
+}
+
+// plan gives the close its due date and owner: the firm's template unless the client's roster entry says otherwise,
+// and the owner the roster names. A September close that is overdue was due earlier than its template says.
+func (s *seeder) plan(ctx context.Context, c *seed.Client, closeID, period string, n int, final bool) {
+	owner := s.owner(c)
+	priority := "normal"
+	if final && (c.Scenario == seed.Overdue || c.Scenario == seed.WaitingClient) {
+		priority = "high"
+	}
+	// Every month is due the template's days after it ends, or the client's own; an overdue September was due days ago.
+	days := s.firm.Template.DueDays
+	if c.DueDays > 0 {
+		days = c.DueDays
+	}
+	due := monthEndTime(period).AddDate(0, 0, days).Format("2006-01-02")
+	if final && c.Scenario == seed.Overdue {
+		due = s.today.AddDate(0, 0, -4).Format("2006-01-02")
+	}
+	body := map[string]any{"priority": priority, "assignment": "keep", "due_on": due}
+	if owner == s.o.Subject {
+		body["assignment"] = "take"
+		body["note"] = "Taking " + c.Name + " for " + period
+	}
+	s.must(ctx, "plan "+period, "POST", "/v1/closes/"+closeID+"/planning", body)
+	if owner != s.o.Subject {
+		// A teammate's close: handed over as the assign action records it (the lookup of teammates needs WorkOS).
+		s.db.ExecContext(ctx, `UPDATE client_closes SET owner=$2 WHERE id::text=$1`, closeID, owner)
+		s.db.ExecContext(ctx, `INSERT INTO close_owner_changes(close_id,from_owner,to_owner,actor,reason) SELECT id,'',$2,$3,$4 FROM client_closes WHERE id::text=$1`, closeID, owner, s.o.Subject, "Handed to the client's usual accountant")
+	}
+	if priority == "high" {
+		s.db.ExecContext(ctx, `UPDATE client_closes SET priority='high' WHERE id::text=$1`, closeID)
+	}
+}
+
+// capture gives the close its month-end books, as a QuickBooks capture leaves them: the connection (once per
+// client), the month-end snapshot with its evidence, and the transaction capture with its rows, open items and
+// exceptions.
+func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connection string, b seed.Books, earlier []seed.Books, n int) (string, error) {
+	realm := fmt.Sprintf("913%07d", 1000000+seedIndex(c.Name))
+	captured := monthEndTime(b.Period).Add(time.Duration(26+n) * time.Hour)
+	if captured.After(s.today) {
+		captured = s.today.Add(-2 * time.Hour)
+	}
+	if connection == "" {
+		err := s.db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,company_name,home_currency,fiscal_year_start,environment,confirmed_by,confirmed_at,created_at,updated_at,access_expires_at)
+ VALUES($1,$2,$3,$4,'active',$5,$6,$7,$3,'USD',1,'production',$4,$6,$6,$6,$6) RETURNING id::text`, closeID, s.o.Organization, c.Name, s.o.Subject, rand.Text(), monthEndTime(seed.Months[0]).AddDate(0, 0, -20), realm).Scan(&connection)
+		if err != nil {
+			return "", err
+		}
+	}
+	evidence := func(name, body string, at time.Time) (string, error) {
+		var id string
+		err := s.db.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state,created_at) VALUES($1,$2,$3,$4,'quickbooks-sync','ready',$5) RETURNING id::text`, closeID, name, preparation.Digest([]byte(body)), body, at).Scan(&id)
+		return id, err
+	}
+	// The transaction capture.
+	records := map[string][]json.RawMessage{}
+	var all []string
+	for _, t := range b.Txns {
+		raw := b.Record(t)
+		records[t.Kind] = append(records[t.Kind], raw)
+		all = append(all, string(raw))
+	}
+	allRaw, _ := json.Marshal(all)
+	open := b.OpenItems(earlier)
+	index, _ := json.Marshal(map[string]any{"source": "quickbooks_transactions", "period": b.Period, "realm": realm, "counts": b.Counts(), "capture_digest": preparation.Digest(allRaw)})
+	indexID, err := evidence("QuickBooks transactions "+b.Period, string(index), captured)
+	if err != nil {
+		return "", err
+	}
+	var rows []quickbooks.TransactionRow
+	for _, t := range b.Txns {
+		rows = append(rows, quickbooks.TransactionRow{Kind: t.Kind, ProviderID: t.ID, Date: t.Date, Currency: "USD", Amount: t.Amount.FloatString(2), Record: b.Record(t)})
+	}
+	exceptions := append(quickbooks.FindExceptions(rows), quickbooks.OpenItemExceptions(open, monthEndTime(b.Period))...)
+	if exceptions == nil {
+		exceptions = []quickbooks.Exception{}
+	}
+	exceptionsRaw, _ := json.Marshal(exceptions)
+	summary, _ := json.Marshal(map[string]any{"counts": b.Counts(), "started_at": captured.Add(-3 * time.Minute), "finished_at": captured, "completeness": "All supported types were paged and provider counts agreed before and after each type. Reads are sequential, not an atomic ledger snapshot; later edits require refresh.", "open_items": open})
+	var syncID string
+	if err = s.db.QueryRowContext(ctx, `INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,started_at,finished_at,payload,digest,exceptions,created_at) VALUES($1,$2,$3,'scheduled-quickbooks-refresh','completed',$4,$5,$6,$7,$8,$9,$5) RETURNING id::text`,
+		closeID, connection, b.Period, indexID, captured.Add(-3*time.Minute), captured, string(summary), preparation.Digest(allRaw), string(exceptionsRaw)).Scan(&syncID); err != nil {
+		return "", err
+	}
+	for _, t := range b.Txns {
+		if _, err = s.db.ExecContext(ctx, `INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,$2,$3,'0',$4,$5,'USD',$6,$7)`,
+			syncID, t.Kind, t.ID, t.Date, t.Date+"T14:00:00Z", t.Amount.FloatString(2), string(b.Record(t))); err != nil {
+			return "", err
+		}
+	}
+	// The month-end snapshot, assembled by the code a real capture uses.
+	snapshot, body, err := quickbooks.PeriodSnapshot("production", realm, c.Name, b.Period, b.Directory(), b.Reports(), captured.Add(-2*time.Minute))
+	if err != nil {
+		return "", err
+	}
+	sourceID, err := evidence("QuickBooks "+b.Period+" accrual period evidence.txt", string(body), captured)
+	if err != nil {
+		return "", err
+	}
+	snapshot["source_id"] = sourceID
+	payload, _ := json.Marshal(snapshot)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,$3,$4,$5,$6,$7,'quickbooks-sync')`, closeID, connection, realm, preparation.Digest(payload), string(payload), captured.Add(-2*time.Minute), captured)
+	s.captures.Store(closeID, [2]string{sourceID, indexID})
+	return connection, err
+}
+
+func seedIndex(name string) int {
+	n := 0
+	for _, r := range name {
+		n = (n*31 + int(r)) % 9000000
+	}
+	return n
+}
+
+func monthEndTime(period string) time.Time {
+	t, _ := time.Parse("2006-01", period)
+	return t.AddDate(0, 1, 0).Add(-time.Second)
+}
+
+// takeover confirms the client's first month: the takeover setup and the opening baseline the tie-out needs.
+func (s *seeder) takeover(ctx context.Context, closeID string) {
+	if out, ok := s.must(ctx, "takeover setup", "GET", "/v1/closes/"+closeID+"/takeover-setup", nil); ok {
+		s.must(ctx, "takeover confirm", "POST", "/v1/closes/"+closeID+"/takeover-setup", map[string]any{"digest": str(field(out, "digest")), "timezone": "America/New_York", "confirmed": true})
+	}
+	out, ok := s.must(ctx, "opening baseline", "GET", "/v1/closes/"+closeID+"/opening-baseline", nil)
+	if !ok {
+		return
+	}
+	notes := map[string]string{}
+	var items []struct{ Key, Label string }
+	if raw, _ := json.Marshal(field(out, "items")); raw != nil {
+		json.Unmarshal(raw, &items)
+	}
+	for _, item := range items {
+		notes[item.Key] = "Taken over as the prior bookkeeper's closing balance; to be agreed to the bank statement and the vendor statements in the first month."
+	}
+	if _, ok = s.must(ctx, "opening baseline confirm", "POST", "/v1/closes/"+closeID+"/opening-baseline", map[string]any{"digest": str(field(out, "digest")), "notes": notes, "confirmed": true}); !ok {
+		return
+	}
+	// The takeover cleanup was done in the first month: each inherited balance was agreed to its statement.
+	var baselineID string
+	s.db.QueryRowContext(ctx, `SELECT id::text FROM opening_baselines WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&baselineID)
+	for _, item := range items {
+		s.must(ctx, "resolve "+item.Label, "POST", "/v1/closes/"+closeID+"/opening-baseline/resolve", map[string]any{"baseline_id": baselineID, "item": item.Key, "reference": "Agreed to the June bank and vendor statements; no correcting entry needed."})
+	}
+}
+
+// documents adds the month's documents as one upload would and records each one's answer for the reading. It returns
+// each document's job ID by file name.
+func (s *seeder) documents(ctx context.Context, closeID string, work []seed.Work) (map[string]string, map[string]string) {
+	jobs, evidenceIDs := map[string]string{}, map[string]string{}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.problem("documents: %v", err)
+		return jobs, evidenceIDs
+	}
+	defer tx.Rollback()
+	actor := s.actor(ctx, s.o.Subject)
+	if _, err = tx.ExecContext(ctx, `SELECT id FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID); err != nil {
+		s.problem("documents: %v", err)
+		return jobs, evidenceIDs
+	}
+	for _, w := range work {
+		id, _, jobID, refused := addEvidence(actor, tx, closeID, w.File, []byte(w.Text), false, "work")
+		if refused != nil {
+			s.problem("upload %s: %s", w.File, refused.message)
+			continue
+		}
+		if !w.NoAnswer {
+			s.answers.Store(id, answerFor(w))
+		}
+		s.closeOf.Store(id, closeID)
+		jobs[w.File], evidenceIDs[w.File] = jobID, id
+	}
+	if err = tx.Commit(); err != nil {
+		s.problem("documents: %v", err)
+	}
+	return jobs, evidenceIDs
+}
+
+// jobState reads a job's state, revision and proposal.
+func (s *seeder) jobState(ctx context.Context, jobID string) (state string, revision int, proposal preparation.Proposal) {
+	var raw []byte
+	s.db.QueryRowContext(ctx, `SELECT j.state,i.revision,i.proposal FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, jobID).Scan(&state, &revision, &raw)
+	json.Unmarshal(raw, &proposal)
+	return
+}
+
+// decide does the accountant's part with each document once the agent is done: confirm an accrual, prepare a loan,
+// payroll, owner item or reconciliation by hand from the document, and leave what the scenario leaves open.
+func (s *seeder) decide(ctx context.Context, c *seed.Client, closeID, period string, work []seed.Work, jobs, evidenceIDs map[string]string, final bool) {
+	capture, _ := s.captures.Load(closeID)
+	ledgerID, indexID := "", ""
+	if capture != nil {
+		ledgerID, indexID = capture.([2]string)[0], capture.([2]string)[1]
+	}
+	for _, w := range work {
+		jobID := jobs[w.File]
+		if jobID == "" || w.NoAnswer || w.Kind == "unsupported" {
+			continue
+		}
+		state, revision, proposal := s.jobState(ctx, jobID)
+		switch w.Kind {
+		case "prepaid":
+			// An invoice the procedure's accounts do not cover (a second kind of prepaid) is confirmed by the accountant.
+			if state == "needs_confirmation" && len(proposal.Questions) == 0 {
+				s.must(ctx, "confirm prepaid "+w.File, "POST", "/v1/closes/"+closeID+"/work/"+jobID+"/confirm", map[string]any{"revision": revision, "facts_confirmed": true, "inventory_confirmed": true, "input": w.Confirm})
+			} else if state != "completed" {
+				s.problem("%s %s: prepaid %s is %s (%s): %s", c.Name, period, w.File, state, proposal.Engine, strings.Join(proposal.Questions, "; "))
+			}
+		case "accrual":
+			if state != "needs_confirmation" {
+				s.problem("%s %s: accrual %s is %s: %s", c.Name, period, w.File, state, strings.Join(proposal.Questions, "; "))
+				continue
+			}
+			if final && c.Scenario == seed.Overdue {
+				continue // the accrual waits with the open question; the month is overdue
+			}
+			s.must(ctx, "confirm accrual "+w.File, "POST", "/v1/closes/"+closeID+"/work/"+jobID+"/confirm", map[string]any{"revision": revision, "facts_confirmed": true, "inventory_confirmed": true, "input": w.Confirm})
+		case "loan", "payroll", "owner", "reconciliation":
+			if final && w.Request != nil {
+				continue
+			}
+			if ledgerID == "" {
+				continue // no books captured: the draft waits for the capture
+			}
+			input := map[string]any{"entity": c.Name, "close_period": period}
+			for k, v := range w.Confirm {
+				input[k] = v
+			}
+			raw, _ := json.Marshal(input)
+			primary := evidenceIDs[w.File]
+			sources := map[string][]map[string]string{
+				"loan":           {{"id": primary, "role": "statement", "location": "Whole statement"}, {"id": ledgerID, "role": "ledger", "location": "Equipment Loan and Interest Expense"}, {"id": indexID, "role": "support", "location": "Loan payment purchase"}},
+				"payroll":        {{"id": primary, "role": "support", "location": "Whole summary"}, {"id": ledgerID, "role": "ledger", "location": "Payroll Clearing"}},
+				"owner":          {{"id": primary, "role": "support", "location": "Owner's reply"}, {"id": ledgerID, "role": "ledger", "location": "Meals and Entertainment"}},
+				"reconciliation": {{"id": primary, "role": "statement", "location": "Whole export"}, {"id": ledgerID, "role": "ledger", "location": "Checking"}},
+			}[w.Kind]
+			plan := map[string]any{"kind": w.Kind, "input": json.RawMessage(raw), "sources": sources}
+			if w.Kind != "reconciliation" && state == "needs_confirmation" && len(proposal.Questions) == 0 {
+				plan["work_id"], plan["work_revision"] = jobID, revision
+			}
+			if out, ok := s.must(ctx, "prepare "+w.Kind+" from "+w.File, "POST", "/v1/closes/"+closeID+"/preparations", plan); ok {
+				if _, linked := plan["work_id"]; !linked {
+					// A plan saved without the agent's work is run as its own job.
+					s.must(ctx, "queue "+w.Kind, "POST", "/v1/closes/"+closeID+"/jobs", map[string]any{"plans": []string{str(field(out, "id"))}})
+				}
+				if _, linked := plan["work_id"]; !linked && state == "needs_confirmation" {
+					_, revision, _ = s.jobState(ctx, jobID)
+					s.must(ctx, "cancel agent's "+w.Kind+" intake", "POST", "/v1/closes/"+closeID+"/work/"+jobID+"/cancel", map[string]any{"revision": revision})
+				}
+			} else if state == "needs_confirmation" {
+				s.problem("%s %s: %s proposal: %s", c.Name, period, w.Kind, strings.Join(proposal.Questions, "; "))
+			}
+		}
+	}
+	if err := s.settle(ctx); err != nil {
+		s.problem("%s %s: %v", c.Name, period, err)
+	}
+}
+
+// recurring refreshes each carried schedule against the month's capture with its booked balance, as the Recurring page
+// does, so the month's entry is proposed from the schedule.
+func (s *seeder) recurring(ctx context.Context, c *seed.Client, closeID, period string) {
+	out, ok := s.must(ctx, "recurring", "GET", "/v1/closes/"+closeID+"/recurring", nil)
+	if !ok {
+		return
+	}
+	var view struct {
+		Snapshot struct {
+			ID string `json:"id"`
+		} `json:"snapshot"`
+		Items []struct {
+			ID      string `json:"id"`
+			Digest  string `json:"digest"`
+			Blocker string `json:"blocker"`
+			JobID   string `json:"job_id"`
+		} `json:"items"`
+	}
+	json.Unmarshal(out, &view)
+	queued := false
+	for _, item := range view.Items {
+		if item.Blocker != "" || item.JobID != "" || view.Snapshot.ID == "" {
+			continue
+		}
+		var booked string
+		s.db.QueryRowContext(ctx, `SELECT COALESCE(paper->'carry_forward'->>'opening_balance',paper->>'prepaid_balance','0.00') FROM workpapers WHERE id::text=$1`, item.ID).Scan(&booked)
+		if _, ok := s.must(ctx, "recurring "+item.ID, "POST", "/v1/closes/"+closeID+"/recurring", map[string]any{"paper_id": item.ID, "digest": item.Digest, "snapshot_id": view.Snapshot.ID, "booked_balance": booked, "confirmed": true}); ok {
+			queued = true
+		}
+	}
+	if queued {
+		if err := s.settle(ctx); err != nil {
+			s.problem("%s %s: %v", c.Name, period, err)
+		}
+	}
+}
+
+// effort records the people's time on the close, as the Measure page counts it.
+func (s *seeder) effort(ctx context.Context, c *seed.Client, closeID, period string, final bool) {
+	owner := s.owner(c)
+	entries := []struct {
+		activity string
+		minutes  int
+		note     string
+	}{
+		{"evidence", 20 + seedIndex(c.Name+period)%25, "Collected the month's documents from " + c.Contact + " and checked the capture"},
+		{"review", 25 + seedIndex(period+c.Name)%40, "Reviewed the agent's drafts against the invoices and the Trial Balance"},
+	}
+	if !final {
+		entries = append(entries, struct {
+			activity string
+			minutes  int
+			note     string
+		}{"signoff", 10 + seedIndex(c.Name)%10, "Tie-out, coverage decisions and sign-off"})
+	}
+	for _, e := range entries {
+		s.callAs(ctx, owner, "POST", "/v1/closes/"+closeID+"/effort/entries", map[string]any{"activity": e.activity, "minutes": e.minutes, "note": e.note})
+	}
+	// A few minutes of tracked activity on the page, as the workspace records it.
+	for i, activity := range []string{"review", "evidence", "review"} {
+		s.db.ExecContext(ctx, `INSERT INTO close_effort(close_id,actor,minute,activity,seconds) SELECT id,$2,$3,$4,$5 FROM client_closes WHERE id::text=$1 ON CONFLICT DO NOTHING`, closeID, owner, monthEndTime(period).Add(time.Duration(30+i)*time.Hour).Truncate(time.Minute), activity, 20+i*5)
+	}
+}
+
+// papers lists the close's current workpapers: every draft no newer draft revises.
+func (s *seeder) papers(ctx context.Context, closeID string) []map[string]any {
+	out, ok := s.must(ctx, "close", "GET", "/v1/closes/"+closeID, nil)
+	if !ok {
+		return nil
+	}
+	var view struct {
+		Workpapers []map[string]any `json:"workpapers"`
+	}
+	json.Unmarshal(out, &view)
+	revised := map[string]bool{}
+	for _, p := range view.Workpapers {
+		if paper, ok := p["paper"].(map[string]any); ok {
+			if old := str(paper["revises"]); old != "" {
+				revised[old] = true
+			}
+		}
+	}
+	current := []map[string]any{}
+	for _, p := range view.Workpapers {
+		if !revised[str(p["id"])] {
+			current = append(current, p)
+		}
+	}
+	return current
+}
+
+// review approves every current draft, as the owner; in a month that is not the last one, with the independent
+// second reviewer where the firm's policy asks for one.
+func (s *seeder) review(ctx context.Context, closeID string, c *seed.Client, period string, final bool) {
+	owner := s.owner(c)
+	for _, p := range s.papers(ctx, closeID) {
+		if str(p["review_state"]) == "approved" {
+			continue
+		}
+		note := "Agrees to the source document and the Trial Balance."
+		if str(p["kind"]) == "reconciliation" {
+			note = "Statement and register agree; no outstanding items."
+		}
+		code, out := s.callAs(ctx, owner, "POST", "/v1/closes/"+closeID+"/workpapers/"+str(p["id"])+"/reviews", map[string]any{"decision": "approved", "note": note, "digest": str(p["digest"]), "expected_review_id": str(p["review_id"])})
+		if code != 200 {
+			s.problem("%s %s: approve draft %s: %d %s", c.Name, period, str(p["id"]), code, out)
+		}
+	}
+}
+
+// cover decides the capture's coverage: a prepaid or accrual account is bound to the work that supports it, a bank
+// account to its reconciliation, and every other account is reviewed from the Trial Balance with its reason.
+func (s *seeder) cover(ctx context.Context, closeID string, b seed.Books) {
+	out, ok := s.must(ctx, "coverage", "GET", "/v1/closes/"+closeID+"/coverage", nil)
+	if !ok {
+		return
+	}
+	var reply struct {
+		Coverage struct {
+			Digest string `json:"digest"`
+			Items  []struct {
+				AccountID       string   `json:"account_id"`
+				Name            string   `json:"name"`
+				Kind            string   `json:"kind"`
+				State           string   `json:"state"`
+				SuggestedJobIDs []string `json:"suggested_job_ids"`
+			} `json:"items"`
+			Jobs []struct {
+				ID    string `json:"id"`
+				State string `json:"state"`
+				Kind  string `json:"kind"`
+			} `json:"jobs"`
+		} `json:"coverage"`
+	}
+	json.Unmarshal(out, &reply)
+	view := reply.Coverage
+	for _, item := range view.Items {
+		if item.State == "bound" || item.State == "excluded" || item.State == "covered" {
+			continue
+		}
+		body := map[string]any{"action": "bind", "digest": view.Digest, "account_id": item.AccountID, "confirmed": true}
+		jobs := []string{}
+		for _, j := range view.Jobs {
+			if j.State == "completed" && j.Kind == item.Kind {
+				jobs = append(jobs, j.ID)
+			}
+		}
+		if len(item.SuggestedJobIDs) > 0 {
+			jobs = item.SuggestedJobIDs
+		}
+		switch {
+		case item.Kind == "prepaid" && len(jobs) > 0:
+			body["jobs"], body["reason"] = jobs, "Supported by the prepaid schedules prepared from the invoices."
+		case item.Kind == "accrual" && len(jobs) > 0:
+			body["jobs"], body["reason"] = jobs, "Supported by the accrual prepared from the vendor's estimate."
+		case item.Kind == "reconciliation":
+			body["excluded"], body["reason"] = true, "Reconciled by hand to the bank statement this month (see the reconciliation draft)."
+		default:
+			body["excluded"], body["reason"] = true, coverageReason(item.Name)
+		}
+		code, result := s.call(ctx, "POST", "/v1/closes/"+closeID+"/coverage", body)
+		if code != 200 {
+			s.problem("coverage %s (%s): %d %s", item.Name, item.Kind, code, result)
+		}
+		// The digest moves with each decision.
+		if fresh, ok := s.must(ctx, "coverage", "GET", "/v1/closes/"+closeID+"/coverage", nil); ok {
+			view.Digest = str(field(fresh, "coverage", "digest"))
+		}
+	}
+}
+
+func coverageReason(account string) string {
+	switch {
+	case strings.Contains(account, "Receivable"):
+		return "Reviewed in the aging; collections are followed up as open items."
+	case strings.Contains(account, "Payable"):
+		return "Reviewed in the payables aging against the vendor statements."
+	case strings.Contains(account, "Equipment") || strings.Contains(account, "Loan"):
+		return "Agrees to the lender's statement and the fixed asset register; no additions this month."
+	case strings.Contains(account, "Equity") || strings.Contains(account, "Retained") || strings.Contains(account, "Owner"):
+		return "Equity moves only through owner items reviewed in the close."
+	case strings.Contains(account, "Payroll"):
+		return "Agrees to the payroll provider's summary; cleared by the payroll entry."
+	case strings.Contains(account, "Accrued"):
+		return "Reviewed against the accrual drafts; no other accrued items this month."
+	default:
+		return "Period activity reviewed from the Trial Balance and the General Ledger; no adjustment needed."
+	}
+}
+
+// scope defines what sign-off covers: every current draft.
+func (s *seeder) scope(ctx context.Context, closeID string, c *seed.Client, period string) {
+	out, ok := s.must(ctx, "readiness", "GET", "/v1/closes/"+closeID+"/readiness", nil)
+	if !ok {
+		return
+	}
+	papers := []string{}
+	for _, p := range s.papers(ctx, closeID) {
+		papers = append(papers, str(p["id"]))
+	}
+	steps := []map[string]any{}
+	if len(papers) == 0 {
+		steps = append(steps, map[string]any{"name": "Month reviewed from the capture", "complete": true, "reference": "Trial Balance and General Ledger reviewed line by line; no adjustment needed this month."})
+	}
+	s.must(ctx, "scope", "POST", "/v1/closes/"+closeID+"/scope", map[string]any{"digest": str(field(out, "digest")), "expected_decision_id": str(field(out, "decision_id")),
+		"scope": map[string]any{"description": fmt.Sprintf("%s %s: prepaids, accruals, payroll, loans and owner items agreed to source documents; bank reconciled; coverage decided for every account.", c.Name, period), "required_papers": papers, "external_steps": steps}})
+}
+
+// signOff signs the month off when nothing blocks it; a blocked month is reported with its blockers.
+func (s *seeder) signOff(ctx context.Context, closeID string, c *seed.Client, period string) bool {
+	out, ok := s.must(ctx, "readiness", "GET", "/v1/closes/"+closeID+"/readiness", nil)
+	if !ok {
+		return false
+	}
+	var ready struct {
+		Digest     string   `json:"digest"`
+		DecisionID string   `json:"decision_id"`
+		State      string   `json:"state"`
+		Blockers   []string `json:"blockers"`
+	}
+	json.Unmarshal(out, &ready)
+	if len(ready.Blockers) > 0 || ready.State != "open" {
+		s.problem("%s %s not signed off (%s): %s", c.Name, period, ready.State, strings.Join(ready.Blockers, " | "))
+		return false
+	}
+	owner := s.owner(c)
+	code, result := s.callAs(ctx, owner, "POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"action": "sign", "note": "Reviewed every draft against its source and the Trial Balance; coverage decided; ready for the client's reports.", "confirmed": true, "digest": ready.Digest, "expected_decision_id": ready.DecisionID})
+	if code != 200 {
+		s.problem("%s %s sign-off: %d %s", c.Name, period, code, result)
+		return false
+	}
+	s.log("  %s signed off", period)
+	return true
+}
+
+// publish publishes the signed month's management pack for the client's executive.
+func (s *seeder) publish(ctx context.Context, closeID string, c *seed.Client, period string) {
+	out, ok := s.must(ctx, "management pack", "GET", "/v1/closes/"+closeID+"/management-pack", nil)
+	if !ok {
+		return
+	}
+	commentary := fmt.Sprintf("%s: revenue held near plan with membership dues steady and corporate wellness billing on schedule. Payroll ran at two pay dates as usual. Utilities are accrued from Metro's estimate and reversed when the bill arrives. Cash ended the month covering about six weeks of operating payments.", monthName(period))
+	s.must(ctx, "publish pack", "POST", "/v1/closes/"+closeID+"/management-pack/publications", map[string]any{"action": "publish", "digest": str(field(out, "digest")), "commentary": commentary, "reason": "Monthly pack for the owner's board call", "confirmed": true})
+}
+
+func monthName(period string) string {
+	t, _ := time.Parse("2006-01", period)
+	return t.Format("January 2006")
+}
+
+// reopen replaces a document after sign-off, so the recorded sign-off no longer stands and the close asks to be
+// reopened: the client sent a corrected payroll summary.
+func (s *seeder) reopen(ctx context.Context, closeID string, work []seed.Work) {
+	for _, w := range work {
+		if w.Kind != "payroll" {
+			continue
+		}
+		var evidenceID string
+		s.db.QueryRowContext(ctx, `SELECT id::text FROM evidence WHERE close_id::text=$1 AND name=$2 ORDER BY id LIMIT 1`, closeID, w.File).Scan(&evidenceID)
+		if evidenceID == "" {
+			return
+		}
+		corrected := strings.Replace(w.Text, "Payroll summary", "Payroll summary (corrected)", 1)
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return
+		}
+		tx.ExecContext(ctx, `SELECT id FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID)
+		id, _, _, refused := addEvidence(s.actor(ctx, s.o.Subject), tx, closeID, strings.Replace(w.File, ".txt", "-corrected.txt", 1), []byte(corrected), false, "work")
+		if refused != nil || tx.Commit() != nil {
+			tx.Rollback()
+			s.problem("reopen: corrected payroll summary refused")
+			return
+		}
+		s.answers.Store(id, answerFor(w))
+		s.closeOf.Store(id, closeID)
+		s.must(ctx, "replace evidence", "POST", "/v1/closes/"+closeID+"/evidence/"+evidenceID+"/replace", map[string]any{"replacement_id": id, "reason": "ADP reissued the September summary with a corrected employer tax figure"})
+		s.settle(ctx)
+		return
+	}
+}
+
+// september leaves the last month where the scenario says: drafts waiting for approval, a request out to the client,
+// an overdue month with an open question, or documents in with no books captured.
+func (s *seeder) september(ctx context.Context, c *seed.Client, closeID string, work []seed.Work, jobs map[string]string) {
+	switch c.Scenario {
+	case seed.WaitingClient:
+		for _, w := range work {
+			if w.Request == nil {
+				continue
+			}
+			jobID := jobs[w.File]
+			state, revision, _ := s.jobState(ctx, jobID)
+			if state != "needs_confirmation" {
+				s.problem("%s: %s is %s, so no request can go out", c.Name, w.File, state)
+				continue
+			}
+			out, ok := s.must(ctx, "request", "POST", "/v1/closes/"+closeID+"/work/"+jobID+"/request", map[string]any{"revision": revision, "recipient": w.Request.Recipient, "body": w.Request.Body})
+			if !ok {
+				continue
+			}
+			requestID := str(field(out, "request_id"))
+			if requestID == "" {
+				s.db.QueryRowContext(ctx, `SELECT max(id)::text FROM work_requests WHERE job_id::text=$1`, jobID).Scan(&requestID)
+			}
+			_, revision, _ = s.jobState(ctx, jobID)
+			if w.Request.Delivered != "" {
+				s.must(ctx, "delivered", "POST", "/v1/closes/"+closeID+"/work/"+jobID+"/delivered", map[string]any{"revision": revision, "request_id": requestID, "delivery_reference": w.Request.Delivered})
+				_, revision, _ = s.jobState(ctx, jobID)
+				s.must(ctx, "link", "POST", "/v1/closes/"+closeID+"/work/"+jobID+"/link", map[string]any{"revision": revision, "request_id": requestID})
+			}
+		}
+	case seed.Review, seed.Overdue, seed.Uncaptured:
+		// Drafts stay unapproved; coverage and scope stay undecided.
+	}
+	if c.Goal {
+		s.must(ctx, "goal", "POST", "/v1/closes/"+closeID+"/goal", map[string]any{"confirmed": true, "due_on": s.today.AddDate(0, 0, 6).Format("2006-01-02"), "finish": "review"})
+	}
+	if c.Routine {
+		s.must(ctx, "routine", "POST", "/v1/closes/"+closeID+"/goal", map[string]any{"confirmed": true, "due_on": s.today.AddDate(0, 0, 9).Format("2006-01-02"), "finish": "signoff", "every_month": true})
+	}
+}
+
+// budget imports the client's budget for the year and maps it to the ledger's accounts.
+func (s *seeder) budget(ctx context.Context, c *seed.Client, books []seed.Books) {
+	closeID := s.closeFor(ctx, c.Name, seed.Months[len(seed.Months)-1])
+	if closeID == "" {
+		return
+	}
+	months := []string{}
+	for m := 1; m <= 12; m++ {
+		months = append(months, fmt.Sprintf("2026-%02d", m))
+	}
+	var lines []string
+	lines = append(lines, "Account,"+strings.Join(months, ","))
+	activity := books[len(books)-1].Activity()
+	for _, a := range c.Accounts {
+		if a.Type != "Income" && a.Type != "Expense" && a.Type != "Cost of Goods Sold" {
+			continue
+		}
+		v := activity[a.ID]
+		if v == nil || v.Sign() == 0 || a.Name == "Ask My Accountant" {
+			continue
+		}
+		base, _ := v.Float64()
+		if base < 0 {
+			base = -base
+		}
+		cells := []string{a.Name}
+		for m := range months {
+			cells = append(cells, fmt.Sprintf("%.2f", base*(0.92+0.015*float64(m))))
+		}
+		lines = append(lines, strings.Join(cells, ","))
+	}
+	s.must(ctx, "budget", "POST", "/v1/closes/"+closeID+"/budget", map[string]any{"action": "import", "name": "FY2026 operating budget", "csv": strings.Join(lines, "\n") + "\n", "source": "Owner's budget workbook, approved January 2026"})
+}
+
+func (s *seeder) closeFor(ctx context.Context, entity, period string) string {
+	var id string
+	s.db.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, s.o.Organization, entity, period).Scan(&id)
+	return id
+}
+
+// cashPlan records the client's standing obligations, a scenario and a reviewed plan on the latest month.
+func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
+	closeID := s.closeFor(ctx, c.Name, seed.Months[len(seed.Months)-1])
+	if closeID == "" {
+		return
+	}
+	path := "/v1/closes/" + closeID
+	obligations := []map[string]any{
+		{"action": "add", "name": "Rent, " + c.Name, "category": "rent", "direction": "out", "amount": "240000", "first_on": "2026-10-01", "every": "month", "vendor": "Lakeside Property Management", "basis": "Lease dated 2024-03-01, section 4: due on the first of each month.", "reason": "Standing obligation"},
+	}
+	if c.Payroll != nil {
+		obligations = append(obligations, map[string]any{"action": "add", "name": c.Payroll.Provider + " payroll", "category": "payroll", "direction": "out", "amount": strings.ReplaceAll(c.Payroll.Net, ".", ""), "first_on": "2026-10-15", "every": "two_weeks", "vendor": c.Payroll.Provider, "basis": "Payroll runs every two weeks; the provider debits net pay and taxes together.", "reason": "Standing obligation"})
+	}
+	if c.Loan != nil {
+		obligations = append(obligations, map[string]any{"action": "add", "name": c.Loan.Lender + " note payment", "category": "debt", "direction": "out", "amount": strings.ReplaceAll(fmt.Sprintf("%.2f", mustFloat(c.Loan.Principal)+mustFloat(c.Loan.Interest)), ".", ""), "first_on": fmt.Sprintf("2026-10-%02d", c.Loan.PayDay), "every": "month", "vendor": c.Loan.Lender, "basis": c.Loan.Agreement + ": fixed monthly payment on the " + fmt.Sprint(c.Loan.PayDay) + "th.", "reason": "Standing obligation"})
+	}
+	obligations = append(obligations, map[string]any{"action": "add", "name": "Quarterly estimated tax", "category": "tax", "direction": "out", "amount": "1150000", "first_on": "2027-01-15", "every": "once", "vendor": "", "basis": "Safe-harbor estimate from the 2025 return, per the owner's tax preparer.", "reason": "Standing obligation"})
+	for _, o := range obligations {
+		s.must(ctx, "obligation "+str(o["name"]), "POST", path+"/cash-obligations", o)
+	}
+	s.must(ctx, "scenario", "POST", path+"/cash-scenarios", map[string]any{"action": "add", "name": "Fairview pays 30 days late", "changes": []map[string]any{{"kind": "add", "label": "Fairview Parks invoice slips a month", "direction": "in", "amount": "685000", "first_on": "2026-11-20", "every": "once"}}})
+	if out, ok := s.must(ctx, "cash plan", "GET", path+"/cash-plan", nil); ok {
+		s.must(ctx, "cash plan review", "POST", path+"/cash-plan/reviews", map[string]any{"scenario": "", "digest": str(field(out, "digest")), "assumptions": "Open invoices collected on their due dates except Fairview Parks (net 45, historically 10 days late); bills paid on due dates; payroll and the note as scheduled.", "confirmed": true})
+	}
+}
+
+func mustFloat(s string) float64 { f, _ := strconv.ParseFloat(s, 64); return f }
+
+// afterwards adds what spans clients: the September decisions already looked at, open-item follow-ups, daily
+// book reviews, chats with the agent and a few rows the pages list.
+func (s *seeder) afterwards(ctx context.Context) {
+	// Collections and open items for the landscaping client, whose customers pay late.
+	if closeID := s.closeFor(ctx, "Larkspur Landscaping Inc.", "2026-09"); closeID != "" {
+		s.must(ctx, "open items", "GET", "/v1/closes/"+closeID+"/open-items", nil)
+		if out, ok := s.must(ctx, "aging", "GET", "/v1/closes/"+closeID+"/aging", nil); ok {
+			captureID := str(field(out, "capture_id"))
+			var receivables []struct {
+				Name  string
+				Lines []struct{ ID, Kind, Number string }
+			}
+			if raw, _ := json.Marshal(field(out, "receivables")); raw != nil {
+				json.Unmarshal(raw, &receivables)
+			}
+			for i, party := range receivables {
+				for _, line := range party.Lines {
+					if line.Kind != "Invoice" {
+						continue
+					}
+					status, note, expected := "following_up", "Statement sent to "+party.Name+"'s AP on "+s.today.AddDate(0, 0, -3).Format("Jan 2")+".", ""
+					if i == 0 {
+						status, note, expected = "promised", party.Name+" promised payment with their next check run.", s.today.AddDate(0, 0, 9).Format("2006-01-02")
+					}
+					body := map[string]any{"kind": "Invoice", "item_id": line.ID, "capture_id": captureID, "status": status, "note": note, "assign": "take"}
+					if expected != "" {
+						body["expected_on"] = expected
+					}
+					s.call(ctx, "POST", "/v1/closes/"+closeID+"/open-items", body)
+					break
+				}
+			}
+		}
+		s.must(ctx, "contact preference", "POST", "/v1/closes/"+closeID+"/collections", map[string]any{"action": "preference", "recipient": "ap@fairview.example", "do_not_contact": true, "reason": "Tom handles the city himself; the contract forbids vendor contact with Parks staff about invoices.", "confirmed": true})
+	}
+	// Daily book reviews: the September captures with exceptions were looked at.
+	for _, name := range []string{"Harbor Fixture LLC", "Cedar & Pine Coffee Co.", "Summit Peak Fitness LLC"} {
+		closeID := s.closeFor(ctx, name, "2026-09")
+		var syncID string
+		s.db.QueryRowContext(ctx, `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&syncID)
+		if syncID != "" {
+			s.call(ctx, "POST", "/v1/closes/"+closeID+"/daily-review", map[string]any{"sync_id": syncID, "source": "quickbooks"})
+		}
+	}
+	// The goals stay active for the worker, which looks at them as it does any hand-over.
+	if s.o.Organization != "local-development" {
+		// Local development shares one identity, so independent review is a hosted firm's rule.
+		s.must(ctx, "policy", "POST", "/v1/closes/organization/policy", map[string]any{"independent_review": true, "independent_review_min_amount": "25000.00", "reason": "A second reviewer on anything over $25,000 from October, per our quality control policy"})
+	}
+	s.chats(ctx)
+	// Some of the inbox has been read already; one item is snoozed to next week.
+	if out, ok := s.must(ctx, "attention", "GET", "/v1/closes/attention", nil); ok {
+		var inbox struct {
+			Groups []struct {
+				Events []struct {
+					Key string `json:"key"`
+				} `json:"events"`
+			} `json:"groups"`
+		}
+		json.Unmarshal(out, &inbox)
+		var keys []string
+		for _, g := range inbox.Groups {
+			for _, item := range g.Events {
+				keys = append(keys, item.Key)
+			}
+		}
+		if len(keys) > 3 {
+			s.call(ctx, "POST", "/v1/closes/attention", map[string]any{"action": "read", "keys": keys[len(keys)/2:]})
+			s.call(ctx, "POST", "/v1/closes/attention", map[string]any{"action": "snooze", "keys": keys[:1], "until": s.today.AddDate(0, 0, 5).Format(time.RFC3339)})
+		}
+	}
+	// Model usage for the month so far, as the operations view counts it.
+	for d := 0; d < 9; d++ {
+		s.db.ExecContext(ctx, `INSERT INTO model_calls(organization_id,day,calls) VALUES($1,$2,$3) ON CONFLICT (organization_id,day) DO UPDATE SET calls=model_calls.calls+EXCLUDED.calls`, s.o.Organization, s.today.AddDate(0, 0, -d).Format("2006-01-02"), 14+(d*7)%23)
+	}
+}
+
+// chats are a few conversations with the agent as the sidebar lists them: firm-wide and about one close.
+func (s *seeder) chats(ctx context.Context) {
+	harbor := s.closeFor(ctx, "Harbor Fixture LLC", "2026-09")
+	larkspur := s.closeFor(ctx, "Larkspur Landscaping Inc.", "2026-09")
+	type turn struct{ role, body string }
+	sessions := []struct {
+		title   string
+		closeID string
+		at      time.Time
+		turns   []turn
+	}{
+		{"What is still open for September", "", s.today.Add(-26 * time.Hour), []turn{
+			{"user", "What is still open for September across the firm?"},
+			{"assistant", "Seven September closes are open. Harbor Fixture has two drafts waiting for your approval. Bluegrass Dental is waiting on Dr. Raman for the Riverbend loan statement; the request went out on Oct 6. Larkspur Landscaping is four days past its due date with a question open about the Fairview retainage. Meridian PT was signed off, but ADP reissued the payroll summary, so it needs reopening. Orchard Street Books has its documents in but no books captured yet. Tidewater Marine has one scan I could not read. Cedar & Pine and Summit Peak are signed off."},
+			{"user", "Which of those is mine?"},
+			{"assistant", "Harbor Fixture, Meridian PT and Summit Peak are yours. The others are with your teammate."},
+		}},
+		{"Harbor Fixture insurance schedule", harbor, s.today.Add(-5 * time.Hour), []turn{
+			{"user", "Why is the insurance expense lower than last month?"},
+			{"assistant", "September's insurance expense is the schedule's monthly share of the Northstar Mutual policy, $400.00, as it was in August. The July figure was higher because the annual premium of $4,800.00 was posted to Insurance when the bill arrived, and the July draft moved $4,400.00 to Prepaid Expenses."},
+		}},
+		{"Fairview retainage", larkspur, s.today.Add(-50 * time.Hour), []turn{
+			{"user", "How should we treat the 5% retainage in the Fairview amendment?"},
+			{"assistant", "I have not prepared anything for it: retainage is a treatment the firm decides. The amendment holds back 5% of each invoice until the trail planting is accepted, expected 2026-11-30. If the September invoice was billed gross, the retained part is a receivable that will not be collected before acceptance; if it was billed net, there is unbilled revenue to consider. I left the question on the September work so you can answer it with Tom."},
+		}},
+	}
+	for _, session := range sessions {
+		var closeID any
+		if session.closeID != "" {
+			closeID = session.closeID
+		}
+		var sessionID string
+		if err := s.db.QueryRowContext(ctx, `INSERT INTO chat_sessions(organization_id,author,close_id,executive,title,renamed,created_at,last_at) VALUES($1,$2,NULLIF($3,'')::bigint,false,$4,false,$5,$6) RETURNING id::text`, s.o.Organization, s.o.Subject, str(closeID), session.title, session.at, session.at.Add(time.Duration(len(session.turns))*time.Minute)).Scan(&sessionID); err != nil {
+			s.problem("chat session: %v", err)
+			continue
+		}
+		for i, t := range session.turns {
+			citations := "[]"
+			if t.role == "assistant" && session.closeID != "" {
+				citations = fmt.Sprintf(`[{"label":"Close overview","href":"/dashboard/closes/%s"}]`, session.closeID)
+			}
+			s.db.ExecContext(ctx, `INSERT INTO chat_messages(organization_id,author,close_id,role,body,citations,every_month,closes,replayable,executive,session_id,created_at) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,$6::jsonb,false,'{}',false,false,$7::bigint,$8)`,
+				s.o.Organization, s.o.Subject, str(closeID), t.role, t.body, citations, sessionID, session.at.Add(time.Duration(i)*time.Minute))
+		}
+	}
+}
+
+// RemoveSeed takes the demonstration firm's clients out of the database: every close of a seeded client with what
+// hangs off it, the roster entries, procedures, plans and chats the seed made. The firm, its members and its policies
+// stay.
+func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) error {
+	names := []string{}
+	for _, c := range firm.Clients {
+		names = append(names, strings.ToLower(c.Name))
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2) ORDER BY period DESC,id DESC`, o.Organization, names)
+	if err != nil {
+		return err
+	}
+	var closes []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		closes = append(closes, id)
+	}
+	rows.Close()
+	for _, id := range closes {
+		if err := removeClose(ctx, db, id); err != nil {
+			return fmt.Errorf("close %s: %w", id, err)
+		}
+	}
+	type statement struct {
+		sql  string
+		args []any
+	}
+	byClient := func(sql string) statement { return statement{sql, []any{o.Organization, names}} }
+	byPerson := func(sql string) statement { return statement{sql, []any{o.Organization, o.Subject}} }
+	byFirm := func(sql string) statement { return statement{sql, []any{o.Organization}} }
+	statements := []statement{
+		byClient(`DELETE FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM client_access WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM procedure_versions WHERE organization_id=$1 AND (client_entity='' OR lower(client_entity)=ANY($2)) AND reason='Firm procedure adopted at onboarding'`),
+		byClient(`DELETE FROM budget_versions WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM open_item_actions WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM collection_contact_preferences WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM close_routines WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byClient(`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=ANY($2)`),
+		byPerson(`DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND close_id IS NULL)`),
+		byPerson(`DELETE FROM chat_sessions WHERE organization_id=$1 AND author=$2 AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.session_id=chat_sessions.id)`),
+		byPerson(`DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2`),
+		byFirm(`DELETE FROM member_invitations WHERE organization_id=$1 AND email IN ('r.castillo@example.com','j.okonkwo@example.com')`),
+		byFirm(`DELETE FROM member_role_changes WHERE organization_id=$1 AND reason='Second administrator so sign-offs do not wait on one person'`),
+		byFirm(`DELETE FROM model_calls WHERE organization_id=$1`),
+	}
+	for _, st := range statements {
+		if _, err := db.ExecContext(ctx, st.sql, st.args...); err != nil {
+			return fmt.Errorf("%s: %w", st.sql[:40], err)
+		}
+	}
+	return nil
+}
+
+// removeClose deletes one close and everything that hangs off it, in the order the deletion route uses.
+func removeClose(ctx context.Context, db *sql.DB, closeID string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, statement := range []string{
+		`DELETE FROM sandbox_postings WHERE close_id=$1`,
+		`DELETE FROM procedure_example_approvals WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`,
+		`DELETE FROM approval_requests WHERE close_id=$1`,
+		`DELETE FROM standing_approvals WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`,
+		`DELETE FROM workpaper_comments WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`,
+		`DELETE FROM management_acknowledgments WHERE publication_id IN (SELECT id FROM management_publications WHERE close_id=$1)`,
+		`DELETE FROM management_publications WHERE close_id=$1`,
+		`DELETE FROM cash_plan_reviews WHERE close_id=$1`,
+		`DELETE FROM cash_flow_imports WHERE close_id=$1`,
+		`DELETE FROM chat_messages WHERE close_id=$1 OR target_close_id=$1 OR $1=ANY(closes)`,
+		`DELETE FROM chat_sessions WHERE close_id=$1`,
+		`DELETE FROM portfolio_items WHERE close_id=$1`,
+		`DELETE FROM statement_extractions WHERE close_id=$1`,
+		`DELETE FROM goal_handoffs WHERE goal_id IN (SELECT id FROM close_goals WHERE close_id=$1)`,
+		`DELETE FROM close_goals WHERE close_id=$1`,
+		`DELETE FROM coverage_bindings WHERE close_id=$1`,
+		`DELETE FROM collection_messages WHERE close_id=$1`,
+		`DELETE FROM work_replies WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1)`,
+		`DELETE FROM request_submissions WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1)`,
+		`DELETE FROM client_request_links WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1)`,
+		`DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`,
+		`DELETE FROM request_drafts WHERE close_id=$1`,
+		`DELETE FROM preparation_jobs WHERE close_id=$1`,
+		`DELETE FROM production_postings WHERE close_id=$1`,
+		`DELETE FROM workpapers WHERE close_id=$1`,
+		`DELETE FROM daily_reviews WHERE close_id=$1`,
+		`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`,
+		`DELETE FROM quickbooks_snapshots WHERE close_id=$1`,
+		`DELETE FROM forwarded_files WHERE close_id=$1`,
+		`DELETE FROM forwarding_links WHERE close_id=$1`,
+		`DELETE FROM production_posting_grants WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
+		`DELETE FROM quickbooks_transaction_rows WHERE sync_id IN (SELECT id FROM quickbooks_entity_syncs WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1))`,
+		`DELETE FROM quickbooks_entity_syncs WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
+		`DELETE FROM quickbooks_snapshots WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
+		`DELETE FROM quickbooks_connections WHERE close_id=$1`,
+		`DELETE FROM client_attachments WHERE close_id=$1`,
+		`DELETE FROM evidence WHERE close_id=$1`,
+		`DELETE FROM preparation_plans WHERE close_id=$1`,
+		`DELETE FROM close_preparations WHERE close_id=$1`,
+		`DELETE FROM close_signoffs WHERE close_id=$1`,
+		`DELETE FROM close_effort WHERE close_id=$1`,
+		`DELETE FROM close_effort_entries WHERE close_id=$1`,
+		`DELETE FROM close_scopes WHERE close_id=$1`,
+		`DELETE FROM close_owner_changes WHERE close_id=$1`,
+		`DELETE FROM opening_baselines WHERE close_id=$1`,
+		`DELETE FROM takeover_setups WHERE close_id=$1`,
+		`DELETE FROM close_export_labels WHERE close_id=$1`,
+		`DELETE FROM operations_alert_deliveries WHERE close_id=$1`,
+		`DELETE FROM client_closes WHERE id=$1`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement, closeID); err != nil {
+			return fmt.Errorf("%s: %w", statement, err)
+		}
+	}
+	return tx.Commit()
+}
