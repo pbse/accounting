@@ -790,12 +790,16 @@ body {
   font-size: 13px;
   color: var(--ink-3);
 }
-.app-shell .ks-crumbs a {
+.app-shell .ks-crumbs a:not(.button) {
   color: var(--ink-3);
   text-decoration: none;
 }
-.app-shell .ks-crumbs a:hover {
+.app-shell .ks-crumbs a:not(.button):hover {
   color: var(--ink);
+}
+.app-shell .ks-crumbs .button[aria-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
 }
 .ks-crumbs b {
   color: var(--ink);
@@ -1012,8 +1016,12 @@ body {
     grid-column: 2;
     justify-self: start;
   }
+  .ks-done-line {
+    flex-wrap: wrap;
+  }
   .ks-done-line small {
-    display: none;
+    margin-left: 0;
+    width: 100%;
   }
   .ks-done-row {
     grid-template-columns: auto 1fr;

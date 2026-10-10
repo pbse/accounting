@@ -16,6 +16,13 @@ type Line = { area: string; state: "done" | "attention" | "waiting" | "info" | "
 type Brief = { headline: string; lines: Line[] };
 
 const area = (line: Line) => line.area[0].toUpperCase() + line.area.slice(1);
+// What the brief says needs the person: its headline counts the actions ("3 things need you: …"), which can outnumber
+// the areas they fall in; the areas are what the tasks show.
+export function needsOf(brief: Brief) {
+  const needs = brief.lines.filter((l) => l.state === "attention" || l.state === "unknown");
+  const counted = /^(\d+) things? needs? you/.exec(brief.headline);
+  return { needs, count: Math.max(needs.length, counted ? Number(counted[1]) : 0) };
+}
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
 export function useBrief(closeId: string) {
@@ -31,15 +38,15 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
   const brief = read.data;
   const [planning, setPlanning] = useState(false);
   const lines = brief?.lines ?? [];
-  const needs = lines.filter((l) => l.state === "attention" || l.state === "unknown");
+  const { count } = brief ? needsOf(brief) : { count: 0 };
   const waiting = lines.filter((l) => l.state === "waiting");
   const done = lines.filter((l) => l.state === "done");
   const sentence = !brief
     ? read.isError
       ? `${close.entity}’s close could not be read.`
       : `${close.entity}, ${monthName(close.period)}.`
-    : needs.length
-      ? `${close.entity} is ${needs.length === 1 ? "one step" : `${n(needs.length, "step")}`} from done.`
+    : count
+      ? `${close.entity} is ${count === 1 ? "one step" : `${n(count, "step")}`} from done.`
       : waiting.length
         ? `${close.entity} is waiting on ${waiting.map((l) => l.area).join(" and ")}.`
         : brief.headline === "Signed off."
@@ -47,7 +54,7 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
           : `${close.entity} is ready to sign off.`;
   const context = [
     close.due_on ? (close.due_on < today ? `Overdue since ${dates.calendarDay(close.due_on)}` : `Due ${dates.calendarDay(close.due_on)}`) : "No due date",
-    brief ? `the agent has done ${done.length} of ${lines.length}` : "",
+    brief ? `${done.length} of ${lines.length} done` : "",
     close.priority && close.priority !== "normal" ? `${close.priority} priority` : "",
     close.owned_by_me ? "yours" : close.assigned ? "held by a colleague" : "",
   ].filter(Boolean);
@@ -84,7 +91,7 @@ export function CloseTasks({ closeId, base }: { closeId: string; base: string })
   const brief = read.data;
   const error = read.error ? read.error.message || "The close brief is unavailable." : "";
   if (!brief) return error ? <p role="alert">{error}</p> : null;
-  const needs = brief.lines.filter((l) => l.state === "attention" || l.state === "unknown");
+  const { needs } = needsOf(brief);
   const waiting = brief.lines.filter((l) => l.state === "waiting");
   const rest = brief.lines.filter((l) => l.state === "done" || l.state === "info");
   const done = rest.filter((l) => l.state === "done");
@@ -128,7 +135,7 @@ export function CloseTasks({ closeId, base }: { closeId: string; base: string })
       <details className="ks-done">
         <summary className="ks-done-line">
           <Icon name="check" />
-          {done.length ? `${done.length} done by the agent · ${done.map((l) => l.area).join(", ")}` : rest.length ? `${n(rest.length, "note")} from the agent` : "Nothing done by the agent yet"}
+          {done.length ? `${done.length} done · ${done.map((l) => l.area).join(", ")}` : rest.length ? `${n(rest.length, "note")}` : "Nothing done yet"}
           <small>
             As of {dates.time(read.dataUpdatedAt)}
             {" · "}
