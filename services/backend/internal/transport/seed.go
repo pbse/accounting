@@ -756,7 +756,8 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 	// The connection is labeled as the demonstration's: its company name says so, its realm is no QuickBooks realm, and
 	// it is a sandbox connection, so nothing it holds counts as a live provider read.
 	realm := fmt.Sprintf("demonstration-%07d", 1000000+seedIndex(c.Name))
-	captured := monthEndTime(b.Period).Add(time.Duration(26+n) * time.Hour)
+	// The month-end capture is taken as the month turns, so its balances and its as-of time agree.
+	captured := monthEndTime(b.Period).Add(time.Duration(30+n) * time.Minute)
 	if captured.After(s.today) {
 		captured = s.today.Add(-2 * time.Hour)
 	}
@@ -1353,7 +1354,16 @@ func (s *seeder) budget(ctx context.Context, c *seed.Client, books []seed.Books)
 		}
 		lines = append(lines, strings.Join(cells, ","))
 	}
-	s.must(ctx, "budget", "POST", "/v1/closes/"+closeID+"/budget", map[string]any{"action": "import", "name": "FY2026 operating budget", "csv": strings.Join(lines, "\n") + "\n", "source": "Owner's budget workbook, approved January 2026"})
+	out, ok := s.must(ctx, "budget", "POST", "/v1/closes/"+closeID+"/budget", map[string]any{"action": "import", "name": "FY2026 operating budget", "csv": strings.Join(lines, "\n") + "\n", "source": "Owner's budget workbook, approved January 2026"})
+	if !ok {
+		return
+	}
+	// The comparison reads the approved version; its lines map by name onto the chart they were taken from.
+	if problems, _ := field(out, "problems").([]any); len(problems) > 0 {
+		s.problem("%s budget: %v", c.Name, problems)
+		return
+	}
+	s.must(ctx, "approve budget", "POST", "/v1/closes/"+closeID+"/budget", map[string]any{"action": "approve", "id": str(field(out, "id"))})
 }
 
 func (s *seeder) closeFor(ctx context.Context, entity, period string) string {
@@ -1371,7 +1381,7 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 	path := "/v1/closes/" + closeID
 	// Amounts are decimal, as the route takes them; each is approved so the plan counts it.
 	obligations := []map[string]any{
-		{"action": "add", "name": "Rent, " + c.Name, "category": "rent", "direction": "out", "amount": "2400.00", "first_on": "2026-10-01", "every": "month", "vendor": "Lakeside Property Management", "basis": "Lease dated 2024-03-01, section 4: due on the first of each month.", "reason": "Standing obligation"},
+		{"action": "add", "name": "Rent, " + c.Name, "category": "rent", "direction": "out", "amount": c.Rent(), "first_on": "2026-10-01", "every": "month", "vendor": "Lakeside Property Management", "basis": "Lease dated 2024-03-01, section 4: due on the first of each month.", "reason": "Standing obligation"},
 	}
 	if c.Payroll != nil {
 		obligations = append(obligations, map[string]any{"action": "add", "name": c.Payroll.Provider + " payroll", "category": "payroll", "direction": "out", "amount": c.Payroll.Net, "first_on": "2026-10-15", "every": "two_weeks", "vendor": c.Payroll.Provider, "basis": "Payroll runs every two weeks; the provider debits net pay and taxes together.", "reason": "Standing obligation"})
@@ -1513,10 +1523,17 @@ func (s *seeder) afterwards(ctx context.Context) {
 	// Model usage for the month so far, as the operations view counts it.
 }
 
-// ownershipAnswer says, from the closes as they are owned, which September closes are the administrator's.
+// openCount says how many of the demonstration's September closes are open, as the closes stand.
+func (s *seeder) openCount(ctx context.Context) string {
+	var open int
+	s.db.QueryRowContext(ctx, `SELECT count(*) FROM client_closes c WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($2) AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'`, s.o.Organization, s.clientNames()).Scan(&open)
+	return fmt.Sprintf("%d September closes are open.", open)
+}
+
+// ownershipAnswer says, from the open closes as they are owned, which September closes are the administrator's.
 func (s *seeder) ownershipAnswer(ctx context.Context) string {
 	var mine, others []string
-	rows, err := s.db.QueryContext(ctx, `SELECT entity,owner=$2 FROM client_closes WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($3) ORDER BY entity`, s.o.Organization, s.o.Subject, s.clientNames())
+	rows, err := s.db.QueryContext(ctx, `SELECT entity,owner=$2 FROM client_closes c WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($3) AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off' ORDER BY entity`, s.o.Organization, s.o.Subject, s.clientNames())
 	if err == nil {
 		for rows.Next() {
 			var entity string
@@ -1554,7 +1571,7 @@ func (s *seeder) chats(ctx context.Context) {
 	}{
 		{"What is still open for September", "", s.today.Add(-26 * time.Hour), []turn{
 			{"user", "What is still open for September across the firm?"},
-			{"assistant", "Seven September closes are open. Harbor Fixture has two drafts waiting for your approval. Bluegrass Dental needs the Riverbend loan statement; the request to Dr. Raman is approved and waiting to be sent. Larkspur Landscaping is four days past its due date with a question open about the Fairview retainage. Meridian PT was signed off, but ADP reissued the payroll summary, so it needs reopening. Orchard Street Books has its documents in but no books captured yet. Tidewater Marine has one scan I could not read. Cedar & Pine and Summit Peak are signed off."},
+			{"assistant", s.openCount(ctx) + " Harbor Fixture has two drafts waiting for your approval. Bluegrass Dental needs the Riverbend loan statement; the request to Dr. Raman is approved and waiting to be sent. Larkspur Landscaping is four days past its due date with a question open about the Fairview retainage. Meridian PT was signed off, but ADP reissued the payroll summary, so it needs reopening. Orchard Street Books has its documents in but no books captured yet. Tidewater Marine has one scan I could not read. Cedar & Pine and Summit Peak are signed off."},
 			{"user", "Which of those is mine?"},
 			{"assistant", s.ownershipAnswer(ctx)},
 		}},

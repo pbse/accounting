@@ -316,6 +316,9 @@ func settleOpenInvoices(g *ids, period string, prior []Txn, late string, settled
 	return txns, paid
 }
 
+// Rent is the client's monthly rent as its books record it.
+func (c *Client) Rent() string { return show(vary("2400.00", c.Name, "rent")) }
+
 // Build makes the firm's profile.
 func Build() Firm {
 	f := Firm{Name: "Demonstration firm"}
