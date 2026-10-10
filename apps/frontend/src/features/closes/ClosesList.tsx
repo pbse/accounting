@@ -17,11 +17,11 @@ export function isEnrollmentError(message: string) {
   return !!authKitClientId && message.includes("firm or membership");
 }
 
-type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean }[] };
+type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean; owner?: string }[] };
 // connections are the states of each client's QuickBooks and Xero connections, and whether a month has labeled exports,
 // by client identity (its own name in lower case).
 type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string; exports?: string }>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
-type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean };
+type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean; owner?: string };
 // key is the client's own name in lower case (a confirmed alias resolves to it), as its connections are kept.
 type ClientRow = { key: string; entity: string; active?: boolean; since?: string; owner?: string | null; closes: ListedClose[]; owed: string[] };
 
@@ -155,10 +155,12 @@ export default function ClosesList() {
   };
   // Who holds the client's months, where the reader can see it: its own owner, else the firm template's.
   const people = roster?.people;
-  // A client off the roster takes no template, so nobody holds its months by schedule.
+  // Who holds the client's work: whoever holds the month in hand now, else, for the months still to open, the client's
+  // own owner or the template's. A client off the roster takes no template, so nobody holds its months by schedule.
   const owner = (r: ClientRow) => {
-    if (r.active === undefined) return "—";
-    const subject = r.owner ?? roster?.template?.owner ?? "";
+    const inHand = r.closes.filter((c) => !c.signed_off).sort((a, b) => a.period.localeCompare(b.period))[0];
+    const subject = inHand ? (inHand.owner ?? "") : r.active === undefined ? undefined : (r.owner ?? roster?.template?.owner ?? "");
+    if (subject === undefined) return "—";
     return subject ? (people?.find((p) => p.subject === subject)?.name ?? subject) : "Nobody";
   };
   return (

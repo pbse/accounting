@@ -246,6 +246,8 @@ type rosterClose struct {
 	Priority  string `json:"priority,omitempty"`
 	Assigned  bool   `json:"assigned,omitempty"`
 	OwnedByMe bool   `json:"owned_by_me,omitempty"`
+	// Owner is who holds the close now (a subject), "" for nobody; a firm administrator sees whom it names.
+	Owner string `json:"owner,omitempty"`
 }
 
 func registerRoster(mux *http.ServeMux, db *sql.DB) {
@@ -312,7 +314,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		if err == nil {
 			var closes *sql.Rows
 			closes, err = tx.QueryContext(r.Context(), `SELECT r.client_entity,c.id::text,c.entity,c.period,COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')='signed_off',
- COALESCE(c.due_on::text,''),c.priority,c.owner<>'',c.owner<>'' AND c.owner=$3
+ COALESCE(c.due_on::text,''),c.priority,c.owner<>'',c.owner<>'' AND c.owner=$3,c.owner
  FROM current_client_roster r JOIN client_closes c ON c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)
  WHERE r.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(r.client_entity)))
  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))
@@ -321,7 +323,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				for closes.Next() {
 					var entity string
 					var cl rosterClose
-					if err = closes.Scan(&entity, &cl.ID, &cl.Entity, &cl.Period, &cl.SignedOff, &cl.DueOn, &cl.Priority, &cl.Assigned, &cl.OwnedByMe); err != nil {
+					if err = closes.Scan(&entity, &cl.ID, &cl.Entity, &cl.Period, &cl.SignedOff, &cl.DueOn, &cl.Priority, &cl.Assigned, &cl.OwnedByMe, &cl.Owner); err != nil {
 						break
 					}
 					if i, ok := index[strings.ToLower(entity)]; ok {
