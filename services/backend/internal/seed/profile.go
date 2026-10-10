@@ -33,6 +33,11 @@ type Work struct {
 	Confirm map[string]any
 	// Request, when set, is sent to the client instead of confirming: the agent's question needs their answer.
 	Request *Request
+	// Sources, when set, are the recorded reading's sources: "$primary" is the document itself and "$source:<file>"
+	// another of the month's documents.
+	Sources []map[string]string
+	// Register, for a reconciliation, is the file of the register export that is its ledger side.
+	Register string
 }
 
 // Request is a question the accountant approves and sends to the client, and the reply when one came.

@@ -58,7 +58,9 @@ type seeder struct {
 	// index), which a recorded answer names as "$ledger" and "$index".
 	closeOf  sync.Map
 	captures sync.Map
-	model    *llm.Client
+	// filesOf is each close's documents by file name, so a recorded answer can name another document as "$source:<file>".
+	filesOf sync.Map
+	model   *llm.Client
 	// problems collects every refused step, so one client's trouble does not stop the others.
 	problems []string
 	today    time.Time
@@ -184,6 +186,11 @@ func (s *seeder) recordedModel() *llm.Client {
 				text = strings.ReplaceAll(text, `"$ledger"`, strconv.Quote(capture[0]))
 				text = strings.ReplaceAll(text, `"$index"`, strconv.Quote(capture[1]))
 			}
+			if f, ok := s.filesOf.Load(closeID); ok {
+				for file, id := range f.(map[string]string) {
+					text = strings.ReplaceAll(text, `"$source:`+file+`"`, strconv.Quote(id))
+				}
+			}
 		}
 		return reply(200, map[string]any{"id": "seed-" + given.Primary, "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": text}}}}}), nil
 	})
@@ -209,6 +216,9 @@ func answerFor(w seed.Work) string {
 		"reconciliation": {{"id": "$primary", "role": "support"}},
 		"unsupported":    {{"id": "$primary", "role": "support"}},
 	}[w.Kind]
+	if w.Sources != nil {
+		sources = w.Sources
+	}
 	answer := map[string]any{"lines": []any{}, "sources": sources}
 	for k, v := range w.Answer {
 		answer[k] = v
@@ -477,7 +487,16 @@ func (s *seeder) policies(ctx context.Context) {
 		{"reminder_after_days": 3, "reminder_max": 2, "reason": "Two reminders, three days apart, then a phone call"},
 	}
 	for _, change := range changes {
-		s.must(ctx, "policy", "POST", "/v1/closes/organization/policy", change)
+		if _, ok := s.must(ctx, "policy", "POST", "/v1/closes/organization/policy", change); !ok {
+			continue
+		}
+		for input := range change {
+			for column, name := range policyInputs {
+				if name == input {
+					s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||jsonb_build_object('changed',COALESCE(policy->'changed','[]'::jsonb)||to_jsonb($2::text)) WHERE organization_id=$1`, s.o.Organization, column)
+				}
+			}
+		}
 	}
 }
 
@@ -904,6 +923,14 @@ func (s *seeder) documents(ctx context.Context, closeID string, work []seed.Work
 	if err = tx.Commit(); err != nil {
 		s.problem("documents: %v", err)
 	}
+	files := map[string]string{}
+	if f, ok := s.filesOf.Load(closeID); ok {
+		files = f.(map[string]string)
+	}
+	for file, id := range evidenceIDs {
+		files[file] = id
+	}
+	s.filesOf.Store(closeID, files)
 	return jobs, evidenceIDs
 }
 
@@ -930,6 +957,12 @@ func (s *seeder) decide(ctx context.Context, c *seed.Client, closeID, period str
 		}
 		state, revision, proposal := s.jobState(ctx, jobID)
 		switch w.Kind {
+		case "register":
+			// The register export is the reconciliation's ledger side; its own reading is set aside.
+			if state == "needs_confirmation" {
+				s.must(ctx, "set aside the register's reading", "POST", "/v1/closes/"+closeID+"/work/"+jobID+"/cancel", map[string]any{"revision": revision})
+			}
+			continue
 		case "prepaid":
 			// An invoice the procedure's accounts do not cover (a second kind of prepaid) is confirmed by the accountant.
 			if state == "needs_confirmation" && len(proposal.Questions) == 0 {
@@ -950,7 +983,7 @@ func (s *seeder) decide(ctx context.Context, c *seed.Client, closeID, period str
 			if final && w.Request != nil {
 				continue
 			}
-			if ledgerID == "" {
+			if ledgerID == "" && w.Kind != "reconciliation" {
 				continue // no books captured: the draft waits for the capture
 			}
 			input := map[string]any{"entity": c.Name, "close_period": period}
@@ -963,10 +996,10 @@ func (s *seeder) decide(ctx context.Context, c *seed.Client, closeID, period str
 				"loan":           {{"id": primary, "role": "statement", "location": "Whole statement"}, {"id": ledgerID, "role": "ledger", "location": "Equipment Loan and Interest Expense"}, {"id": indexID, "role": "support", "location": "Loan payment purchase"}},
 				"payroll":        {{"id": primary, "role": "support", "location": "Whole summary"}, {"id": ledgerID, "role": "ledger", "location": "Payroll Clearing"}},
 				"owner":          {{"id": primary, "role": "support", "location": "Owner's reply"}, {"id": ledgerID, "role": "ledger", "location": "Meals and Entertainment"}},
-				"reconciliation": {{"id": primary, "role": "statement", "location": "Whole export"}, {"id": ledgerID, "role": "ledger", "location": "Checking"}},
+				"reconciliation": {{"id": primary, "role": "statement", "location": "Whole export"}, {"id": evidenceIDs[w.Register], "role": "ledger", "location": "Whole export"}},
 			}[w.Kind]
 			plan := map[string]any{"kind": w.Kind, "input": json.RawMessage(raw), "sources": sources}
-			if w.Kind != "reconciliation" && state == "needs_confirmation" && len(proposal.Questions) == 0 {
+			if state == "needs_confirmation" && len(proposal.Questions) == 0 {
 				plan["work_id"], plan["work_revision"] = jobID, revision
 			}
 			if out, ok := s.must(ctx, "prepare "+w.Kind+" from "+w.File, "POST", "/v1/closes/"+closeID+"/preparations", plan); ok {
@@ -1704,8 +1737,8 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		byClient(`DELETE FROM collection_contact_preferences WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND recorded_at BETWEEN $3 AND $4`),
 		byClient(`DELETE FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND recorded_at BETWEEN $3 AND $4`),
 		byClient(`DELETE FROM close_routines WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4`),
-		byClient(`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4 AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id)`),
-		{`DELETE FROM procedure_versions WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, procedures}},
+		byClient(`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=ANY($2) AND created_at BETWEEN $3 AND $4 AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs WHERE connection_id=quickbooks_connections.id)`),
+		{`DELETE FROM procedure_versions WHERE organization_id=$1 AND id=ANY($2) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.procedure_id=procedure_versions.id)`, []any{o.Organization, procedures}},
 		{`DELETE FROM chat_messages WHERE session_id=ANY($1)`, []any{chats}},
 		{`DELETE FROM chat_sessions WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, chats}},
 		{`DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2 AND key=ANY($3)`, []any{o.Organization, subject, keys}},
@@ -1730,8 +1763,14 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 			json.Unmarshal(raw, &now)
 		}
 		restore := map[string]any{"reason": "The demonstration was removed; the firm's policy is as it was before it"}
+		changed := map[string]bool{}
+		if list, ok := before["changed"].([]any); ok {
+			for _, field := range list {
+				changed[fmt.Sprint(field)] = true
+			}
+		}
 		for field, set := range seedPolicy {
-			if fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
+			if changed[field] && fmt.Sprint(now[field]) == fmt.Sprint(set) && fmt.Sprint(before[field]) != fmt.Sprint(set) {
 				restore[policyInputs[field]] = before[field]
 			}
 		}
@@ -1741,7 +1780,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		if restore != nil {
 			s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
 		}
-		if stopped, ok := before["agent_chat_stopped"].(bool); ok && fmt.Sprint(now["agent_chat"]) == fmt.Sprint(seedPolicy["agent_chat"]) {
+		if stopped, ok := before["agent_chat_stopped"].(bool); ok && changed["agent_chat"] && fmt.Sprint(now["agent_chat"]) == fmt.Sprint(seedPolicy["agent_chat"]) {
 			// The notice that the agent was stopped by a migration is not a policy the route sets; it is put back as found,
 			// unless the firm has since chosen an agent level of its own.
 			db.ExecContext(ctx, `UPDATE organizations SET agent_chat_stopped=$2 WHERE id=$1`, o.Organization, stopped)
@@ -1827,10 +1866,8 @@ func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions [
 		`DELETE FROM forwarded_files WHERE close_id=$1`,
 		`DELETE FROM forwarding_links WHERE close_id=$1`,
 		`DELETE FROM production_posting_grants WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
-		`DELETE FROM quickbooks_transaction_rows WHERE sync_id IN (SELECT id FROM quickbooks_entity_syncs WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1))`,
-		`DELETE FROM quickbooks_entity_syncs WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
-		`DELETE FROM quickbooks_snapshots WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
-		`DELETE FROM quickbooks_connections WHERE close_id=$1`,
+		`DELETE FROM quickbooks_connections WHERE close_id=$1 AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs s WHERE s.connection_id=quickbooks_connections.id)`,
+		`UPDATE quickbooks_connections SET close_id=(SELECT min(s.close_id) FROM quickbooks_snapshots s WHERE s.connection_id=quickbooks_connections.id) WHERE close_id=$1`,
 		`DELETE FROM xero_transaction_rows WHERE snapshot_id IN (SELECT id FROM xero_snapshots WHERE close_id=$1)`,
 		`DELETE FROM xero_snapshots WHERE close_id=$1`,
 		`DELETE FROM xero_posting_grants WHERE connection_id IN (SELECT id FROM xero_connections WHERE close_id=$1)`,

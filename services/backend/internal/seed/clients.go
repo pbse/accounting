@@ -291,7 +291,7 @@ Thanks,
 		work = append(work, Work{Kind: "owner", File: fmt.Sprintf("owner-reply-%s.txt", period), Text: text, Answer: answer, Confirm: input})
 	}
 	if c.Reconcile {
-		work = append(work, reconciliationWork(c, period, books))
+		work = append(work, reconciliationWork(c, period, books)...)
 	}
 	work = append(work, c.Extra[period]...)
 	return work
@@ -301,9 +301,10 @@ func slug(s string) string {
 	return strings.ToLower(strings.NewReplacer(" ", "-", ".", "", ",", "", "&", "and", "'", "").Replace(s))
 }
 
-// reconciliationWork is the month's bank statement for Checking and the ledger page for it, prepared by hand as an
-// exact match.
-func reconciliationWork(c *Client, period string, books Books) Work {
+// reconciliationWork is the month's bank statement export for Checking and the register export that is its ledger
+// side, both as id,date,amount CSVs; the agent reads the statement as a reconciliation of the two, and the
+// accountant prepares it from that reading as an exact match.
+func reconciliationWork(c *Client, period string, books Books) []Work {
 	var statement, ledger []string
 	statement = append(statement, "id,date,amount")
 	ledger = append(ledger, "id,date,amount")
@@ -325,12 +326,17 @@ func reconciliationWork(c *Client, period string, books Books) Work {
 			ledger = append(ledger, fmt.Sprintf("%s,%s,%s", t.ID, t.Date, show(amount)))
 		}
 	}
-	text := strings.Join(statement, "\n") + "\n"
-	input := map[string]any{"account": "Checking", "account_type": "bank", "currency": "USD", "statement_reference": "Riverbend Bank statement " + period + ", account 4471", "ledger_reference": "QuickBooks capture, Checking, " + period,
+	registerFile := fmt.Sprintf("checking-register-%s.csv", period)
+	statementFile := fmt.Sprintf("riverbend-checking-statement-%s.csv", period)
+	register := Work{Kind: "register", File: registerFile, Text: strings.Join(ledger, "\n") + "\n",
+		Answer: map[string]any{"kind": "unsupported", "summary": "QuickBooks register export for Checking, " + period, "questions": []string{"This is the Checking register export for " + period + "; it is the ledger side of the month's bank reconciliation."}, "facts": []map[string]string{}}}
+	input := map[string]any{"account": "Checking", "account_type": "bank", "currency": "USD", "statement_reference": "Riverbend Bank export " + period + ", account 4471", "ledger_reference": "QuickBooks Checking register export " + period,
 		"expected_pages": 1, "pages": []int{1}, "statement_opening": show(opening), "statement_closing": show(closing), "ledger_opening": show(opening), "ledger_closing": show(closing),
 		"policy_confirmed": true, "reviewed_matches": []any{}, "prior_outstanding": []any{}, "current_outstanding": []any{}, "transfers": []any{}}
-	answer := map[string]any{"kind": "unsupported", "summary": "Bank statement export for Checking, " + period, "questions": []string{"This is the Riverbend Bank export for Checking ····4471 for " + period + ". Reconcile it against the captured register on the reconciliation page."}, "facts": []map[string]string{}}
-	return Work{Kind: "reconciliation", File: fmt.Sprintf("riverbend-checking-statement-%s.csv", period), Text: text, Answer: answer, Confirm: input}
+	answer := map[string]any{"kind": "reconciliation", "summary": "Bank statement export for Checking, " + period + ", with its register", "questions": []string{}, "facts": []map[string]string{}}
+	item := Work{Kind: "reconciliation", File: statementFile, Text: strings.Join(statement, "\n") + "\n", Answer: answer, Confirm: input, Register: registerFile,
+		Sources: []map[string]string{{"id": "$primary", "role": "statement"}, {"id": "$source:" + registerFile, "role": "ledger"}}}
+	return []Work{register, item}
 }
 
 // The clients.

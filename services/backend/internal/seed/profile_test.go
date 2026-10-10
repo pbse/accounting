@@ -63,7 +63,7 @@ func TestEveryMonthBalancesAndReadsAsACapture(t *testing.T) {
 				t.Fatalf("%s %s: no open items map", c.Name, b.Period)
 			}
 			for _, w := range c.WorkFor(b.Period, b) {
-				if w.File == "" || w.Text == "" || (w.Answer == nil && !w.NoAnswer) {
+				if w.File == "" || w.Text == "" || (w.Answer == nil && !w.NoAnswer) || (w.Kind == "reconciliation" && w.Register == "") {
 					t.Errorf("%s %s: work %s incomplete", c.Name, b.Period, w.Kind)
 				}
 			}
