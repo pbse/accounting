@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Icon } from "@close/ui/components/Icon";
 import { workspaceQuery } from "../../data/queries";
-import { askAssistant, starterCommands, starters } from "./assistantStore";
+import { useNavigate } from "react-router";
+import { askAssistant, nextReview, starterCommands, starters } from "./assistantStore";
+import { parseCommand, runCommand, type Ask } from "./commands";
 
 // The composer at the foot of every page but Home (docs/design-system.md, Composer): a box with room for sentences
 // and three controls, the plus (the asks the agent answers here), the scope, and send. What is sent opens the agent
@@ -10,6 +12,8 @@ import { askAssistant, starterCommands, starters } from "./assistantStore";
 export function PageComposer({ closeId, executive }: { closeId: string; executive: boolean }) {
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
+  const [note, setNote] = useState("");
+  const navigate = useNavigate();
   const box = useRef<HTMLTextAreaElement>(null);
   const close = useQuery({ ...workspaceQuery<{ close: { entity: string; period: string } }>(`/${closeId}`), enabled: !!closeId }).data?.close;
   const scope = executive ? "Your business" : close ? `${close.entity} · ${close.period}` : closeId ? `Close #${closeId}` : "Firm-wide";
@@ -18,13 +22,37 @@ export function PageComposer({ closeId, executive }: { closeId: string; executiv
   useEffect(() => {
     setText("");
     setMenu(false);
+    setNote("");
   }, [closeId]);
   const send = (what: string) => {
     const line = what.trim();
     if (!line) return;
+    setNote("");
+    setMenu(false);
+    // A slash command runs as the drawer would run it: its fixed read, or its navigation, never the model.
+    if (!executive && line.startsWith("/")) {
+      const { command, argument } = parseCommand(line);
+      if (!command) {
+        setNote("Unknown command. Type / to see the commands.");
+        return;
+      }
+      setText("");
+      void runCommand(command, argument, {
+        closeId,
+        navigate,
+        nextReview,
+        ask: (ask: Ask, close: string) => {
+          // A firm-wide command asked from a close opens the firm's conversation on Home.
+          if (close !== closeId) navigate("/dashboard");
+          askAssistant(ask, close);
+        },
+      })
+        .then(setNote)
+        .catch((e: unknown) => setNote(e instanceof Error ? e.message : "The command could not run."));
+      return;
+    }
     askAssistant(!executive && starterCommands[line] ? starterCommands[line] : line, closeId);
     setText("");
-    setMenu(false);
   };
   // The box grows with its text, to seven lines.
   useEffect(() => {
@@ -35,6 +63,11 @@ export function PageComposer({ closeId, executive }: { closeId: string; executiv
   }, [text]);
   return (
     <div className="ks-composer foot">
+      {note && (
+        <p role="alert" className="ks-composer-note">
+          {note}
+        </p>
+      )}
       <form
         className="ks-box"
         onSubmit={(event) => {

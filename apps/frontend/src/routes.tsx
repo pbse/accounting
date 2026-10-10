@@ -60,7 +60,7 @@ async function workspaceLoader({ context, request }: LoaderFunctionArgs) {
 
 // Home reads its counts and every section under them; the filters start empty.
 async function homeLoader({ context }: LoaderFunctionArgs) {
-  if (prefetching) await prefetch(context, "/home", "/review-queue?client=", "/portfolio", "/setup", "/dependencies?client=", "/daily?client=", "/goals?client=");
+  if (prefetching) await prefetch(context, "/home", "/me/profile", "/portfolio", "/setup", "/goals?client=");
   return null;
 }
 

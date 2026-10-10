@@ -21,7 +21,8 @@ export default function Home() {
   const homeRead = useQuery({ ...workspaceQuery<HomeCounts>("/home"), refetchInterval: 30_000 });
   const counts = homeRead.data;
   const error = homeRead.error ? homeRead.error.message || "Home is unavailable." : "";
-  const me = useQuery(workspaceQuery<{ email?: string; first_name?: string }>("/me")).data;
+  // The person's name comes with their profile, read with the page.
+  const me = useQuery(workspaceQuery<{ email?: string; first_name?: string }>("/me/profile")).data;
   const [chatting, setChatting] = useState(false);
   const bump = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   const hour = useHour();
@@ -35,6 +36,7 @@ export default function Home() {
         missed ? n(missed, "close") + " overdue" : "",
         counts.uncaptured.length ? n(counts.uncaptured.length, "month") + " without month-end books" : "",
         counts.books.exceptions ? n(counts.books.exceptions, "new exception") + " in the books" : "",
+        counts.books.unchecked ? n(counts.books.unchecked, "capture") + " not fully checked" : "",
       ].filter(Boolean)
     : [];
   const line = counts ? `${waiting.length ? waiting.join(" · ") : "Nothing is waiting on you"} · counted at ${dates.time(counts.as_of)}` : error ? "Your closes could not be read." : "Reading your closes…";

@@ -1161,6 +1161,15 @@ aside.assistant {
   margin: var(--space-24) auto 0;
   z-index: 5;
 }
+.ks-composer-note {
+  margin: 0;
+  padding: var(--space-8) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--ring);
+  font-size: 13px;
+  color: var(--ink-2);
+}
 /* The page's content ends above the composer, so nothing hides under it. */
 .app-shell .app-main:has(> .ks-composer.foot) .page {
   padding-bottom: 150px;
