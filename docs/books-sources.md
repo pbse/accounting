@@ -239,7 +239,7 @@ File imports stay behind a firm setting until every feature a month on files nee
 
 Each client gets a page at `/dashboard/clients/<client>`, on the Krith design system, reached from its row in Clients (the records page from #343). It holds:
 
-- the client's name, and the roster settings `Roster.tsx` manages today: active state, first month to close, owner, and days after month-end, including what it takes from the firm's template. Renaming a client is not part of it; that would be new work;
+- the client's name, and the roster settings `Roster.tsx` manages today: active state, first month to close, owner, and days after month-end, including what it takes from the firm's template. Renaming a client is not possible today; the page is the natural place for it as a follow-up, which must keep the client's identity, access and history intact (existing names already resolve through confirmed aliases);
 - the **Books card**: the client's ledger and how its books arrive, the connection or the latest upload with its freshness, reconnect, upload, the saved layouts and the account map;
 - the client profile (currency, fiscal-year start) and a link to the approved basis procedure;
 - the client's months, newest first, each with its state and books version;
@@ -309,7 +309,7 @@ Reliable US market-share figures for these ledgers were not found; the counts ab
 Each PR leaves the product working, and is reviewed and validated as usual. None of it gates launch, and launch work does not wait for it. File imports stay behind a firm setting: step 9 turns it on for internal validation and the demonstration firm only; partner firms get it after step 13, once the acceptance below passes.
 
 1. **Client page.** On Krith, with the Books card holding today's QuickBooks and Xero connections, moved out of the month, and the setup checklist pointing to it. Independent of everything below.
-2. **Ledger catalog and onboarding.** The catalog as configuration, the client's ledger recorded in Add client and on the Books card (including not known yet and a named other ledger), connector switches, and the admin console's counts. Recording or correcting the ledger changes no books; source switching arrives with step 4, file upload with step 9.
+2. **Ledger catalog and onboarding** (details to be confirmed with the owner as the work starts; see [ledger catalog](#ledger-catalog-and-onboarding)). The catalog as configuration, the client's ledger recorded in Add client and on the Books card (including not known yet and a named other ledger), connector switches, and the admin console's counts. Recording or correcting the ledger changes no books; source switching arrives with step 4, file upload with step 9.
 3. **Month-books record.** `books_versions` and `books_lines`; backfill and dual-write for QuickBooks and Xero; parity checks. No visible change.
 4. **Client profile and source selection.** The confirmed profile and its readers; each client's default source and month overrides, set from today's behaviour.
 5. **Readers move.** Feature by feature as under [migration](#migration), each with its readiness, status, exports and invalidation. A reader switches only when parity holds and the switch puts no launch work at risk; otherwise it waits, and the provider path keeps working unchanged.
@@ -321,7 +321,7 @@ Each PR leaves the product working, and is reviewed and validated as usual. None
 11. **Cash and open items.** Current-cash and open-item observations with their cutoffs; a dated bank-to-book bridge (extending the reconciliation to a mid-month cutoff, or a reviewed external reconciliation with its outstanding items), pinned to its cutoff, accounts and evidence and never counted as a completed month-end reconciliation; reconciliation to control accounts for accrual books and operational lists for cash-basis books; the cash plan on files.
 12. **Client-provided books.** Connect and upload requests, workbook scanning, larger limits. Part of the first release of files to partner firms.
 13. **Partner release of files,** once the acceptance below passes.
-14. **Native connectors,** in an order informed by the onboarding counts and each ledger's access terms, each switched on by configuration after its own acceptance.
+14. **Native connectors,** in an order informed by demand (the onboarding counts, as proposed) and each ledger's access terms, each switched on by configuration after its own acceptance.
 
 ## Acceptance
 
