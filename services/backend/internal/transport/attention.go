@@ -279,7 +279,12 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 				if err != nil {
 					return false
 				}
-				if _, _, status := sessions.accessToken(r.Context(), db, firmSession, verifier, cookie.Value); status != 0 {
+				// The session rows are the system's, not a firm's: the lookup runs without this request's actor, as it
+				// does when a request enters, on a context of its own.
+				lookup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_, _, status := sessions.accessToken(lookup, db, firmSession, verifier, cookie.Value)
+				cancel()
+				if status != 0 {
 					return false
 				}
 			}
