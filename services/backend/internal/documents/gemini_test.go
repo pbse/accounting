@@ -86,7 +86,7 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 		if text, method, err = reading.page(ctx, "", render, tesseract); err != nil || text != "SCANNED INVOICE 6000.00" || method != "OCR (English; verify against original)" {
 			t.Fatalf("%+v: a scanned page falls back to Tesseract: %q %q %v", failing, text, method, err)
 		}
-		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Gemini could not compare it with the page image" {
+		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Image model could not compare it with the page image" {
 			t.Fatalf("%+v: a page with text keeps it, saying it went unchecked: %q %q", failing, text, method)
 		}
 	}
@@ -147,7 +147,7 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 	// A page that cannot be rendered fails only when nothing else can read it.
 	broken := func() ([]byte, error) { return nil, errors.New("pdftoppm failed") }
 	reading = Reading{Gemini: &fakeReader{text: "never sent"}}
-	if text, method, err = reading.page(ctx, layer, broken, noTesseract); err != nil || text != layer || method != "PDF text; Gemini could not compare it with the page image" {
+	if text, method, err = reading.page(ctx, layer, broken, noTesseract); err != nil || text != layer || method != "PDF text; Image model could not compare it with the page image" {
 		t.Fatalf("an unrenderable page with text keeps it: %q %q %v", text, method, err)
 	}
 	if _, _, err = reading.page(ctx, "", broken, noTesseract); err != errRender {
@@ -192,7 +192,7 @@ func TestSameReadingSetsOnlyLayoutAside(t *testing.T) {
 func TestAPageGeminiReadDifferentlyIsNamedToCompare(t *testing.T) {
 	flagged := "--- Page 1 · PDF text; Gemini gemini-3.8-flash-001" + imageDiffers + " ---\nStatement\nPage 1 of 2\n--- Page 2 · PDF text; Gemini gemini-3.8-flash-001 read the same text ---\nPage 2 of 2\n"
 	check := Check("statement.pdf", flagged)
-	if len(check.Warnings) != 1 || len(check.Questions) != 0 || !strings.Contains(check.Warnings[0], "PDF page 1: Gemini's reading of the page image differs from its PDF text; compare that page with the original") {
+	if len(check.Warnings) != 1 || len(check.Questions) != 0 || !strings.Contains(check.Warnings[0], "PDF page 1: The image model's reading of the page image differs from its PDF text; compare that page with the original") {
 		t.Fatalf("a page Gemini read differently is named, to compare with the original: %+v", check)
 	}
 	if agreed := Check("statement.pdf", strings.Replace(flagged, imageDiffers, " read the same text", 1)); len(agreed.Warnings) != 0 || len(agreed.Questions) != 0 {
@@ -202,12 +202,62 @@ func TestAPageGeminiReadDifferentlyIsNamedToCompare(t *testing.T) {
 	if inText := Check("statement.pdf", "--- Page 1 · PDF text ---\nGemini"+imageDiffers+" ---\nPage 1 of 1\n"); len(inText.Warnings) != 0 || len(inText.Questions) != 0 {
 		t.Fatalf("a page's text cannot raise the warning: %+v", inText)
 	}
-	// Pages Gemini could not compare are named together, in a warning that holds nothing.
+	// Pages the image model could not compare are named together, in a warning that holds nothing.
 	unchecked := Check("statement.pdf", "--- Page 1 · PDF text"+imageUnchecked+" ---\nPage 1 of 3\n--- Page 2 · PDF text ---\nPage 2 of 3\n--- Page 3 · PDF text"+imageUnchecked+" ---\nPage 3 of 3\n")
-	if len(unchecked.Questions) != 0 || len(unchecked.Warnings) != 1 || !strings.HasPrefix(unchecked.Warnings[0], "Gemini could not compare PDF pages 1 and 3 with the page image") {
-		t.Fatalf("pages Gemini could not compare are named: %+v", unchecked)
+	if len(unchecked.Questions) != 0 || len(unchecked.Warnings) != 1 || !strings.HasPrefix(unchecked.Warnings[0], "The image model could not compare PDF pages 1 and 3 with the page image") {
+		t.Fatalf("pages the image model could not compare are named: %+v", unchecked)
 	}
-	if !strings.Contains(strings.Join(Check("invoice.pdf", "--- Page 1 · PDF text"+imageUnchecked+" ---\nTotal 5\n").Warnings, " "), "Gemini could not compare PDF page 1 with") {
-		t.Fatal("one page Gemini could not compare is named")
+	if !strings.Contains(strings.Join(Check("invoice.pdf", "--- Page 1 · PDF text"+imageUnchecked+" ---\nTotal 5\n").Warnings, " "), "The image model could not compare PDF page 1 with") {
+		t.Fatal("one page the image model could not compare is named")
+	}
+}
+
+func TestLegacyGeminiUncheckedLabelsStillWarn(t *testing.T) {
+	old := Check("statement.pdf", "--- Page 1 · PDF text"+legacyImageUnchecked+" ---\nPage 1 of 1\n")
+	if !strings.Contains(strings.Join(old.Warnings, " "), "could not compare PDF page 1") {
+		t.Fatal(old)
+	}
+}
+
+func TestBusyImageServiceFallsBackForRemainingPagesWithoutMoreReservations(t *testing.T) {
+	reserved := 0
+	reader := &fakeReader{err: llm.ErrBusy}
+	reading := Reading{Gemini: reader, Provider: "Image model", Reserve: func(context.Context) error { reserved++; return nil }}
+	for i := 0; i < 3; i++ {
+		text, method, err := reading.page(t.Context(), "PDF text", func() ([]byte, error) { return []byte("synthetic"), nil }, func([]byte) (string, error) { t.Fatal("text layer needs no Tesseract"); return "", nil })
+		if err != nil || text != "PDF text" || method != "PDF text"+imageUnchecked {
+			t.Fatal(text, method, err)
+		}
+	}
+	if reserved != 1 || len(reader.sent) != 1 {
+		t.Fatal("busy service was retried", reserved, len(reader.sent))
+	}
+}
+
+type validatedReader struct{ fakeReader }
+
+func (*validatedReader) ValidatePage(context.Context, []byte) error { return llm.ErrLimit }
+func TestPageKnownLimitsAreRejectedBeforeBudgetReservation(t *testing.T) {
+	reserved := 0
+	reader := &validatedReader{}
+	reading := Reading{Gemini: reader, Provider: "Image model", Reserve: func(context.Context) error { reserved++; return nil }}
+	text, _, err := reading.page(t.Context(), "PDF text", func() ([]byte, error) { return []byte("page"), nil }, func([]byte) (string, error) { t.Fatal("text layer needs no Tesseract"); return "", nil })
+	if err != nil || text != "PDF text" || reserved != 0 || len(reader.sent) != 0 {
+		t.Fatal("known invalid image was charged or dispatched", reserved, text, err)
+	}
+}
+
+func TestContextMachineFailureStopsModelReadsForRemainingPages(t *testing.T) {
+	reserved := 0
+	reader := &fakeReader{err: errors.New("model service returned HTTP 503")}
+	reading := Reading{Gemini: reader, Provider: "Image model", StopOnError: true, Reserve: func(context.Context) error { reserved++; return nil }}
+	for i := 0; i < 3; i++ {
+		text, _, err := reading.page(t.Context(), "PDF text", func() ([]byte, error) { return []byte("page"), nil }, func([]byte) (string, error) { return "", nil })
+		if err != nil || text != "PDF text" {
+			t.Fatal(text, err)
+		}
+	}
+	if reserved != 1 || len(reader.sent) != 1 {
+		t.Fatal("failed context machine was retried", reserved, len(reader.sent))
 	}
 }

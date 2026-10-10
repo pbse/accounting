@@ -56,7 +56,7 @@ These are pointers into the existing implementation, not evidence that a package
 | [Design system](docs/design-system.md) | Krith: the agent-first shell (sidebar, Home stage, composer, close and records pages), tokens, components, motion and the layout check. Tray is archived at [docs/archive/design-system-tray.md](docs/archive/design-system-tray.md). |
 | [Workspace simplification](docs/workspace-simplification.md) | The 2026-10-07 audit's decisions: the cleaner look, the top bar, and the PR sequence that rebuilds the home, Clients, the close page, Firm settings and the copy. |
 | [Workflow engine](docs/workflow-engine.md) | Go durable workflow primitives, activity execution and current/deferred engine capabilities. |
-| [LLM gateway](docs/llm-gateway.md) | Model routing, context-machine integration, execution and operational boundaries. |
+| [LLM gateway](docs/llm-gateway.md) | Text/image model routing, context-machine integration, local evaluation, execution and operational boundaries. |
 | [Context-machine deployment](docs/context-machine-deployment.md) | Runtime configuration, deployment and verification procedure. |
 | [Agentic chat plan](docs/agent-chat.md) | The governing design for the assistant rebuild: model-chosen tool reads, writes as confirmed cards, event protocol, Context Machine constraints, panel look and feel, evaluation and the four delivery PRs (2026-10-07). |
 | [Assistant](docs/chat.md) | Current scoped chat behavior: keyword reads, cards, written answers and investigations, until the agentic chat plan replaces each part. |

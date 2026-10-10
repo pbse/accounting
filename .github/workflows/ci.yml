@@ -145,3 +145,20 @@ jobs:
           docker build -t close-context-machine -f services/context-machine/Dockerfile .
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go -C services/backend test -c -o /tmp/machine.test ./internal/llm/machine
           docker run --rm --entrypoint /tmp/machine.test -e CONTEXT_MACHINE_CLI_SMOKE=1 -v /tmp/machine.test:/tmp/machine.test:ro close-context-machine -test.run 'TestInstalled.*CLIs' -test.v
+      - name: Record the exact file tree that passed CI
+        if: github.event_name == 'pull_request'
+        env:
+          CI_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node --input-type=module <<'JS'
+          import {execFileSync} from 'node:child_process';
+          import {writeFileSync} from 'node:fs';
+          writeFileSync('/tmp/provenance.json',JSON.stringify({head:process.env.CI_PR_HEAD,tree:execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim()}));
+          JS
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'pull_request'
+        with:
+          name: ci-provenance
+          path: /tmp/provenance.json
+          retention-days: 7
+          if-no-files-found: error

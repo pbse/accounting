@@ -312,7 +312,7 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 		t.Fatalf("which outside services are in use: %+v", got.Providers)
 	}
 	for _, p := range got.Providers {
-		if p.Provider == "Google Gemini" && (p.Evidence != "Key set on the worker; model gemini-3.8-flash; 2 page readings reserved in the last 30 days" || !strings.Contains(p.Receives, "Each page of a PDF")) {
+		if p.Provider == "Google Gemini" && (p.Evidence != "Key set on the worker; model gemini-3.8-flash; 2 page readings reserved in the last 30 days (across configured image providers; not confirmed delivery)" || !strings.Contains(p.Receives, "Each page of a PDF")) {
 			t.Fatalf("Gemini receives each PDF page, as the worker reports: %+v", p)
 		}
 	}
