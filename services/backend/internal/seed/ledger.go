@@ -88,10 +88,24 @@ type Books struct {
 	Settled map[string]bool
 }
 
-// Captured is every transaction this month's capture reads back: the entries posted since the last capture, then
-// the month's own.
-func (b Books) Captured() []Txn {
-	return append(append([]Txn{}, b.Posted...), b.Txns...)
+// PostedRecords are the previous month's close entries as the ledger returns them once posted: the readback the
+// bookkeeper's posting leaves, kept with the month that opens on them.
+func (b Books) PostedRecords() []json.RawMessage {
+	var out []json.RawMessage
+	for _, t := range b.Posted {
+		out = append(out, b.Record(t))
+	}
+	return out
+}
+
+// reportedKind is the label the TransactionList report gives a transaction type.
+var reportedKind = map[string]string{"BillPayment": "Bill Payment (Check)", "Purchase": "Expense", "JournalEntry": "Journal Entry", "SalesReceipt": "Sales Receipt", "VendorCredit": "Vendor Credit", "CreditMemo": "Credit Memo", "RefundReceipt": "Refund"}
+
+func reportedLabel(kind string) string {
+	if label, ok := reportedKind[kind]; ok {
+		return label
+	}
+	return kind
 }
 
 // Closing is the net balance by account at the end of the month.
@@ -363,10 +377,13 @@ func (b Books) CashFlow() json.RawMessage {
 // TransactionList is the month's transactions as the report lists them.
 func (b Books) TransactionList() json.RawMessage {
 	rows := []map[string]any{}
-	for _, t := range b.Captured() {
-		rows = append(rows, map[string]any{"type": "Data", "ColData": []map[string]string{{"value": t.Date}, {"value": t.Kind, "id": t.ID}, {"value": t.Number}, {"value": t.Party, "id": t.PartyID}, {"value": t.Memo}, {"value": show(t.Amount)}}})
+	for _, t := range b.Txns {
+		rows = append(rows, map[string]any{"type": "Data", "ColData": []map[string]string{{"value": t.Date}, {"value": reportedLabel(t.Kind), "id": t.ID}, {"value": t.Number}, {"value": "No"}, {"value": t.Party, "id": t.PartyID}, {"value": t.Memo}, {"value": show(t.Amount)}}})
 	}
-	report := map[string]any{"Header": header("TransactionList", b.Period, b.Currency), "Columns": map[string]any{"Column": []map[string]string{{"ColTitle": "Date", "ColType": "Date"}, {"ColTitle": "Transaction Type", "ColType": "String"}, {"ColTitle": "Num", "ColType": "String"}, {"ColTitle": "Name", "ColType": "String"}, {"ColTitle": "Memo/Description", "ColType": "String"}, {"ColTitle": "Amount", "ColType": "Money"}}}, "Rows": map[string]any{"Row": rows}}
+	column := func(title, kind, key string) map[string]any {
+		return map[string]any{"ColTitle": title, "ColType": kind, "MetaData": []map[string]string{{"Name": "ColKey", "Value": key}}}
+	}
+	report := map[string]any{"Header": header("TransactionList", b.Period, b.Currency), "Columns": map[string]any{"Column": []map[string]any{column("Date", "Date", "tx_date"), column("Transaction Type", "String", "txn_type"), column("Num", "String", "doc_num"), column("Posting", "String", "is_no_post"), column("Name", "String", "name"), column("Memo/Description", "String", "memo"), column("Amount", "Money", "subt_nat_amount")}}, "Rows": map[string]any{"Row": rows}}
 	raw, _ := json.Marshal(report)
 	return raw
 }
@@ -480,7 +497,7 @@ func (b Books) Counts() map[string]int {
 	for _, kind := range []string{"Bill", "BillPayment", "CreditMemo", "Deposit", "Invoice", "JournalEntry", "Payment", "Purchase", "RefundReceipt", "SalesReceipt", "Transfer", "VendorCredit"} {
 		counts[kind] = 0
 	}
-	for _, t := range b.Captured() {
+	for _, t := range b.Txns {
 		counts[t.Kind]++
 	}
 	return counts

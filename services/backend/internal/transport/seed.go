@@ -717,6 +717,9 @@ func (s *seeder) client(ctx context.Context, c *seed.Client, index int) error {
 			if connection, err = s.capture(ctx, c, closeID, connection, b, earlier, n); err != nil {
 				return fmt.Errorf("%s capture: %w", period, err)
 			}
+			if out, ok := s.must(ctx, "ledger certification", "GET", "/v1/closes/"+closeID+"/ledger-certification", nil); ok && str(field(out, "status")) != "agrees" {
+				s.problem("%s %s: the period reports and the transaction capture do not certify: %s", c.Name, period, out)
+			}
 		}
 		work := c.WorkFor(period, b)
 		jobs, evidenceIDs := s.documents(ctx, closeID, work)
@@ -922,10 +925,18 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 		err := s.db.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state,created_at) VALUES($1,$2,$3,$4,'quickbooks-sync','ready',$5) RETURNING id::text`, closeID, name, preparation.Digest([]byte(body)), body, at).Scan(&id)
 		return id, err
 	}
+	// The previous month's close entries as the ledger returns them once the bookkeeper has posted them, dated that
+	// month-end: the readback that explains this month's opening balances, kept with this close.
+	if posted := b.PostedRecords(); len(posted) > 0 {
+		readback, _ := json.Marshal(map[string]any{"source": "quickbooks_postings", "period": seed.PreviousMonth(b.Period), "realm": realm, "read_at": captured, "entries": posted})
+		if _, err := evidence("QuickBooks entries posted for "+seed.PreviousMonth(b.Period), string(readback), captured); err != nil {
+			return "", err
+		}
+	}
 	// The transaction capture.
 	records := map[string][]json.RawMessage{}
 	var all []string
-	for _, t := range b.Captured() {
+	for _, t := range b.Txns {
 		raw := b.Record(t)
 		records[t.Kind] = append(records[t.Kind], raw)
 		all = append(all, string(raw))
@@ -938,7 +949,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 		return "", err
 	}
 	var rows []quickbooks.TransactionRow
-	for _, t := range b.Captured() {
+	for _, t := range b.Txns {
 		rows = append(rows, quickbooks.TransactionRow{Kind: t.Kind, ProviderID: t.ID, Date: t.Date, Currency: "USD", Amount: t.Amount.FloatString(2), Record: b.Record(t)})
 	}
 	exceptions := append(quickbooks.FindExceptions(rows), quickbooks.OpenItemExceptions(open, monthEndTime(b.Period))...)
@@ -952,7 +963,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 		closeID, connection, b.Period, indexID, captured.Add(-3*time.Minute), captured, string(summary), preparation.Digest(allRaw), string(exceptionsRaw)).Scan(&syncID); err != nil {
 		return "", err
 	}
-	for _, t := range b.Captured() {
+	for _, t := range b.Txns {
 		if _, err = s.db.ExecContext(ctx, `INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,$2,$3,'0',$4,$5,'USD',$6,$7)`,
 			syncID, t.Kind, t.ID, t.Date, t.Date+"T14:00:00Z", t.Amount.FloatString(2), string(b.Record(t))); err != nil {
 			return "", err
@@ -2227,7 +2238,7 @@ func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions, 
 		`DELETE FROM forwarding_links WHERE close_id=$1`,
 		`DELETE FROM production_posting_grants WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
 		`DELETE FROM quickbooks_connections WHERE close_id=$1 AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs s WHERE s.connection_id=quickbooks_connections.id)`,
-		`UPDATE quickbooks_connections SET close_id=(SELECT min(s.close_id) FROM quickbooks_snapshots s WHERE s.connection_id=quickbooks_connections.id) WHERE close_id=$1`,
+		`UPDATE quickbooks_connections SET close_id=COALESCE((SELECT min(s.close_id) FROM quickbooks_snapshots s WHERE s.connection_id=quickbooks_connections.id AND s.close_id<>$1::bigint),(SELECT min(z.close_id) FROM quickbooks_entity_syncs z WHERE z.connection_id=quickbooks_connections.id AND z.close_id<>$1::bigint)) WHERE close_id=$1::bigint AND EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.connection_id=quickbooks_connections.id AND s.close_id<>$1::bigint UNION ALL SELECT 1 FROM quickbooks_entity_syncs z WHERE z.connection_id=quickbooks_connections.id AND z.close_id<>$1::bigint)`,
 		`DELETE FROM xero_transaction_rows WHERE snapshot_id IN (SELECT id FROM xero_snapshots WHERE close_id=$1)`,
 		`DELETE FROM xero_snapshots WHERE close_id=$1`,
 		`DELETE FROM xero_posting_grants WHERE connection_id IN (SELECT id FROM xero_connections WHERE close_id=$1)`,

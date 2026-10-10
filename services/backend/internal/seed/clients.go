@@ -144,6 +144,9 @@ func previousMonthOf(period string) string {
 	return t.AddDate(0, -1, 0).Format("2006-01")
 }
 
+// PreviousMonth is the month before period.
+func PreviousMonth(period string) string { return previousMonth(period) }
+
 func previousMonth(period string) string {
 	for i, m := range Months {
 		if m == period && i > 0 {
