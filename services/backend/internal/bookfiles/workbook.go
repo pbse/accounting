@@ -158,7 +158,10 @@ func ReadWorkbook(body []byte) (File, error) {
 	}
 	dated := make([]bool, len(styles.Cells))
 	for i, c := range styles.Cells {
-		dated[i] = (c.Format >= 14 && c.Format <= 17) || c.Format == 22 || documents.ShowsDate(custom[c.Format])
+		// The built-in date formats: 14 to 17 and 22, and the localized ones East Asian versions use (27 to 36, 50 to 58).
+		builtIn := (c.Format >= 14 && c.Format <= 17) || c.Format == 22 || (c.Format >= 27 && c.Format <= 36) || (c.Format >= 50 && c.Format <= 58)
+		_, own := custom[c.Format]
+		dated[i] = (builtIn && !own) || documents.ShowsDate(custom[c.Format])
 	}
 	epoch := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 	if workbook.Pr.Date1904 {

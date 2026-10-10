@@ -22,6 +22,9 @@ type NumberStyle struct {
 type Amount struct {
 	Value *big.Rat
 	Cents bool
+	// Side is dr or cr when the amount carried a Dr or Cr marker (Value is then signed as balances are, a credit
+	// negative), else "".
+	Side string
 }
 
 // ErrNotAmount is a value that is not an amount in the stated style.
@@ -41,16 +44,16 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 	}
 	negative := false
 	// A Dr or Cr suffix (or prefix) says the side: a credit is negative, as balances are kept (debit minus credit).
-	upper := strings.ToUpper(s)
+	upper, side := strings.ToUpper(s), ""
 	switch {
 	case strings.HasSuffix(upper, "CR"):
-		negative, s = true, strings.TrimSpace(s[:len(s)-2])
+		negative, side, s = true, "cr", strings.TrimSpace(s[:len(s)-2])
 	case strings.HasSuffix(upper, "DR"):
-		s = strings.TrimSpace(s[:len(s)-2])
+		side, s = "dr", strings.TrimSpace(s[:len(s)-2])
 	case strings.HasPrefix(upper, "CR "):
-		negative, s = true, strings.TrimSpace(s[3:])
+		negative, side, s = true, "cr", strings.TrimSpace(s[3:])
 	case strings.HasPrefix(upper, "DR "):
-		s = strings.TrimSpace(s[3:])
+		side, s = "dr", strings.TrimSpace(s[3:])
 	}
 	// Parentheses, a leading or trailing minus and a currency mark or code can wrap one another in any order
 	// ($ (12.00), -$12.00, (12.00) USD); each is taken off until none is left.
@@ -99,7 +102,7 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 		resolution := new(big.Rat).SetFrac(big.NewInt(scale), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(len(fraction))), nil))
 		cents = cents && resolution.Cmp(big.NewRat(1, 100)) <= 0
 	}
-	return Amount{Value: value, Cents: cents}, nil
+	return Amount{Value: value, Cents: cents, Side: side}, nil
 }
 
 // pointGrouped and commaGrouped are a number with a decimal point or a decimal comma: its whole part, either plain or

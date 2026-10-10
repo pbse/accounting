@@ -40,8 +40,10 @@ type Layout struct {
 	AsOf        string `json:"as_of"`
 	Currency    string `json:"currency"`
 	// Headings are rows a person confirmed are headings though nothing totals them; any other row with an account and
-	// no amounts is an account with a zero balance.
+	// no amounts is an account with a zero balance. Totals are rows a person confirmed are totals though not named so;
+	// a total is otherwise known by its name ("Total …"), never by its amount being a formula.
 	Headings []int `json:"headings,omitempty"`
+	Totals   []int `json:"totals,omitempty"`
 }
 
 // headerWords names what each column header usually says, for a proposal.
@@ -167,6 +169,8 @@ type Line struct {
 	Name    string   `json:"name"`
 	Type    string   `json:"type,omitempty"`
 	Balance *big.Rat `json:"-"`
+	// Debit and Credit are the row's two columns as written, in a two-column layout, for checking totals by column.
+	Debit, Credit *big.Rat `json:"-"`
 	// Amount is Balance as an exact decimal, for storing.
 	Amount string `json:"balance"`
 	// Other balances the file carries for the account, by meaning.
@@ -221,6 +225,7 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 			}
 		}
 		if debit != nil && credit != nil {
+			debits, credits = columnSums(lines[:i])
 			if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
 				return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows above come to %s and %s", t.Row, t.Name, exact(debit), exact(credit), exact(debits), exact(credits))}
 			}
@@ -247,15 +252,8 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 		}
 	}
 	if debit != nil && credit != nil {
-		// Written as two columns, each column must equal its side of the rows it totals.
-		debits, credits := new(big.Rat), new(big.Rat)
-		for _, l := range lines[from:i] {
-			if l.Kind == Posting && l.Balance.Sign() > 0 {
-				debits.Add(debits, l.Balance)
-			} else if l.Kind == Posting {
-				credits.Sub(credits, l.Balance)
-			}
-		}
+		// Written as two columns, each column must equal its column's sum over the rows it totals.
+		debits, credits := columnSums(lines[from:i])
 		if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
 			return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows it totals come to %s and %s", t.Row, t.Name, exact(debit), exact(credit), exact(debits), exact(credits))}
 		}
@@ -273,6 +271,16 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
 	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}}
+	// The month-end balance is what a Trial Balance is read for: a layout naming no column for it reads nothing, rather
+	// than every account as zero.
+	meanings := map[Meaning]bool{}
+	for _, m := range l.Columns {
+		meanings[m] = true
+	}
+	if !meanings[Balance] && !(meanings[Debit] && meanings[Credit]) {
+		reading.Problems = append(reading.Problems, "The layout names no month-end balance: choose the debit and credit columns, or the one signed balance column")
+		return reading
+	}
 	// The names a total row totals ("Total Current Assets" totals "Current Assets"): a row by such a name with no amounts
 	// heads what the total covers.
 	totalled := map[string]bool{}
@@ -295,7 +303,7 @@ func (l Layout) Read(t Table) Reading {
 		}
 		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cents: true}
 		var debit, credit, balance *big.Rat
-		hasAmount, summed := false, false
+		hasAmount, signed := false, false
 		for _, c := range r.Cells {
 			meaning, ok := l.Columns[c.Column]
 			if !ok {
@@ -319,14 +327,22 @@ func (l Layout) Read(t Table) Reading {
 				}
 				hasAmount = true
 				line.Cents = line.Cents && a.Cents
-				summed = summed || strings.Contains(strings.ToUpper(c.Formula), "SUM(")
-				switch meaning {
-				case Debit:
+				// A Dr or Cr marker says the side itself, whichever column the amount sits in: its value is then already
+				// signed as balances are, a credit negative.
+				switch {
+				case a.Side != "" && (meaning == Debit || meaning == Credit):
+					if a.Value.Sign() >= 0 {
+						debit = a.Value
+					} else {
+						credit = new(big.Rat).Neg(a.Value)
+					}
+				case meaning == Debit:
 					debit = a.Value
-				case Credit:
+				case meaning == Credit:
 					credit = a.Value
-				case Balance:
+				case meaning == Balance:
 					balance = a.Value
+					signed = a.Side != ""
 				default:
 					line.Others[meaning] = exact(a.Value)
 				}
@@ -338,16 +354,18 @@ func (l Layout) Read(t Table) Reading {
 		switch {
 		case balance != nil:
 			line.Balance = new(big.Rat).Set(balance)
-			if l.BalanceSign == "credit" {
+			if l.BalanceSign == "credit" && !signed {
 				line.Balance.Neg(line.Balance)
 			}
 		case debit != nil || credit != nil:
-			line.Balance = new(big.Rat)
+			line.Balance, line.Debit, line.Credit = new(big.Rat), new(big.Rat), new(big.Rat)
 			if debit != nil {
 				line.Balance.Add(line.Balance, debit)
+				line.Debit.Set(debit)
 			}
 			if credit != nil {
 				line.Balance.Sub(line.Balance, credit)
+				line.Credit.Set(credit)
 			}
 		}
 		// A row with no amounts heads a section when a total names it or a person said it does; otherwise it is an
@@ -361,7 +379,7 @@ func (l Layout) Read(t Table) Reading {
 		switch {
 		case line.Balance == nil:
 			line.Kind = Heading
-		case totalName.MatchString(line.Name) || summed:
+		case totalName.MatchString(line.Name) || slices.Contains(l.Totals, r.Number):
 			line.Kind = Total
 		default:
 			line.Kind = Posting
@@ -408,4 +426,27 @@ func exact(r *big.Rat) string {
 		}
 	}
 	return r.RatString()
+}
+
+// columnSums is the posting rows' debit and credit columns summed as written (a row in a signed-balance layout counts
+// on its balance's side).
+func columnSums(lines []Line) (*big.Rat, *big.Rat) {
+	debits, credits := new(big.Rat), new(big.Rat)
+	for _, l := range lines {
+		switch {
+		case l.Kind != Posting:
+		case l.Debit != nil || l.Credit != nil:
+			if l.Debit != nil {
+				debits.Add(debits, l.Debit)
+			}
+			if l.Credit != nil {
+				credits.Add(credits, l.Credit)
+			}
+		case l.Balance.Sign() > 0:
+			debits.Add(debits, l.Balance)
+		default:
+			credits.Sub(credits, l.Balance)
+		}
+	}
+	return debits, credits
 }

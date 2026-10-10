@@ -252,3 +252,49 @@ func TestSharedFormulasMoveWithTheirCells(t *testing.T) {
 		t.Fatalf("a reference moved off the sheet: %s", got)
 	}
 }
+
+// A Trial Balance is read for its month-end balances: a layout without them reads nothing; a total is known by its
+// name, not by its amount being a formula; totals in two columns add their columns as written; Dr and Cr markers say
+// the side whatever column they sit in; and localized built-in date formats are dates.
+func TestTheReaderTakesNothingForGranted(t *testing.T) {
+	movement, _ := Read("tb.csv", []byte("Account,Opening,Movement\nBank,100,20\nCapital,-100,-20\n"))
+	layout := Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountName, 1: Opening, 2: Movement}, Style: NumberStyle{Scale: 1}}
+	if reading := layout.Read(movement.Tables[0]); len(reading.Lines) != 0 || len(reading.Problems) != 1 || reading.Balanced {
+		t.Fatalf("no month-end balance column, nothing read: %+v", reading)
+	}
+	summed := Table{Name: "TB", Rows: []Row{
+		{Number: 1, Cells: []Cell{{Column: 0, Ref: "A1", Kind: Text, Value: "Account"}, {Column: 1, Ref: "B1", Kind: Text, Value: "Balance"}}},
+		{Number: 2, Cells: []Cell{{Column: 0, Ref: "A2", Kind: Text, Value: "Bank"}, {Column: 1, Ref: "B2", Kind: Number, Value: "150", Formula: "SUM(D2:D9)"}}},
+		{Number: 3, Cells: []Cell{{Column: 0, Ref: "A3", Kind: Text, Value: "Capital"}, {Column: 1, Ref: "B3", Kind: Number, Value: "-150"}}},
+	}}
+	layout, _ = ProposeLayout(summed)
+	if reading := layout.Read(summed); reading.Lines[0].Kind != Posting || !reading.Balanced || len(reading.Problems) != 0 {
+		t.Fatalf("an account whose balance is a SUM formula is an account: %+v", reading)
+	}
+	both, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,100.00,50.00\nCapital,,50.00\nTOTAL,100.00,100.00\n"))
+	layout, _ = ProposeLayout(both.Tables[0])
+	if reading := layout.Read(both.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {
+		t.Fatalf("a total adds its columns as written: %+v", reading)
+	}
+	marked, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,100.00,\nCapital,,100.00 Cr\n"))
+	layout, _ = ProposeLayout(marked.Tables[0])
+	if reading := layout.Read(marked.Tables[0]); !reading.Balanced || reading.Credits != "100" || reading.Lines[1].Amount != "-100" {
+		t.Fatalf("a Cr marker in the credit column is one credit: %+v", reading)
+	}
+	signedBalance, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00 Dr\nCapital,100.00 Cr\n"))
+	layout, _ = ProposeLayout(signedBalance.Tables[0])
+	layout.BalanceSign = "credit"
+	if reading := layout.Read(signedBalance.Tables[0]); !reading.Balanced || reading.Lines[0].Amount != "100" {
+		t.Fatalf("a marked balance keeps its marked side whatever the column's sign: %+v", reading)
+	}
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	file, err := Read("tb.xlsx", workbook(t, map[string]string{
+		"xl/workbook.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/styles.xml":              `<styleSheet ` + main + `><cellXfs><xf numFmtId="0"/><xf numFmtId="30"/><xf numFmtId="57"/></cellXfs></styleSheet>`,
+		"xl/worksheets/sheet1.xml":   `<worksheet ` + main + `><sheetData><row r="1"><c r="A1" s="1"><v>46295</v></c><c r="B1" s="2"><v>46295</v></c></row></sheetData></worksheet>`,
+	}))
+	if err != nil || cells(file.Tables[0])["A1"].Value != "2026-09-30" || cells(file.Tables[0])["B1"].Kind != Date {
+		t.Fatalf("localized built-in date formats: %+v %v", file.Tables, err)
+	}
+}
