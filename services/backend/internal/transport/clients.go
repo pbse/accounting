@@ -13,6 +13,7 @@ import (
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/xero"
 )
 
 // A client's page (docs/books-sources.md, Client page): one read of everything the firm keeps about a client, apart
@@ -217,14 +218,24 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		var quickbooksRaw, xeroRaw []byte
 		if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'environment',x.environment,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at) ORDER BY x.environment='production' DESC,x.id DESC)
   FROM quickbooks_connections x WHERE x.organization_id=$1 AND lower(x.client_entity)=lower($2) AND x.state<>'disconnected'),'[]'::jsonb),
- (SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
+ (SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
   FROM xero_connections x WHERE x.organization_id=$1 AND lower(x.client_entity)=lower($2) AND x.state<>'disconnected' ORDER BY x.id DESC LIMIT 1)`, org, name).Scan(&quickbooksRaw, &xeroRaw); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
 		out["quickbooks"] = json.RawMessage(quickbooksRaw)
-		// Which QuickBooks companies this server can connect, and the client's production posting grant, if any.
+		// Which ledgers this server can connect, and the client's QuickBooks and Xero posting grants, if any.
 		out["quickbooks_setup"] = map[string]bool{"sandbox": quickbooks.OAuthConfigured(), "production": quickbooks.OAuthConfiguredFor("production")}
+		out["xero_configured"] = xero.Configured()
+		switch grant, e := scanXeroGrant(tx.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND revoked_at IS NULL`, org, name)); e {
+		case nil:
+			out["xero_grant"] = grant
+		case sql.ErrNoRows:
+			out["xero_grant"] = nil
+		default:
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
 		switch grant, e := scanGrant(tx.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND lower(g.client_entity)=lower($2) AND g.revoked_at IS NULL LIMIT 1`, org, name)); e {
 		case nil:
 			out["production_grant"] = grant

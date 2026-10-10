@@ -121,24 +121,17 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		reconnect := []setupReconnect{}
 		if err == nil {
 			var rows *sql.Rows
-			rows, err = tx.QueryContext(r.Context(), `SELECT provider,client_entity,error,COALESCE((SELECT id::text FROM client_closes c WHERE c.organization_id=$1 AND lower(c.entity)=lower(x.client_entity) ORDER BY period DESC,c.id DESC LIMIT 1),'') FROM (
+			rows, err = tx.QueryContext(r.Context(), `SELECT provider,client_entity,error FROM (
  SELECT 'QuickBooks' provider,client_entity,error FROM quickbooks_connections WHERE organization_id=$1 AND state='reconnect_required'
  UNION ALL SELECT 'Xero',client_entity,error FROM xero_connections WHERE organization_id=$1 AND state='reconnect_required') x
  WHERE `+access("x.client_entity")+` ORDER BY client_entity LIMIT 50`, org, all, me)
 			for err == nil && rows.Next() {
 				var item setupReconnect
-				var close string
-				if err = rows.Scan(&item.Provider, &item.Client, &item.Error, &close); err != nil {
+				if err = rows.Scan(&item.Provider, &item.Client, &item.Error); err != nil {
 					break
 				}
-				// QuickBooks is connected on the client's page; Xero still on a month's Evidence tab.
+				// A client's ledgers are connected again on its page.
 				item.Href = "/dashboard/clients/" + url.PathEscape(item.Client)
-				if item.Provider == "Xero" {
-					item.Href = "/dashboard/clients"
-					if close != "" {
-						item.Href = "/dashboard/closes/" + close + "?tab=evidence#xero"
-					}
-				}
 				reconnect = append(reconnect, item)
 			}
 			if rows != nil {

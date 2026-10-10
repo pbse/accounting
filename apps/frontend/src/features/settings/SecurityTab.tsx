@@ -53,9 +53,8 @@ type Operation = {
   limitation: string;
 };
 
-// Where a connection or a grant is managed: QuickBooks on the client's page, others from the month they were made in.
-const manage = (provider: string, client: string, closeId?: string) =>
-  provider === "QuickBooks" ? clientPage(client) : closeId ? `/dashboard/closes/${closeId}?tab=${provider === "Stripe" || provider === "Xero" ? "evidence" : "settings"}` : "";
+// Where a connection or a grant is managed: a ledger's on the client's page, Stripe's from the month it was made in.
+const manage = (provider: string, client: string, closeId?: string) => (provider === "Stripe" ? (closeId ? `/dashboard/closes/${closeId}?tab=evidence` : "") : clientPage(client));
 
 function OperationRecord({ operation, stage, onSaved }: { operation: Operation; stage: "sandbox_checked" | "accountant_accepted"; onSaved: () => void }) {
   const day = useDates().date;
@@ -207,7 +206,7 @@ export function SecurityTab() {
       {failed}
       <section aria-label="Connected services">
         <h2>Connected services</h2>
-        <p>Each client's books and payouts, and who connected them. QuickBooks is managed on the client's page; Xero and Stripe from the client's month.</p>
+        <p>Each client's books and payouts, and who connected them. QuickBooks and Xero are managed on the client's page; Stripe from the client's month.</p>
         {security.services.length === 0 ? (
           <p className="empty">No ledger or payout connections yet.</p>
         ) : (

@@ -51,8 +51,9 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 		for _, id := range []string{september, october, due} {
 			db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, id)
 		}
+		db.Exec(`DELETE FROM xero_posting_grants WHERE organization_id=$1`, org)
+		db.Exec(`DELETE FROM xero_connections WHERE organization_id=$1`, org)
 		for _, id := range []string{due, september, october} {
-			db.Exec(`DELETE FROM xero_connections WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM client_closes WHERE id=$1`, id)
 		}
 		db.Exec(`DELETE FROM organization_member_access WHERE organization_id=$1`, org)
@@ -132,11 +133,17 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 
 	mux := http.NewServeMux()
 	registerXero(mux, db)
+	registerClientConnections(mux, db)
 	h := organizationBoundary(db, mux)
+	// A close's route; client names the client's page's route instead, which connects the organisation.
 	call := func(subject, closeID string, body any, want int) map[string]any {
 		t.Helper()
 		raw, _ := json.Marshal(body)
-		r := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/xero", bytes.NewReader(raw))
+		target := "/v1/closes/" + closeID + "/xero"
+		if closeID == "client" {
+			target = "/v1/closes/client/xero?name=" + url.QueryEscape("Xero client")
+		}
+		r := httptest.NewRequest("POST", target, bytes.NewReader(raw))
 		r.Header.Set("Content-Type", "application/json")
 		r = r.WithContext(auth.WithActor(r.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: []string{"clients:all", "integrations:manage"}}))
 		w := httptest.NewRecorder()
@@ -148,16 +155,22 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 		json.Unmarshal(w.Body.Bytes(), &out)
 		return out
 	}
-	started := call("user_accountant", september, map[string]any{"action": "connect", "confirmed": true}, 200)
+	started := call("user_accountant", "client", map[string]any{"action": "connect", "confirmed": true}, 200)
 	link, _ := url.Parse(started["url"].(string))
 	state, id := link.Query().Get("state"), started["id"].(string)
+	var month sql.NullString
+	if err = db.QueryRow(`SELECT close_id::text FROM xero_connections WHERE id=$1`, id).Scan(&month); err != nil || month.Valid {
+		t.Fatalf("a connection made from the client's page names no month: %v %v", month, err)
+	}
+	// The client's page reads no month's Trial Balance.
+	call("user_accountant", "client", map[string]any{"action": "snapshot", "connection_id": id, "confirmed": true}, 422)
 	if link.Query().Get("scope") != "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals accounting.invoices accounting.payments.read accounting.banktransactions.read" {
 		t.Fatalf("granular scopes: reads, transaction reads, manual journals and bill updates for approved writes: %s", link.Query().Get("scope"))
 	}
 	back := httptest.NewRecorder()
 	xeroReturn(back, httptest.NewRequest("GET", "/v1/xero/callback?code=c1&state="+url.QueryEscape(state), nil), db)
-	if back.Code != 303 || !strings.HasPrefix(back.Header().Get("Location"), "https://app.example.test/dashboard/closes/"+september+"?tab=evidence#") {
-		t.Fatalf("the sign-in returns to its close: %d %s", back.Code, back.Header().Get("Location"))
+	if back.Code != 303 || !strings.HasPrefix(back.Header().Get("Location"), "https://app.example.test/dashboard/clients/Xero%20client#") {
+		t.Fatalf("the sign-in returns to the client's page: %d %s", back.Code, back.Header().Get("Location"))
 	}
 	call("user_other", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)
 	status := call("user_accountant", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 200)
@@ -313,14 +326,24 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	if scheduled() != 0 {
 		t.Fatal("a close already attempted today is not attempted again, whatever the outcome")
 	}
-	tx, err := db.Begin()
+	blockers := func() string {
+		t.Helper()
+		tx, err := db.Begin()
+		must(err)
+		defer tx.Rollback()
+		retention, err := readRetention(t.Context(), tx, september, org)
+		must(err)
+		return strings.Join(retention.Blockers, " | ")
+	}
+	// A connection made on the client's page belongs to no month, so deleting a month never waits on it.
+	if b := blockers(); strings.Contains(b, "Xero connection") {
+		t.Fatalf("a client's connection holds no month back: %s", b)
+	}
+	// One opened from a month before connections moved to the client's page still holds that month back.
+	_, err = db.Exec(`UPDATE xero_connections SET close_id=$2 WHERE id=$1`, id, september)
 	must(err)
-	retention, err := readRetention(t.Context(), tx, september, org)
-	tx.Rollback()
-	must(err)
-	blockers := strings.Join(retention.Blockers, " | ")
-	if !strings.Contains(blockers, "Disconnect the Xero connection opened from this close.") || !strings.Contains(blockers, "A Xero connection opened here is used by another close.") {
-		t.Fatalf("deleting the opening close must wait for disconnection and the other close: %s", blockers)
+	if b := blockers(); !strings.Contains(b, "Disconnect the Xero connection opened from this close.") || !strings.Contains(b, "A Xero connection opened here is used by another close.") {
+		t.Fatalf("deleting the opening close must wait for disconnection and the other close: %s", b)
 	}
 	status = call("user_accountant", september, map[string]any{"action": "disconnect", "connection_id": id, "confirmed": true}, 200)
 	var cleared bool
