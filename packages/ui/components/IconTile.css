@@ -8,28 +8,28 @@
   border-radius: var(--radius-full);
 }
 .icon-tile-blue {
-  background: var(--blue-tint);
-  color: var(--blue-text);
+  background: var(--accent-tint);
+  color: var(--accent-text);
 }
 .icon-tile-orange {
-  background: var(--attention-tint);
-  color: var(--attention-text);
+  background: var(--att-tint);
+  color: var(--att-text);
 }
 .icon-tile-teal {
-  background: var(--teal-tint);
-  color: var(--teal-text);
+  background: var(--accent-tint);
+  color: var(--client-teal);
 }
 .icon-tile-green {
-  background: var(--positive-tint);
-  color: var(--positive-text);
+  background: var(--pos-tint);
+  color: var(--pos-text);
 }
 .icon-tile-violet {
-  background: var(--violet-tint);
-  color: var(--violet-text);
+  background: var(--accent-tint);
+  color: var(--client-violet);
 }
 .icon-tile-red {
-  background: var(--negative-tint);
-  color: var(--negative-text);
+  background: var(--neg-tint);
+  color: var(--neg-text);
 }
 .icon-tile-gray {
   background: var(--fill);

@@ -94,7 +94,7 @@ html:has(.k-site) {
   color-scheme: light;
 }
 .k-site ::selection {
-  background: var(--blue);
+  background: var(--accent);
   color: var(--on-blue);
 }
 /* Base element rules carry no specificity, so every k- class overrides them. */
@@ -109,7 +109,7 @@ html:has(.k-site) {
   color: inherit;
 }
 .k-site :where(a, button, [tabindex]):focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
   border-radius: 2px;
 }
@@ -178,7 +178,7 @@ html:has(.k-site) {
   color: var(--ink);
   text-decoration: none;
   padding-bottom: 4px;
-  border-bottom: 3px double var(--blue);
+  border-bottom: 3px double var(--accent);
 }
 .k-nav {
   display: flex;
@@ -212,7 +212,7 @@ html:has(.k-site) {
   display: inline-flex;
   align-items: center;
   gap: 0.55em;
-  background: var(--blue);
+  background: var(--accent);
   color: var(--on-blue);
   border: 0;
   border-radius: 999px;
@@ -302,7 +302,7 @@ html:has(.k-site) {
   letter-spacing: -0.026em;
 }
 .k-yours {
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-sub,
 .k-lede {
@@ -333,7 +333,7 @@ html:has(.k-site) {
 }
 .k-bracket:hover,
 .k-bracket:focus-within {
-  --b: var(--blue);
+  --b: var(--accent);
   padding: 10px 14px;
   margin-top: 29px;
   margin-bottom: 5px;
@@ -369,7 +369,7 @@ html:has(.k-site) {
   font-variant-numeric: tabular-nums;
 }
 .k-tally .k-yours b {
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-tally > i {
   font-style: normal;
@@ -391,7 +391,7 @@ html:has(.k-site) {
   cursor: pointer;
 }
 .k-live-toggle:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .k-live-dot {
@@ -444,7 +444,7 @@ html:has(.k-site) {
   left: var(--lx, 50%);
   width: 1px;
   height: 16px;
-  background: var(--blue);
+  background: var(--accent);
 }
 .k-dc-client {
   font-style: italic;
@@ -456,7 +456,7 @@ html:has(.k-site) {
   font-family: var(--sans);
   font-size: 14px;
   font-weight: 500;
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-dc-amt {
   margin-top: 2px;
@@ -473,7 +473,7 @@ html:has(.k-site) {
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-worktag {
   width: max-content;
@@ -516,10 +516,10 @@ html:has(.k-site) {
 }
 .k-worktag.is-blue .k-wt-title,
 .k-worktag.is-blue .k-wt-line {
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-worktag.is-blue .k-wt-dot {
-  background: var(--blue);
+  background: var(--accent);
   animation: none;
 }
 .k-worktag.is-ok .k-wt-dot {
@@ -614,10 +614,10 @@ html:has(.k-site) {
   animation: none;
 }
 .k-status.is-signed {
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-status.is-signed i {
-  background: var(--blue);
+  background: var(--accent);
   animation: none;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -857,7 +857,7 @@ html:has(.k-site) {
   font-family: var(--hand);
   font-size: 54px;
   line-height: 1;
-  color: var(--blue);
+  color: var(--accent);
   white-space: nowrap;
   clip-path: inset(-20% 100% -20% 0);
   transition: clip-path 1.6s linear;
@@ -867,7 +867,7 @@ html:has(.k-site) {
 }
 .k-reviewed .k-key,
 .k-reviewed .k-meta {
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-reviewed .k-meta {
   opacity: 0;
@@ -899,7 +899,7 @@ html:has(.k-site) {
   color: var(--ink);
 }
 .k-textbtn:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
 /* The agents, shown the way collaborators appear on a shared document. */
@@ -918,7 +918,7 @@ html:has(.k-site) {
   opacity: 1;
 }
 .k-cursor-you {
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-bob {
   display: flex;
@@ -960,7 +960,7 @@ html:has(.k-site) {
   transition: opacity 0.4s ease, transform 0.4s ease;
 }
 .k-cursor-you .k-who-tag {
-  background: var(--blue);
+  background: var(--accent);
 }
 .k-cursor.is-mini .k-who-tag {
   opacity: 0;
@@ -1005,14 +1005,14 @@ html:has(.k-site) {
 }
 .k-crew li.k-crew-you,
 .k-crew li.k-crew-you b {
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-crew li.k-crew-you .k-mk {
-  border-color: var(--blue);
-  color: var(--blue);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .k-crew li.k-crew-you.is-on .k-mk {
-  background: var(--blue);
+  background: var(--accent);
   color: var(--white);
 }
 .k-trust {
@@ -1124,7 +1124,7 @@ html:has(.k-site) {
   font-family: var(--serif);
   font-size: 30px;
   line-height: 1;
-  color: var(--blue);
+  color: var(--accent);
   padding-bottom: 8px;
 }
 .k-sl {
@@ -1222,8 +1222,8 @@ html:has(.k-site) {
 }
 .k-field :is(input, textarea):focus-visible {
   outline: none;
-  border-bottom-color: var(--blue);
-  box-shadow: 0 1px 0 var(--blue);
+  border-bottom-color: var(--accent);
+  box-shadow: 0 1px 0 var(--accent);
 }
 .k-trap {
   position: absolute;
@@ -1263,7 +1263,7 @@ html:has(.k-site) {
   padding: 20px 22px;
   background: var(--white);
   border: 1px solid var(--rule-2);
-  border-left: 4px double var(--blue);
+  border-left: 4px double var(--accent);
 }
 .k-sent p {
   font-size: 18px;
@@ -1298,7 +1298,7 @@ html:has(.k-site) {
   content: counter(k-step);
   font-family: var(--mono);
   font-size: 12px;
-  color: var(--blue);
+  color: var(--accent);
   padding-top: 5px;
 }
 .k-next b {
@@ -1540,7 +1540,7 @@ html:has(.k-site) {
   border: 0;
   border-radius: 999px;
   padding: 13px 24px;
-  background: var(--blue);
+  background: var(--accent);
   color: var(--on-blue);
   font: 500 15.5px/1.2 var(--sans);
   cursor: pointer;
@@ -1579,7 +1579,7 @@ html:has(.k-site) {
 }
 .k-signin a.k-provider:focus-visible,
 .k-signin button.k-provider:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
 .k-signin .k-alert {
@@ -1668,7 +1668,7 @@ html:has(.k-site) {
   font-size: 14px;
 }
 .k-heart {
-  color: var(--blue);
+  color: var(--accent);
 }
 .k-engraving {
   display: block;

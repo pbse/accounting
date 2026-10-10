@@ -18,8 +18,8 @@
   stroke-linejoin: round;
 }
 .hex-map .empty {
-  fill: var(--bg);
-  stroke: var(--bg);
+  fill: var(--surface);
+  stroke: var(--surface);
 }
 .hex-map g > polygon:first-child {
   fill: currentColor;
@@ -41,16 +41,16 @@
   stop-opacity: 0.07;
 }
 .hex-map .blue {
-  color: var(--blue);
+  color: var(--accent);
 }
 .hex-map .teal {
-  color: var(--teal);
+  color: var(--client-teal);
 }
 .hex-map .orange {
-  color: var(--orange);
+  color: var(--client-amber);
 }
 .hex-map .violet {
-  color: var(--violet);
+  color: var(--client-violet);
 }
 .hex-legend {
   margin: 0;
@@ -58,7 +58,7 @@
   list-style: none;
   border-radius: var(--radius-sm);
   background: var(--surface);
-  box-shadow: var(--shadow-tile);
+  box-shadow: inset var(--ring);
 }
 .hex-legend li {
   display: grid;

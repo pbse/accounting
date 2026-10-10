@@ -158,7 +158,7 @@ body {
 .app-shell input:focus-visible,
 .app-shell select:focus-visible,
 .app-shell textarea:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 /* A section is a card: white with a hairline ring, no shadow; a section inside it is a tile with the same ring. */
@@ -361,16 +361,16 @@ body {
   flex-shrink: 0;
 }
 .status.ok::before {
-  background: var(--green);
+  background: var(--client-green);
 }
 .status.warn::before {
-  background: var(--orange);
+  background: var(--client-amber);
 }
 .status.danger::before {
-  background: var(--red);
+  background: var(--neg-text);
 }
 .status.info::before {
-  background: var(--blue);
+  background: var(--accent);
 }
 .chip {
   display: inline-flex;
@@ -382,7 +382,7 @@ body {
   font-weight: 500;
   line-height: 16px;
   background: var(--surface);
-  box-shadow: var(--shadow-raised);
+  box-shadow: var(--ring);
   white-space: nowrap;
 }
 .empty {
@@ -415,13 +415,13 @@ body {
   background: var(--surface);
   border-radius: var(--radius-md);
   padding: var(--space-20);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .app-shell section.bare section section {
   background: var(--surface);
   border-radius: var(--radius-sm);
   padding: var(--space-16);
-  box-shadow: var(--shadow-tile);
+  box-shadow: inset var(--ring);
 }
 .app-shell .gate {
   max-width: 34rem;
@@ -442,7 +442,7 @@ body {
   background: var(--surface);
   border-radius: var(--radius-md);
   padding: var(--space-12) var(--space-20);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .app-shell .stack > details[open] > summary {
   margin-bottom: var(--space-10);
@@ -456,7 +456,7 @@ body {
   padding: var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 /* A row of actions under a form or a card, the primary one first. */
 .setting-actions {
