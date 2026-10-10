@@ -110,6 +110,8 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  // An answer under way can be stopped; a confirmed action cannot, and holds the composer until it ends.
+  const [answering, setAnswering] = useState(false);
   const [error, setError] = useState("");
   const [lastBody, setLastBody] = useState<Record<string, string>>();
   const [loaded, setLoaded] = useState(false);
@@ -273,6 +275,7 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
     };
     const controller = new AbortController();
     inFlight.current = controller;
+    setAnswering(true);
     try {
       // The member's own date resolves day names such as "by Friday"; the agent's steps and text arrive as events.
       const data = await workspaceRequest(path, { ...body, session_id: session?.id ?? "new", picked, today: localDate() } as Record<string, unknown>, false, onEvent, controller.signal);
@@ -304,6 +307,7 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
         setSteps([]);
         setAsking("");
         setBusy(false);
+        setAnswering(false);
       }
       if (inFlight.current === controller) inFlight.current = null;
     }
@@ -315,11 +319,14 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
     inFlight.current?.abort();
     inFlight.current = null;
     setBusy(false);
+    setAnswering(false);
     setPending("");
     setSteps([]);
     setAsking("");
     setError("Stopped.");
-    workspaceRequest(session ? `${path}?session=${encodeURIComponent(session.id)}` : path).then((data) => {
+    // A chat not yet saved stays the empty new chat it was; a saved one is read back as it was saved.
+    if (!session) return;
+    workspaceRequest(`${path}?session=${encodeURIComponent(session.id)}`).then((data) => {
       if (asked !== generation.current) return;
       setMessages(data.messages);
       if (data.session) setSession({ id: data.session.id, title: data.session.title });
@@ -660,12 +667,12 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
             </span>
             <span className="ks-scope">{closeId ? label || `Close #${closeId}` : executive ? "Your business" : "Firm-wide"}{paperId ? ` · Draft #${paperId}` : ""}</span>
             <span className="ks-spacer" />
-            {busy ? (
+            {busy && answering ? (
               <button type="button" className="ks-send stop" aria-label="Stop" onClick={stop}>
                 <Icon name="stop" />
               </button>
             ) : (
-              <button className="ks-send" disabled={!loaded || !text.trim()} aria-label={!loaded ? "Opening the chat" : "Send"}>
+              <button className="ks-send" disabled={busy || !loaded || !text.trim()} aria-label={busy ? "Confirming" : !loaded ? "Opening the chat" : "Send"}>
                 <Icon name="up" />
               </button>
             )}
