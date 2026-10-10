@@ -4,12 +4,11 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { Icon } from "@close/ui/components/Icon";
 import { IconTile } from "@close/ui/components/IconTile";
-import { PageHeader } from "@close/ui/components/PageHeader";
 import { Segmented } from "@close/ui/components/Segmented";
 import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { BillCorrection } from "./BillCorrection";
 import { CreditApplications } from "./CreditApplications";
-import { Brief } from "./Brief";
+import { CloseLede, CloseTasks } from "./Stands";
 import { CarryForward } from "./CarryForward";
 import { Coordinator } from "./Coordinator";
 import { GoalPanel } from "./Goal";
@@ -41,12 +40,10 @@ import { Replay } from "./Replay";
 import { RecurringAccruals } from "./RecurringAccruals";
 import { Requests } from "./Requests";
 import { EffortCard, EffortTracker, type Activity } from "./Effort";
-import { PlanChips, PlanningControls } from "./Planning";
 import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
 import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
-import { BackLink } from "@close/ui/components/BackLink";
 
 // Overview holds what needs a person; Books holds what the ledger shows; the rest is where each kind of work lives.
 const tabs = closeTabs;
@@ -178,27 +175,36 @@ export default function ClientClose() {
   return (
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
-      <BackLink to="/dashboard/clients">Clients</BackLink>
+      <div className="ks-crumbs">
+        <Link to="/dashboard/clients">Clients</Link>
+        <span>/</span>
+        <Link to={`/dashboard/clients?q=${encodeURIComponent(close.entity)}`}>{close.entity}</Link>
+        <span>/</span>
+        <b>{monthName(close.period)}</b>
+        <div className="ks-tools">
+          <PrepareActions close={close} />
+          <Link className="button primary" to={`${base}?tab=signoff`}>
+            Sign off
+          </Link>
+        </div>
+      </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
-      <PageHeader avatar={close.entity} title={close.entity} actions={<PrepareActions close={close} />}>
-        {monthName(close.period)} <PlanChips plan={close} />
+      <CloseLede close={close} onPlanSaved={() => void reload()} />
+      <p className="ks-lede-notes">
         {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]}</span>}
         {close.profile && close.profile.state !== "none" && <span className={close.profile.state === "conflict" || close.profile.state === "unknown" ? "chip warn" : "chip"} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
-      </PageHeader>
-      <PlanningControls key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}-${close.can_assign}-${close.can_take_over}`} closeId={close.id} plan={close} onSaved={() => void reload()} />
-      <StatGroup>
-        <StatTile icon="review" label="Ready for review" value={ready.length} caption={`Current drafts with evidence and no blockers${latest}`} to={`${base}?tab=workpapers&filter=ready`} />
-        <StatTile icon="blocked" tone="red" label="Needs attention" value={attention.length} caption={`Blockers, changes requested or evidence changed${latest}`} to={`${base}?tab=workpapers&filter=attention`} />
-        <StatTile icon="decision" tone="teal" label="Approved" value={approved.length} caption="Approval is not posting or sign-off" to={`${base}?tab=workpapers&filter=approved`} />
-        <StatTile icon="file" tone="gray" label="Saved drafts" value={papers.length} caption={more ? "Latest 100 shown" : "All versions in this close"} to={`${base}?tab=workpapers`} />
-      </StatGroup>
-      <nav className="toolbar" aria-label="Close sections">
-        <Segmented items={tabs.map(([key, label]) => ({ key, label, to: `${base}?tab=${key}` }))} value={tab} />
+      </p>
+      <nav className="ks-tabs" aria-label="Close sections">
+        {tabs.map(([key, label]) => (
+          <Link key={key} to={`${base}?tab=${key}`} aria-current={tab === key ? "page" : undefined}>
+            {label}
+          </Link>
+        ))}
       </nav>
       {tab === "overview" && (
         <div className="stack">
+          <CloseTasks key={`stands-${close.id}-${papers.map((paper) => paper.id + paper.review_state).join()}`} closeId={close.id} base={base} />
           <GoalPanel key={`goal-${close.id}`} closeId={close.id} />
-          <Brief key={`brief-${close.id}-${papers.map((paper) => paper.id + paper.review_state).join()}`} closeId={close.id} />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
         </div>
@@ -219,6 +225,12 @@ export default function ClientClose() {
       )}
       {tab === "workpapers" && (
         <div className="stack">
+      <StatGroup>
+        <StatTile icon="review" label="Ready for review" value={ready.length} caption={`Current drafts with evidence and no blockers${latest}`} to={`${base}?tab=workpapers&filter=ready`} />
+        <StatTile icon="blocked" tone="red" label="Needs attention" value={attention.length} caption={`Blockers, changes requested or evidence changed${latest}`} to={`${base}?tab=workpapers&filter=attention`} />
+        <StatTile icon="decision" tone="teal" label="Approved" value={approved.length} caption="Approval is not posting or sign-off" to={`${base}?tab=workpapers&filter=approved`} />
+        <StatTile icon="file" tone="gray" label="Saved drafts" value={papers.length} caption={more ? "Latest 100 shown" : "All versions in this close"} to={`${base}?tab=workpapers`} />
+      </StatGroup>
           <div className="toolbar">
             <Segmented
               label="Filter drafts"

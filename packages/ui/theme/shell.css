@@ -779,3 +779,243 @@ body {
     width: 100%;
   }
 }
+
+/* A close's page (docs/design-system.md, Breadcrumbs, Lede, Task, DoneLine, Tabs): the breadcrumb row and the one
+   action, the sentence, the tasks left, the agent's work folded to a line, the close's pages as tabs. */
+.ks-crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: var(--crumbs-height);
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.app-shell .ks-crumbs a {
+  color: var(--ink-3);
+  text-decoration: none;
+}
+.app-shell .ks-crumbs a:hover {
+  color: var(--ink);
+}
+.ks-crumbs b {
+  color: var(--ink);
+  font-weight: 500;
+}
+.ks-crumbs .ks-tools {
+  margin-left: auto;
+}
+.ks-lede {
+  width: var(--lede-width);
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin: var(--space-24) 0 0;
+}
+.app-shell .ks-lede h2 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 36px;
+  line-height: 42px;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+.app-shell .ks-lede p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-3);
+}
+.ks-lede-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  margin: var(--space-10) 0 var(--space-20);
+}
+.ks-lede-notes:empty {
+  display: none;
+}
+.app-shell .ks-link {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--ink-2);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.app-shell .ks-link:hover:not(:disabled) {
+  background: none;
+  box-shadow: none;
+  color: var(--ink);
+}
+.ks-tasks {
+  width: var(--lede-width);
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+.ks-task {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: var(--space-14);
+  padding: var(--space-16) 18px;
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--ring);
+  transition: box-shadow 160ms var(--ease), transform 160ms var(--ease);
+}
+.ks-task:hover {
+  box-shadow: var(--lift);
+  transform: translateY(-1px);
+}
+.ks-task .ks-numeral {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  display: grid;
+  place-items: center;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ks-task.waiting .ks-numeral {
+  background: var(--att-tint);
+  color: var(--att-text);
+}
+.ks-task b {
+  display: block;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 20px;
+}
+.ks-task p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.ks-done {
+  margin-top: var(--space-6);
+}
+.ks-done-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: 40px;
+  padding: 0 18px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  color: var(--ink-3);
+  list-style: none;
+  cursor: pointer;
+}
+.ks-done-line::-webkit-details-marker {
+  display: none;
+}
+.ks-done-line:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.ks-done-line > svg:first-child {
+  color: var(--pos-text);
+  flex: none;
+}
+.ks-done-line small {
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ks-done-line .ks-chev {
+  color: var(--ink-4);
+  transition: transform 200ms var(--ease);
+  flex: none;
+}
+.ks-done[open] .ks-done-line .ks-chev {
+  transform: rotate(90deg);
+}
+.ks-done-list {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4) 0 0;
+}
+.ks-done-row {
+  display: grid;
+  grid-template-columns: auto 140px 1fr auto;
+  align-items: center;
+  gap: var(--space-12);
+  min-height: 40px;
+  padding: var(--space-6) 18px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.ks-done-row b {
+  font-weight: 500;
+}
+.ks-done-row > span:nth-child(3) {
+  color: var(--ink-2);
+}
+.ks-tabs {
+  display: flex;
+  gap: var(--space-4);
+  margin: var(--space-20) 0 var(--space-20);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.app-shell .ks-tabs a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 38px;
+  padding: 0 var(--space-10);
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.app-shell .ks-tabs a:hover {
+  color: var(--ink);
+}
+.app-shell .ks-tabs a[aria-current="page"] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+@media (max-width: 860px) {
+  .ks-crumbs {
+    flex-wrap: wrap;
+    min-height: 0;
+    padding: var(--space-8) 0;
+  }
+  .ks-crumbs .ks-tools {
+    margin-left: 0;
+    width: 100%;
+  }
+  .app-shell .ks-lede h2 {
+    font-size: 28px;
+    line-height: 34px;
+  }
+  .ks-task {
+    grid-template-columns: 28px 1fr;
+  }
+  .ks-task > :last-child {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .ks-done-line small {
+    display: none;
+  }
+  .ks-done-row {
+    grid-template-columns: auto 1fr;
+  }
+}
