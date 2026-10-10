@@ -304,8 +304,8 @@ func (s *seeder) isolated(ctx context.Context) error {
 	}
 	var independent bool
 	s.db.QueryRowContext(ctx, `SELECT require_independent_review OR independent_review_min_amount IS NOT NULL FROM organizations WHERE id=$1`, s.o.Organization).Scan(&independent)
-	if independent && len(s.o.Members) == 0 {
-		return errors.New("the firm requires an independent reviewer, so the seed needs a second member (-members) to approve what the administrator confirms")
+	if independent {
+		return errors.New("the firm requires an independent reviewer; the seed records every decision as the administrator, so it cannot run here")
 	}
 	names := s.clientNames()
 	var taken []string
@@ -358,8 +358,19 @@ func (s *seeder) people(ctx context.Context) error {
 			return err
 		}
 	}
-	s.must(ctx, "time zone", "POST", "/v1/closes/me", map[string]any{"time_zone": "America/New_York"})
-	s.must(ctx, "notification preferences", "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"answered", "confirm", "failed", "approve", "changed", "fix", "send", "unanswered", "goal", "handoff"}, "browser": false})
+	// The administrator's own settings are set only where they have none, and taken out with the seed.
+	var hasZone, hasPreferences bool
+	s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM member_settings WHERE organization_id=$1 AND subject=$2),EXISTS(SELECT 1 FROM attention_preferences WHERE organization_id=$1 AND subject=$2)`, s.o.Organization, s.o.Subject).Scan(&hasZone, &hasPreferences)
+	if !hasZone {
+		if _, ok := s.must(ctx, "time zone", "POST", "/v1/closes/me", map[string]any{"time_zone": "America/New_York"}); ok {
+			s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||'{"set_time_zone":true}'::jsonb WHERE organization_id=$1`, s.o.Organization)
+		}
+	}
+	if !hasPreferences {
+		if _, ok := s.must(ctx, "notification preferences", "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"answered", "confirm", "failed", "approve", "changed", "fix", "send", "unanswered", "goal", "handoff"}, "browser": false}); ok {
+			s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||'{"set_preferences":true}'::jsonb WHERE organization_id=$1`, s.o.Organization)
+		}
+	}
 	// Invitations: one accepted in July, one still pending; and the role history a growing firm has.
 	var id int64
 	if err := s.db.QueryRowContext(ctx, `INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at,decided_at)
@@ -373,11 +384,6 @@ func (s *seeder) people(ctx context.Context) error {
 		s.problem("invitation: %v", err)
 	} else {
 		s.invitations = append(s.invitations, id)
-	}
-	for _, m := range s.o.Members {
-		if err := s.db.QueryRowContext(ctx, `INSERT INTO member_role_changes(organization_id,subject,from_role,to_role,reason,actor,created_at) VALUES($1,$2,'member','firm-admin','Second administrator so sign-offs do not wait on one person',$3,$4) RETURNING id`, s.o.Organization, m, s.o.Subject, s.today.AddDate(0, 0, -60)).Scan(&id); err == nil {
-			s.roleChanges = append(s.roleChanges, id)
-		}
 	}
 	// The administrator's own agent connection, approved when the firm turned the agent on.
 	if code, out := s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "request", "scope": "prepare", "reason": "Use the agent from my editor for the monthly preparation work", "confirmed": true}); code == 200 {
@@ -611,6 +617,8 @@ func (s *seeder) openClose(ctx context.Context, c *seed.Client, period string) (
 	if id == "" {
 		return "", fmt.Errorf("no close ID for %s", period)
 	}
+	// Recorded as soon as it exists, so a run that stops here can still be removed.
+	s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=array_append(close_ids,$2::bigint) WHERE organization_id=$1 AND NOT $2::bigint=ANY(close_ids)`, s.o.Organization, id)
 	if period == seed.Months[0] {
 		s.clientProcedures(ctx, c)
 	}
@@ -952,7 +960,12 @@ func (s *seeder) effort(ctx context.Context, c *seed.Client, closeID, period str
 		}{"signoff", 10 + seedIndex(c.Name)%10, "Tie-out, coverage decisions and sign-off"})
 	}
 	for _, e := range entries {
-		s.callAs(ctx, owner, "POST", "/v1/closes/"+closeID+"/effort/entries", map[string]any{"activity": e.activity, "minutes": e.minutes, "note": e.note})
+		if owner == s.o.Subject {
+			s.must(ctx, "time entry", "POST", "/v1/closes/"+closeID+"/effort/entries", map[string]any{"activity": e.activity, "minutes": e.minutes, "note": e.note})
+		} else {
+			// A teammate's time is recorded as theirs; the seed never acts with their authority.
+			s.db.ExecContext(ctx, `INSERT INTO close_effort_entries(close_id,actor,activity,minutes,note) SELECT id,$2,$3,$4,$5 FROM client_closes WHERE id::text=$1`, closeID, owner, e.activity, e.minutes, e.note)
+		}
 	}
 	// A few minutes of tracked activity on the page, as the workspace records it.
 	for i, activity := range []string{"review", "evidence", "review"} {
@@ -987,14 +1000,10 @@ func (s *seeder) papers(ctx context.Context, closeID string) []map[string]any {
 	return current
 }
 
-// review approves every current draft as a reviewer other than the administrator who confirmed and prepared the
-// agent's work: the first other member when the firm has one, so a firm that requires an independent reviewer gets
-// one; otherwise the administrator.
+// review approves every current draft as the administrator: every decision the seed records is theirs, since it
+// never acts with another member's authority.
 func (s *seeder) review(ctx context.Context, closeID string, c *seed.Client, period string, final bool) {
 	owner := s.o.Subject
-	if len(s.o.Members) > 0 {
-		owner = s.o.Members[0]
-	}
 	for _, p := range s.papers(ctx, closeID) {
 		if str(p["review_state"]) == "approved" {
 			continue
@@ -1125,8 +1134,7 @@ func (s *seeder) signOff(ctx context.Context, closeID string, c *seed.Client, pe
 		s.problem("%s %s not signed off (%s): %s", c.Name, period, ready.State, strings.Join(ready.Blockers, " | "))
 		return false
 	}
-	owner := s.owner(c)
-	code, result := s.callAs(ctx, owner, "POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"action": "sign", "note": "Reviewed every draft against its source and the Trial Balance; coverage decided; ready for the client's reports.", "confirmed": true, "digest": ready.Digest, "expected_decision_id": ready.DecisionID})
+	code, result := s.call(ctx, "POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"action": "sign", "note": "Reviewed every draft against its source and the Trial Balance; coverage decided; ready for the client's reports.", "confirmed": true, "digest": ready.Digest, "expected_decision_id": ready.DecisionID})
 	if code != 200 {
 		s.problem("%s %s sign-off: %d %s", c.Name, period, code, result)
 		return false
@@ -1450,8 +1458,10 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	for _, c := range firm.Clients {
 		names = append(names, strings.ToLower(c.Name))
 	}
-	// Closes newest first, so a connection's later months go before the month that holds it.
-	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND id=ANY($2) ORDER BY period DESC,id DESC`, o.Organization, closes)
+	// Every close of the demonstration's clients is the seed's (the firm had none under those names), so a run that
+	// stopped before it recorded them is still taken out whole. Newest first, so a connection's later months go before
+	// the month that holds it.
+	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND (id=ANY($2) OR lower(entity)=ANY($3)) ORDER BY period DESC,id DESC`, o.Organization, closes, names)
 	if err != nil {
 		return err
 	}
@@ -1508,6 +1518,12 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		s.must(ctx, "restore policy", "POST", "/v1/closes/organization/policy", restore)
 		// A monthly template, once set, has a due date of 1–60 days: a firm that had none keeps the demonstration's
 		// 15 days until it chooses its own (docs/seed-data.md says so).
+		if set, _ := before["set_time_zone"].(bool); set {
+			db.ExecContext(ctx, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2`, o.Organization, subject)
+		}
+		if set, _ := before["set_preferences"].(bool); set {
+			db.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2`, o.Organization, subject)
+		}
 		if len(s.problems) > 0 {
 			return errors.New(s.problems[0])
 		}
