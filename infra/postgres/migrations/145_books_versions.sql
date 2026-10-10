@@ -45,8 +45,20 @@ CREATE TABLE books_lines (
  cells jsonb NOT NULL,
  PRIMARY KEY (version_id,position)
 );
+-- books_parity: each run of the parity check over every version, by the worker: how many it checked, and the captures
+-- whose stored version no longer matches what the readers compute (identifiers only). A run in progress has no
+-- finished_at. Staff read the latest finished run.
+CREATE TABLE books_parity (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ started_at timestamptz NOT NULL DEFAULT now(),
+ finished_at timestamptz,
+ checked integer NOT NULL DEFAULT 0,
+ mismatched jsonb NOT NULL DEFAULT '[]'::jsonb
+);
 ALTER TABLE books_versions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON books_versions USING (current_setting('app.organization',true) IN ('*',organization_id));
 ALTER TABLE books_lines ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON books_lines USING (current_setting('app.organization',true)='*' OR version_id IN (SELECT id FROM books_versions));
+ALTER TABLE books_parity ENABLE ROW LEVEL SECURITY;
+CREATE POLICY platform ON books_parity USING (current_setting('app.organization',true)='*');
 COMMIT;

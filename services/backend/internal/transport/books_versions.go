@@ -148,7 +148,8 @@ func writeBooksVersion(ctx context.Context, db *sql.DB, source, id string) error
 	if err != nil {
 		return err
 	}
-	if source == "quickbooks" && unreadable == "" && len(m.gl) > 0 && string(m.gl) != "null" {
+	// The General Ledger's rows are kept whether or not the readers can read the month's financial reports.
+	if source == "quickbooks" && len(m.gl) > 0 && string(m.gl) != "null" {
 		lines, e := quickbooks.LedgerLinesOf(m.gl)
 		if e == nil {
 			raw, _ := json.Marshal(lines)
@@ -193,12 +194,22 @@ func writeBooksVersions(ctx context.Context, db *sql.DB, limit int) (int, error)
 }
 
 // RunBooksVersions keeps every month-end capture's books version written: the existing captures first, a batch at a
-// time, then each new one within a minute of its capture.
+// time, then each new one within a minute of its capture; and once they are, checks the readers against every version
+// each hour.
 func RunBooksVersions(ctx context.Context, db *sql.DB) {
+	var checked time.Time
 	for {
 		written, err := writeBooksVersions(ctx, db, 200)
 		if err != nil && ctx.Err() == nil {
 			log.Print("Books versions could not be written: ", err)
+		}
+		// Once the versions are written, the readers are checked against every one of them, hourly.
+		if err == nil && written < 200 && time.Since(checked) > time.Hour {
+			if e := runBooksParity(ctx, db); e != nil && ctx.Err() == nil {
+				log.Print("The books parity check could not run: ", e)
+			} else {
+				checked = time.Now()
+			}
 		}
 		wait := time.Minute
 		if err == nil && written == 200 {
@@ -218,25 +229,50 @@ func RunBooksVersions(ctx context.Context, db *sql.DB) {
 func booksParity(ctx context.Context, q interface {
 	rowReader
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, org string, limit int) (checked int, mismatched []string, err error) {
-	rows, err := q.QueryContext(ctx, `SELECT source,source_id,digest,unreadable FROM books_versions WHERE ($1='' OR organization_id=$1) ORDER BY id LIMIT $2`, org, limit)
-	if err != nil {
-		return 0, nil, err
+}, org string) (checked int, mismatched []string, err error) {
+	// A page of versions at a time, by id, so every version is checked however many there are.
+	after := int64(0)
+	for {
+		var page []storedVersion
+		if page, err = storedVersions(ctx, q, org, after, 200); err != nil || len(page) == 0 {
+			return checked, mismatched, err
+		}
+		after = page[len(page)-1].row
+		n, wrong, e := compareVersions(ctx, q, page)
+		checked, mismatched = checked+n, append(mismatched, wrong...)
+		if e != nil {
+			return checked, mismatched, e
+		}
 	}
-	type stored struct{ source, id, digest, unreadable string }
-	var versions []stored
+}
+
+type storedVersion struct {
+	row                            int64
+	source, id, digest, unreadable string
+}
+
+// storedVersions is up to limit versions after row id after, of firm org or of every firm ("").
+func storedVersions(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, org string, after int64, limit int) ([]storedVersion, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id,source,source_id,digest,unreadable FROM books_versions WHERE ($1='' OR organization_id=$1) AND id>$2 ORDER BY id LIMIT $3`, org, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var versions []storedVersion
 	for rows.Next() {
-		var v stored
-		if err = rows.Scan(&v.source, &v.id, &v.digest, &v.unreadable); err != nil {
-			rows.Close()
-			return 0, nil, err
+		var v storedVersion
+		if err = rows.Scan(&v.row, &v.source, &v.id, &v.digest, &v.unreadable); err != nil {
+			return nil, err
 		}
 		versions = append(versions, v)
 	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return 0, nil, err
-	}
+	return versions, rows.Err()
+}
+
+// compareVersions recomputes each version from its capture and names those that disagree.
+func compareVersions(ctx context.Context, q rowReader, versions []storedVersion) (checked int, mismatched []string, err error) {
 	for _, v := range versions {
 		m, _, _, e := captureMonth(ctx, q, v.source, v.id)
 		if e == sql.ErrNoRows {
@@ -261,27 +297,37 @@ func booksParity(ctx context.Context, q interface {
 
 // adminBooks is the month-books record's state across firms, for staff deciding when a reader may switch to it
 // (delivery step 5): how many month-end captures there are, how many have a version and how many are unreadable, and
-// the parity check over the versions written so far, with the captures where it disagrees (identifiers only).
+// the worker's latest finished parity run over every version, with the captures where it disagrees (identifiers
+// only).
 func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
-	if err != nil {
-		problem(w, 503, "The books record is unavailable.")
-		return
-	}
-	defer tx.Rollback()
 	var captures, versions, unreadable int
-	if err = tx.QueryRowContext(r.Context(), `SELECT (SELECT count(*) FROM quickbooks_snapshots WHERE payload ? 'period')+(SELECT count(*) FROM xero_snapshots),
- (SELECT count(*) FROM books_versions),(SELECT count(*) FROM books_versions WHERE unreadable<>'')`).Scan(&captures, &versions, &unreadable); err != nil {
-		problem(w, 503, "The books record is unavailable.")
+	var parity json.RawMessage
+	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM quickbooks_snapshots WHERE payload ? 'period')+(SELECT count(*) FROM xero_snapshots),
+ (SELECT count(*) FROM books_versions),(SELECT count(*) FROM books_versions WHERE unreadable<>''),
+ COALESCE((SELECT jsonb_build_object('checked',checked,'mismatched',mismatched,'finished_at',finished_at) FROM books_parity WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &versions, &unreadable, &parity)
+	})
+	if err != nil {
+		adminFirmProblem(w, err, "books read")
 		return
 	}
-	checked, mismatched, err := booksParity(r.Context(), tx, "", 5000)
+	jsonReply(w, 200, map[string]any{"captures": captures, "versions": versions, "pending": max(captures-versions, 0), "unreadable": unreadable, "parity": parity})
+}
+
+// runBooksParity checks every version against its capture and records the run, so staff read its outcome.
+func runBooksParity(ctx context.Context, db *sql.DB) error {
+	var run int64
+	if err := db.QueryRowContext(ctx, `INSERT INTO books_parity DEFAULT VALUES RETURNING id`).Scan(&run); err != nil {
+		return err
+	}
+	checked, mismatched, err := booksParity(ctx, db, "")
 	if err != nil {
-		problem(w, 503, "The parity check could not run.")
-		return
+		return err
 	}
 	if mismatched == nil {
 		mismatched = []string{}
 	}
-	jsonReply(w, 200, map[string]any{"captures": captures, "versions": versions, "pending": max(captures-versions, 0), "unreadable": unreadable, "parity": map[string]any{"checked": checked, "mismatched": mismatched}})
+	raw, _ := json.Marshal(mismatched)
+	_, err = db.ExecContext(ctx, `UPDATE books_parity SET finished_at=now(),checked=$2,mismatched=$3::jsonb WHERE id=$1`, run, checked, string(raw))
+	return err
 }

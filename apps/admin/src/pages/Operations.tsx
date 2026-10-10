@@ -143,7 +143,7 @@ const tone: Record<string, string> = { active: "ok", reconnect_required: "danger
 
 // The month-books record (docs/books-sources.md, Migration): how many month-end captures have their books version, and
 // whether the readers still agree with every version written. A reader moves to the record only while this agrees.
-type BooksRecord = { captures: number; versions: number; pending: number; unreadable: number; parity: { checked: number; mismatched: string[] } };
+type BooksRecord = { captures: number; versions: number; pending: number; unreadable: number; parity: { checked: number; mismatched: string[]; finished_at: string } | null };
 
 function MonthBooks() {
   const books = useResource<BooksRecord>("/v1/admin/books");
@@ -158,18 +158,24 @@ function MonthBooks() {
             {books.data.versions} of {books.data.captures} month-end captures have their books version{books.data.pending ? `; ${books.data.pending} are waiting for the worker` : ""}. {books.data.unreadable} are kept as unreadable, as the readers find
             them.
           </p>
-          <p>
-            <span className={`status ${books.data.parity.mismatched.length ? "danger" : "ok"}`}>
-              {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : "The readers agree"}
-            </span>{" "}
-            with {books.data.parity.checked} versions checked.
-          </p>
-          {books.data.parity.mismatched.length > 0 && (
-            <ul>
-              {books.data.parity.mismatched.map((m) => (
-                <li key={m}>{m}</li>
-              ))}
-            </ul>
+          {!books.data.parity ? (
+            <p>The parity check has not run yet; the worker runs it hourly once every capture has its version.</p>
+          ) : (
+            <>
+              <p>
+                <span className={`status ${books.data.parity.mismatched.length ? "danger" : "ok"}`}>
+                  {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : "The readers agree"}
+                </span>{" "}
+                with all {books.data.parity.checked} versions, checked {when(books.data.parity.finished_at)}.
+              </p>
+              {books.data.parity.mismatched.length > 0 && (
+                <ul>
+                  {books.data.parity.mismatched.map((m) => (
+                    <li key={m}>{m}</li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </>
       )}

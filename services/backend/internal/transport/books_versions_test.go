@@ -92,6 +92,11 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if location != "reports.GeneralLedger.Rows.Row[1].Rows.Row[0]" {
 		t.Fatalf("a line's report location: %s", location)
 	}
+	// The unreadable capture's General Ledger is kept all the same.
+	must(db.QueryRow(`SELECT count(*) FROM books_lines l JOIN books_versions v ON v.id=l.version_id WHERE v.source='quickbooks' AND v.source_id=$1`, unreadable).Scan(&lines))
+	if lines != 3 {
+		t.Fatalf("a capture whose reports cannot be read keeps its ledger lines: %d", lines)
+	}
 	for _, c := range [][2]string{{"quickbooks", unreadable}, {"xero", xeroCapture}} {
 		must(db.QueryRow(`SELECT unreadable FROM books_versions WHERE source=$1 AND source_id=$2`, c[0], c[1]).Scan(&problem))
 		if problem == "" {
@@ -108,15 +113,23 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if before != 3 || after != 3 {
 		t.Fatalf("one version per capture: %d then %d", before, after)
 	}
-	checked, mismatched, err := booksParity(t.Context(), db, org, 100)
+	checked, mismatched, err := booksParity(t.Context(), db, org)
 	must(err)
 	if checked != 3 || len(mismatched) != 0 {
 		t.Fatalf("the readers agree with every version: %d %v", checked, mismatched)
 	}
+	// The worker's run checks every version and records what it found.
+	must(runBooksParity(t.Context(), db))
+	var finished bool
+	var recorded int
+	must(db.QueryRow(`SELECT finished_at IS NOT NULL,checked FROM books_parity ORDER BY id DESC LIMIT 1`).Scan(&finished, &recorded))
+	if !finished || recorded < 3 {
+		t.Fatalf("a parity run is recorded: %v %d", finished, recorded)
+	}
 	// Once the readers would read a capture differently, the parity check names it.
 	_, err = db.Exec(`UPDATE quickbooks_snapshots SET payload=jsonb_set(payload,'{reports,TrialBalance,Rows,Row,0,ColData,1,value}','"1500.26"') WHERE id=$1`, readable)
 	must(err)
-	_, mismatched, err = booksParity(t.Context(), db, org, 100)
+	_, mismatched, err = booksParity(t.Context(), db, org)
 	must(err)
 	if len(mismatched) != 1 || !strings.Contains(mismatched[0], "quickbooks "+readable) {
 		t.Fatalf("a disagreement is named: %v", mismatched)
