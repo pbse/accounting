@@ -51,7 +51,7 @@ These are pointers into the existing implementation, not evidence that a package
 | Document | Contents |
 | --- | --- |
 | [Architecture](docs/architecture.md) | System boundaries, identity/authority, exact accounting and shared capabilities. |
-| [Design system](docs/design-system.md) | Tray shell, components, agent interaction conventions and layout checks. Reuse for accountant and executive experiences. |
+| [Design system](docs/design-system.md) | Krith: the agent-first shell (sidebar, Home stage, composer, close and records pages), tokens, components, motion and the layout check. Tray is archived at [docs/archive/design-system-tray.md](docs/archive/design-system-tray.md). |
 | [Workspace simplification](docs/workspace-simplification.md) | The 2026-10-07 audit's decisions: the cleaner look, the top bar, and the PR sequence that rebuilds the home, Clients, the close page, Firm settings and the copy. |
 | [Workflow engine](docs/workflow-engine.md) | Go durable workflow primitives, activity execution and current/deferred engine capabilities. |
 | [LLM gateway](docs/llm-gateway.md) | Model routing, context-machine integration, execution and operational boundaries. |

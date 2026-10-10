@@ -1,81 +1,91 @@
-# Workspace design system (Tray)
+# Workspace design system (Krith)
 
-The product (everything under `/dashboard`, and the client request page at `/request`) uses **Tray**: a light-only look with a light grey ground, white cards with soft shadows and 16px corners, pills for navigation, buttons and status, icons in tinted circles, Inter Display type and Hugeicons. Marketing and legal pages keep their own styles; Tray is scoped to `.app-shell`, the workspace layout's root. The client request page uses `.app-shell.standalone`, a single centred column without the top bar.
+The product (everything under `/dashboard`, and the client request page at `/request`) uses **Krith**: a white canvas, a faint grey sidebar with categories, hairlines instead of shadows, graphite for the one thing to do, blue only where something is alive, Geist for everything the person operates and Newsreader for the few lines the product says in its own voice. Each screen asks one thing of the person. Home is a stage for the agent. A close is one sentence and the few things left. Records pages keep the same shell, so the agent is always a keystroke away. It is light only.
 
-The reference for every value is the Tray design system: tokens, type scale, components and icon guidance were measured from the dashboards the product is modelled on, and refreshed on 2026-10-07 to the cleaner reference in [workspace simplification](workspace-simplification.md).
+The reference for every value is the Krith design system artifact: https://claude.ai/artifact/5UEvdXnLb9BgC4Ecte4ydL. It holds the tokens (colour, type, spacing, radius, shadow, size), the brand book (content, visual foundations, motion, the agent, icons, accessibility) and a live preview with guidelines for every component. The design was chosen on 2026-10-10 from the mockups in https://claude.ai/artifact/92yC3uzKqVHD7dcqhts5sk (rows "Calm" and "Growth", boards G0–G4). The earlier system, Tray, is archived at [design-system-tray.md](archive/design-system-tray.md).
 
 ## Where things live
 
 | What | File | Change it when |
 | --- | --- | --- |
-| Tokens: colours, radii, spacing, sizes, shadows, fonts | `packages/ui/theme/tokens.css` | A colour, radius or spacing step changes for both apps. |
-| The shell both apps share: the top bar, the page column, element styles | `packages/ui/theme/shell.css` | The shell, the top bar or a shared element style (cards, buttons, fields, tables, pills) changes. |
-| Font files (Inter and, for the word mark, Newsreader; both OFL) | `packages/ui/theme/fonts/` | Inter or Newsreader is upgraded. Keep the Latin and Latin Extended subsets with their `unicode-range`s. |
+| Tokens: colours, type, spacing, radii, shadows, sizes | `packages/ui/theme/tokens.css` | A value changes in the design system. Names match the artifact's tokens. |
+| The shell both apps share: the sidebar, the page column, element styles | `packages/ui/theme/shell.css` | The shell or a shared element style (buttons, inputs, chips, cards, tables) changes. |
+| Font files (Geist and Newsreader; both OFL) | `packages/ui/theme/fonts/` | A face is upgraded. Keep the Latin and Latin Extended subsets with their `unicode-range`s. |
 | Shared components, each with its stylesheet beside it | `packages/ui/components/` | A pattern used on more than one page or app changes. |
 | Icons | `packages/ui/components/Icon.tsx` | An icon is added or replaced. |
-| The firm app's own patterns (preparation forms, evidence pane, Work's rows, Attention, the agent panel) | `apps/frontend/src/theme/workspace.css` | One of those changes. |
+| The firm app's own patterns (preparation forms, evidence pane, the thread) | `apps/frontend/src/theme/workspace.css` | One of those changes. |
 | The staff console's own patterns (workflow flow, inspector, schema forms) | `apps/admin/src/admin.css` | One of those changes. |
 | The browser toolbar colour on shell pages | `packages/ui/theme/useShellThemeColor.ts` | A new shell page opens outside the firm app's workspace layout. |
-| The public site's styles (its own system: `k-` classes under `.k-site`; see [public site](marketing-site.md#design)) | `apps/frontend/src/styles.css` | A public page changes. |
+| The public site's styles (its own system: `k-site` classes; see [public site](marketing-site.md#design)) | `apps/frontend/src/styles.css` | A public page changes. |
 
-Both apps import the design system as `@close/ui/...`, an alias to `packages/ui` set in each app's `vite.config.ts` and `tsconfig.json`. Each `main.tsx` imports `@close/ui/theme/tokens.css`, `@close/ui/theme/shell.css` and then its own stylesheet; the firm app imports the public site's `styles.css` first, for its marketing pages. Each component imports its own stylesheet, which loads with the page that uses it.
+Both apps import the design system as `@close/ui/...`, an alias to `packages/ui` set in each app's `vite.config.ts` and `tsconfig.json`. Each `main.tsx` imports `@close/ui/theme/tokens.css`, `@close/ui/theme/shell.css` and then its own stylesheet.
+
+## The shell
+
+One sidebar, no top bar. The sidebar is 256px on `surface-side` with a hairline on its right (56px of icons when collapsed), and its order is fixed:
+
+1. The wordmark (Newsreader, lowercase, over its double blue rule) and the collapse control.
+2. The firm line (the firm's name, a switch when the person belongs to more than one).
+3. New chat, with its ⌘K hint.
+4. The pages: Home, Clients, Closes (with a count of what needs the person), then each module as a group that opens to its pages (Tax: Returns, Estimates, Deadlines), then Reports. A module is one line until opened; the one the person is in stays open.
+5. Chats: the four most recent by title, a pulsing dot while the agent works, a steady dot when it answered while the person was away, "All chats".
+6. Needs you: one-line notices of what the agent noticed (a document arrived, a client replied, something is waiting, something is done). Taking one opens it and the card slides out; taken notices stay under Attention.
+7. At the foot: Settings, Help, then the person (avatar, name, role), which opens the account menu.
+
+The main column is white. Home is a stage: the greeting in Newsreader ("Good evening, Prashant."), one italic line about the week, the composer at the centre with three suggestions, and a This-week list of up to three rows. Send turns the stage into the thread: the greeting and the list fade up, the composer glides to the foot, the answer streams. New chat brings the stage back.
+
+A page (a close) opens with the breadcrumb row and its one action on the right (Sign off, disabled until it can be taken), then the lede, one sentence in Newsreader on where the close stands ("Acme is two steps from done.") with a context line, then the tasks: numbered cards with a title, one line and one button, the first with the primary. What the agent already did is one folded line beneath. A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table. Every page has the composer at its foot, scoped to the page.
+
+Below 860px the sidebar is a sheet opened from the brand button, the composer spans the width, and the stage's positions become flow.
 
 ## Components
 
-Pages build from these instead of repeating markup and class names. Each takes its values from the tokens.
+Pages build from these instead of repeating markup and class names. Each takes its values from the tokens; the artifact's component of the same name is the reference for its markup, states and guidelines.
 
 | Component | Use it for |
 | --- | --- |
-| `PageHeader` | The title row at the top of a page: `icon` or a client's `avatar`, the 24px `title`, a one-line description as children, and `actions` on the right. |
-| `BackLink` | The way back to the page this one belongs to, above its header. |
-| `SectionHeader` | A heading above a block, with an optional aside (a count, a note or actions) as children. `level={1}` when it is the page's only heading. |
-| `StatGroup`, `StatTile` | A row of number cards. A tile with `to` is a link, with `onClick` a button, with neither it only reads; the icon and caption are optional. |
-| `HexMap` | A whole split into up to four parts that never overlap, as clusters of hex cells with a legend of counts and shares that add up to 100 (Measure's track record). Its label states every share for screen readers.
-| `DotChart` | One series over time as dot columns over a full grid of empty dots (Measure's median human minutes by month). A point with no value stays empty rather than reading as zero; its label states every point.
-| `Segmented` | A set of toggles (`onChange`) or page tabs (each item's `to`), with optional counts and an alert dot. |
-| `VerticalTabs` | A settings page's sections as a column of links, under their group names, beside the selected section's cards (Settings); on a phone the column becomes a strip above that scrolls sideways. |
-| `SettingGrid`, `SettingCard`, `StatusChip` | Cards of settings side by side: each its icon in a tinted circle, its state as a chip with a dot, its name, one line on where it stands, and an action at its foot (Settings → Policies). |
-| `Dialog`, `DialogActions` | A focused window for one change: a title, one line on what it does, the form and its actions at the foot; the browser's own modal, closed by Escape, the backdrop or Cancel. Every change on the Settings page is made in one, never in a fold-out. |
-| `RowList`, `EntityCell` | A card of rows with optional column names; `EntityCell` is a row's first cell with the client's avatar or another leading mark. Rows themselves are `.row` links, summaries or blocks. |
-| `IconTile`, `Avatar`, `Icon` | A 36px tinted circle with an icon in its hue (blue, orange, teal, green, violet, red or gray), a client's initial in its colour, and an icon by name. |
-| `AgentComposer` | The card that leads a page with the agent: title, what it can do, a large input, one-click asks and the caller's results below. |
-| `Suggestions` | One-click asks as pills. The caller asks the picked text exactly as written; a suggestion never runs an action without its preview. |
-| `AgentMark` | The agent's blue tile; with children it leads a label, such as the heading of something the agent wrote. |
+| `Sidebar`, `NavItem`, `NavGroup`, `ChatList`, `Notices`, `SidebarFoot` | The shell's sidebar and its parts, in the fixed order above. |
+| `Composer`, `Suggestions`, `ActionsMenu` | The agent's input: the floating box with plus, scope and send; the three offers on Home; the plus menu (attach, actions, Preview before acting, Move to the side). |
+| `Stage`, `Thread`, `Steps`, `Citations` | Home before the first message; a conversation; what the agent is doing while it runs; where an answer came from. |
+| `Breadcrumbs`, `Lede`, `Task`, `DoneLine` | A page's head, its one sentence, the things left, what the agent already did. |
+| `RecordsHead`, `Segmented`, `Tabs`, `Table` | A records page: its title row, its filter, page tabs, the table. |
+| `Card`, `Stat`, `SectionNav`, `EmptyState` | Settings cards (every change in a Dialog), Measure's numbers, a settings page's sections, nothing yet. |
+| `Button`, `IconButton`, `Input`, `Choice`, `Chip`, `Mark`, `Kbd` | The primitives: actions, icon-only actions (including send), fields, switches and checkboxes, status chips and dots, client, firm, agent and person marks, shortcut hints. |
+| `Dialog`, `Toast`, `Tooltip`, `Skeleton` | One change in a focused window; a confirmation line; a label for an icon-only control; a block before its data arrives. |
 
-To add a component, put `Name.tsx` and `Name.css` in `packages/ui/components/`, import the stylesheet from the component, use only tokens in it, and add a row here. Import it as `@close/ui/components/Name`.
+`HexMap` and `DotChart` keep their drawing and take their colours from the tokens (parts in `accent` and `client-teal`, empty cells in `surface-side`).
+
+To add a component, put `Name.tsx` and `Name.css` in `packages/ui/components/`, import the stylesheet from the component, use only tokens in it, add it to the artifact with a preview and guidelines, and add a row here. Import it as `@close/ui/components/Name`.
 
 ## Rules
 
-- **Use tokens, not literals.** `workspace.css` takes every colour, radius, spacing step and shadow from `tokens.css`. A new colour becomes a token first, with a comment saying where it is used.
-- **Cards are white on the grey ground.** A section is a white card (`--surface`, `--radius-md`, `--shadow-card`, no border). A section inside a card and a list row are white tiles with a hairline ring (`--shadow-tile`, `--radius-sm`). Grey fills (`--tile`, `--fill`) are for notes, inset controls, segmented tracks and chat bubbles, never for cards.
-- **Pills everywhere round.** Buttons, navigation items, segments, status pills and chips use `--radius-full`. The one primary action on a view is solid `--blue` with white words; every other button is white with a hairline ring. The current page and the selected segment are solid blue too.
-- **Concentric corners.** Anything nested inside a `--radius-md` container uses `--radius-sm`.
-- **One type family.** Inter at optical size 32 at every size, weights 400, 500 and 600. Page titles are 24px semibold, section titles 17px, card titles 15px, body 14px, controls and labels 13px, captions 11–12px; column names and eyebrows are 11px uppercase.
-- **Colour means something.** `--blue` is the brand, the current page, the primary button and the focus ring. `--green` and `--red` paint status dots and bars; words use `--positive-text` and `--negative-text`, which pass AA on their tints. Icons sit in tinted circles (`IconTile`) whose hue says what the number is about. `--spotlight` marks the one thing to do first. Avatar and chart hues (`--teal`, `--pink`, `--orange`, `--violet`) never carry status.
+- **Use tokens, not literals.** Every colour, radius, spacing step, shadow and size comes from `tokens.css`, named as in the artifact. A new colour becomes a token first, with a usage note in both places.
+- **One thing per screen.** A page states where things stand in one sentence, then shows only what is left. Numbers, tables and history come after, or on a records page.
+- **Hairlines, not shadows.** A card, a task, a notice, a table, an input and a white button have a 1px `ring` and no shadow. Hover adds depth (`raised`, `lift`), not colour. Only the composer and the actions menu float; a dialog sits on the overlay.
+- **Graphite is the action.** One `primary` button per view. The send button, the task numerals and the firm and agent marks are graphite too. Never two primaries, never a primary in a table row.
+- **Blue means alive.** `accent` is the working and unread dots, the up-next dot, the wordmark's rule, the focus ring and links. Never a fill behind words, never the current nav item, never a switch.
+- **Current is white.** The current page and the current chat are `surface` with a `ring` at weight 500.
+- **Status has a word.** `pos`, `att` and `neg` chips pair a text colour with its tint and always carry a word. A client's hue is identity, never status.
+- **Two faces, by role.** Geist for everything the person operates. Newsreader only for the wordmark, the greeting, a page's lede and a records title. Never the serif on a control, a table or a label.
+- **Corners are concentric.** `radius-3xl` composer, `radius-2xl` dialog, `radius-xl` task and menu, `radius-lg` cards and tables, `radius-md` notices and rows, `radius-sm` nav items, buttons and inputs, `radius-xs` small tiles, `radius-full` pills and dots.
+- **Motion is one easing and a short list of durations**, all off under `prefers-reduced-motion`: 120ms hover, 140ms rings, 160ms lifts, 180ms fades, 220ms rise and slide, 240ms folds and pops, 260ms a notice dropping in, 320ms the stage stepping aside, 380ms the composer's glide.
 - **Light only.** There is no dark theme, by product decision.
-- **Text passes AA.** Text is `--ink` or `--ink-2` (7:1 on white); `--ink-3` is for dots, dividers and icons, never words or numbers.
-- **The shell stands alone.** `shell.css` sets every element style its pages rely on, so the public site's `styles.css` can change without touching the product: the staff console doesn't load it at all, and the firm app's product rules live in `workspace.css`.
-- **No inline styles.** A one-off need becomes a class: `.pre-line` keeps a message's line breaks, `.block` puts a line on its own, `.scroll-text` lets long source text scroll in its box (a `pre` already wraps), `.evidence-frame` sizes an embedded PDF. Anything used on more than one page becomes a component.
-- **Every page opens with `PageHeader`**, titled as the top bar names the page. A form or panel placed straight on a page is a white card.
-- **No dead code.** Both apps' type-checks fail on unused locals and parameters (`noUnusedLocals`, `noUnusedParameters`); when a class stops being used, delete its rule in the same change.
-- **The staff console follows the same rules.** Its pages open with `PageHeader` and use the shared components; its navigation sits in the same top bar with icons like the firm app's; only patterns no firm page has (the workflow flow and inspector, schema forms, filter rows, grants) live in `apps/admin/src/admin.css`.
-
-## Checking the layout
-
-`scripts/layout-check.mjs` opens every page of both apps in Chrome, at desktop and phone width (a synthetic firm is added straight to the database, since only the sign-in provider creates real ones, and the client request page's one read is answered in the browser with an open request, since a request really sent needs a client's preparation work behind it), and fails when a page has no `PageHeader`, the top bar is not one full-width row on a desktop (or at most two on a phone) with the page column below it, the rail is not a narrow pill at the left of the page column on a desktop (or shows on a phone), a page is wider than a phone's screen, a page throws, or the firm app's shell takes any style from the public site's `styles.css`. CI runs it whenever `apps/`, `packages/` or the dependencies change. Locally, start the API and both apps' dev servers, then run `WORKSPACE_TOKEN=… DATABASE_URL=… npm run check:layout` (`CHROME_PATH` picks another Chromium browser, `FRONTEND_URL`, `ADMIN_URL` and `API_URL` other ports). A new page joins the check by adding its route to the script.
+- **Text passes AA.** Text is `ink`, `ink-2` or `ink-3`. `ink-4` is for icons at rest, chevrons and dividers, never words or numbers.
+- **Focus is visible** on every control: a 2px `accent` ring offset by 2px of white. A hidden affordance (a row's arrow) appears on focus as well as hover.
+- **No inline styles.** A one-off need becomes a class. Anything used on more than one page becomes a component.
+- **No dead code.** Both apps' type-checks fail on unused locals; when a class stops being used, delete its rule in the same change.
+- **The staff console follows the same rules** with the same sidebar; only patterns no firm page has live in `apps/admin/src/admin.css`.
 
 ## The agent comes first
 
-The agent is how people get work done, so it is never more than one click away:
-
-- **Home opens with the outcomes**, not a prompt: the four cards, the trust strip and the decision list. The agent is one click away in the top bar, and portfolio goals ("prepare my clients due Friday") are asked in its panel, which shows the server's exact preview before anything runs.
-- **A close's Overview opens with "Ask the agent"** until the close is handed over: the hand-over and the panel's close starter questions as suggestions, and any question opens the agent panel on that close. Once handed over, the same place shows the agent's progress.
-- **Attention and Client closes open with "Ask the agent" too**, with the panel's firm starter questions; a question opens the panel's firm-wide conversation. These pages and the close's Overview share `AskAgent` (`apps/frontend/src/features/dashboard/AskAgent.tsx`), which hands every question to the panel, so nothing runs from the page itself.
-- **Chats are many**: the rail's chats item (a history icon above Agent) opens a small menu with "New chat", the five latest chats (title over scope) and "All chats"; the panel's header has "+" and a chats button that swaps the conversation for the full list (grouped Today, Yesterday, This week, Earlier, with a filter); the chat's title sits under the scope chip and is renamed in place from the menu.
-- **"Agent" sits in the top bar**, the one blue button there, and in the rail, and opens the agent panel with the cursor in its input; closing the panel hands focus back to it.
-- **The panel starts the conversation** (for an executive: their three questions, "Your business" as the scope chip, no command list): an empty conversation offers only the scope chip and three starter chips, which send commands the fixed reads answer ("What needs me today?", or inside a close "What blocks sign-off?"); on a page that leads with its own `AskAgent` composer, the panel shows no chips of its own.
-- **The agent panel is a conversation, not a help widget** (`apps/frontend/src/features/dashboard/Assistant.tsx`): a rounded composer with the send button inside it (Enter sends, Shift+Enter breaks, grows to five lines), "/" opening the palette's command list inline (a listbox the box names through `aria-activedescendant`; arrows choose, Tab completes the text, Enter sends), Clear under the header's menu, one line under the composer before the first message and the full statement behind the header's info button. Member text sits in a tinted bubble on the right; the agent's text is plain on the left with the small mark, in paragraphs, lists and bold only, with citation chips below. While an answer runs, the steps the agent makes show one by one (✓ read, … reading, – refused), then collapse to a line on the saved answer; three dots say it is thinking and "Waiting for the agent" after three seconds without a step. A card is the message. On a phone the panel is a full-screen sheet with a back button and the composer above the home indicator. The drawer slides in and messages rise 4px, all off under `prefers-reduced-motion`. The name is "Agent" everywhere: the header, the top bar and the rail.
-- **What the agent wrote carries its mark** (`AgentMark`), as the morning brief does.
+- **Home opens on the composer.** The greeting says how the week stands; the composer is the first control; the three suggestions are the agent's own offers, worded as asks ("What needs me today?"). Send turns the stage into the thread.
+- **Every page has the composer at its foot**, scoped to the page ("Acme · September", "Firm-wide"). The scope is a quiet control inside the box; the person can widen it.
+- **The composer has three controls**: plus, scope, send. Enter sends, Shift+Enter breaks, the box grows to seven lines. Send is disabled until there is text and becomes Stop while a turn runs. Preview before acting and Move to the side live in the plus menu and the open thread.
+- **The agent shows its work.** While it runs: the mark breathes, "Looking at your closes" shimmers, each step slides in with a spinner that becomes a tick, the text streams with a caret. Done: the steps fold to one line with Show, citations follow the text as chips, an action row has at most one primary. This needs server-sent events from the backend for the steps and the words; until then the thread shows the finished answer with the same fold.
+- **Needs you is what the agent noticed**, one line each, at most four showing. Live notices need a push channel alongside the streaming one; until then the block is read with the page.
+- **Chats are titles.** No previews, timestamps or avatars in the list. A working chat pulses; one that answered shows a steady dot.
+- **What the agent wrote carries its mark**, including the morning brief.
+- **Nothing runs from a suggestion without its preview.**
 
 ## Icons
 
@@ -83,12 +93,12 @@ Icons come from Hugeicons free, Stroke Rounded (MIT), copied from `@hugeicons/co
 
 1. Find the icon at hugeicons.com (free set, Stroke Rounded) and note its name, for example `CalendarCheck01`.
 2. Copy its element list from `@hugeicons/core-free-icons/dist/esm/<Name>Icon.js` into `icons` in `packages/ui/components/Icon.tsx` under a short product name (`calendar-check`), dropping each element's `key`.
-3. Use it as `<Icon name="calendar-check" />`. Icons are 16px in navigation, controls and card headers and 24px beside a page title.
+3. Use it as `<Icon name="calendar-check" />`. Icons are 16px in nav, controls, notices and chips, 18px on round buttons, 14px for chevrons and hidden arrows. `ink-4` at rest, `ink` when current, the tint's text colour on a tinted tile, white on the send button and marks.
 
-## The shell
+## Checking the layout
 
-Both apps share one shell: a sticky top bar (`.topbar`) with the brand pill (the Krith word mark, `.wordmark`, in the public site's serif over its double blue rule), the navigation as pills (`nav` of `.nav-item`s, the current one solid blue) and the tools on the right (`.topbar-tools`: the client search and "Agent" in the firm app, and an account menu, `.topbar-account`, in both; the firm app’s menu also opens the member’s profile); under it the body row (`.app-body`): a floating rail down the left (`.rail`, `--rail-width`, the same places as icons in `.rail-group`s, the current one a blue square, and at its foot what the firm app asks of the agent) beside the page column (`.app-main > .page`), one centred column up to `--page-width` wide. Below 1100px the navigation takes a second row and scrolls sideways and the rail gives way to it; on a phone the bar also loses its subtitle, the account name and the search (the Clients page has its own), and the blue button keeps its icon alone. An open content grant shows on the staff console's account button at every width. The firm app's bar names three pages, Home, Clients and Settings (and the worked example for Krith's own firm); Settings holds the person's and the firm's sections (people, clients, policies and security), Measure opens from its Firm section, the preparation forms from a close. The staff console's bar names its ten.
+`scripts/layout-check.mjs` opens every page of both apps in Chrome, at desktop and phone width (a synthetic firm is added straight to the database, since only the sign-in provider creates real ones, and the client request page's one read is answered in the browser with an open request), and fails when a page is wider than a phone's screen, a page throws, or the firm app's shell takes any style from the public site's `styles.css`. With the Krith shell it also checks that the sidebar is one column at the left of the page on a desktop (and a sheet on a phone), that its sections appear in the fixed order, and that the composer is present at the foot of every page. CI runs it whenever `apps/`, `packages/` or the dependencies change. Locally, start the API and both apps' dev servers, then run `WORKSPACE_TOKEN=… DATABASE_URL=… npm run check:layout` (`CHROME_PATH` picks another Chromium browser, `FRONTEND_URL`, `ADMIN_URL` and `API_URL` other ports). A new page joins the check by adding its route to the script.
 
 ## Rollout
 
-The workspace moved to Tray in PRs #205–#222 (tokens, shared components, the agent first, the shared package and the staff console). On 2026-10-07 the shell took the cleaner reference look and the top bar; the pages themselves follow in [workspace simplification](workspace-simplification.md).
+The workspace moved to Tray in PRs #205–#222 and took the top bar and rail on 2026-10-07 ([workspace simplification](workspace-simplification.md)). Krith was chosen on 2026-10-10. It lands in this order, each step a PR that keeps both apps green and the layout check passing: tokens and fonts; the sidebar shell (replacing the top bar and rail) with the layout check updated; the composer and the Home stage; the close page (lede, tasks, done line); the records pages; the thread's motion with server-sent events; the live Needs you block. Until a page has moved it keeps its Tray classes, which `shell.css` keeps until the last page moves; then the Tray rules are deleted.
