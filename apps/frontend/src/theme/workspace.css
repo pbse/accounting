@@ -622,7 +622,18 @@ aside.assistant {
   display: flex;
   gap: var(--space-8);
   align-items: flex-start;
-  animation: ks-rise 220ms var(--ease) both;
+  animation: ks-rise-sm 220ms var(--ease) both;
+}
+/* A message rises four pixels (docs/agent-chat.md); the stage's composer has its own, longer rise. */
+@keyframes ks-rise-sm {
+  from {
+    transform: translateY(4px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
 }
 .assistant-messages > li .agent-mark {
   flex: 0 0 auto;
@@ -766,7 +777,7 @@ aside.assistant {
   gap: var(--space-8);
   min-height: 20px;
   color: var(--ink-2);
-  animation: ks-rise 220ms var(--ease) both;
+  animation: ks-rise-sm 220ms var(--ease) both;
 }
 .assistant-steps li > span:nth-child(2) {
   flex: 1;
@@ -841,8 +852,9 @@ aside.assistant {
     box-shadow: 0 0 0 7px rgb(24 24 27 / 0%);
   }
 }
+/* The shimmer runs from ink to ink-3 and back, so every frame of the line stays at 4.5:1 on the surface. */
 .ks-thinking {
-  background: linear-gradient(90deg, #52525b 0%, #52525b 35%, #c4c6cc 50%, #52525b 65%, #52525b 100%);
+  background: linear-gradient(90deg, #18181b 0%, #18181b 35%, #6b6f78 50%, #18181b 65%, #18181b 100%);
   background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
