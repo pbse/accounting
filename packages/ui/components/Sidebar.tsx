@@ -38,6 +38,16 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [open, setOpen] = useState(false);
+  // Below 860px the sidebar is a sheet, never collapsed: a remembered collapsed state waits for a desktop.
+  const [sheetMode, setSheetMode] = useState(false);
+  useEffect(() => {
+    const narrow = window.matchMedia("(max-width: 860px)");
+    const read = () => setSheetMode(narrow.matches);
+    read();
+    narrow.addEventListener("change", read);
+    return () => narrow.removeEventListener("change", read);
+  }, []);
+  const iconsOnly = collapsed && !sheetMode;
   useEffect(() => {
     try {
       setCollapsed(localStorage.getItem(collapsedKey) === "1");
@@ -132,7 +142,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
           </button>
         )}
         <div className="ks-pages">
-          {items.map((item) => (isGroup(item) ? <Group key={item.label} group={item} path={location.pathname} collapsed={collapsed} expand={toggleCollapsed} /> : <Page key={item.to} item={item} />))}
+          {items.map((item) => (isGroup(item) ? <Group key={item.label} group={item} path={location.pathname} collapsed={iconsOnly} expand={toggleCollapsed} /> : <Page key={item.to} item={item} />))}
         </div>
         {children}
         <div className="ks-foot">
