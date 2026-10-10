@@ -25,7 +25,8 @@ export function signOffAvailable(brief: Brief | undefined) {
   return !!line && line.state === "attention" && /ready/i.test(line.text);
 }
 export function needsOf(brief: Brief) {
-  const needs = brief.lines.filter((l) => l.state === "attention" || l.state === "unknown");
+  // A section that could not be read is said so, never counted as the person's work.
+  const needs = brief.lines.filter((l) => l.state === "attention");
   const counted = /^(\d+) things? needs? you/.exec(brief.headline);
   return { needs, count: Math.max(needs.length, counted ? Number(counted[1]) : 0) };
 }
@@ -51,12 +52,12 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
     ? read.isError
       ? `${close.entity}’s close could not be read.`
       : `${close.entity}, ${monthName(close.period)}.`
-    : count
-      ? `${close.entity} is ${count === 1 ? "one step" : `${n(count, "step")}`} from done.`
-      : waiting.length
-        ? `${close.entity} is waiting on ${waiting.map((l) => l.area).join(" and ")}.`
-        : brief.headline === "Signed off."
-          ? `${close.entity} is signed off.`
+    : brief.headline.startsWith("Signed off.")
+      ? `${close.entity} is signed off.`
+      : count
+        ? `${close.entity} is ${count === 1 ? "one step" : `${n(count, "step")}`} from done.`
+        : waiting.length
+          ? `${close.entity} is waiting on ${waiting.map((l) => l.area).join(" and ")}.`
           : `${close.entity} is ready to sign off.`;
   const context = [
     close.due_on ? (close.due_on < today ? `Overdue since ${dates.calendarDay(close.due_on)}` : `Due ${dates.calendarDay(close.due_on)}`) : "No due date",
@@ -99,6 +100,7 @@ export function CloseTasks({ closeId, base }: { closeId: string; base: string })
   if (!brief) return error ? <p role="alert">{error}</p> : null;
   const { needs } = needsOf(brief);
   const waiting = brief.lines.filter((l) => l.state === "waiting");
+  const unchecked = brief.lines.filter((l) => l.state === "unknown");
   const rest = brief.lines.filter((l) => l.state === "done" || l.state === "info");
   const done = rest.filter((l) => l.state === "done");
   return (
@@ -112,7 +114,25 @@ export function CloseTasks({ closeId, base }: { closeId: string; base: string })
             <p>{line.text}</p>
           </div>
           {line.tab ? (
-            <Link className={i === 0 ? "button primary" : "button"} to={`${base}?tab=${line.tab}`}>
+            <Link className="button" to={`${base}?tab=${line.tab}`}>
+              Open
+            </Link>
+          ) : (
+            <span />
+          )}
+        </div>
+      ))}
+      {unchecked.map((line) => (
+        <div className="ks-task unchecked" key={line.area}>
+          <span className="ks-numeral">
+            <Icon name="blocked" size={14} />
+          </span>
+          <div>
+            <b>{area(line)} · not checked</b>
+            <p>{line.text}</p>
+          </div>
+          {line.tab ? (
+            <Link className="button" to={`${base}?tab=${line.tab}`}>
               Open
             </Link>
           ) : (
