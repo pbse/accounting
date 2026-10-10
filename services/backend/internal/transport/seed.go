@@ -1914,11 +1914,6 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	if unresolved > 0 {
 		return fmt.Errorf("%d posting(s) or correction(s) on the demonstration's closes have an outcome still to confirm; resolve them before removing it", unresolved)
 	}
-	for _, id := range ordered {
-		if err := removeClose(ctx, db, id, chats, subject); err != nil {
-			return fmt.Errorf("close %s: %w", id, err)
-		}
-	}
 	// The client-scoped rows the run recorded as it made them; anything else under those names is someone else's.
 	recorded := map[string][]string{}
 	var before map[string]any
@@ -1932,19 +1927,51 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 			}
 		}
 	}
+	// Work that depends on the demonstration's rows and is not the demonstration's keeps them: a budget based on a
+	// seeded version, or a goal the monthly routine made on a retained close.
+	var dependents int
+	if err := db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM budget_versions WHERE organization_id=$1 AND based_on::text=ANY($2) AND NOT id::text=ANY($2))
+ +(SELECT count(*) FROM close_goals g WHERE g.routine_id::text=ANY($3) AND NOT g.close_id::text=ANY($4))`, o.Organization, recorded["budget_versions"], recorded["close_routines"], ordered).Scan(&dependents); err != nil {
+		return err
+	}
+	if dependents > 0 {
+		return fmt.Errorf("%d budget(s) or goal(s) outside the demonstration build on its rows; remove those first", dependents)
+	}
+	// Everything goes in one transaction, so a refusal partway leaves the demonstration whole.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ordered {
+		if err := removeClose(ctx, tx, id, chats, subject); err != nil {
+			return fmt.Errorf("close %s: %w", id, err)
+		}
+	}
+	// A demonstration client with a close of someone else's keeps its setup: roster entry, assignments, aliases,
+	// routine and connection stay with that close.
+	var retained []string
+	if rows, err := tx.QueryContext(ctx, `SELECT DISTINCT lower(entity) FROM client_closes WHERE organization_id=$1 AND lower(entity)=ANY($2)`, o.Organization, names); err == nil {
+		for rows.Next() {
+			var name string
+			rows.Scan(&name)
+			retained = append(retained, name)
+		}
+		rows.Close()
+	}
 	statements := []seedStatement{}
 	for _, table := range []string{"client_roster", "client_access", "budget_versions", "cash_obligations", "cash_scenarios", "open_item_actions", "collection_contact_preferences", "close_routines"} {
 		if ids := recorded[table]; len(ids) > 0 {
-			statements = append(statements, seedStatement{fmt.Sprintf(`DELETE FROM %s WHERE organization_id=$1 AND id::text=ANY($2)`, table), []any{o.Organization, ids}})
+			statements = append(statements, seedStatement{fmt.Sprintf(`DELETE FROM %s WHERE organization_id=$1 AND id::text=ANY($2) AND NOT lower(client_entity)=ANY($3)`, table), []any{o.Organization, ids, retained}})
 		}
 	}
 	for _, pair := range recorded["client_aliases"] {
-		if entity, alias, ok := strings.Cut(pair, " | "); ok {
+		if entity, alias, ok := strings.Cut(pair, " | "); ok && !slices.Contains(retained, strings.ToLower(entity)) {
 			statements = append(statements, seedStatement{`DELETE FROM client_aliases WHERE organization_id=$1 AND client_entity=$2 AND alias=$3`, []any{o.Organization, entity, alias}})
 		}
 	}
 	if ids := recorded["quickbooks_connections"]; len(ids) > 0 {
-		statements = append(statements, seedStatement{`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND id::text=ANY($2) AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs WHERE connection_id=quickbooks_connections.id)`, []any{o.Organization, ids}})
+		statements = append(statements, seedStatement{`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND id::text=ANY($2) AND NOT lower(client_entity)=ANY($3) AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs WHERE connection_id=quickbooks_connections.id)`, []any{o.Organization, ids, retained}})
 	}
 	// The seed's own chat messages go; a session that still holds the administrator's later turns stays with them.
 	statements = append(statements,
@@ -1959,9 +1986,15 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		seedStatement{`DELETE FROM agent_access WHERE organization_id=$1 AND id=ANY($2)`, []any{o.Organization, agentAccess}},
 	)
 	for _, st := range statements {
-		if _, err := db.ExecContext(ctx, st.sql, st.args...); err != nil {
+		if _, err := tx.ExecContext(ctx, st.sql, st.args...); err != nil {
 			return fmt.Errorf("%s: %w", st.sql[:40], err)
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM demonstration_seeds WHERE organization_id=$1`, o.Organization); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	// The firm's policy as the seed found it, recorded as a change by the person who ran the seed; the review rules
 	// were never changed, and the local firm cannot take them.
@@ -2009,17 +2042,11 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 			return errors.New(s.problems[0])
 		}
 	}
-	_, err = db.ExecContext(ctx, `DELETE FROM demonstration_seeds WHERE organization_id=$1`, o.Organization)
-	return err
+	return nil
 }
 
 // removeClose deletes one close and everything that hangs off it, in the order the deletion route uses.
-func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions []int64, actor string) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions []int64, actor string) error {
 	// The close is locked and its hold checked again here, under the deletion's own transaction, before anything goes.
 	var org, entity, period, client, plainClient string
 	var postings int
@@ -2110,5 +2137,5 @@ func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions [
 			return fmt.Errorf("%s: %w", statement, err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
