@@ -889,10 +889,17 @@ func (s *seeder) plan(ctx context.Context, c *seed.Client, closeID, period strin
 		body["note"] = "Taking " + c.Name + " for " + period
 	}
 	s.must(ctx, "plan "+period, "POST", "/v1/closes/"+closeID+"/planning", body)
-	if owner != s.o.Subject {
-		// A teammate's close: handed over as the assign action records it (the lookup of teammates needs WorkOS).
+	if owner != s.o.Subject && s.o.Organization == "local-development" {
+		// Local development shares one identity, so the teammate lookup (WorkOS) is not available: handed over as the
+		// assign action records it.
 		s.db.ExecContext(ctx, `UPDATE client_closes SET owner=$2 WHERE id::text=$1`, closeID, owner)
 		s.db.ExecContext(ctx, `INSERT INTO close_owner_changes(close_id,from_owner,to_owner,actor,reason) SELECT id,'',$2,$3,$4 FROM client_closes WHERE id::text=$1`, closeID, owner, s.o.Subject, "Handed to the client's usual accountant")
+	} else if owner != s.o.Subject {
+		// A teammate's close is handed over through the planning route, which checks that they can review the client's
+		// work; one who cannot keeps the administrator as the holder, and the run says so.
+		if code, out := s.call(ctx, "POST", "/v1/closes/"+closeID+"/planning", map[string]any{"priority": priority, "assignment": "assign", "assignee": owner, "due_on": due, "note": "Handed to the client's usual accountant"}); code != 200 {
+			s.problem("%s %s stays with the administrator: %s cannot be handed the close (%d %s)", c.Name, period, owner, code, out)
+		}
 	}
 	if priority == "high" {
 		s.db.ExecContext(ctx, `UPDATE client_closes SET priority='high' WHERE id::text=$1`, closeID)
@@ -1937,7 +1944,25 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	// stopped before it recorded them is still taken out whole. Newest first, so a connection's later months go before
 	// the month that holds it.
 	// Only the recorded closes: a close someone opened under a demonstration name, during the run or after, is theirs.
-	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND id=ANY($2) ORDER BY period DESC,id DESC`, o.Organization, closes)
+	recorded := map[string][]string{}
+	var before map[string]any
+	json.Unmarshal(policy, &before)
+	if rowsByTable, ok := before["rows"].(map[string]any); ok {
+		for table, list := range rowsByTable {
+			if ids, ok := list.([]any); ok {
+				for _, id := range ids {
+					recorded[table] = append(recorded[table], fmt.Sprint(id))
+				}
+			}
+		}
+	}
+	// A month the seeded monthly routine opened since the run is the demonstration's too, as long as no one has worked
+	// in it: it goes with the rest. One a person has worked in stays, and keeps the routine (checked below).
+	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes c WHERE organization_id=$1 AND (id=ANY($2)
+ OR (EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.routine_id::text=ANY($3))
+  AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id=c.id)
+  AND NOT EXISTS(SELECT 1 FROM close_signoffs x WHERE x.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.close_id=c.id)
+  AND NOT EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id))) ORDER BY period DESC,id DESC`, o.Organization, closes, recorded["close_routines"])
 	if err != nil {
 		return err
 	}
@@ -2003,18 +2028,6 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		return fmt.Errorf("%d active procedure rule(s) were learned from the demonstration's documents; retire them before removing it", rules)
 	}
 	// The client-scoped rows the run recorded as it made them; anything else under those names is someone else's.
-	recorded := map[string][]string{}
-	var before map[string]any
-	json.Unmarshal(policy, &before)
-	if rowsByTable, ok := before["rows"].(map[string]any); ok {
-		for table, list := range rowsByTable {
-			if ids, ok := list.([]any); ok {
-				for _, id := range ids {
-					recorded[table] = append(recorded[table], fmt.Sprint(id))
-				}
-			}
-		}
-	}
 	// Work that depends on the demonstration's rows and is not the demonstration's keeps them: a budget based on a
 	// seeded version, or a goal the monthly routine made on a retained close.
 	var dependents int
