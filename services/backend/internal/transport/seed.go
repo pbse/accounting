@@ -640,7 +640,7 @@ func (s *seeder) client(ctx context.Context, c *seed.Client, index int) error {
 			s.publish(ctx, closeID, c, period)
 		}
 		if final && c.Scenario == seed.Reopened && signed {
-			s.reopen(ctx, closeID, work)
+			s.reopen(ctx, c, closeID, period, work)
 		}
 		earlier = append(earlier, b)
 	}
@@ -1235,7 +1235,7 @@ func monthName(period string) string {
 
 // reopen replaces a document after sign-off, so the recorded sign-off no longer stands and the close asks to be
 // reopened: the client sent a corrected payroll summary.
-func (s *seeder) reopen(ctx context.Context, closeID string, work []seed.Work) {
+func (s *seeder) reopen(ctx context.Context, c *seed.Client, closeID, period string, work []seed.Work) {
 	for _, w := range work {
 		if w.Kind != "payroll" {
 			continue
@@ -1245,21 +1245,35 @@ func (s *seeder) reopen(ctx context.Context, closeID string, work []seed.Work) {
 		if evidenceID == "" {
 			return
 		}
-		corrected := strings.Replace(w.Text, "Payroll summary", "Payroll summary (corrected)", 1)
+		// The reissued summary corrects the employer taxes, so the reading and the draft it would make differ.
+		reissued := *c
+		payroll := *c.Payroll
+		payroll.EmployerTaxes = fmt.Sprintf("%.2f", mustFloat(payroll.EmployerTaxes)+56.25)
+		reissued.Payroll = &payroll
+		var corrected seed.Work
+		for _, again := range reissued.WorkFor(period, seed.Books{}) {
+			if again.Kind == "payroll" {
+				corrected = again
+			}
+		}
+		if corrected.Text == "" {
+			return
+		}
+		corrected.Text = strings.Replace(corrected.Text, "Payroll summary", "Payroll summary (reissued)", 1)
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return
 		}
 		tx.ExecContext(ctx, `SELECT id FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID)
-		id, _, _, refused := addEvidence(s.actor(ctx, s.o.Subject), tx, closeID, strings.Replace(w.File, ".txt", "-corrected.txt", 1), []byte(corrected), false, "work")
+		id, _, _, refused := addEvidence(s.actor(ctx, s.o.Subject), tx, closeID, strings.Replace(w.File, ".txt", "-reissued.txt", 1), []byte(corrected.Text), false, "work")
 		if refused != nil || tx.Commit() != nil {
 			tx.Rollback()
-			s.problem("reopen: corrected payroll summary refused")
+			s.problem("reopen: reissued payroll summary refused")
 			return
 		}
-		s.answers.Store(id, answerFor(w))
+		s.answers.Store(id, answerFor(corrected))
 		s.closeOf.Store(id, closeID)
-		s.must(ctx, "replace evidence", "POST", "/v1/closes/"+closeID+"/evidence/"+evidenceID+"/replace", map[string]any{"replacement_id": id, "reason": "ADP reissued the September summary with a corrected employer tax figure"})
+		s.must(ctx, "replace evidence", "POST", "/v1/closes/"+closeID+"/evidence/"+evidenceID+"/replace", map[string]any{"replacement_id": id, "reason": "ADP reissued the September summary with a corrected employer tax figure (up $56.25)"})
 		if err := s.settle(ctx); err != nil {
 			s.problem("reopen: %v", err)
 		}
@@ -1499,6 +1513,34 @@ func (s *seeder) afterwards(ctx context.Context) {
 	// Model usage for the month so far, as the operations view counts it.
 }
 
+// ownershipAnswer says, from the closes as they are owned, which September closes are the administrator's.
+func (s *seeder) ownershipAnswer(ctx context.Context) string {
+	var mine, others []string
+	rows, err := s.db.QueryContext(ctx, `SELECT entity,owner=$2 FROM client_closes WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($3) ORDER BY entity`, s.o.Organization, s.o.Subject, s.clientNames())
+	if err == nil {
+		for rows.Next() {
+			var entity string
+			var yours bool
+			if rows.Scan(&entity, &yours) == nil {
+				if yours {
+					mine = append(mine, entity)
+				} else {
+					others = append(others, entity)
+				}
+			}
+		}
+		rows.Close()
+	}
+	switch {
+	case len(others) == 0:
+		return "All of them are yours: every open September close is assigned to you."
+	case len(mine) == 0:
+		return "None of them: every open September close is with a teammate."
+	default:
+		return strings.Join(mine, ", ") + " are yours. " + strings.Join(others, ", ") + " are with a teammate."
+	}
+}
+
 // chats are a few conversations with the agent as the sidebar lists them: firm-wide and about one close.
 func (s *seeder) chats(ctx context.Context) {
 	harbor := s.closeFor(ctx, "Harbor Fixture LLC", "2026-09")
@@ -1512,9 +1554,9 @@ func (s *seeder) chats(ctx context.Context) {
 	}{
 		{"What is still open for September", "", s.today.Add(-26 * time.Hour), []turn{
 			{"user", "What is still open for September across the firm?"},
-			{"assistant", "Seven September closes are open. Harbor Fixture has two drafts waiting for your approval. Bluegrass Dental is waiting on Dr. Raman for the Riverbend loan statement; the request went out on Oct 6. Larkspur Landscaping is four days past its due date with a question open about the Fairview retainage. Meridian PT was signed off, but ADP reissued the payroll summary, so it needs reopening. Orchard Street Books has its documents in but no books captured yet. Tidewater Marine has one scan I could not read. Cedar & Pine and Summit Peak are signed off."},
+			{"assistant", "Seven September closes are open. Harbor Fixture has two drafts waiting for your approval. Bluegrass Dental needs the Riverbend loan statement; the request to Dr. Raman is approved and waiting to be sent. Larkspur Landscaping is four days past its due date with a question open about the Fairview retainage. Meridian PT was signed off, but ADP reissued the payroll summary, so it needs reopening. Orchard Street Books has its documents in but no books captured yet. Tidewater Marine has one scan I could not read. Cedar & Pine and Summit Peak are signed off."},
 			{"user", "Which of those is mine?"},
-			{"assistant", "Harbor Fixture, Meridian PT and Summit Peak are yours. The others are with your teammate."},
+			{"assistant", s.ownershipAnswer(ctx)},
 		}},
 		{"Harbor Fixture insurance schedule", harbor, s.today.Add(-5 * time.Hour), []turn{
 			{"user", "Why is the insurance expense lower than last month?"},
@@ -1596,6 +1638,13 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	}
 	if len(held) > 0 {
 		return fmt.Errorf("a legal hold or retention date protects %s; lift it under the close's Settings before removing the demonstration", strings.Join(held, ", "))
+	}
+	// An email still on its way out (a request's or a collection message's) is kept until its outcome is known, as the
+	// deletion route keeps it.
+	var inFlight int
+	db.QueryRowContext(ctx, `SELECT count(*) FROM email_outbox m WHERE m.state IN ('queued','sending','unknown') AND (m.request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id::text=ANY($1)) OR m.collection_id IN (SELECT id FROM collection_messages WHERE close_id::text=ANY($1)))`, ordered).Scan(&inFlight)
+	if inFlight > 0 {
+		return fmt.Errorf("%d email(s) from the demonstration's closes are still being sent; wait for their outcome before removing it", inFlight)
 	}
 	for _, id := range ordered {
 		if err := removeClose(ctx, db, id, chats, subject); err != nil {

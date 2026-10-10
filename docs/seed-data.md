@@ -9,10 +9,10 @@ Ten clients, taken on in June 2026; October 2026 is the running month, so Septem
 | Client | Business | Recurring work | Where September stands |
 | --- | --- | --- | --- |
 | Harbor Fixture LLC | Lighting wholesaler | Two prepaids (software, insurance); budget; handed to the agent | Drafts wait for approval |
-| Bluegrass Dental PLLC | Dental practice | Gusto payroll, Riverbend equipment note, prepaid software; every month handed to the agent | A request for the loan statement is out; waiting on the client |
+| Bluegrass Dental PLLC | Dental practice | Gusto payroll, Riverbend equipment note, prepaid software; every month handed to the agent | A request for the loan statement is approved and waiting to be sent |
 | Cedar & Pine Coffee Co. | Two cafés | Bank reconciliation from the statement export and the captured register; owner items | Signed off |
 | Larkspur Landscaping Inc. | Commercial landscaping | Deere truck note, prepaid insurance, late-paying customers, cash plan, open items | Overdue (due five days after month-end), with a retainage question and an accrual open |
-| Meridian Physical Therapy PC | Physical therapy | ADP payroll, prepaid malpractice insurance | Signed off, then ADP reissued the payroll summary: the sign-off no longer stands |
+| Meridian Physical Therapy PC | Physical therapy | ADP payroll, prepaid malpractice insurance | Signed off, then ADP reissued the payroll summary with higher employer taxes: the sign-off no longer stands |
 | Orchard Street Books LLC | Bookstore | Prepaid point-of-sale, August utilities accrual | Documents in, no books captured |
 | Summit Peak Fitness LLC | Fitness studio | Gusto payroll, monthly utilities accrual with reversal, prepaid insurance, budget, cash plan; packs published for the owner | Signed off and published |
 | Tidewater Marine Services Inc. | Boat yard | Riverbend note with accrued interest, prepaid insurance | A scan the agent could not read; drafts wait for approval |
