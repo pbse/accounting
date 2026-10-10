@@ -71,6 +71,8 @@ type seeder struct {
 	chatSessions, invitations, roleChanges, agentAccess, procedureIDs []int64
 	attentionKeys                                                     []string
 	modelCallDays                                                     []string
+	// fatal is the first failure to write the seed's record, which ends the run.
+	fatal error
 }
 
 func (s *seeder) log(format string, args ...any) {
@@ -320,8 +322,14 @@ func SeedFirm(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) ([
 		if err := s.client(ctx, c, i); err != nil {
 			return s.problems, fmt.Errorf("%s: %w", c.Name, err)
 		}
+		if s.fatal != nil {
+			return s.problems, fmt.Errorf("%s: %w; remove the demonstration and seed again", c.Name, s.fatal)
+		}
 	}
 	s.afterwards(ctx)
+	if s.fatal != nil {
+		return s.problems, fmt.Errorf("%w; remove the demonstration and seed again", s.fatal)
+	}
 	if err := s.manifest(ctx); err != nil {
 		return s.problems, err
 	}
@@ -420,9 +428,19 @@ func (s *seeder) clientNames() []string {
 	return names
 }
 
+// recordClose records a close of the demonstration's as soon as it exists.
+func (s *seeder) recordClose(ctx context.Context, id string) {
+	if _, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=array_append(close_ids,$2::bigint) WHERE organization_id=$1 AND NOT $2::bigint=ANY(close_ids)`, s.o.Organization, id); err != nil && s.fatal == nil {
+		s.fatal = fmt.Errorf("the seed's record could not be written (close): %w", err)
+	}
+}
+
 // record adds one ID or key to the seed's record as soon as the row exists, so a run that stops can still be removed.
+// A record that cannot be written stops the run: a row removal could not find is worse than a run cut short.
 func (s *seeder) record(ctx context.Context, column string, value any) {
-	s.db.ExecContext(ctx, fmt.Sprintf(`UPDATE demonstration_seeds SET %s=array_append(%s,$2) WHERE organization_id=$1`, column, column), s.o.Organization, value)
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`UPDATE demonstration_seeds SET %s=array_append(%s,$2) WHERE organization_id=$1`, column, column), s.o.Organization, value); err != nil && s.fatal == nil {
+		s.fatal = fmt.Errorf("the seed's record could not be written (%s): %w", column, err)
+	}
 }
 
 // recordRow records a client-scoped row the seed made, by its table and ID, for removal.
@@ -430,7 +448,9 @@ func (s *seeder) recordRow(ctx context.Context, table string, id string) {
 	if id == "" {
 		return
 	}
-	s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||jsonb_build_object('rows',COALESCE(policy->'rows','{}'::jsonb)||jsonb_build_object($2::text,COALESCE(policy->'rows'->$2::text,'[]'::jsonb)||to_jsonb($3::text))) WHERE organization_id=$1`, s.o.Organization, table, id)
+	if _, err := s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||jsonb_build_object('rows',COALESCE(policy->'rows','{}'::jsonb)||jsonb_build_object($2::text,COALESCE(policy->'rows'->$2::text,'[]'::jsonb)||to_jsonb($3::text))) WHERE organization_id=$1`, s.o.Organization, table, id); err != nil && s.fatal == nil {
+		s.fatal = fmt.Errorf("the seed's record could not be written (%s): %w", table, err)
+	}
 }
 
 // rowActor is the column that names who made a row, for the tables whose routes do not return the row's ID.
@@ -634,12 +654,9 @@ func (s *seeder) clientProcedures(ctx context.Context, c *seed.Client) {
 		publish(c.Name, "reconciliation", "", "Reconcile Checking to the bank's export every month; timing items need their clearing reference.", "", "")
 	}
 	if len(c.Prepaids) > 0 {
-		id := publish(c.Name, "prepaid", "", "Spread annual policies and subscriptions over equal full months from the first month of service.", seed.ExpenseName(c.Prepaids[0].Expense), "Prepaid Expenses")
-		// The equal-full-months rule is the method procedure learning records on a prepaid procedure; the route itself
-		// records only the accounts and the instructions. Only the version just published takes it.
-		if id != "" {
-			s.db.ExecContext(ctx, `UPDATE procedure_versions SET method='equal_full_months_v1' WHERE organization_id=$1 AND id::text=$2 AND kind='prepaid' AND method=''`, s.o.Organization, id)
-		}
+		// The procedure names the accounts and the instructions; the method a prepaid is prepared by is confirmed by the
+		// accountant on each reading, as it is until procedure learning records a reviewed rule.
+		publish(c.Name, "prepaid", "", "Spread annual policies and subscriptions over equal full months from the first month of service.", seed.ExpenseName(c.Prepaids[0].Expense), "Prepaid Expenses")
 	}
 }
 
@@ -732,7 +749,7 @@ func (s *seeder) client(ctx context.Context, c *seed.Client, index int) error {
 			}
 			// Sign-off carried the schedules into the next month and opened it; it gets its owner and due date too.
 			if next := s.closeFor(ctx, c.Name, nextPeriod(period)); next != "" {
-				s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=array_append(close_ids,$2::bigint) WHERE organization_id=$1 AND NOT $2::bigint=ANY(close_ids)`, s.o.Organization, next)
+				s.recordClose(ctx, next)
 				s.plan(ctx, c, next, nextPeriod(period), n+1, false)
 			}
 		}
@@ -794,7 +811,7 @@ func (s *seeder) openClose(ctx context.Context, c *seed.Client, period string) (
 		return "", fmt.Errorf("no close ID for %s", period)
 	}
 	// Recorded as soon as it exists, so a run that stops here can still be removed.
-	s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET close_ids=array_append(close_ids,$2::bigint) WHERE organization_id=$1 AND NOT $2::bigint=ANY(close_ids)`, s.o.Organization, id)
+	s.recordClose(ctx, id)
 	if period == seed.Months[0] {
 		s.clientProcedures(ctx, c)
 		// A named teammate who will own the client is assigned it, so its work is theirs to open.
