@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"fmt"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -162,7 +163,7 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	// The request waiting on the client, from the month opened under its alias: approved, not sent yet; then sent,
 	// once its delivery is recorded.
 	if requests := read["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["id"] != request || requests[0].(map[string]any)["close_id"] != september ||
-		requests[0].(map[string]any)["items"] != float64(1) || requests[0].(map[string]any)["state"] != "not_sent" || requests[0].(map[string]any)["sent_at"] != nil {
+		requests[0].(map[string]any)["items"] != float64(1) || requests[0].(map[string]any)["state"] != "not_sent" || requests[0].(map[string]any)["sent_at"] != nil || requests[0].(map[string]any)["job"] != fmt.Sprint(job) {
 		t.Fatalf("requests: %v", requests)
 	}
 	_, err = db.Exec(`UPDATE work_requests SET delivered_by='fixture',delivered_at=now(),delivery_reference='Handed over' WHERE id=$1`, request)
@@ -183,10 +184,10 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if held := call("user_a", admin, page("Acme Co"), 200)["xero"].([]any); len(held) != 1 || held[0].(map[string]any)["client_entity"] != "Acme Services LLC" {
 		t.Fatalf("a connection held under an alias: %v", held)
 	}
-	// Who can hold Acme's closes, as the roster offers owners: Ann, who reviews every client. Cy is assigned to its
-	// alias' name only, which gives him its September close to work on but not the client's months to hold.
+	// Who can work on Acme: Ann, who reviews every client, and Cy, assigned under the alias' name, which gives him its
+	// September close (the schedule's owner still needs an assignment under its own name).
 	people := read["people"].([]any)
-	if len(people) != 1 || people[0].(map[string]any)["subject"] != "user_a" {
+	if len(people) != 2 || people[0].(map[string]any)["subject"] != "user_a" || people[1].(map[string]any)["subject"] != "user_c" {
 		t.Fatalf("people: %v", people)
 	}
 
@@ -209,6 +210,16 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	}
 	if months := dee["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != august || len(dee["requests"].([]any)) != 0 {
 		t.Fatalf("Dee's months and requests: %v %v", months, dee["requests"])
+	}
+	// A client on the roster with no month yet can be assigned to a member.
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Corvid Labs',true,$2,'Synthetic','fixture')`, org, now)
+	must(err)
+	assign := httptest.NewRequest("POST", "/v1/closes/access", strings.NewReader(`{"subject":"user_c","entity":"Corvid Labs","granted":true,"reason":"Takes Corvid on","previous_id":"","confirmed":true}`)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: admin}))
+	assign.Header.Set("Content-Type", "application/json")
+	assigned := httptest.NewRecorder()
+	store.ServeHTTP(assigned, assign)
+	if assigned.Code != 200 {
+		t.Fatalf("a roster client can be assigned before its first month: %d %s", assigned.Code, assigned.Body.String())
 	}
 	// A client nobody has heard of, or one the reader is not assigned to, is not found; so is one whose name is too long.
 	call("user_a", admin, page("Birch Dental"), 404)

@@ -76,7 +76,17 @@ type ClientRead = {
   people_unavailable?: string;
 };
 // A request sent to the client that it has not answered, from any month the reader can open.
-type AskedOfClient = { id: string; close_id: string; period: string; recipient: string; state: "sent" | "sending" | "failed" | "not_sent"; sent_at?: string; answered_in_part: boolean; items: number };
+type AskedOfClient = {
+  id: string;
+  close_id: string;
+  period: string;
+  recipient: string;
+  state: "sent" | "sending" | "failed" | "not_sent";
+  sent_at?: string;
+  answered_in_part: boolean;
+  job?: string;
+  items: number;
+};
 
 const basisLabels = {
   cash: "cash basis",
@@ -336,8 +346,8 @@ export default function ClientPage() {
               {client.people_unavailable
                 ? client.people_unavailable
                 : workers
-                  ? `${listed(people.map((p) => p.name))} can hold ${name}’s months.`
-                  : `Nobody can hold ${name}’s months yet: assign a reviewer to it, or give a role every client.`}
+                  ? `${listed(people.map((p) => p.name))} can work on ${name}.`
+                  : `Nobody can work on ${name} yet: assign a reviewer to it, or give a role every client.`}
             </Card>
           )}
         </Cards>
@@ -408,7 +418,7 @@ export default function ClientPage() {
             {asks.map((item) => (
               <div className="ks-tr linked" role="row" key={item.id}>
                 <span role="cell">
-                  <Link className="ks-rowlink" to={`/dashboard/closes/${item.close_id}?tab=requests`}>
+                  <Link className="ks-rowlink" to={item.job ? `/dashboard/closes/${item.close_id}?job=${item.job}` : `/dashboard/closes/${item.close_id}#coverage-work`}>
                     Request #{item.id} to {item.recipient}
                   </Link>
                 </span>

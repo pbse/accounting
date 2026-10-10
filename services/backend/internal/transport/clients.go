@@ -57,7 +57,10 @@ type openRequest struct {
 	State     string     `json:"state"`
 	Sent      *time.Time `json:"sent_at,omitempty"`
 	Answered  bool       `json:"answered_in_part"`
-	Items     int        `json:"items"`
+	// Job is the first work item waiting on the request, where its delivery, reply and follow-up are handled; "" for
+	// a request about accounts alone, handled in its month's coverage.
+	Job   string `json:"job,omitempty"`
+	Items int    `json:"items"`
 }
 
 type owedClientMonth struct {
@@ -210,6 +213,8 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
  COALESCE((SELECT CASE WHEN m.state IN ('failed','unknown') OR m.delivery IN ('bounced','complained','failed','suppressed') THEN 'failed' WHEN m.state IN ('queued','sending') THEN 'sending' END
   FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
  EXISTS(SELECT 1 FROM request_submissions s WHERE s.request_id=q.id),
+ COALESCE((SELECT min(j.id)::text FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
+  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)),''),
  CASE WHEN q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FROM request_jobs WHERE request_id=q.id) THEN jsonb_array_length(COALESCE(q.coverage_scope->'bindings','[]'::jsonb))
   ELSE (SELECT count(*) FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
    AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)) END
@@ -221,7 +226,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 				var q openRequest
 				var sent sql.NullTime
 				var email string
-				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &sent, &email, &q.Answered, &q.Items); err != nil {
+				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &sent, &email, &q.Answered, &q.Job, &q.Items); err != nil {
 					break
 				}
 				switch {
@@ -371,8 +376,9 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 }
 
 // clientPeople is rosterPeople's members who can do entity's work, judged with reviewers read before the snapshot: a
-// role reviewing every client, or a reviewer assigned to entity. Each keeps every client they are assigned to, so the
-// schedule's owner choice reads as the roster's does.
+// role reviewing every client, or a reviewer assigned to the client under any of its names (one assigned under a
+// confirmed alias opens that name's months). Each keeps every client they are assigned to, so the schedule's owner
+// choice, which needs an assignment under the client's own name, reads as the roster's does.
 func clientPeople(ctx context.Context, tx *sql.Tx, org, who string, reviewers map[string]reviewer, entity string) ([]rosterPerson, error) {
 	var people []rosterPerson
 	var err error
@@ -387,8 +393,25 @@ func clientPeople(ctx context.Context, tx *sql.Tx, org, who string, reviewers ma
 	if err != nil {
 		return nil, err
 	}
-	named := strings.ToLower(entity)
-	return slices.DeleteFunc(people, func(p rosterPerson) bool { return !p.FirmWide && !slices.Contains(p.Clients, named) }), nil
+	names := map[string]bool{strings.ToLower(entity): true}
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT lower(client_entity) FROM current_client_access WHERE organization_id=$1 AND granted AND client_identity(organization_id,client_entity)=client_identity($1,$2)`, org, entity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names[name] = true
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(people, func(p rosterPerson) bool {
+		return !p.FirmWide && !slices.ContainsFunc(p.Clients, func(c string) bool { return names[c] })
+	}), nil
 }
 
 // canConnect is a member of a hosted firm who may connect and disconnect a client's ledgers (integrations:manage), as
