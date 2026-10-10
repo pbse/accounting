@@ -33,7 +33,8 @@ export function SideNotices() {
           undefined,
           false,
           (event) => {
-            if ((event as { type: string }).type === "attention") void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && String(q.queryKey[1]).startsWith("/attention") });
+            // A change reaches the inbox and Home's and Closes' counts and decisions alike, which read /home.
+            if ((event as { type: string }).type === "attention") void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && /^\/(attention|home)\b/.test(String(q.queryKey[1])) });
           },
           controller.signal,
         );
