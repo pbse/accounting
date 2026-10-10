@@ -108,6 +108,20 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if refused == "" {
 		t.Fatal("a General Ledger that cannot be read is recorded as such")
 	}
+	// A close deleted before its capture's version is written takes the waiting capture with it.
+	var gone string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Books client','2026-10') RETURNING id::text`, org).Scan(&gone))
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123','d','{"period":"2026-10"}',now(),'fixture')`, gone, connection)
+	must(err)
+	var waiting int
+	must(db.QueryRow(`SELECT count(*) FROM books_pending WHERE close_id=$1`, gone).Scan(&waiting))
+	_, err = db.Exec(`DELETE FROM client_closes WHERE id=$1`, gone)
+	must(err)
+	var left int
+	must(db.QueryRow(`SELECT count(*) FROM books_pending WHERE close_id=$1`, gone).Scan(&left))
+	if waiting != 1 || left != 0 {
+		t.Fatalf("a capture waits for its version, and leaves with its close: %d then %d", waiting, left)
+	}
 	// Written once: another pass writes nothing for these captures.
 	var before int
 	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1`, org).Scan(&before))

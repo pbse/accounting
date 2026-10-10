@@ -54,20 +54,23 @@ CREATE TABLE books_pending (
  source text NOT NULL CHECK (source IN ('quickbooks','xero')),
  source_id bigint NOT NULL,
  organization_id text NOT NULL REFERENCES organizations(id),
+ -- close_id goes with the capture's close: a close deleted before its capture's version is written takes it along.
+ close_id bigint NOT NULL REFERENCES client_closes(id) ON DELETE CASCADE,
  queued_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY (source,source_id)
 );
+CREATE INDEX books_pending_close ON books_pending(close_id);
 CREATE INDEX books_pending_order ON books_pending(queued_at,source,source_id);
 CREATE FUNCTION books_pending_capture() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- INSERT INTO books_pending(source,source_id,organization_id) SELECT TG_ARGV[0],NEW.id,c.organization_id FROM client_closes c WHERE c.id=NEW.close_id ON CONFLICT DO NOTHING;
+ INSERT INTO books_pending(source,source_id,organization_id,close_id) SELECT TG_ARGV[0],NEW.id,c.organization_id,c.id FROM client_closes c WHERE c.id=NEW.close_id ON CONFLICT DO NOTHING;
  RETURN NEW;
 END $$;
 CREATE TRIGGER quickbooks_capture_books AFTER INSERT ON quickbooks_snapshots FOR EACH ROW WHEN (NEW.payload ? 'period') EXECUTE FUNCTION books_pending_capture('quickbooks');
 CREATE TRIGGER xero_capture_books AFTER INSERT ON xero_snapshots FOR EACH ROW EXECUTE FUNCTION books_pending_capture('xero');
-INSERT INTO books_pending(source,source_id,organization_id,queued_at)
- SELECT 'quickbooks',s.id,c.organization_id,s.captured_at FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.payload ? 'period'
- UNION ALL SELECT 'xero',s.id,c.organization_id,s.captured_at FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id;
+INSERT INTO books_pending(source,source_id,organization_id,close_id,queued_at)
+ SELECT 'quickbooks',s.id,c.organization_id,c.id,s.captured_at FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.payload ? 'period'
+ UNION ALL SELECT 'xero',s.id,c.organization_id,c.id,s.captured_at FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id;
 -- books_parity: each run of the parity check over every version, by the worker: how many it checked, and the captures
 -- whose stored version no longer matches what the readers compute (identifiers only). A run in progress has no
 -- finished_at. Staff read the latest finished run.
