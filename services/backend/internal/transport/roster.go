@@ -353,8 +353,9 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		// How each client's books arrive, by client identity (its own name in lower case, as the Clients page groups
 		// it): the state of its QuickBooks connection (production first) and of its Xero connection, under any of its
-		// names, for every client the reader can work on, on the roster or not; and, as "exports", whether a month it
-		// can open has its uploaded exports labeled in place of a live ledger.
+		// names, for every client the reader can see whole (the firm's, or one assigned to them under its own name, as
+		// the client's page shows them), on the roster or not; and, as "exports", whether a month of it has its uploaded
+		// exports labeled in place of a live ledger.
 		connections := map[string]map[string]string{}
 		if err == nil {
 			var rows *sql.Rows
@@ -362,7 +363,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
  SELECT 'quickbooks' AS provider,client_entity,state,environment='production' AS first,id FROM quickbooks_connections WHERE organization_id=$1 AND state<>'disconnected'
  UNION ALL SELECT 'xero',client_entity,state,true,id FROM xero_connections WHERE organization_id=$1 AND state<>'disconnected'
  UNION ALL SELECT 'exports',c.entity,'labeled',true,l.id FROM close_export_labels l JOIN client_closes c ON c.id=l.close_id WHERE c.organization_id=$1) x
- WHERE $2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(x.client_entity))
+ WHERE $2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$3 AND g.granted AND lower(g.client_entity)=client_identity($1,x.client_entity))
  ORDER BY provider,client_identity($1,client_entity),first DESC,id DESC`, org, firmAccess(r), subject(r)); err == nil {
 				for rows.Next() {
 					var provider, client, state string

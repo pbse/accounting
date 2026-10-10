@@ -211,6 +211,13 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if months := dee["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != august || len(dee["requests"].([]any)) != 0 {
 		t.Fatalf("Dee's months and requests: %v %v", months, dee["requests"])
 	}
+	// Clients tells Dee how Acme's books arrive, the Xero connection held under its alias included.
+	if connections := call("user_d", []string{"workpapers:review"}, "/v1/closes/roster", 200)["connections"].(map[string]any)["acme co"].(map[string]any); connections["quickbooks"] != "active" || connections["xero"] != "active" {
+		t.Fatalf("Dee's view of Acme's books: %v", connections)
+	}
+	if connections := call("user_c", []string{"workpapers:review"}, "/v1/closes/roster", 200)["connections"].(map[string]any); len(connections) != 0 {
+		t.Fatalf("Cy, assigned to the alias alone, is not shown the client's connections: %v", connections)
+	}
 	// A client on the roster with no month yet can be assigned to a member.
 	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Corvid Labs',true,$2,'Synthetic','fixture')`, org, now)
 	must(err)
