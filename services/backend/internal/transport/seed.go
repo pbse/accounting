@@ -1919,6 +1919,9 @@ func toFloat(v any) float64 {
 	return f
 }
 
+// routineUntouched says nothing in any table that hangs off a close refers to it.
+const routineUntouched = "NOT EXISTS(SELECT 1 FROM approval_requests t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM assistant_answers t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM bill_corrections t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM cash_flow_imports t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM cash_plan_reviews t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM chat_messages t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM chat_sessions t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM client_attachments t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM close_effort t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM close_effort_entries t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM close_export_labels t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM close_owner_changes t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM close_preparations t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM close_scopes t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM close_signoffs t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM collection_messages t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM coverage_bindings t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM credit_applications t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM daily_reviews t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM email_delivery_events t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM evidence t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM forwarded_files t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM forwarding_links t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM inbound_replies t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM management_publications t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM opening_baselines t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM operations_alert_deliveries t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM portfolio_items t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM preparation_jobs t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM preparation_plans t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM production_postings t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_connections t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM recovery_actions t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM replay_runs t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM request_drafts t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM sandbox_postings t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM statement_extractions t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM stripe_connections t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM stripe_report_runs t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM takeover_setups t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM vendor_credit_postings t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM workpaper_review_state t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM workpaper_source_review_state t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM workpapers t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM xero_connections t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM xero_corrections t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM xero_postings t WHERE t.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM xero_snapshots t WHERE t.close_id=c.id)"
+
 // RemoveSeed takes the demonstration out of the firm by its record: the closes it made with what hangs off them, the
 // demonstration clients' roster entries, aliases, procedures, plans and decisions, the chats, marks and rows it
 // added, and the firm's policy as it was. The firm and its members stay.
@@ -1956,13 +1959,15 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 			}
 		}
 	}
-	// A month the seeded monthly routine opened since the run is the demonstration's too, as long as no one has worked
-	// in it: it goes with the rest. One a person has worked in stays, and keeps the routine (checked below).
+	// A month the seeded monthly routine opened since the run is the demonstration's too, as long as it is exactly as
+	// the routine left it: no plan, no holder, no retention, no work, nothing in any table that hangs off a close, and
+	// no goal but the routine's own. It goes with the rest; one a person has touched stays, and keeps the routine
+	// (checked below).
 	rows, err := db.QueryContext(ctx, `SELECT id::text FROM client_closes c WHERE organization_id=$1 AND (id=ANY($2)
  OR (EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.routine_id::text=ANY($3))
-  AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id=c.id)
-  AND NOT EXISTS(SELECT 1 FROM close_signoffs x WHERE x.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM chat_messages m WHERE m.close_id=c.id)
-  AND NOT EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id))) ORDER BY period DESC,id DESC`, o.Organization, closes, recorded["close_routines"])
+  AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND NOT g.routine_id::text=ANY($3))
+  AND c.owner='' AND c.priority='normal' AND c.due_on IS NULL AND c.retain_until IS NULL AND NOT c.legal_hold AND NOT c.takeover
+  AND `+routineUntouched+`)) ORDER BY period DESC,id DESC`, o.Organization, closes, recorded["close_routines"])
 	if err != nil {
 		return err
 	}
@@ -2184,8 +2189,9 @@ func removeClose(ctx context.Context, tx *sql.Tx, closeID string, seedSessions, 
 	if inFlight > 0 {
 		return fmt.Errorf("an email from %s %s is now being sent; wait for its outcome", entity, period)
 	}
-	// The deletion is receipted as the deletion route receipts one: the demonstration's relationship with the client ends.
-	if _, err := tx.ExecContext(ctx, `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,$2::bigint,$3,$4,$5,$6,'contract_termination',$7,$8)`,
+	// The deletion is receipted as the deletion route receipts one, under the demonstration's own reason, which the
+	// roster's owed months leave out.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,$2::bigint,$3,$4,$5,$6,'demonstration_reset',$7,$8)`,
 		org, closeID, preparation.Digest([]byte(org+"\x00"+strings.ToLower(entity)+"\x00"+period)), period, postings, actor, preparation.Digest([]byte(org+"\x00"+client+"\x00"+period)), preparation.Digest([]byte(org+"\x00"+plainClient+"\x00"+period))); err != nil {
 		return fmt.Errorf("receipt: %w", err)
 	}
