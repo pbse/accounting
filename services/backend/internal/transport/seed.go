@@ -533,15 +533,14 @@ func (s *seeder) people(ctx context.Context) error {
 	}
 	// The administrator's own agent connection, approved when the firm turned the agent on.
 	if code, out := s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "request", "scope": "prepare", "reason": "Use the agent from my editor for the monthly preparation work", "confirmed": true}); code == 200 {
-		s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "approve", "subject": s.o.Subject, "scope": "prepare", "previous_id": str(field(out, "id")), "reason": "Approved for the firm's administrator", "confirmed": true})
-		rows, err := s.db.QueryContext(ctx, `SELECT id FROM agent_access WHERE organization_id=$1 AND subject=$2 AND created_at>=(SELECT started_at FROM demonstration_seeds WHERE organization_id=$1)`, s.o.Organization, s.o.Subject)
-		if err == nil {
-			for rows.Next() {
-				if rows.Scan(&id) == nil {
-					s.record(ctx, "agent_access_ids", id)
-				}
+		// Both rows are recorded by the IDs the route returns: only what the seed made.
+		if n, err := strconv.ParseInt(str(field(out, "id")), 10, 64); err == nil {
+			s.record(ctx, "agent_access_ids", n)
+		}
+		if code, approved := s.call(ctx, "POST", "/v1/closes/agent-access", map[string]any{"action": "approve", "subject": s.o.Subject, "scope": "prepare", "previous_id": str(field(out, "id")), "reason": "Approved for the firm's administrator", "confirmed": true}); code == 200 {
+			if n, err := strconv.ParseInt(str(field(approved, "id")), 10, 64); err == nil {
+				s.record(ctx, "agent_access_ids", n)
 			}
-			rows.Close()
 		}
 	}
 	return nil
