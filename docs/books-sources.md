@@ -1,6 +1,6 @@
 # Books sources: files, more ledgers and connections
 
-Written 2026-10-10. **Adopted 2026-10-10 as a track that does not gate launch** (see [decisions](#decisions-2026-10-10)). The [agent-first build plan](agent-first-build-plan.md) governs launch scope; its proposed acceptance group stays US, single-entity, USD service businesses on QuickBooks Online. This document widens where a client's books can come from, gives each client a page that holds its connection, and makes the client's ledger a choice made at onboarding. Each part ships when it is ready, before or after launch; launch never waits for it (see [effect on the build plan](#effect-on-the-build-plan)).
+Written 2026-10-10. **Adopted 2026-10-10 as a track that does not gate launch** (see [decisions](#decisions-2026-10-10)). The [agent-first build plan](agent-first-build-plan.md) governs launch scope; its proposed acceptance group stays US, single-entity, USD service businesses on QuickBooks Online. This document widens where a client's books can come from, gives each client a page that holds its connection, and proposes recording the client's ledger at onboarding. Each part ships when it is ready, before or after launch; launch never waits for it (see [effect on the build plan](#effect-on-the-build-plan)).
 
 ## The problem
 
@@ -239,23 +239,24 @@ File imports stay behind a firm setting until every feature a month on files nee
 
 Each client gets a page at `/dashboard/clients/<client>`, on the Krith design system, reached from its row in Clients (the records page from #343). It holds:
 
-- the client's name, owner, monthly due day and active state, editable as in the Add client dialog;
+- the client's name, and the roster settings `Roster.tsx` manages today: active state, first month to close, owner, and days after month-end, including what it takes from the firm's template. Renaming a client is not part of it; that would be new work;
 - the **Books card**: the client's ledger and how its books arrive, the connection or the latest upload with its freshness, reconnect, upload, the saved layouts and the account map;
 - the client profile (currency, fiscal-year start) and a link to the approved basis procedure;
 - the client's months, newest first, each with its state and books version;
 - open client requests, and the members with access.
 
-It follows the rollout's rules in [design system](design-system.md#rollout): it is drawn as a Krith board first, from the artifact's components, and built only after the board is chosen. It does not wait for the files work: on its own it moves today's QuickBooks and Xero connection panels out of the month. Until it ships, connections stay where they are today.
+It follows [design system](design-system.md#rollout) as any screen added during the rollout does: Krith's tokens, the Krith component from the artifact where one exists, and the rollout's stated fallback otherwise. It does not wait for the files work: on its own it moves today's QuickBooks and Xero connection panels out of the month. Until it ships, connections stay where they are today.
 
 ### Ledger catalog and onboarding
 
-The client's ledger is a choice made when the client is added, not a guess the product makes later:
+The owner's direction (2026-10-10) on which connector comes first: "I think it should be a config maybe as part of onboarding?" What follows is this document's proposal for carrying that out; its details are for the owner to confirm as the work starts.
 
-- **At onboarding.** The Add client dialog asks which ledger the client keeps (QuickBooks Online, Xero, QuickBooks Desktop, Sage Intacct, NetSuite, Business Central, Sage 50, MYOB, Zoho Books, FreshBooks, Wave, Tally, or another). The Books card shows it and can change it; a change is the source switch described under [one authoritative books version](#one-authoritative-books-version-per-month), so earlier months keep theirs.
+- **The client's ledger is recorded at onboarding.** The Add client dialog (today: name and first month to close) also asks which ledger the client keeps: QuickBooks Online, Xero, QuickBooks Desktop, Sage Intacct, NetSuite, Business Central, Sage 50, MYOB, Zoho Books, FreshBooks, Wave, Tally, another ledger (named), or not known yet. Not known yet is completed later on the Books card.
+- **The ledger is not the books source.** The ledger says which product the client keeps; the source says how a month's books arrive (the QuickBooks connector, the Xero connector, or files). Correcting the ledger changes the export steps and the catalog entry shown, and leaves accepted books alone. Moving a client between sources, for example from files to a new connection on the same ledger, is the source switch under [one authoritative books version](#one-authoritative-books-version-per-month), with its confirmation; it is available once source selection exists ([delivery](#delivery) step 4).
 - **The ledger catalog is configuration, not code per ledger.** For each ledger it records: its name; its native connector, if one exists; the export steps and the recognised layouts for its Trial Balance, General Ledger and open items; its journal import format; and the operations it cannot do natively.
 - **Connectors are switched on by configuration**, per environment and, for a pilot, per firm. A connector reaches firms when it passes its own acceptance, with no other change.
-- **No dead ends.** Choosing a ledger whose connector is not switched on gives the files route with that ledger's export steps. "Another ledger" gives the files route with any layout.
-- **Demand decides the next connector.** The admin console counts clients by ledger and by whether they have a connector. The next native connector is the most-chosen ledger without one, weighed against its access terms under [more ledgers](#more-ledgers).
+- **No dead ends.** Choosing a ledger whose connector is not switched on gives the files route with that ledger's export steps. Another ledger gives the files route with any layout, under the name given.
+- **Demand informs the next connector.** The admin console counts clients by ledger, including the names given for other ledgers, and by whether they have a connector. Those counts inform which native connector to build next, weighed against each ledger's access terms under [more ledgers](#more-ledgers).
 
 ### Who does what
 
@@ -287,12 +288,12 @@ From vendor pages and third-party reports gathered 2026-10-10 (sources below); e
 
 ## More ledgers
 
-Files cover every ledger from the first release. Native connectors add refresh and writing back where enough clients need them; which comes first is decided by the ledgers firms choose at onboarding (see [ledger catalog](#ledger-catalog-and-onboarding)).
+Files cover every ledger from the first release. Native connectors add refresh and writing back where enough clients need them; which comes first is informed by the ledgers firms record at onboarding (see [ledger catalog](#ledger-catalog-and-onboarding)), not fixed in advance.
 
 | Ledger | Where it matters | Programmatic access | Recommendation |
 | --- | --- | --- | --- |
-| QuickBooks Desktop | Still large in the US: Intuit's Desktop ecosystem earned about $2.8B in FY2025. New sales of Pro, Premier and Mac Plus to US subscribers stopped in September 2024; Enterprise is still sold | No cloud API; the Web Connector runs on the client's Windows PC. Conductor sells a REST layer over it | If firms bring Desktop clients: evaluate Conductor rather than building the Web Connector |
-| Sage Intacct | US mid-market; supported by FloQast, Numeric and Truewind | Each company authorises our sender ID; partnership about $2,500 a year plus per-call fees, as reported. The cited Trial Balance page documents the XML `get_trialbalance` function; the REST equivalent must be confirmed before relying on it | If firms bring mid-market clients: the first native connector |
+| QuickBooks Desktop | Still large in the US: Intuit's Desktop ecosystem earned about $2.8B in FY2025. New sales of Pro, Premier and Mac Plus to US subscribers stopped in September 2024; Enterprise is still sold | No cloud API; the Web Connector runs on the client's Windows PC. Conductor sells a REST layer over it | A candidate to evaluate when onboarding counts show demand: Conductor rather than building the Web Connector |
+| Sage Intacct | US mid-market; supported by FloQast, Numeric and Truewind | Each company authorises our sender ID; partnership about $2,500 a year plus per-call fees, as reported. The cited Trial Balance page documents the XML `get_trialbalance` function; the REST equivalent must be confirmed before relying on it | A candidate to evaluate when onboarding counts show demand |
 | NetSuite | Mid-market | No Trial Balance endpoint (summed from transaction lines with SuiteQL); each customer sets up access | Files; native later if demand |
 | Business Central | Mid-market; vendor counts put it above NetSuite | Trial Balance, ledger entries and journal posting; consent per customer | Files; native when a firm brings several |
 | MYOB, Tally, Zoho Books, FreshBooks, Wave, Sage 50 | MYOB in Australia, Tally in India; the rest a long tail | Varies; Tally is local only; Wave's API reportedly needs a paid plan | Files |
@@ -307,8 +308,8 @@ Reliable US market-share figures for these ledgers were not found; the counts ab
 
 Each PR leaves the product working, and is reviewed and validated as usual. None of it gates launch, and launch work does not wait for it. File imports stay behind a firm setting: step 9 turns it on for internal validation and the demonstration firm only; partner firms get it after step 13, once the acceptance below passes.
 
-1. **Client page.** A Krith board first, chosen by the user; then the page, with the Books card holding today's QuickBooks and Xero connections, moved out of the month, and the setup checklist pointing to it. Independent of everything below.
-2. **Ledger catalog and onboarding.** The catalog as configuration, the ledger choice in Add client and on the Books card, connector switches, and the admin console's counts. Ledgers without a connector show their export steps; file upload arrives with step 9.
+1. **Client page.** On Krith, with the Books card holding today's QuickBooks and Xero connections, moved out of the month, and the setup checklist pointing to it. Independent of everything below.
+2. **Ledger catalog and onboarding.** The catalog as configuration, the client's ledger recorded in Add client and on the Books card (including not known yet and a named other ledger), connector switches, and the admin console's counts. Recording or correcting the ledger changes no books; source switching arrives with step 4, file upload with step 9.
 3. **Month-books record.** `books_versions` and `books_lines`; backfill and dual-write for QuickBooks and Xero; parity checks. No visible change.
 4. **Client profile and source selection.** The confirmed profile and its readers; each client's default source and month overrides, set from today's behaviour.
 5. **Readers move.** Feature by feature as under [migration](#migration), each with its readiness, status, exports and invalidation. A reader switches only when parity holds and the switch puts no launch work at risk; otherwise it waits, and the provider path keeps working unchanged.
@@ -320,7 +321,7 @@ Each PR leaves the product working, and is reviewed and validated as usual. None
 11. **Cash and open items.** Current-cash and open-item observations with their cutoffs; a dated bank-to-book bridge (extending the reconciliation to a mid-month cutoff, or a reviewed external reconciliation with its outstanding items), pinned to its cutoff, accounts and evidence and never counted as a completed month-end reconciliation; reconciliation to control accounts for accrual books and operational lists for cash-basis books; the cash plan on files.
 12. **Client-provided books.** Connect and upload requests, workbook scanning, larger limits. Part of the first release of files to partner firms.
 13. **Partner release of files,** once the acceptance below passes.
-14. **Native connectors,** in the order the catalog's counts call for, each switched on by configuration after its own acceptance.
+14. **Native connectors,** in an order informed by the onboarding counts and each ledger's access terms, each switched on by configuration after its own acceptance.
 
 ## Acceptance
 
@@ -343,8 +344,8 @@ Each PR leaves the product working, and is reviewed and validated as usual. None
 
 1. **Files can land at any time; launch must not be blocked.** Files are a track beside the launch, not part of it (see [effect on the build plan](#effect-on-the-build-plan)).
 2. **Clients may connect or upload their own books through a request** in the first release of files to partner firms ([delivery](#delivery) step 12).
-3. **A client page on the Krith design system**, drawn as a board first ([client page](#client-page)).
-4. **The ledger is configuration, chosen at onboarding.** Rather than choosing a connector up front, each client's ledger is picked when it is added. Connectors are switched on by configuration, and the onboarding counts decide which connector to build next ([ledger catalog](#ledger-catalog-and-onboarding)).
+3. **A client page on the Krith design system** ([client page](#client-page)).
+4. **On which connector comes first:** "I think it should be a config maybe as part of onboarding?" No connector is chosen in advance. The [ledger catalog](#ledger-catalog-and-onboarding) section proposes how to carry this out (the ledger recorded at onboarding, a configured catalog, connectors switched on by configuration, counts that inform the next connector); its details are to be confirmed as the work starts.
 
 ## Sources
 
