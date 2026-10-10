@@ -190,9 +190,20 @@ export default function ClientPage() {
   const scheduleLine = (() => {
     if (!roster) return `${name} is not on the roster, so no month is owed for it; its months are opened by hand.`;
     if (!roster.active) return `No longer a client: it owes no new month, and its months stay on record. ${roster.reason}`;
-    const due = dueDays ? `due ${n(dueDays, "day")} after month-end` : roster.due_days === null && !client.template ? "due as the firm’s template says" : "with no due date";
-    const holder = owner === null ? "Whoever the firm’s template names holds them." : owner ? `${nameOf(owner)} holds them.` : "Nobody holds them until someone takes one.";
-    const follows = [roster.due_days === null ? "due date" : "", roster.owner === null ? "owner" : ""].filter(Boolean);
+    // A term the client leaves to the firm's template is the template's, when there is one; without a template it is
+    // unset. A member, who is not shown the template, is told only that the template decides.
+    const template = client.template;
+    const hidden = client.template_hidden && !template;
+    const due = dueDays ? `due ${n(dueDays, "day")} after month-end` : roster.due_days === null && hidden ? "due as the firm’s template says" : "with no due date";
+    const holder =
+      owner === null
+        ? hidden
+          ? "Whoever the firm’s template names holds them."
+          : "Nobody holds them until someone takes one."
+        : owner
+          ? `${nameOf(owner)} holds them.`
+          : "Nobody holds them until someone takes one.";
+    const follows = template || hidden ? [roster.due_days === null ? "due date" : "", roster.owner === null ? "owner" : ""].filter(Boolean) : [];
     const note = follows.length === 2 ? " Both follow the firm’s template." : follows.length ? ` The ${follows[0]} follows the firm’s template.` : "";
     return `Each month from ${monthName(roster.since)}, ${due}. ${holder}${note}`;
   })();
@@ -475,7 +486,7 @@ function books(client: ClientRead, day: (value: string) => string) {
   const newest = client.months.find((m) => m.books);
   const latest = newest?.books
     ? newest.books.source === "exports"
-      ? ` ${monthName(newest.period)}’s exports were labeled ${day(newest.books.at)}, as reported.`
+      ? ` ${monthName(newest.period)}’s exports were labeled ${day(newest.books.at)}, as reported${newest.books.stale ? ", and one has been replaced since" : ""}.`
       : ` ${monthName(newest.period)}’s books were captured from ${sources[newest.books.source]} ${day(newest.books.at)}${newest.books.stale ? " and are out of date" : ""}.`
     : "";
   const state = (s: string, confirm: string): [string, string] =>

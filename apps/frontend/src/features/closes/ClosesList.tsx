@@ -21,7 +21,8 @@ type RosterClient = { entity: string; active: boolean; since: string; owner: str
 // connections are the states of each client's QuickBooks and Xero connections, by the name they are kept under (lower case).
 type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string }>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
 type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean };
-type ClientRow = { entity: string; active?: boolean; since?: string; owner?: string | null; closes: ListedClose[]; owed: string[] };
+// key is the client's own name in lower case (a confirmed alias resolves to it), as its connections are kept.
+type ClientRow = { key: string; entity: string; active?: boolean; since?: string; owner?: string | null; closes: ListedClose[]; owed: string[] };
 
 const monthName = monthShort;
 
@@ -69,7 +70,7 @@ export default function ClosesList() {
   const rows = new Map<string, ClientRow>();
   const row = (entity: string, key = entity.toLowerCase()) => {
     let found = rows.get(key);
-    if (!found) rows.set(key, (found = { entity, closes: [], owed: [] }));
+    if (!found) rows.set(key, (found = { key, entity, closes: [], owed: [] }));
     return found;
   };
   // The roster carries each client's whole history (every close under any of its names) and which months it can open:
@@ -128,7 +129,7 @@ export default function ClosesList() {
   };
   // How the client's books arrive: each ledger connected, with a word when it is not working.
   const books = (r: ClientRow) => {
-    const states = roster?.connections?.[r.entity.toLowerCase()];
+    const states = roster?.connections?.[r.key];
     const ledgers = (
       [
         ["QuickBooks", states?.quickbooks],
@@ -153,7 +154,9 @@ export default function ClosesList() {
   };
   // Who holds the client's months, where the reader can see it: its own owner, else the firm template's.
   const people = roster?.people;
+  // A client off the roster takes no template, so nobody holds its months by schedule.
   const owner = (r: ClientRow) => {
+    if (r.active === undefined) return "—";
     const subject = r.owner ?? roster?.template?.owner ?? "";
     return subject ? (people?.find((p) => p.subject === subject)?.name ?? subject) : "Nobody";
   };
