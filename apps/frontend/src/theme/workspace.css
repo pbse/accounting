@@ -72,7 +72,7 @@
   border-radius: var(--radius-md);
   padding: var(--space-16) var(--space-20);
   margin: var(--space-16) 0;
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .app-shell .preparation-inputs > summary {
   font-size: 15px;
@@ -87,7 +87,7 @@
   font-size: 11px;
 }
 .app-shell .checkbox-label input {
-  accent-color: var(--blue);
+  accent-color: var(--accent);
 }
 /* On a wide screen the open assistant sits beside the page instead of over it. */
 @media (min-width: 1100px) {
@@ -97,7 +97,7 @@
 }
 .work-item:not([open]) > summary.row:hover {
   background: var(--hover);
-  box-shadow: var(--shadow-tile-hover);
+  box-shadow: inset var(--ring-strong);
 }
 /* Measure: the firm-wide splits of the agent's work, side by side, stacking when there is no room. */
 .track-split {
@@ -142,7 +142,7 @@
   margin: 0;
   padding: var(--space-8) 0;
   font: 12px/1.55 var(--font-mono);
-  background: var(--tile);
+  background: var(--surface-side);
   flex: 1;
 }
 .source-line {
@@ -160,8 +160,8 @@
   user-select: none;
 }
 .source-line.cited {
-  background: var(--highlight);
-  box-shadow: inset 3px 0 0 var(--highlight-edge);
+  background: var(--fill);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .evidence-meta {
   display: flex;
@@ -190,7 +190,7 @@
   border-radius: var(--radius-md);
   padding: var(--space-12) var(--space-20);
   margin-bottom: var(--space-24);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .agent-card > summary {
   display: flex;
@@ -211,7 +211,7 @@
 }
 .work-item[open] {
   background: var(--surface);
-  box-shadow: var(--shadow-tile-hover);
+  box-shadow: inset var(--ring-strong);
 }
 .work-item[open] > summary {
   background: transparent;
@@ -272,7 +272,7 @@
   padding: var(--space-8);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--float);
 }
 .app-shell .prepare-menu a {
   padding: var(--space-8) var(--space-12);
@@ -290,11 +290,11 @@
   padding: var(--space-16) var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .decision.spotlight {
-  background: var(--spotlight);
-  color: var(--spotlight-text);
+  background: var(--att-tint);
+  color: var(--att-text);
 }
 .decision.spotlight a,
 .decision.spotlight small {
@@ -302,7 +302,7 @@
 }
 .decision.spotlight .pill {
   background: rgb(255 255 255 / 60%);
-  color: var(--spotlight-text);
+  color: var(--att-text);
 }
 .decision > header {
   display: flex;
@@ -313,17 +313,17 @@
   padding: var(--space-12) var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
   margin-bottom: var(--space-12);
 }
 .app-shell details.team .decision {
-  box-shadow: var(--shadow-tile);
+  box-shadow: inset var(--ring);
 }
 .app-shell details.owed {
   padding: var(--space-12) var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .app-shell details.owed .row-list {
   margin: var(--space-12) 0 0;
@@ -377,7 +377,7 @@
   padding: var(--space-10) var(--space-12);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  box-shadow: var(--shadow-tile);
+  box-shadow: inset var(--ring);
   color: var(--ink);
 }
 .decision > ul > li > a {
@@ -403,7 +403,7 @@
   padding: var(--space-12) var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
 }
 .evidence-frame {
   width: 100%;
@@ -602,7 +602,7 @@ aside.assistant {
   margin: 0;
   padding: var(--space-10) var(--space-12);
   border-radius: var(--radius-md);
-  background: var(--tile);
+  background: var(--surface-side);
   font-size: 12px;
   line-height: 17px;
   color: var(--ink-2);
@@ -926,14 +926,14 @@ aside.assistant {
   padding: var(--space-12);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--float);
 }
 .app-shell .palette input {
   width: 100%;
   max-width: none;
   margin: 0;
   padding: var(--space-10) var(--space-12);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-2);
   border-radius: var(--radius-md);
   font: inherit;
   font-size: 16px;
