@@ -317,14 +317,9 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 			}
 			inbox := attentionInbox(events, kinds, browser, "unread", 0, true)
 			keys, _ := inbox["unread_keys"].([]string)
-			// What the sidebar shows is the first page of groups in priority order: a change of order, due date or
-			// text is a change, not only a key arriving or leaving.
-			shown, _ := json.Marshal(inbox["groups"])
-			fingerprint := strings.Join(keys, "\n") + "\n" + string(shown)
+			fingerprint := inbox["version"].(string)
 			if first || fingerprint != last {
-				// The version names this reading of the inbox, so the sidebar can tell a change from a repeat.
-				version := fmt.Sprintf("%x", sha256.Sum256([]byte(fingerprint)))[:16]
-				if !send(map[string]any{"type": "attention", "unread": len(keys), "unread_keys": keys, "version": version}) {
+				if !send(map[string]any{"type": "attention", "unread": len(keys), "unread_keys": keys, "version": fingerprint}) {
 					return
 				}
 				last = fingerprint
@@ -486,5 +481,10 @@ func attentionInbox(events []attentionEvent, kinds []string, browser bool, view 
 		}
 		groups[i].Events = append(groups[i].Events, e)
 	}
-	return map[string]any{"groups": groups, "unread": len(unread), "unread_keys": unread, "page": page, "has_more": end < len(shown), "kinds": attentionKinds, "preferences": map[string]any{"kinds": kinds, "browser": browser}}
+	// The version names this reading: the unread keys, and the groups shown in their order with their state, so a
+	// change of order, due date or text counts, not only a key arriving or leaving. The stream and the read share it,
+	// so the sidebar can tell a reading it holds from a change.
+	listed, _ := json.Marshal(groups)
+	version := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(unread, "\n")+"\n"+string(listed))))[:16]
+	return map[string]any{"groups": groups, "unread": len(unread), "unread_keys": unread, "page": page, "has_more": end < len(shown), "kinds": attentionKinds, "preferences": map[string]any{"kinds": kinds, "browser": browser}, "version": version}
 }
