@@ -743,6 +743,10 @@ func (s *seeder) client(ctx context.Context, c *seed.Client, index int) error {
 		if c.LeftIn != "" && period == last {
 			s.leave(ctx, c)
 		}
+		// A next month that exists before sign-off is someone else's; sign-off would carry work into it.
+		if existing := s.closeFor(ctx, c.Name, nextPeriod(period)); existing != "" {
+			return fmt.Errorf("%s %s was opened by someone else while the demonstration was being seeded", c.Name, nextPeriod(period))
+		}
 		signed := s.signOff(ctx, closeID, c, period)
 		if signed {
 			// Sign-off carried the schedules into the next month and opened it: recorded before anything else runs, so a
@@ -807,6 +811,14 @@ func previous(period string) string {
 
 // openClose opens the client's month, or finds the one carry-forward opened.
 func (s *seeder) openClose(ctx context.Context, c *seed.Client, period string) (string, error) {
+	// A month that already exists is someone else's, opened while the run ran: the seed records only closes it made.
+	if existing := s.closeFor(ctx, c.Name, period); existing != "" {
+		var recorded bool
+		s.db.QueryRowContext(ctx, `SELECT $2::bigint=ANY(close_ids) FROM demonstration_seeds WHERE organization_id=$1`, s.o.Organization, existing).Scan(&recorded)
+		if !recorded {
+			return "", fmt.Errorf("%s %s was opened by someone else while the demonstration was being seeded", c.Name, period)
+		}
+	}
 	out, ok := s.must(ctx, "open "+period, "POST", "/v1/closes", map[string]any{"entity": c.Name, "period": period})
 	if !ok {
 		return "", fmt.Errorf("could not open %s", period)
@@ -1958,6 +1970,17 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
  +(SELECT count(*) FROM xero_corrections WHERE close_id::text=ANY($1) AND state IN ('executing','unknown'))`, ordered).Scan(&unresolved)
 	if unresolved > 0 {
 		return fmt.Errorf("%d posting(s) or correction(s) on the demonstration's closes have an outcome still to confirm; resolve them before removing it", unresolved)
+	}
+	// A client link still valid, an attachment or forwarded file not yet disposed of, or a report still being read
+	// keeps the close, as the deletion route keeps it.
+	var intake int
+	db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id::text=ANY($1) AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now())
+ +(SELECT count(*) FROM client_attachments a WHERE a.close_id::text=ANY($1) AND a.state NOT IN ('released','rejected'))
+ +(SELECT count(*) FROM forwarding_links l WHERE l.close_id::text=ANY($1) AND l.revoked_at IS NULL AND l.expires_at>now())
+ +(SELECT count(*) FROM forwarded_files f WHERE f.close_id::text=ANY($1) AND f.state NOT IN ('released','rejected'))
+ +(SELECT count(*) FROM stripe_report_runs s WHERE s.close_id::text=ANY($1) AND s.state IN ('requesting','pending'))`, ordered).Scan(&intake)
+	if intake > 0 {
+		return fmt.Errorf("%d client link(s), attachment(s), forwarded file(s) or report run(s) on the demonstration's closes are still live; revoke or dispose of them before removing it", intake)
 	}
 	// The client-scoped rows the run recorded as it made them; anything else under those names is someone else's.
 	recorded := map[string][]string{}
