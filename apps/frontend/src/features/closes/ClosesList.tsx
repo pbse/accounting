@@ -186,35 +186,37 @@ export default function ClosesList() {
       </Dialog>
       <div className="ks-table ks-clients" role="table" aria-label="Clients">
         <div className="ks-tr head" role="row">
-          <span>Client</span>
-          <span>Months</span>
-          <span>Status</span>
-          <span></span>
+          <span role="columnheader">Client</span>
+          <span role="columnheader">Months</span>
+          <span role="columnheader">Status</span>
+          <span role="columnheader">
+            <span className="visually-hidden">Open another month</span>
+          </span>
         </div>
         {loading && (
           <div className="ks-tr" role="row">
-            <p className="ks-empty-row" role="status">
+            <p className="ks-empty-row" role="cell" aria-live="polite">
               Loading clients…
             </p>
           </div>
         )}
         {empty && (
           <div className="ks-tr" role="row">
-            <p className="ks-empty-row">{roster?.can_manage ? "No clients yet. Add your first client; the agent takes it from there." : "No client is assigned to you yet."}</p>
+            <p className="ks-empty-row" role="cell">{roster?.can_manage ? "No clients yet. Add your first client; the agent takes it from there." : "No client is assigned to you yet."}</p>
           </div>
         )}
         {!loading && query && shown.length === 0 && (
           <div className="ks-tr" role="row">
-            <p className="ks-empty-row">No client or month matches “{query}”.</p>
+            <p className="ks-empty-row" role="cell">No client or month matches “{query}”.</p>
           </div>
         )}
         {shown.map((r) => (
           <div className="ks-tr" role="row" key={r.entity}>
-            <span className="ks-who">
+            <span className="ks-who" role="cell">
               <Mark label={r.entity} />
               <span title={r.active === false ? "No longer a client" : r.since ? `Closes each month from ${monthName(r.since)}` : undefined}>{r.entity}</span>
             </span>
-            <span className="ks-months">
+            <span className="ks-months" role="cell">
               {r.owed.map((period) => (
                 <button type="button" className="ks-month owed" key={period} disabled={busy !== ""} onClick={() => void open(r.entity, period)}>
                   {busy === `${r.entity}:${period}` ? "Opening…" : `Open ${monthName(period)}`}
@@ -235,9 +237,9 @@ export default function ClosesList() {
                 </Link>
               ))}
             </span>
-            <span>{state(r)}</span>
+            <span role="cell">{state(r)}</span>
             {r.active !== false ? (
-              <details className="ks-another">
+              <details className="ks-another" role="cell">
                 <summary>Another month</summary>
                 <form
                   onSubmit={(event) => {
@@ -250,7 +252,7 @@ export default function ClosesList() {
                 </form>
               </details>
             ) : (
-              <span />
+              <span role="cell" />
             )}
           </div>
         ))}

@@ -17,6 +17,7 @@ import { workspaceQuery } from "../../data/queries";
 import { useDates } from "../../data/time";
 import { BulkReview, type QueueItem } from "../review/BulkReview";
 import { DailyBooks } from "./DailyBooks";
+import { DeadlinesSection, OwedSection, UncapturedSection, dueWords } from "./Lists";
 import { Dependencies } from "./Dependencies";
 import { Goals } from "./Goals";
 
@@ -206,73 +207,12 @@ export default function Home() {
       ) : (
         <>
           <Setup onEnrolled={bump} />
-          {deadlines && (
-            <>
-              <SectionHeader title="Deadlines" id="deadlines">
-                <small>Overdue or due within a week and not signed off, and closes with no due date.</small>
-              </SectionHeader>
-              {counts!.due.length + undated.length > 0 && (
-                <RowList label="Due closes">
-                  {[...counts!.due, ...undated].map((item) => (
-                    <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
-                      <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
-                      {!item.due_on ? <span className="status">No date</span> : item.due_on < today ? <span className="status danger">Overdue</span> : <span className="status warn">Due soon</span>}
-                      <small>{{ open: "Not signed off", reopen_required: "Changed since sign-off", unknown: "Sign-off could not be rechecked", signed_off: "Signed off" }[item.state]}</small>
-                      <Icon name="arrow" />
-                    </Link>
-                  ))}
-                </RowList>
-              )}
-              <NotOpened months={[...dueUnopened, ...undatedUnopened]} due />
-            </>
-          )}
+          <DeadlinesSection counts={counts!} today={today} />
           <Decisions today={today} tick={tick} snapshot={counts?.inbox} reopened={reopened} canReview={counts?.can_review ?? false} teamTotal={counts?.decisions.team ?? 0} view={view} onView={setView} onChange={bump} />
-          {counts && counts.uncaptured.length > 0 && (
-            <>
-              <SectionHeader title="Books to capture" id="uncaptured">
-                <small>Ended months with no usable month-end capture: capture them, or label historical exports.</small>
-              </SectionHeader>
-              <RowList label="Books to capture">
-                {counts.uncaptured.map((item) => (
-                  <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}?tab=evidence`}>
-                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
-                    <span className="status warn">No month-end books</span>
-                    <span />
-                    <Icon name="arrow" />
-                  </Link>
-                ))}
-              </RowList>
-            </>
-          )}
+          <UncapturedSection counts={counts} today={today} />
           <Dependencies />
           <DailyBooks canReview={counts?.can_review ?? false} onReviewed={bump} />
-          {counts && (counts.owed.length > 0 || counts.not_opened.length > 0) && (
-            <details className="owed" id="owed">
-              <summary>
-                Closes owed through this month · {counts.signed_off.done} of {counts.signed_off.total} signed off
-              </summary>
-              <RowList label="Closes owed">
-                {counts.owed.map((item) => (
-                  <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
-                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
-                    <span className={item.state === "signed_off" ? "status ok" : item.state === "open" ? "status warn" : "status danger"}>
-                      {{ signed_off: "Signed off", open: "Not signed off", reopen_required: "Changed since sign-off", unknown: "Sign-off could not be rechecked" }[item.state]}
-                    </span>
-                    <span />
-                    <Icon name="arrow" />
-                  </Link>
-                ))}
-                {counts.not_opened.map((m) => (
-                  <div className="row" key={`${m.entity}:${m.period}`}>
-                    <EntityCell name={m.entity} title={`${m.entity} · ${m.period}`} detail={m.due_on ? dueWords(m.due_on, today, dates.calendarDay) : "No due date"} />
-                    <span className="status danger">Not opened</span>
-                    <span />
-                    <span />
-                  </div>
-                ))}
-              </RowList>
-            </details>
-          )}
+          <OwedSection counts={counts} today={today} />
         </>
       )}
       {!empty && (queueError || queueClient || reviewed || (queue && queue.count > 0)) && (
@@ -310,12 +250,6 @@ export default function Home() {
     </section>
   );
 }
-
-const dueWords = (dueOn: string, today: string, day: (value: string) => string) => {
-  if (!dueOn) return "";
-  const date = day(dueOn);
-  return dueOn < today ? `Overdue since ${date}` : `Due ${date}`;
-};
 
 // A client or month filter for a capped list, with what the list shows of its whole.
 export function ClientFilter({ value, onChange, shown, of }: { value: string; onChange: (value: string) => void; shown: number; of: number }) {

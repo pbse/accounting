@@ -5,6 +5,8 @@ import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { workspaceQuery } from "../../data/queries";
 import { useDates } from "../../data/time";
 import { ClientFilter, Decisions, type HomeCounts, type View } from "../home/Home";
+import { DeadlinesSection, OwedSection, UncapturedSection, deadlineParts } from "../home/Lists";
+import { Link } from "react-router";
 import { DailyBooks } from "../home/DailyBooks";
 import { Dependencies } from "../home/Dependencies";
 import { BulkReview, type QueueItem } from "../review/BulkReview";
@@ -36,7 +38,14 @@ export default function Closes() {
   const d = counts?.deadlines;
   const missed = d ? d.overdue + d.not_opened_overdue : 0;
   const soon = d ? d.due_soon + d.not_opened_upcoming : 0;
-  const undated = counts ? counts.owed.filter((item) => item.state !== "signed_off" && !item.due_on).length + counts.not_opened.filter((m) => !m.due_on).length : 0;
+  const parts = counts ? deadlineParts(counts, today) : undefined;
+  const undated = parts ? parts.undated.length + parts.undatedUnopened.length : 0;
+  // A count opens the list it counted; a collapsed list opens before it scrolls into view.
+  const scrollTo = (id: string) => {
+    const target = document.getElementById(id);
+    if (target instanceof HTMLDetailsElement) target.open = true;
+    target?.scrollIntoView({ block: "start" });
+  };
   const reopened = [...(counts?.owed.filter((item) => item.state === "reopen_required" || item.state === "unknown") ?? []), ...(counts?.reopened_later ?? [])];
   const context = counts
     ? [
@@ -53,7 +62,7 @@ export default function Closes() {
       <PageHeader title="Closes">{context}</PageHeader>
       {error && <p role="alert">{error}</p>}
       <div className="ks-stats">
-        <div className="ks-stat">
+        <button type="button" className="ks-stat" onClick={() => scrollTo("owed")}>
           <span className="ks-l">Signed off</span>
           <span className="ks-v">
             <b>
@@ -62,24 +71,24 @@ export default function Closes() {
             </b>
           </span>
           <span className="ks-c">closes owed through this month</span>
-        </div>
-        <div className="ks-stat">
+        </button>
+        <button type="button" className="ks-stat" onClick={() => { setView("all"); scrollTo("decisions"); }}>
           <span className="ks-l">Need your decision</span>
           <span className="ks-v">
             <b>{counts?.decisions.count ?? "–"}</b>
             {counts && counts.decisions.unread > 0 && <span className="pill muted">{counts.decisions.unread} new</span>}
           </span>
           <span className="ks-c">{counts?.decisions.team ? `${counts.decisions.team} for teammates` : "across the closes you can open"}</span>
-        </div>
-        <div className="ks-stat">
+        </button>
+        <button type="button" className="ks-stat" onClick={() => scrollTo(parts?.any ? "deadlines" : "owed")}>
           <span className="ks-l">Deadline exceptions</span>
           <span className="ks-v">
             <b>{counts ? missed + soon + undated : "–"}</b>
             {missed > 0 && <span className="pill danger">{missed} overdue</span>}
           </span>
           <span className="ks-c">{d ? `${n(soon, "close")} due this week · ${undated} without a date` : "overdue, due this week, or undated"}</span>
-        </div>
-        <div className="ks-stat">
+        </button>
+        <Link className="ks-stat" to="/dashboard/work?view=all">
           <span className="ks-l">Prepared by the agent</span>
           <span className="ks-v">
             <b>
@@ -89,9 +98,11 @@ export default function Closes() {
             {counts && counts.prepared.failed > 0 && <span className="pill danger">{counts.prepared.failed} failed</span>}
           </span>
           <span className="ks-c">{counts ? `${counts.prepared.waiting_person} waiting on you · ${counts.prepared.waiting_client} on clients` : "this month"}</span>
-        </div>
+        </Link>
       </div>
+      {counts && <DeadlinesSection counts={counts} today={today} />}
       <Decisions today={today} tick={tick} snapshot={counts?.inbox} reopened={reopened} canReview={counts?.can_review ?? false} teamTotal={counts?.decisions.team ?? 0} view={view} onView={setView} onChange={bump} />
+      <UncapturedSection counts={counts} today={today} />
       <Dependencies />
       <DailyBooks canReview={counts?.can_review ?? false} onReviewed={bump} />
       {(queueError || queueClient || reviewed || (queue && queue.count > 0)) && (
@@ -120,6 +131,7 @@ export default function Closes() {
           )}
         </>
       )}
+      <OwedSection counts={counts} today={today} />
       <DelegatedCloses client="" />
       {counts && <NotOpened months={counts.not_opened} />}
     </section>
