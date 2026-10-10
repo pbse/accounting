@@ -194,7 +194,7 @@ for (const app of apps) {
       if (!app.standalone) await page.evaluate((path) => {
         const target = new URL(path, location.href);
         const same = target.pathname + target.search === location.pathname + location.search;
-        const previous = same ? null : document.querySelector(".page-header h1, .ks-hello h2, .ks-lede h2");
+        const previous = same ? null : document.querySelector(".page-header h1, .ks-hello h2, .ks-lede h1");
         window.__layoutPrevious = previous && { element: previous, title: previous.textContent };
         history.pushState({}, "", path);
         dispatchEvent(new PopStateEvent("popstate"));
@@ -203,7 +203,7 @@ for (const app of apps) {
         const header = () =>
           page.waitForFunction(
             () => {
-              const h1 = document.querySelector(".page-header h1, .ks-hello h2, .ks-lede h2");
+              const h1 = document.querySelector(".page-header h1, .ks-hello h2, .ks-lede h1");
               const previous = window.__layoutPrevious;
               return h1?.textContent?.trim() && (!previous || h1 !== previous.element || h1.textContent !== previous.title);
             },

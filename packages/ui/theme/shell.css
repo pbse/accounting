@@ -812,7 +812,7 @@ body {
   gap: var(--space-6);
   margin: var(--space-24) 0 0;
 }
-.app-shell .ks-lede h2 {
+.app-shell .ks-lede h1 {
   margin: 0;
   font-family: var(--font-serif);
   font-weight: 400;
@@ -1005,7 +1005,7 @@ body {
     margin-left: 0;
     width: 100%;
   }
-  .app-shell .ks-lede h2 {
+  .app-shell .ks-lede h1 {
     font-size: 28px;
     line-height: 34px;
   }
