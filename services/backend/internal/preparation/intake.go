@@ -212,7 +212,7 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	defer tx.Rollback()
 	var id, closeID, entity, period string
-	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.state='waiting_evidence' AND (e.extraction_state IN ('ready','failed') OR e.superseded_by IS NOT NULL) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled AND ($1::bigint[] IS NULL OR c.id=ANY($1::bigint[]))) ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`, CloseScope(ctx)).Scan(&id, &closeID)
+	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.state='waiting_evidence' AND (e.extraction_state IN ('ready','failed') OR e.superseded_by IS NOT NULL) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled AND ($1::bigint[] IS NULL OR c.id=ANY($1::bigint[])) AND ($1::bigint[] IS NOT NULL OR NOT EXISTS(SELECT 1 FROM demonstration_seeds d WHERE d.organization_id=c.organization_id AND d.finished_at IS NULL AND c.id=ANY(d.close_ids)))) ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`, CloseScope(ctx)).Scan(&id, &closeID)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
