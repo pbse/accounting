@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 import { Icon, type IconName } from "./Icon";
 import "./Sidebar.css";
@@ -45,8 +45,19 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
       /* a private window keeps the sidebar open */
     }
   }, []);
-  // The sheet closes when the person goes somewhere.
+  // The sheet closes when the person goes somewhere, and on Escape, which hands focus back to the menu button.
   useEffect(() => setOpen(false), [location.pathname, location.search]);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      menuButton.current?.focus();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [open]);
   const toggleCollapsed = () => {
     const next = !collapsed;
     setCollapsed(next);
@@ -59,7 +70,7 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   return (
     <>
       <div className="ks-phonebar">
-        <button type="button" className="ks-phonebar-brand" aria-label="Open the menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <button type="button" className="ks-phonebar-brand" aria-label="Open the menu" aria-expanded={open} onClick={() => setOpen(!open)} ref={menuButton}>
           <span className="ks-wordmark">krith</span>
         </button>
         {newChat && (
