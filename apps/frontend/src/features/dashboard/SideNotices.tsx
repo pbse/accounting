@@ -41,12 +41,13 @@ export function SideNotices() {
     setFailed("");
     setLeaving((l) => [...l, key]);
     window.setTimeout(() => {
+      // The notice opens whether or not the mark saves; a failed mark is said, and the notice comes back.
+      navigate(to);
       workspaceRequest("/attention", { action: "read", keys: [key] })
-        .then(() => navigate(to))
         .catch((e: unknown) => setFailed(e instanceof Error ? e.message : "The notice could not be marked read."))
-        // Read or not, the key leaves the leaving state: a notice marked new again on Home must show again.
         .then(() => setLeaving((l) => l.filter((k) => k !== key)))
-        .finally(() => void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && String(q.queryKey[1]).startsWith("/attention") }));
+        // Home's counts and decisions come from /home, so they refresh with the inbox.
+        .finally(() => void queries.invalidateQueries({ predicate: (q) => q.queryKey[0] === "workspace" && /^\/(attention|home)\b/.test(String(q.queryKey[1])) }));
     }, 220);
   }
   return (
