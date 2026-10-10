@@ -53,7 +53,7 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_export_labels WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
-			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`,
+			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM xero_connections WHERE organization_id=$1`,
 			`DELETE FROM procedure_versions WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`,
 			`DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
 			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
@@ -144,7 +144,7 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 		t.Fatalf("template: %v", template)
 	}
 	qbo := read["quickbooks"].([]any)
-	if len(qbo) != 1 || qbo[0].(map[string]any)["environment"] != "production" || qbo[0].(map[string]any)["state"] != "active" || read["xero"] != nil {
+	if len(qbo) != 1 || qbo[0].(map[string]any)["environment"] != "production" || qbo[0].(map[string]any)["state"] != "active" || qbo[0].(map[string]any)["client_entity"] != "Acme Co" || len(read["xero"].([]any)) != 0 {
 		t.Fatalf("connections: %v %v", qbo, read["xero"])
 	}
 	if profile := read["profile"].(map[string]any); profile["currency"] != "USD" || profile["fiscal_year_start"] != float64(4) || profile["state"] != "detected" {
@@ -170,6 +170,13 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if requests := call("user_a", admin, page("Acme Co"), 200)["requests"].([]any); len(requests) != 1 || requests[0].(map[string]any)["answered_in_part"] != true {
 		t.Fatalf("a partial reply is shown: %v", requests)
 	}
+	// A Xero connection made from the September month, under the name later confirmed as Acme's alias, is Acme's too,
+	// and says which name it is held under.
+	_, err = db.Exec(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_name) VALUES($1,$2,'Acme Services LLC','fixture','active',$3,now(),'Acme Services')`, september, org, rand.Text())
+	must(err)
+	if held := call("user_a", admin, page("Acme Co"), 200)["xero"].([]any); len(held) != 1 || held[0].(map[string]any)["client_entity"] != "Acme Services LLC" {
+		t.Fatalf("a connection held under an alias: %v", held)
+	}
 	// Who can hold Acme's closes, as the roster offers owners: Ann, who reviews every client. Cy is assigned to its
 	// alias' name only, which gives him its September close to work on but not the client's months to hold.
 	people := read["people"].([]any)
@@ -183,7 +190,7 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 	if months := cy["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != september || len(cy["requests"].([]any)) != 1 {
 		t.Fatalf("Cy's months and requests: %v %v", months, cy["requests"])
 	}
-	if cy["whole"] != false || cy["roster"] != nil || len(cy["owed"].([]any)) != 0 || len(cy["quickbooks"].([]any)) != 0 || cy["profile"] != nil || cy["basis"] != nil ||
+	if cy["whole"] != false || cy["roster"] != nil || len(cy["owed"].([]any)) != 0 || len(cy["quickbooks"].([]any)) != 0 || len(cy["xero"].([]any)) != 0 || cy["profile"] != nil || cy["basis"] != nil ||
 		cy["template"] != nil || cy["template_hidden"] != true || cy["people"] != nil || cy["can_manage"] != false || cy["can_connect"] != false {
 		t.Fatalf("Cy's read: %v", cy)
 	}

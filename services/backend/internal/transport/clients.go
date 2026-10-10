@@ -248,7 +248,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		out["requests"] = requests
 		// A member who can open only some of the client's months, under another of its names, sees those alone.
 		if !whole {
-			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"] = nil, nil, true, []any{}, nil, nil, nil
+			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"] = nil, nil, true, []any{}, []any{}, nil, nil
 			jsonReply(w, 200, out)
 			return
 		}
@@ -293,25 +293,24 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		out["template"], out["template_hidden"] = template, !firm
 
-		// How the books arrive: the client's QuickBooks connections (production first, the one its books are read from)
-		// and its Xero connection, matched by the client's own name as connections are kept.
+		// How the books arrive: the client's QuickBooks connections (under its own name first, then production first, as
+		// its books are read) and its Xero connections, under any of its names. A connection is kept under the name of the
+		// close it was made from, which may since have been confirmed as an alias, and serves the months opened under
+		// that name; each says which name it is held under.
 		var quickbooksRaw, xeroRaw []byte
-		if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'environment',x.environment,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at) ORDER BY x.environment='production' DESC,x.id DESC)
-  FROM quickbooks_connections x WHERE x.organization_id=$1 AND lower(x.client_entity)=lower($2) AND x.state<>'disconnected'),'[]'::jsonb),
- (SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
-  FROM xero_connections x WHERE x.organization_id=$1 AND lower(x.client_entity)=lower($2) AND x.state<>'disconnected' ORDER BY x.id DESC LIMIT 1)`, org, name).Scan(&quickbooksRaw, &xeroRaw); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'client_entity',x.client_entity,'environment',x.environment,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
+  ORDER BY lower(x.client_entity)=lower($2) DESC,x.environment='production' DESC,x.id DESC)
+  FROM quickbooks_connections x WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity($1,$2) AND x.state<>'disconnected'),'[]'::jsonb),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'client_entity',x.client_entity,'state',x.state,'tenant_name',x.tenant_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
+  ORDER BY lower(x.client_entity)=lower($2) DESC,x.id DESC)
+  FROM xero_connections x WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity($1,$2) AND x.state<>'disconnected'),'[]'::jsonb)`, org, name).Scan(&quickbooksRaw, &xeroRaw); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
-		out["quickbooks"] = json.RawMessage(quickbooksRaw)
-		if xeroRaw != nil {
-			out["xero"] = json.RawMessage(xeroRaw)
-		} else {
-			out["xero"] = nil
-		}
+		out["quickbooks"], out["xero"] = json.RawMessage(quickbooksRaw), json.RawMessage(xeroRaw)
 
-		// The client's currency and fiscal year as its connected ledgers report them, and its approved basis (a client
-		// override first, then the firm's), as a close reads both.
+		// The client's currency and fiscal year as its connected ledgers report them, under any of its names, and its
+		// approved basis (a client override first, then the firm's), as a close reads it.
 		profile, err := preparation.ClientProfileOf(ctx, tx, org, name)
 		if err != nil {
 			problem(w, 503, "The client is unavailable.")

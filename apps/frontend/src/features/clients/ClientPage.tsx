@@ -28,8 +28,10 @@ type Month = {
   books?: Books;
 };
 type Owed = { period: string; due_on?: string };
+// A connection is held under the name of the close it was made from (client_entity), which may be an alias.
 type QuickBooksConnection = {
   id: string;
+  client_entity: string;
   environment: "sandbox" | "production";
   state: string;
   realm: string;
@@ -38,6 +40,7 @@ type QuickBooksConnection = {
 };
 type XeroConnection = {
   id: string;
+  client_entity: string;
   state: string;
   tenant_name: string;
   error: string;
@@ -60,7 +63,7 @@ type ClientRead = {
   months: Month[];
   owed: Owed[];
   quickbooks: QuickBooksConnection[];
-  xero: XeroConnection | null;
+  xero: XeroConnection[];
   profile: Profile | null;
   basis: {
     method: "accrual" | "cash" | "modified_cash";
@@ -179,9 +182,11 @@ export default function ClientPage() {
   // The one action: the oldest month open, else the earliest month it owes.
   const inHand = active ? oldest : undefined;
   const next = active && !inHand && owed[0] ? owed[0] : null;
-  // Connections and procedures are kept under the client's own name, so they are managed from its newest month opened
-  // under that name (a month opened under another of its names shows neither).
+  // Procedures are kept under the client's own name, so they are managed from its newest month opened under that name;
+  // a connection from the newest month opened under the name it is held under (a month under another name shows
+  // neither).
   const latest = months.find((m) => m.entity.toLowerCase() === name.toLowerCase());
+  const managedIn = months.find((m) => m.entity.toLowerCase() === (ledger.held ?? name).toLowerCase());
 
   // How each month is due and who holds it: the client's own terms, else the firm template's, said once.
   const people = client.people ?? [];
@@ -264,15 +269,15 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              latest ? (
-                <Link className="button" to={`/dashboard/closes/${latest.id}?tab=${ledger.tab}#${ledger.anchor}`}>
-                  {ledger.connected ? "Manage" : "Connect"} in {monthShort(latest.period)}
+              managedIn ? (
+                <Link className="button" to={`/dashboard/closes/${managedIn.id}?tab=${ledger.tab}#${ledger.anchor}`}>
+                  {ledger.connected ? "Manage" : "Connect"} in {monthShort(managedIn.period)}
                 </Link>
               ) : undefined
             }
           >
             {ledger.line}
-            {latest ? "" : ` Open a month under ${name}’s own name to connect its ledger.`}
+            {managedIn ? "" : ` Open a month under ${ledger.held ?? name} to ${ledger.connected ? "manage" : "connect"} its ledger.`}
           </Card>
           <Card
             icon="history"
@@ -481,8 +486,11 @@ function monthState(m: Month, today: string) {
 // How the client's books arrive, from its connections (the QuickBooks one its books are read from first, then Xero),
 // and the newest month's books: one line, a chip, and where the connection is managed today.
 function books(client: ClientRead, day: (value: string) => string) {
+  // Under the client's own name first, then production first, as the API lists them.
   const qbo = client.quickbooks[0];
-  const xero = client.xero;
+  const xero = client.xero[0];
+  const heldUnder = (c: { client_entity: string }) =>
+    c.client_entity.toLowerCase() === client.entity.toLowerCase() ? "" : ` It is held under ${c.client_entity}, the name of the month it was made from.`;
   const newest = client.months.find((m) => m.books);
   const latest = newest?.books
     ? newest.books.source === "exports"
@@ -507,7 +515,8 @@ function books(client: ClientRead, day: (value: string) => string) {
     const production = qbo.environment === "production";
     return {
       short: production ? "QuickBooks Online" : "QuickBooks sandbox",
-      line: `${quickbooksLine}${xero ? " Xero is connected too." : ""}${latest}`,
+      line: `${quickbooksLine}${heldUnder(qbo)}${xero ? " Xero is connected too." : ""}${latest}`,
+      held: qbo.client_entity,
       chip: state(qbo.state, "Confirm the company"),
       attention: !live(qbo.state),
       connected: true,
@@ -518,7 +527,8 @@ function books(client: ClientRead, day: (value: string) => string) {
   if (xero) {
     return {
       short: "Xero",
-      line: `${xeroLine}${qbo ? " QuickBooks is connected too." : ""}${latest}`,
+      line: `${xeroLine}${heldUnder(xero)}${qbo ? " QuickBooks is connected too." : ""}${latest}`,
+      held: xero.client_entity,
       chip: state(xero.state, "Choose the organisation"),
       attention: !live(xero.state),
       connected: true,
@@ -532,6 +542,7 @@ function books(client: ClientRead, day: (value: string) => string) {
     chip: ["Not connected", "pill neutral"] as [string, string],
     attention: false,
     connected: false,
+    held: undefined as string | undefined,
     tab: "evidence",
     anchor: "quickbooks-ledger",
   };
