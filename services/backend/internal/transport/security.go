@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/delivery"
 	"close.local/backend/internal/llm"
 )
 
@@ -98,8 +99,13 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "The firm's security settings require clients:all and members:manage.")
 			return
 		}
-		// Read before the transaction takes a connection, so concurrent views never wait on a second one.
+		// Read before the transaction takes a connection, so concurrent views never wait on a second one. The firm's
+		// sender is settled first, so a firm that never opened its email settings still shows Krith's default sender.
 		ocr, ocrModel := workerOCR(r.Context(), db)
+		if _, _, _, err := currentSender(r.Context(), db, organization(r)); err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "Security is unavailable.")
+			return
+		}
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 		if err != nil {
 			problem(w, 503, "Security is unavailable.")
@@ -117,15 +123,15 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			}
 			out[key] = json.RawMessage(raw)
 		}
-		var calls, pageReads, alerts, email int
-		var level string
+		var calls, pageReads, alerts int
+		var level, email string
 		var connected map[string]int
 		var raw []byte
 		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT sum(calls-gemini_calls) FROM model_calls WHERE organization_id=$1 AND day>(now() AT TIME ZONE 'UTC')::date-30),0),
  COALESCE((SELECT sum(gemini_calls) FROM model_calls WHERE organization_id=$1 AND day>(now() AT TIME ZONE 'UTC')::date-30),0),
  (SELECT agent_chat FROM organizations WHERE id=$1),
  (SELECT count(*) FROM operations_alert_deliveries WHERE organization_id=$1 AND status='accepted' AND finished_at>now()-interval '30 days'),
- (SELECT count(*) FROM email_connections WHERE organization_id=$1 AND enabled),
+ COALESCE((SELECT provider FROM email_connections WHERE organization_id=$1 AND enabled),''),
  jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &pageReads, &level, &alerts, &email, &raw)
 		if err != nil || json.Unmarshal(raw, &connected) != nil {
 			problem(w, 503, "Security is unavailable.")
@@ -140,11 +146,20 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			answers += " Agent chat is also on firm-wide: a question typed outside a close is sent the same way with the reads the model chooses across the closes the member can open (the list of closes, Work's lists, the review queue, the morning brief, the track record, closes handed to the agent, a search, and any close read by its id), with client names."
 		}
 		gemini := map[string]string{"gemini": "Key set on the worker; model " + ocrModel, "tesseract": "Key not set on the worker; PDFs are read locally", "held": "Key set on the worker, but " + heldBecause(ocrModel) + ", so PDFs are read locally", "": "The worker has not reported its PDF reading in the last five minutes"}[ocr]
+		// Krith's sender and a firm's own Resend connection both send through Resend, from different accounts.
+		resendAccount, resendEvidence := "the firm's own Resend account", "No enabled sending connection"
+		switch email {
+		case delivery.Krith:
+			resendAccount, resendEvidence = "Krith's Resend account, from Krith's sender in the firm's name", "Krith's sender, the firm's default"
+		case "resend":
+			resendEvidence = "The firm's own enabled Resend connection"
+		}
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.
 		out["providers"] = []map[string]any{
 			{"provider": "Google Gemini", "receives": "Each page of a PDF the firm adds (uploaded, imported, forwarded or sent by a client), as an image, to read its text. A page's own PDF text is always kept; there Gemini's reading only checks it.", "evidence": gemini + "; " + plural(pageReads, "page reading", "page readings") + " reserved in the last 30 days", "in_use": ocr == "gemini" || pageReads > 0},
 			{"provider": llm.ProviderLabel(r.Context(), "preparation"), "receives": "Extracted text of the documents the agent reads (their names first, then up to 20 it selects), PDF statement text for row proposals, policy text or reviewer edits for procedure drafts, a Work command with the visible client names, and, when platform staff draft a workflow plan for a close while the firm allows staff plan drafts, their instruction with the close's client, month, sign-off state and counts of its preparation work. " + answers + " Card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details are removed from document text and those questions and reads first; file names and Work commands are sent as written. API requests ask the provider not to store them; the context machine deletes each task's workspace after the call.", "evidence": plural(calls, "model call", "model calls") + " reserved in the last 30 days (a budget count, not confirmed delivery)", "in_use": calls > 0},
-			{"provider": "Resend", "receives": "Emails a person approved, sent through the firm's own Resend account: client request emails (the recipient, a standard notice from the firm's sender and the private reply link; never the request's questions or the client's figures) and collection reminders to the client's customers (the recipient and the approved subject and message, which by default name the invoice, its amount, its due date and the client, and carry whatever the accountant wrote).", "evidence": map[bool]string{true: "An enabled sending connection", false: "No enabled sending connection"}[email > 0], "in_use": email > 0},
+			{"provider": "Resend", "receives": "Emails a person approved, sent through " + resendAccount + ": client request emails (the recipient, a standard notice from the firm's sender and the private reply link; never the request's questions or the client's figures) and collection reminders to the client's customers (the recipient and the approved subject and message, which by default name the invoice, its amount, its due date and the client, and carry whatever the accountant wrote).",
+				"evidence": resendEvidence, "in_use": email == delivery.Krith || email == "resend"},
 			{"provider": "QuickBooks", "receives": "Read requests for the connected company's ledger; postings only under an approved grant.", "evidence": plural(connected["QuickBooks"], "active connection", "active connections"), "in_use": connected["QuickBooks"] > 0},
 			{"provider": "Xero", "receives": "Read requests for the connected organisation's ledger; corrections only under an approved grant.", "evidence": plural(connected["Xero"], "active connection", "active connections"), "in_use": connected["Xero"] > 0},
 			{"provider": "Stripe", "receives": "Requests for payout reports of the connected account.", "evidence": plural(connected["Stripe"], "active connection", "active connections"), "in_use": connected["Stripe"] > 0},

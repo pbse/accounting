@@ -86,11 +86,12 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 	t.Setenv("PLATFORM_EMAIL_KEY", "re_platform_synthetic")
 	t.Setenv("EMAIL_INTAKE_ADDRESS", "replies@in.krith.test")
 	t.Setenv("EMAIL_INTAKE_KEY", strings.Repeat("k", 32))
-	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_sender", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))}, Organization: org, Permissions: []string{"clients:all", "integrations:manage", "requests:send", "workpapers:review"}}
+	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_sender", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))}, Organization: org, Permissions: []string{"clients:all", "integrations:manage", "members:manage", "requests:send", "workpapers:review"}}
 	mux := http.NewServeMux()
 	registerEmail(mux, db)
 	registerWork(mux, db)
 	registerEmailSettlement(mux, db)
+	registerSecurity(mux, db)
 	h := organizationBoundary(db, mux)
 	call := func(method, path string, value any, want int) []byte {
 		t.Helper()
@@ -140,7 +141,23 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
 	})
 
-	// A firm that connected nothing sends from Krith's sender, in its name, tracked by Krith's webhook.
+	// A firm that connected nothing sends from Krith's sender, in its name, tracked by Krith's webhook; Security says so
+	// even before anyone opened the firm's email settings.
+	var security struct {
+		Email     struct{ Provider, Sender string }
+		Providers []struct {
+			Provider, Receives string
+			InUse              bool `json:"in_use"`
+		}
+	}
+	must(json.Unmarshal(call("GET", "/v1/closes/security", nil, 200), &security))
+	resend := false
+	for _, p := range security.Providers {
+		resend = resend || p.Provider == "Resend" && p.InUse && strings.Contains(p.Receives, "Krith's Resend account")
+	}
+	if security.Email.Provider != "krith" || !resend {
+		t.Fatalf("Security shows Krith's sender and whose Resend account sends: %+v", security)
+	}
 	krith, extra := current()
 	if krith.Provider != "krith" || krith.Sender != `"Smith & Co via Krith" <requests@mail.krith.test>` || !krith.Tracking || extra["krith"] != true {
 		t.Fatalf("every firm starts with Krith's sender: %+v %v", krith, extra)

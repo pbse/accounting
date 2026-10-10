@@ -4002,6 +4002,7 @@ Checked on a fresh local PostgreSQL 18 with all migrations:
     - a fresh ID settles it.
   - A server without Krith's address stops Krith's sender. The firm then has no sender, nothing is approved through the old one, and Krith's sender returns with the address, its old records kept.
   - A request through Krith's sender carries the reply address back to the close, and without one it is refused.
+  - Security, read before anyone opened the firm's email settings, shows Krith's sender, and says Resend sends from Krith's account.
 - **`TestCollectionMessagesThroughKrithNameWhereRepliesGo` (new).**
   - Through Krith's sender, a collection draft without a reply-to address is refused.
   - The client's authority names Krith's sender in the firm's name, and the message goes with its reply-to.
