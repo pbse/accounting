@@ -262,7 +262,16 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 		defer deadline.Stop()
 		last := ""
 		first := true
+		// The stream ends with a final document, as a chat's stream does, so the sidebar reads a normal ending.
+		defer send(map[string]any{"ended": true})
 		for {
+			// Access is checked again on every read, as it is when a request enters: a membership revoked or a firm
+			// suspended while the stream is open ends it with nothing more said.
+			if !first {
+				if allowed, err := organizationAccess(db, r); err != nil || !allowed {
+					return
+				}
+			}
 			events, err := attentionEvents(r.Context(), db, r)
 			var kinds []string
 			var browser bool

@@ -61,11 +61,19 @@ func TestAttentionStreamFollowsTheInbox(t *testing.T) {
 		t.Fatalf("content type %q", ct)
 	}
 	var kinds []string
+	ended := false
 	scanner := bufio.NewScanner(strings.NewReader(w.Body.String()))
 	for scanner.Scan() {
 		var line map[string]any
 		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
 			t.Fatalf("line %q: %v", scanner.Text(), err)
+		}
+		if ended {
+			t.Fatalf("a line after the ending: %v", line)
+		}
+		if line["ended"] == true {
+			ended = true
+			continue
 		}
 		kinds = append(kinds, line["type"].(string))
 		if line["type"] == "attention" {
@@ -76,6 +84,9 @@ func TestAttentionStreamFollowsTheInbox(t *testing.T) {
 	}
 	if len(kinds) < 2 || kinds[0] != "attention" {
 		t.Fatalf("the stream should open with the inbox and keep ticking, got %v", kinds)
+	}
+	if !ended {
+		t.Fatal("the stream should end with its final document")
 	}
 	for _, k := range kinds[1:] {
 		if k != "tick" && k != "attention" {

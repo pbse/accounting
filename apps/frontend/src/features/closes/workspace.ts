@@ -125,7 +125,8 @@ async function send(
       if (done) break;
     }
     if (failed) throw new Error(failed);
-    if (!last?.messages) throw new Error(last?.message ?? "The answer was interrupted. Your conversation shows what was saved.");
+    // A stream ends with a final document; one cut off before it is an interruption.
+    if (!last) throw new Error("The answer was interrupted. Your conversation shows what was saved.");
     return last;
   }
   const result = await response.json();

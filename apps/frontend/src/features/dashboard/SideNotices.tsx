@@ -37,9 +37,9 @@ export function SideNotices() {
           },
           controller.signal,
         );
+        // A normal ending (the server's final document) is followed at once; a failure waits.
         if (!controller.signal.aborted) timer = window.setTimeout(listen, 1000);
       } catch {
-        // The stream ends without a final document, which the request reads as an interruption; a real failure waits.
         if (!controller.signal.aborted) timer = window.setTimeout(listen, 30_000);
       }
     };
