@@ -114,6 +114,7 @@
   gap: 1px;
 }
 .app-shell .ks-nav {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-10);
@@ -473,7 +474,6 @@
 }
 .ks-side.collapsed .ks-kbd,
 .ks-side.collapsed .ks-firm,
-.ks-side.collapsed .ks-count,
 .ks-side.collapsed .ks-chev,
 .ks-side.collapsed .ks-section,
 .ks-side.collapsed .ks-me-name,
@@ -496,6 +496,20 @@
 }
 .ks-side.collapsed .ks-sub {
   display: none;
+}
+/* A count folds to a dot on its icon, so what needs the person stays visible. */
+.ks-side.collapsed .ks-count {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  min-width: 0;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+  box-shadow: 0 0 0 2px var(--surface-side);
+  background: var(--att-text);
 }
 /* What sits beside the person (an open grant) folds to a dot on the avatar, so it stays visible. */
 .ks-side.collapsed .ks-me-aside {
