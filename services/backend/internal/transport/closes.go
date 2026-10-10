@@ -17,6 +17,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,8 @@ type savedClose struct {
 	CanAssign bool `json:"can_assign,omitempty"`
 	// CanTakeOver says the reader may take the close from the colleague who holds it: a firm administrator who reviews work.
 	CanTakeOver bool `json:"can_take_over,omitempty"`
+	// CanSignOff says the reader's role may sign the close off (close:signoff), as the sign-off route checks.
+	CanSignOff bool `json:"can_sign_off,omitempty"`
 	// Handed is how the reader came to hold the close when someone else handed it to them: who, when, and their note.
 	Handed *closeHandover `json:"handed,omitempty"`
 	// Basis is the client's approved accounting basis; BasisScope says whether a client override sets it.
@@ -401,6 +404,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			return
 		}
 		item.CanAssign = !signed && subject(r) != "" && canHandOver(r) && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
+		item.CanSignOff = canSignOff(r)
 		item.CanTakeOver = !signed && item.Assigned && !item.OwnedByMe && canTakeOver(r)
 		if item.OwnedByMe {
 			var h closeHandover
@@ -753,4 +757,10 @@ func warm(db *sql.DB, n int) {
 
 func workspaceVerifier() *auth.Verifier {
 	return &auth.Verifier{ClientID: os.Getenv("WORKOS_CLIENT_ID"), Organization: os.Getenv("WORKOS_ORGANIZATION_ID"), Issuer: os.Getenv("WORKOS_ISSUER")}
+}
+
+// canSignOff says the reader's organization role holds close:signoff; local development, with no organization, may.
+func canSignOff(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return a == nil || a.Organization == "" || slices.Contains(a.Permissions, "close:signoff")
 }

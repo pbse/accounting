@@ -174,9 +174,9 @@ export default function ClientClose() {
   const shown = papers.filter(filters[filter][1]);
   const base = `/dashboard/closes/${close.id}`;
   const latest = more ? " among the latest 100" : "";
-  // Sign off is the page's one action, and waits until readiness says the close is ready, read without error: a
-  // status that could not be refreshed offers nothing on it.
-  const signOffBlocked = !!briefRead.error || !signOffAvailable(brief);
+  // Sign off is the page's one action, and waits until readiness says the close is ready, read without error, for a
+  // reader whose role may sign off: a status that could not be refreshed offers nothing on it.
+  const signOffBlocked = !!briefRead.error || !signOffAvailable(brief) || !close.can_sign_off;
   return (
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
@@ -189,7 +189,7 @@ export default function ClientClose() {
         <div className="ks-tools">
           <PrepareActions close={close} />
           {signOffBlocked ? (
-            <button type="button" className="primary" disabled title="Not ready yet; the Sign-off tab shows what blocks it">
+            <button type="button" className="primary" disabled title={!close.can_sign_off ? "Your role cannot sign off; a reviewer can" : "Not ready yet; the Sign-off tab shows what blocks it"}>
               Sign off
             </button>
           ) : (

@@ -51,7 +51,8 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
   const { count } = brief ? needsOf(brief) : { count: 0 };
   const waiting = lines.filter((l) => l.state === "waiting");
   const done = lines.filter((l) => l.state === "done");
-  const unchecked = lines.filter((l) => l.state === "unknown");
+  const named = brief ? /Not checked: (.+?)\.?$/.exec(brief.headline)?.[1] : "";
+  const notChecked = named || lines.filter((l) => l.state === "unknown").map((l) => l.area).join(", ");
   const sentence = !brief
     ? read.isError
       ? `${close.entity}’s close could not be read.`
@@ -70,9 +71,10 @@ export function CloseLede({ close, onPlanSaved }: { close: Close & Plan; onPlanS
     brief ? `${done.length} of ${lines.length} done` : "",
     close.priority && close.priority !== "normal" ? `${close.priority} priority` : "",
     close.owned_by_me ? "yours" : close.assigned ? "held by a colleague" : "",
-    // A section that could not be read is said here on every tab, not only where the tasks show it; so is a status
-    // that could not be refreshed, which stays as last read.
-    unchecked.length ? `not checked: ${unchecked.map((l) => l.area).join(", ")}` : "",
+    // What could not be checked is said here on every tab, not only where the tasks show it: the brief names it in
+    // its headline ("Not checked: …"), which covers a check that failed inside an area that still needs the person
+    // as well as a section that could not be read. So is a status that could not be refreshed, which stays as last read.
+    notChecked ? `not checked: ${notChecked}` : "",
     read.error && brief ? `not refreshed since ${dates.time(read.dataUpdatedAt)}` : "",
   ].filter(Boolean);
   return (
