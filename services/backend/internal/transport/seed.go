@@ -535,32 +535,37 @@ func (s *seeder) clientProcedures(ctx context.Context, c *seed.Client) {
 		publish(c.Name, "reconciliation", "", "Reconcile Checking to the bank's export every month; timing items need their clearing reference.", "", "")
 	}
 	if len(c.Prepaids) > 0 {
-		publish(c.Name, "prepaid", "", "Spread annual policies and subscriptions over equal full months from the first month of service.", seed.ExpenseName(c.Prepaids[0].Expense), "Prepaid Expenses")
+		id := publish(c.Name, "prepaid", "", "Spread annual policies and subscriptions over equal full months from the first month of service.", seed.ExpenseName(c.Prepaids[0].Expense), "Prepaid Expenses")
 		// The equal-full-months rule is the method procedure learning records on a prepaid procedure; the route itself
-		// records only the accounts and the instructions.
-		s.db.ExecContext(ctx, `UPDATE procedure_versions SET method='equal_full_months_v1' WHERE organization_id=$1 AND kind='prepaid' AND method='' AND client_entity=$2`, s.o.Organization, c.Name)
+		// records only the accounts and the instructions. Only the version just published takes it.
+		if id != "" {
+			s.db.ExecContext(ctx, `UPDATE procedure_versions SET method='equal_full_months_v1' WHERE organization_id=$1 AND id::text=$2 AND kind='prepaid' AND method=''`, s.o.Organization, id)
+		}
 	}
 }
 
-func (s *seeder) publishProcedure(ctx context.Context) func(client, kind, method, instructions, expense, prepaid string) {
-	return func(client, kind, method, instructions, expense, prepaid string) {
+func (s *seeder) publishProcedure(ctx context.Context) func(client, kind, method, instructions, expense, prepaid string) string {
+	return func(client, kind, method, instructions, expense, prepaid string) string {
 		query := url.Values{"impact_kind": {kind}}
 		if client != "" {
 			query.Set("client_entity", client)
 		}
 		out, ok := s.must(ctx, "procedure impact "+kind, "GET", "/v1/closes/procedures?"+query.Encode(), nil)
 		if !ok {
-			return
+			return ""
 		}
 		body := map[string]any{"client_entity": client, "kind": kind, "method": method, "instructions": instructions, "enabled": true, "reason": "Firm procedure adopted at onboarding", "confirmed": true, "impact_digest": str(field(out, "impact_digest")), "previous_id": str(field(out, "previous_id"))}
 		if expense != "" {
 			body["expense_account"], body["prepaid_account"] = expense, prepaid
 		}
-		if out, ok := s.must(ctx, "procedure "+kind+" "+client, "POST", "/v1/closes/procedures", body); ok {
-			if id, err := strconv.ParseInt(str(field(out, "id")), 10, 64); err == nil {
-				s.record(ctx, "procedure_ids", id)
-			}
+		out, ok = s.must(ctx, "procedure "+kind+" "+client, "POST", "/v1/closes/procedures", body)
+		if !ok {
+			return ""
 		}
+		if id, err := strconv.ParseInt(str(field(out, "id")), 10, 64); err == nil {
+			s.record(ctx, "procedure_ids", id)
+		}
+		return str(field(out, "id"))
 	}
 }
 
@@ -1667,6 +1672,10 @@ func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions [
 	defer tx.Rollback()
 	// A member's own conversation that mentions the close keeps its messages, detached from it; only the seed's chats
 	// and the chats held inside the close go with it.
+	// An action card the agent offered on the close cannot stand without it (chat_action_scope), so it goes with the close.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_messages m USING chat_sessions s WHERE s.id=m.session_id AND s.close_id IS NULL AND NOT s.id=ANY($2::bigint[]) AND m.action IS NOT NULL AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint)`, closeID, seedSessions); err != nil {
+		return fmt.Errorf("detach chat actions: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE chat_messages m SET close_id=NULLIF(m.close_id,$1::bigint),target_close_id=NULLIF(m.target_close_id,$1::bigint),closes=array_remove(m.closes,$1::bigint) FROM chat_sessions s
  WHERE s.id=m.session_id AND s.close_id IS NULL AND NOT s.id=ANY($2::bigint[]) AND (m.close_id=$1::bigint OR m.target_close_id=$1::bigint OR $1::bigint=ANY(m.closes))`, closeID, seedSessions); err != nil {
 		return fmt.Errorf("detach chats: %w", err)
