@@ -1991,7 +1991,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	statements := []seedStatement{}
 	for _, table := range []string{"client_roster", "client_access", "budget_versions", "cash_obligations", "cash_scenarios", "open_item_actions", "collection_contact_preferences", "close_routines"} {
 		if ids := recorded[table]; len(ids) > 0 {
-			statements = append(statements, seedStatement{fmt.Sprintf(`DELETE FROM %s WHERE organization_id=$1 AND id::text=ANY($2) AND NOT lower(client_entity)=ANY($3)`, table), []any{o.Organization, ids, retained}})
+			statements = append(statements, seedStatement{fmt.Sprintf(`DELETE FROM %s WHERE organization_id=$1 AND id::text=ANY($2) AND NOT lower(client_entity)=ANY(COALESCE($3::text[],'{}'))`, table), []any{o.Organization, ids, retained}})
 		}
 	}
 	for _, pair := range recorded["client_aliases"] {
@@ -2000,7 +2000,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		}
 	}
 	if ids := recorded["quickbooks_connections"]; len(ids) > 0 {
-		statements = append(statements, seedStatement{`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND id::text=ANY($2) AND NOT lower(client_entity)=ANY($3) AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs WHERE connection_id=quickbooks_connections.id)`, []any{o.Organization, ids, retained}})
+		statements = append(statements, seedStatement{`DELETE FROM quickbooks_connections WHERE organization_id=$1 AND id::text=ANY($2) AND NOT lower(client_entity)=ANY(COALESCE($3::text[],'{}')) AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE connection_id=quickbooks_connections.id) AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs WHERE connection_id=quickbooks_connections.id)`, []any{o.Organization, ids, retained}})
 	}
 	// The seed's own chat messages go; a session that still holds the administrator's later turns stays with them.
 	statements = append(statements,
