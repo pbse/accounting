@@ -737,7 +737,8 @@ func (s *seeder) plan(ctx context.Context, c *seed.Client, closeID, period strin
 // client), the month-end snapshot with its evidence, and the transaction capture with its rows, open items and
 // exceptions.
 func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connection string, b seed.Books, earlier []seed.Books, n int) (string, error) {
-	// The connection is labeled as the demonstration's: its company name says so and its realm is no QuickBooks realm.
+	// The connection is labeled as the demonstration's: its company name says so, its realm is no QuickBooks realm, and
+	// it is a sandbox connection, so nothing it holds counts as a live provider read.
 	realm := fmt.Sprintf("demonstration-%07d", 1000000+seedIndex(c.Name))
 	captured := monthEndTime(b.Period).Add(time.Duration(26+n) * time.Hour)
 	if captured.After(s.today) {
@@ -745,7 +746,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 	}
 	if connection == "" {
 		err := s.db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,company_name,home_currency,fiscal_year_start,environment,confirmed_by,confirmed_at,created_at,updated_at,access_expires_at)
- VALUES($1,$2,$3,$4,'active',$5,$6,$7,$3||' (demonstration books)','USD',1,'production',$4,$6,$6,$6,$6) RETURNING id::text`, closeID, s.o.Organization, c.Name, s.o.Subject, rand.Text(), monthEndTime(seed.Months[0]).AddDate(0, 0, -20), realm).Scan(&connection)
+ VALUES($1,$2,$3,$4,'active',$5,$6,$7,$3||' (demonstration books)','USD',1,'sandbox',$4,$6,$6,$6,$6) RETURNING id::text`, closeID, s.o.Organization, c.Name, s.o.Subject, rand.Text(), monthEndTime(seed.Months[0]).AddDate(0, 0, -20), realm).Scan(&connection)
 		if err != nil {
 			return "", err
 		}
@@ -792,7 +793,7 @@ func (s *seeder) capture(ctx context.Context, c *seed.Client, closeID, connectio
 		}
 	}
 	// The month-end snapshot, assembled by the code a real capture uses.
-	snapshot, body, err := quickbooks.PeriodSnapshot("production", realm, c.Name+" (demonstration books)", b.Period, b.Directory(), b.Reports(), captured.Add(-2*time.Minute))
+	snapshot, body, err := quickbooks.PeriodSnapshot("sandbox", realm, c.Name+" (demonstration books)", b.Period, b.Directory(), b.Reports(), captured.Add(-2*time.Minute))
 	if err != nil {
 		return "", err
 	}
@@ -1478,13 +1479,6 @@ func (s *seeder) afterwards(ctx context.Context) {
 		}
 	}
 	// Model usage for the month so far, as the operations view counts it.
-	// Usage is added to each day's count and remembered, so removal subtracts exactly it.
-	for d := 0; d < 9; d++ {
-		day, calls := s.today.AddDate(0, 0, -d).Format("2006-01-02"), 14+(d*7)%23
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO model_calls(organization_id,day,calls) VALUES($1,$2,$3) ON CONFLICT (organization_id,day) DO UPDATE SET calls=model_calls.calls+EXCLUDED.calls`, s.o.Organization, day, calls); err == nil {
-			s.db.ExecContext(ctx, `UPDATE demonstration_seeds SET policy=policy||jsonb_build_object('model_calls',COALESCE(policy->'model_calls','{}'::jsonb)||jsonb_build_object($2::text,$3::int)) WHERE organization_id=$1`, s.o.Organization, day, calls)
-		}
-	}
 }
 
 // chats are a few conversations with the agent as the sidebar lists them: firm-wide and about one close.
@@ -1611,13 +1605,6 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 	// were never changed, and the local firm cannot take them.
 	var before map[string]any
 	if json.Unmarshal(policy, &before) == nil {
-		// Usage the seed added to a day's count is subtracted; a day it alone filled goes.
-		if calls, ok := before["model_calls"].(map[string]any); ok {
-			for day, n := range calls {
-				db.ExecContext(ctx, `UPDATE model_calls SET calls=GREATEST(calls-$3,0) WHERE organization_id=$1 AND day=$2::date`, o.Organization, day, int(n.(float64)))
-			}
-			db.ExecContext(ctx, `DELETE FROM model_calls WHERE organization_id=$1 AND calls=0 AND COALESCE(gemini_calls,0)=0`, o.Organization)
-		}
 		s := &seeder{db: db, mux: savedCloses(db, strings.Repeat("s", 32)), o: SeedOptions{Organization: o.Organization, Subject: subject}}
 		// Only what the seed set, and only where the firm has left it as the seed set it: a later decision stands.
 		var now map[string]any
@@ -1648,7 +1635,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 			db.ExecContext(ctx, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2 AND time_zone='America/New_York'`, o.Organization, subject)
 		}
 		if set, _ := before["set_preferences"].(bool); set {
-			db.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2 AND NOT browser AND kinds=$3::text[]`, o.Organization, subject, seedKinds)
+			db.ExecContext(ctx, `DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2 AND NOT browser AND kinds <@ $3::text[] AND kinds @> $3::text[]`, o.Organization, subject, seedKinds)
 		}
 		if len(s.problems) > 0 {
 			return errors.New(s.problems[0])
@@ -1712,6 +1699,12 @@ func removeClose(ctx context.Context, db *sql.DB, closeID string, seedSessions [
 		`DELETE FROM quickbooks_entity_syncs WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
 		`DELETE FROM quickbooks_snapshots WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
 		`DELETE FROM quickbooks_connections WHERE close_id=$1`,
+		`DELETE FROM xero_transaction_rows WHERE snapshot_id IN (SELECT id FROM xero_snapshots WHERE close_id=$1)`,
+		`DELETE FROM xero_snapshots WHERE close_id=$1`,
+		`DELETE FROM xero_posting_grants WHERE connection_id IN (SELECT id FROM xero_connections WHERE close_id=$1)`,
+		`DELETE FROM xero_connections WHERE close_id=$1`,
+		`DELETE FROM stripe_report_runs WHERE close_id=$1`,
+		`DELETE FROM stripe_connections WHERE close_id=$1`,
 		`DELETE FROM client_attachments WHERE close_id=$1`,
 		`UPDATE procedure_drafts SET source_evidence_id=NULL,source_digest='',source_quote='' WHERE source_evidence_id IN (SELECT id FROM evidence WHERE close_id=$1)`,
 		`DELETE FROM evidence WHERE close_id=$1`,
