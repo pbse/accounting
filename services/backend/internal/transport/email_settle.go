@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/delivery"
 )
 
 // emailSettlement is a person's reading of the provider's own records for one email: accepted, with the provider's
@@ -25,12 +26,12 @@ type emailSettlement struct {
 // attempts and error stay; the settlement is added to the error line so every view of the email shows it.
 func settleEmail(ctx context.Context, tx *sql.Tx, outbox string, states []string, in emailSettlement, who string) (string, error) {
 	in.ProviderID, in.Evidence = strings.TrimSpace(in.ProviderID), strings.TrimSpace(in.Evidence)
-	var state, connection, provider, recipient, org string
+	var state, connection, provider, recipient, org, sender string
 	var sending bool
 	err := tx.QueryRowContext(ctx, `SELECT m.state,m.connection_id::text,COALESCE(m.provider_id,''),
  COALESCE((SELECT q.recipient FROM work_requests q WHERE q.id=m.request_id),(SELECT c.recipient FROM collection_messages c WHERE c.id=m.collection_id),''),
- x.organization_id,m.state='sending' AND m.claimed_at>=now()-interval '2 minutes'
- FROM email_outbox m JOIN email_connections x ON x.id=m.connection_id WHERE m.id=$1 FOR UPDATE OF m`, outbox).Scan(&state, &connection, &provider, &recipient, &org, &sending)
+ x.organization_id,m.state='sending' AND m.claimed_at>=now()-interval '2 minutes',x.provider
+ FROM email_outbox m JOIN email_connections x ON x.id=m.connection_id WHERE m.id=$1 FOR UPDATE OF m`, outbox).Scan(&state, &connection, &provider, &recipient, &org, &sending, &sender)
 	if err != nil {
 		return "", err
 	}
@@ -53,12 +54,18 @@ func settleEmail(ctx context.Context, tx *sql.Tx, outbox string, states []string
 	}
 	if in.Outcome == "accepted" {
 		var taken bool
-		// Settlements naming the same message ID on a sender wait for each other, so two emails never both take it.
-		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('email_provider:'||$1||':'||$2))`, connection, in.ProviderID); err != nil {
+		// Settlements naming the same message ID on a sender wait for each other, so two emails never both take it. Every
+		// firm's email through Krith's sender shares Krith's account, so there the ID is checked across all of them.
+		scope := connection
+		if sender == delivery.Krith {
+			scope = delivery.Krith
+		}
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('email_provider:'||$1||':'||$2))`, scope, in.ProviderID); err != nil {
 			return org, err
 		}
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM email_outbox WHERE connection_id::text=$1 AND provider_id=$2 AND id<>$3)
- OR EXISTS(SELECT 1 FROM email_delivery_events WHERE connection_id::text=$1 AND provider_id=$2 AND lower(recipient)<>lower($4))`, connection, in.ProviderID, outbox, recipient).Scan(&taken); err != nil {
+		if err = tx.QueryRowContext(ctx, `WITH senders AS (SELECT id FROM email_connections WHERE id::text=$1 OR ($5 AND provider='krith'))
+ SELECT EXISTS(SELECT 1 FROM email_outbox WHERE connection_id IN (SELECT id FROM senders) AND provider_id=$2 AND id<>$3)
+ OR EXISTS(SELECT 1 FROM email_delivery_events WHERE connection_id IN (SELECT id FROM senders) AND provider_id=$2 AND lower(recipient)<>lower($4))`, connection, in.ProviderID, outbox, recipient, sender == delivery.Krith).Scan(&taken); err != nil {
 			return org, err
 		}
 		if taken {
@@ -94,14 +101,20 @@ func registerEmailSettlement(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var mine bool
-		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM email_outbox m LEFT JOIN work_requests q ON q.id=m.request_id LEFT JOIN request_drafts d ON d.id=q.draft_id
- LEFT JOIN collection_messages c ON c.id=m.collection_id WHERE m.id=$1 AND COALESCE(d.close_id,c.close_id)::text=$2)`, r.PathValue("outbox"), r.PathValue("id")).Scan(&mine); err != nil {
+		var sender string
+		err = tx.QueryRowContext(r.Context(), `SELECT x.provider FROM email_outbox m JOIN email_connections x ON x.id=m.connection_id LEFT JOIN work_requests q ON q.id=m.request_id
+ LEFT JOIN request_drafts d ON d.id=q.draft_id LEFT JOIN collection_messages c ON c.id=m.collection_id WHERE m.id=$1 AND COALESCE(d.close_id,c.close_id)::text=$2`, r.PathValue("outbox"), r.PathValue("id")).Scan(&sender)
+		if err == sql.ErrNoRows {
+			problem(w, 404, "Email not found in this close.")
+			return
+		}
+		if err != nil {
 			problem(w, 503, "Email unavailable.")
 			return
 		}
-		if !mine {
-			problem(w, 404, "Email not found in this close.")
+		// Only Krith's team can read Krith's sending records, and sees the email among its operations.
+		if sender == delivery.Krith {
+			problem(w, 409, "This email went through Krith's sender, whose records only Krith's team can read. Krith's team settles it; ask your support owner.")
 			return
 		}
 		_, err = settleEmail(r.Context(), tx, r.PathValue("outbox"), []string{"unknown"}, in, who)

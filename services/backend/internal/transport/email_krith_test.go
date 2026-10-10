@@ -88,6 +88,7 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 	mux := http.NewServeMux()
 	registerEmail(mux, db)
 	registerWork(mux, db)
+	registerEmailSettlement(mux, db)
 	h := organizationBoundary(db, mux)
 	call := func(method, path string, value any, want int) []byte {
 		t.Helper()
@@ -262,6 +263,31 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 	}
 	if s, e := state(queued); s != "failed" || !strings.Contains(e, "not set up") {
 		t.Fatalf("Krith's sender without its key: %s %s", s, e)
+	}
+
+	// An unknown email through Krith's sender is settled by Krith's team, from Krith's records, where a message ID is
+	// checked against every email through Krith's sender, not this connection's alone.
+	_, err = db.Exec(`UPDATE email_outbox SET state='unknown' WHERE id=$1`, queued)
+	must(err)
+	settle := map[string]any{"expected_state": "unknown", "outcome": "accepted", "provider_id": "provider-fresh", "evidence": "Krith's Resend log for the recipient"}
+	if body := call("POST", "/v1/closes/"+closeID+"/email/"+queued+"/settle", settle, 409); !strings.Contains(string(body), "Krith's team settles it") {
+		t.Fatalf("a firm cannot read Krith's records: %s", body)
+	}
+	staff := func(provider string) error {
+		tx, e := db.BeginTx(context.Background(), nil)
+		must(e)
+		defer tx.Rollback()
+		if _, e = settleEmail(context.Background(), tx, queued, []string{"unknown"}, emailSettlement{ExpectedState: "unknown", Outcome: "accepted", ProviderID: provider, Evidence: "Krith's Resend log"}, "staff:fixture"); e == nil {
+			e = tx.Commit()
+		}
+		return e
+	}
+	if e := staff("provider-" + id); e == nil || !strings.Contains(e.Error(), "belongs to another email") {
+		t.Fatalf("a message ID of another connection of Krith's sender is taken: %v", e)
+	}
+	must(staff("provider-fresh"))
+	if s, _ := state(queued); s != "accepted" {
+		t.Fatalf("Krith's team settles it: %s", s)
 	}
 	t.Setenv("CLIENT_EMAIL_ADDRESS", "")
 	if still, extra := current(); still.ID != back.ID || extra["krith"] != false {

@@ -3996,6 +3996,10 @@ Checked on a fresh local PostgreSQL 18 with all migrations:
   - Renaming the firm records Krith's sender again in its new name, and an approval naming the old one is refused.
   - Connecting the firm's own Resend sends with the firm's key and no tag. Disconnecting it brings back Krith's.
   - A worker without Krith's key fails the email: "not set up".
+  - An unknown email through Krith's sender:
+    - the firm's settle route refuses it, since only Krith's team can read Krith's records;
+    - staff settling it with a message ID that another connection of Krith's sender already holds are refused;
+    - a fresh ID settles it.
   - A server without Krith's address records nothing new and says so.
 - **`TestCollectionMessagesThroughKrithNameWhereRepliesGo` (new).**
   - Through Krith's sender, a collection draft without a reply-to address is refused.
