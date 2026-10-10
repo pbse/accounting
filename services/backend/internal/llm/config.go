@@ -28,10 +28,11 @@ type Config struct {
 	CodexModel, ClaudeModel, CodexEffort, ClaudeEffort string
 	Profiles                                           []Scope
 	AllowUncappedOutputTokens                          bool
+	Gemini                                             *Gemini
 	HTTP                                               *http.Client
 }
 
-var purposes = []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat"}
+var purposes = []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat", "ocr"}
 
 // AnyMember is the subject of an organization-wide caller profile: every current member of the organization may
 // complete through it, and the context machine checks that member's own access on every call.
@@ -91,17 +92,24 @@ func New(cfg Config) (*Client, error) {
 			c.routes[purpose] = route{Provider: ContextMachine, Model: model, Agent: cfg.ContextMachineModel, Effort: effort, Token: cfg.ContextMachineToken, Uncapped: cfg.AllowUncappedOutputTokens}
 		}
 	}
+	if cfg.Provider == "api" && cfg.Gemini != nil {
+		c.gemini = cfg.Gemini
+		c.routes["ocr"] = route{Provider: Google, Token: cfg.Gemini.key, Model: cfg.Gemini.model}
+	}
 	for purpose, model := range cfg.Models {
 		route, known := c.routes[purpose]
 		if !known || model == "" {
 			return nil, errors.New("LLM_MODELS requires a known accounting purpose and a nonempty model")
+		}
+		if route.Provider == Google {
+			return nil, errors.New("configure Gemini OCR with GEMINI_OCR_MODEL")
 		}
 		route.Model = model
 		c.routes[purpose] = route
 	}
 	for purpose, effort := range cfg.ReasoningEfforts {
 		r, ok := c.routes[purpose]
-		if !ok || !validEffort(effort) || (r.Provider == ContextMachine && !ValidAgentEffort(r.Agent, effort)) {
+		if !ok || r.Provider == Google || !validEffort(effort) || (r.Provider == ContextMachine && !ValidAgentEffort(r.Agent, effort)) {
 			return nil, errors.New("invalid LLM_REASONING_EFFORTS")
 		}
 		r.Effort = effort
@@ -130,7 +138,7 @@ func New(cfg Config) (*Client, error) {
 
 // FromEnv is called once by API/worker startup, not by model workflows.
 func FromEnv() (*Client, error) {
-	cfg := Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: os.Getenv("OPENAI_MODEL"), ContextMachineToken: os.Getenv("CONTEXT_MACHINE_TOKEN"), ContextMachineModel: os.Getenv("CONTEXT_MACHINE_MODEL"), ContextMachineEndpoint: os.Getenv("CONTEXT_MACHINE_ENDPOINT")}
+	cfg := Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: os.Getenv("OPENAI_MODEL"), ContextMachineToken: os.Getenv("CONTEXT_MACHINE_TOKEN"), ContextMachineModel: os.Getenv("CONTEXT_MACHINE_MODEL"), ContextMachineEndpoint: os.Getenv("CONTEXT_MACHINE_ENDPOINT"), Gemini: GeminiFromEnv()}
 	cfg.Provider = os.Getenv("LLM_PROVIDER")
 	cfg.CodexModel, cfg.ClaudeModel = os.Getenv("CODEX_MODEL"), os.Getenv("CLAUDE_MODEL")
 	cfg.CodexEffort, cfg.ClaudeEffort = os.Getenv("CODEX_REASONING_EFFORT"), os.Getenv("CLAUDE_REASONING_EFFORT")
@@ -393,3 +401,7 @@ func (c *Client) profile(organization, subject string) Scope {
 	}
 	return Scope{Organization: organization, Subject: subject, AccessProfile: wide.AccessProfile}
 }
+
+// ContextMachineEndpoint exposes non-secret transport metadata for local evaluation
+// safeguards. Workflow code must continue dispatching through Generate.
+func (c *Client) ContextMachineEndpoint() string { return c.routes["research"].URL }

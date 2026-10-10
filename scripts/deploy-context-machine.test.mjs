@@ -201,3 +201,24 @@ test('completion routing requires an enabled service and explicit subscription t
   assert.notEqual(badEffort.status, 0);
   assert.match(badEffort.stderr, /Invalid context-machine LLM_REASONING_EFFORTS/);
 });
+
+import {check as checkMergedCI} from './check-merged-ci.mjs';
+const pr={merged_at:'now',merge_commit_sha:'merge',base:{ref:'main'},head:{sha:'head'}};
+function run(prs,states,attempts=3) {
+ let n=0,waits=0;
+ return { promise:checkMergedCI({repository:'owner/repo',sha:'merge',attempts,query:args=>args[0]==='api'?prs:states[Math.min(n++,states.length-1)],pause:async()=>{waits++}}), waits:()=>waits };
+}
+test('a just-merged PR waits for its already-running CI, without rerunning checks',async()=>{
+ const r=run([pr],[[{status:'in_progress',conclusion:''}],[{status:'completed',conclusion:'success'}]]);
+ await r.promise; assert.equal(r.waits(),1);
+});
+test('failed, unrelated or absent CI cannot authorize deployment',async()=>{
+ for(const prs of [[pr],[{...pr,merge_commit_sha:'other'}],[]]) {
+  const r=run(prs,[[{status:'completed',conclusion:'failure'}]]);
+  await assert.rejects(r.promise); assert.equal(r.waits(),0);
+ }
+});
+test('pending CI has a bounded wait',async()=>{
+ const r=run([pr],[[{status:'in_progress'}]]);
+ await assert.rejects(r.promise,/still running/); assert.equal(r.waits(),2);
+});

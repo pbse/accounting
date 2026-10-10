@@ -62,7 +62,7 @@ func TestInstalledCompletionCLIs(t *testing.T) {
 					t.Fatal(err)
 				}
 				calls := 0
-				proxy := &modelProxy{ctx: context.Background(), token: "run", key: "private", model: "gpt-5", effort: "low", authMode: mode, agent: agent, limit: 1, tokens: 4096, completion: true, schema: schema}
+				proxy := &modelProxy{images: []llm.Image{{PNG: testPageImage(t)}}, ctx: context.Background(), token: "run", key: "private", model: "gpt-5", effort: "low", authMode: mode, agent: agent, limit: 1, tokens: 4096, completion: true, schema: schema}
 				if agent == "claude" {
 					proxy.model = "claude-sonnet-4-6"
 				}
@@ -70,6 +70,14 @@ func TestInstalledCompletionCLIs(t *testing.T) {
 					calls++
 					var body map[string]any
 					json.NewDecoder(r.Body).Decode(&body)
+					key := "input"
+					if agent == "claude" {
+						key = "messages"
+					}
+					items := body[key].([]any)
+					if len(items[len(items)-1].(map[string]any)["content"].([]any)) != 1 {
+						t.Fatal("CLI proxy lost attached image")
+					}
 					if len(body["tools"].([]any)) != 0 {
 						t.Fatal("CLI was given executable tools")
 					}

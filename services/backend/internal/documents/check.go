@@ -164,10 +164,17 @@ func Check(name, content string) CheckResult {
 			// statement is confirmed only once every page is recorded as checked against the original, and no draft is
 			// prepared from such a document without a person confirming its facts.
 			for _, page := range ImageDisputed(content) {
-				result.Warnings = append(result.Warnings, fmt.Sprintf("PDF page %d: Gemini's reading of the page image differs from its PDF text; compare that page with the original before using its facts.", page))
+				result.Warnings = append(result.Warnings, fmt.Sprintf("PDF page %d: The image model's reading of the page image differs from its PDF text; compare that page with the original before using its facts.", page))
 			}
-			if unchecked := markedPages(content, imageUnchecked); len(unchecked) > 0 {
-				result.Warnings = append(result.Warnings, fmt.Sprintf("Gemini could not compare %s with the page image; the PDF text is used as it is, so inspect the original for anything only the image shows.", pageList(unchecked)))
+			unchecked := markedPages(content, imageUnchecked)
+			for _, page := range markedPages(content, legacyImageUnchecked) {
+				if !slices.Contains(unchecked, page) {
+					unchecked = append(unchecked, page)
+				}
+			}
+			slices.Sort(unchecked)
+			if unchecked := unchecked; len(unchecked) > 0 {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("The image model could not compare %s with the page image; the PDF text is used as it is, so inspect the original for anything only the image shows.", pageList(unchecked)))
 			}
 			if pagesWithPrinted == 0 {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("PDF has %d extracted pages but no printed page total; compare with the original to confirm completeness.", len(pages)))

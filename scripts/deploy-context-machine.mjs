@@ -84,7 +84,7 @@ if (provider === "context_machine") {
  const mode = process.env[`${agent.toUpperCase()}_AUTH_MODE`] || "auto";
  const subscription = agent === "codex" && (mode === "subscription" || mode === "chatgpt" || (mode === "auto" && !has("OPENAI_API_KEY")));
  if (subscription && uncapped !== "true") throw new Error("Codex subscription completions require LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS=true");
- const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat"];
+ const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat", "ocr"];
  for (const name of ["LLM_MODELS", "LLM_REASONING_EFFORTS"]) {
   if (!process.env[name]) continue;
   let values; try { values=JSON.parse(process.env[name]); } catch { throw new Error(`Invalid ${name}`); }

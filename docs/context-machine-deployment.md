@@ -46,15 +46,15 @@ For example, these **variables** pin Codex research independently from direct AP
 
 ```text
 CONTEXT_MACHINE_MODEL=codex
-CODEX_MODEL=gpt-5.5
+CODEX_MODEL=gpt-6.1-sol
 CODEX_REASONING_EFFORT=medium
 CODEX_AUTH_MODE=auto
-OPENAI_MODEL=gpt-5.5
-OPENAI_REASONING_EFFORT=low
-LLM_REASONING_EFFORTS={"work_command":"none","investigation":"none","written_answer":"none"}
+OPENAI_MODEL=gpt-6.1-sol
+OPENAI_REASONING_EFFORT=medium
+LLM_REASONING_EFFORTS={}
 ```
 
-These small-budget overrides use GPT-5.5’s supported `none` effort; revalidate them if you choose a different model. Claude can be pinned separately with `CLAUDE_MODEL=claude-opus-5-5` and `CLAUDE_REASONING_EFFORT=medium`.
+This pins every purpose to medium reasoning unless an explicit purpose override is added. GPT-6.1 Sol supports medium reasoning and image input ([model documentation](https://developers.openai.com/api/docs/models/gpt-6.1-sol)); verify entitlement with the actual account before activation. Claude can be pinned separately with `CLAUDE_MODEL=claude-opus-5-5` and `CLAUDE_REASONING_EFFORT=medium`.
 
 Use model IDs available to your account. Model/effort variables can be staged before credentials: the Worker hides direct-API route metadata from its container when the Cloudflare `OPENAI_API_KEY` binding is empty, while preserving the GitHub variables. Install the key directly in Cloudflare and run the normal deployment to activate the saved policy. Setting `CODEX_AUTH_MODE=subscription` explicitly chooses the account token even when an API key exists. Direct API mode still needs an API key. Context-machine completion mode preserves schemas and caller-executed tool proposals; it is separate from autonomous research.
 
@@ -221,3 +221,22 @@ The HTTP organization boundary supplies the authenticated organization/subject. 
 Each `/v1/complete` call uses exactly one model-call reservation and no agent read tools. Schemas and tool proposals are returned to existing domain validators; the caller's existing capability authorization, consent and approval gates still apply. Completion text arrives in one callback after validation, rather than live token deltas. Autonomous research retains its separately reserved multi-call/read-tool protocol. `/readyz` checks the same private binding for either mode but performs no paid inference.
 
 To return accounting calls to direct API, set `LLM_PROVIDER=api`, install `OPENAI_API_KEY`/`OPENAI_MODEL`, restore API-compatible effort/model policy and redeploy. Research may stay enabled independently. There is no automatic fallback and no code change. Review provider disclosures and existing firm consent before switching account/provider types; task workspace deletion does not imply provider-side zero retention.
+
+## Single-owner local golden-set evaluation
+
+Use a migrated disposable local PostgreSQL database and a local context-machine process connected to it through a dedicated read-only role. Give that local service exactly one synthetic profile, for example:
+
+```json
+[{"organization":"org_AgentEvalLocal","subject":"user_agent_eval","access_profile":"local-eval"}]
+```
+
+Use the same profile, agent, model, effort and token in the evaluator's environment, with `LLM_PROVIDER=context_machine`, `CONTEXT_MACHINE_ENDPOINT=http://127.0.0.1:8090/v1/run`, `CODEX_MODEL=gpt-6.1-sol`, `CODEX_REASONING_EFFORT=medium`, and `LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS=true`. Point `ACCEPTANCE_DATABASE_URL` at the local database. In `services/backend`, run:
+
+```sh
+go run ./cmd/agent-eval -profile local-eval -only question-prefix -report /tmp/agent-eval-smoke.json
+go run ./cmd/agent-eval -profile local-eval -report /tmp/agent-eval.json
+```
+
+Replace the smoke prefix with an ID prefix from `acceptance/agent/golden.json`; the full run spends real subscription/API calls and is deliberately on demand. The replay installs its synthetic local member and remaps fixture identities while preserving each recorded close, permitted reads and scoring. It rejects the hosted context-machine endpoint. Do not change the production profile to synthetic evaluation identities or wildcard subjects. Passing means at least 90% of accounting questions and 100% of off-scope refusals; record the selected model/effort and report before claiming live acceptance.
+
+Production's automatic deployment reuses the merged PR's exact CI head. It waits up to three minutes if that run is still pending, then fails closed if it remains pending or fails. It starts no second suite and does not accept an unrelated ancestor's green run. A successful app `/readyz` with the context machine disabled is app readiness only; activation additionally needs the exact owner's enabled platform membership/client grants, `CONTEXT_MACHINE_PROFILES`, `CONTEXT_MACHINE_ENABLED=true`, `LLM_PROVIDER=context_machine`, and a real authorized inference.

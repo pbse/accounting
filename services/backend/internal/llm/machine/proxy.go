@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"close.local/backend/internal/llm"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,6 +25,7 @@ type modelProxy struct {
 	client                   *http.Client
 	personal                 *codexAuthSession
 	completion               bool
+	images                   []llm.Image
 	schema                   json.RawMessage
 	refused                  atomic.Bool
 }
@@ -94,6 +96,16 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if len(p.images) > 0 {
+		if !p.completion {
+			http.Error(w, "invalid images", 400)
+			return
+		}
+		if err := attachImages(body, p.agent, p.images); err != nil {
+			http.Error(w, "invalid images", 400)
+			return
+		}
+	}
 	delete(body, "tool_choice")
 	if int(p.calls.Add(1)) > p.limit {
 		p.calls.Add(-1)
@@ -283,5 +295,28 @@ func completionProviderStatus(agent string, raw []byte) error {
 	if scan.Err() != nil || !complete {
 		return llm.ErrIncomplete
 	}
+	return nil
+}
+
+// The parent attaches validated pages directly to the provider request. Images
+// never enter CLI prompts, tool results or a file accessible to the agent.
+func attachImages(body map[string]any, agent string, images []llm.Image) error {
+	key := "input"
+	if agent == "claude" {
+		key = "messages"
+	}
+	input, ok := body[key].([]any)
+	if !ok {
+		return llm.ErrIncomplete
+	}
+	parts := []any{}
+	for _, image := range images {
+		if agent == "claude" {
+			parts = append(parts, map[string]any{"type": "image", "source": map[string]string{"type": "base64", "media_type": "image/png", "data": base64.StdEncoding.EncodeToString(image.PNG)}})
+		} else {
+			parts = append(parts, llm.OpenAIImage(image))
+		}
+	}
+	body[key] = append(input, map[string]any{"role": "user", "content": parts})
 	return nil
 }

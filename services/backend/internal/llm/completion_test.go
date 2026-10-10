@@ -39,7 +39,11 @@ func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
 		}
 		ctx := WithIdentity(WithClient(context.Background(), client), scope.Organization, scope.Subject)
 		for _, purpose := range purposes {
-			out, err := Generate(ctx, Request{Purpose: purpose, Instructions: "Complete", Data: "authorized data", Schema: &OutputSchema{Name: "result", Definition: json.RawMessage(`{"type":"object"}`)}, MaxOutputTokens: 100})
+			in := Request{Purpose: purpose, Instructions: "Complete", Data: "authorized data", Schema: &OutputSchema{Name: "result", Definition: json.RawMessage(`{"type":"object"}`)}, MaxOutputTokens: 100}
+			if purpose == "ocr" {
+				in.Images = []Image{{PNG: pagePNG(t)}}
+			}
+			out, err := Generate(ctx, in)
 			if err != nil || out.Text != "{}" || string(out.Provider) != map[string]string{"api": "openai", "context_machine": "context_machine"}[provider] {
 				t.Fatal(purpose, out, err)
 			}
