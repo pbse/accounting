@@ -1,0 +1,629 @@
+/* The Krith sidebar (docs/design-system.md, The shell). Every value comes from tokens.css. Classes start with ks-,
+   the shell's prefix; the design system's previews call the same parts k-. */
+.ks-side {
+  position: sticky;
+  top: 0;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: var(--side-width);
+  height: 100vh;
+  padding: var(--space-14) var(--space-12) var(--space-14);
+  overflow-y: auto;
+  background: var(--surface-side);
+  border-right: 1px solid var(--line);
+  transition: width 220ms var(--ease);
+}
+.ks-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  height: 36px;
+  padding: 0 6px 0 var(--space-10);
+  margin-bottom: var(--space-2);
+}
+.app-shell .ks-wordmark {
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 3px double var(--accent);
+  padding-bottom: 2px;
+}
+.app-shell .ks-collapse {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--ink-4);
+}
+.app-shell .ks-collapse:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.ks-firm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 28px;
+  padding: 0 var(--space-10);
+  margin-bottom: var(--space-10);
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-shell .ks-new-chat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  height: var(--control);
+  padding: 0 var(--space-10);
+  margin-bottom: var(--space-10);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--ring);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  width: 100%;
+  transition: box-shadow 140ms var(--ease);
+}
+.app-shell .ks-new-chat:hover {
+  background: var(--surface);
+  box-shadow: var(--raised);
+}
+.ks-kbd {
+  margin-left: auto;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.ks-cat {
+  display: flex;
+  align-items: center;
+  padding: var(--space-16) var(--space-10) var(--space-6);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.ks-cat .ks-n {
+  margin-left: auto;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.ks-pages {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.app-shell .ks-nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  height: var(--control);
+  padding: 0 var(--space-10);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+  white-space: nowrap;
+}
+.ks-nav svg {
+  flex: none;
+  color: var(--ink-4);
+}
+.app-shell .ks-nav:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.app-shell .ks-nav[aria-current="page"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--ring);
+}
+.ks-nav[aria-current="page"] svg {
+  color: var(--ink);
+}
+.ks-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--att-tint);
+  color: var(--att-text);
+}
+.ks-group .ks-chev {
+  margin-left: auto;
+  width: 14px;
+  height: 14px;
+  transition: transform 200ms var(--ease);
+}
+.ks-group[aria-expanded="true"] .ks-chev {
+  transform: rotate(90deg);
+}
+.app-shell .ks-group.has-current {
+  color: var(--ink);
+}
+.ks-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: max-height 240ms var(--ease), opacity 180ms var(--ease), visibility 0s 240ms;
+}
+.ks-sub.open {
+  max-height: 200px;
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+.app-shell .ks-sub .ks-nav {
+  height: 30px;
+  padding-left: 36px;
+  font-weight: 400;
+}
+.app-shell .ks-sub .ks-nav[aria-current="page"] {
+  font-weight: 500;
+}
+
+/* Chats: one line each, a dot when the agent is working or answered while the person was away. */
+.app-shell .ks-chat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  height: 32px;
+  padding: 0 var(--space-10);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  width: 100%;
+  transition: background 120ms;
+}
+.app-shell .ks-chat:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.ks-chat .ks-t,
+.ks-note .ks-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ks-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  flex: none;
+}
+.ks-dot.live {
+  animation: ks-pulse 1.4s ease-in-out infinite;
+}
+.app-shell .ks-more {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 var(--space-12);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  width: 100%;
+}
+.app-shell .ks-more:hover {
+  background: var(--hover);
+}
+.ks-empty {
+  padding: 0 var(--space-12);
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 30px;
+  margin: 0;
+}
+
+/* Notices: what the agent noticed, one line each. Taking one slides it out and the rest close up. */
+.ks-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.app-shell .ks-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  height: var(--notice);
+  padding: 0 var(--space-10) 0 var(--space-8);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--ring);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  width: 100%;
+  overflow: hidden;
+  transition: transform 220ms var(--ease), opacity 180ms var(--ease), height 220ms var(--ease), margin 220ms var(--ease), box-shadow 140ms var(--ease);
+}
+.app-shell .ks-note:hover {
+  background: var(--surface);
+  box-shadow: var(--raised);
+}
+.ks-tile {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-xs);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.ks-tile svg {
+  width: 14px;
+  height: 14px;
+}
+.ks-tile.doc {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}
+.ks-tile.reply {
+  background: var(--pos-tint);
+  color: var(--pos-text);
+}
+.ks-tile.wait {
+  background: var(--att-tint);
+  color: var(--att-text);
+}
+.ks-tile.done {
+  background: var(--fill);
+  color: var(--ink);
+}
+.ks-go {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-4);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 140ms, transform 140ms var(--ease);
+  flex: none;
+}
+.ks-note:hover .ks-go,
+.ks-note:focus-visible .ks-go {
+  opacity: 1;
+  transform: none;
+}
+.app-shell .ks-note.leaving {
+  transform: translateX(28px);
+  opacity: 0;
+  height: 0;
+  margin-top: calc(-1 * var(--space-4));
+  pointer-events: none;
+}
+.ks-notes-empty {
+  height: var(--notice);
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  box-shadow: inset var(--ring);
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* The foot: Settings and Help as quiet links, then the person. */
+.ks-foot {
+  margin-top: auto;
+  padding-top: var(--space-16);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.app-shell .ks-foot .ks-nav {
+  height: 32px;
+  color: var(--ink-3);
+  font-weight: 400;
+}
+.app-shell .ks-foot .ks-nav:hover {
+  color: var(--ink);
+}
+.ks-me {
+  position: relative;
+  margin-top: var(--space-4);
+}
+.app-shell .ks-me > summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  height: 40px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+}
+.ks-me > summary::-webkit-details-marker {
+  display: none;
+}
+.app-shell .ks-me > summary:hover {
+  background: var(--hover);
+}
+.ks-me .avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+.ks-me-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 16px;
+}
+.ks-me-name b {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ks-me-name small {
+  font-size: 11px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ks-me > summary > svg {
+  color: var(--ink-4);
+  flex: none;
+}
+.app-shell .ks-me[open] > div {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--space-4));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-8);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--float);
+  font-size: 13px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  z-index: 6;
+}
+.app-shell .ks-me > div > p {
+  margin: 0;
+  padding: var(--space-6) var(--space-10);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.app-shell .ks-me > div > a,
+.app-shell .ks-me > div > button {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 var(--space-10);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--ink);
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
+}
+.app-shell .ks-me > div > a:hover,
+.app-shell .ks-me > div > button:hover {
+  background: var(--hover);
+}
+
+/* Collapsed: icons only. */
+.ks-side.collapsed {
+  width: var(--side-collapsed);
+  padding-left: var(--space-8);
+  padding-right: var(--space-8);
+}
+/* Labels stay in the accessible name when collapsed; only the eye loses them. */
+.ks-side.collapsed .ks-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.ks-side.collapsed .ks-kbd,
+.ks-side.collapsed .ks-firm,
+.ks-side.collapsed .ks-chev,
+.ks-side.collapsed .ks-section,
+.ks-side.collapsed .ks-me-name,
+.ks-side.collapsed .ks-me > summary > svg,
+.ks-side.collapsed .ks-wordmark {
+  display: none;
+}
+.ks-side.collapsed .ks-brand {
+  padding: 0;
+  justify-content: center;
+}
+.ks-side.collapsed .ks-collapse {
+  margin: 0;
+}
+.ks-side.collapsed .ks-new-chat,
+.ks-side.collapsed .ks-nav,
+.ks-side.collapsed .ks-me > summary {
+  justify-content: center;
+  padding: 0;
+}
+.ks-side.collapsed .ks-sub {
+  display: none;
+}
+/* A count folds to a dot on its icon, so what needs the person stays visible. */
+.ks-side.collapsed .ks-count {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  min-width: 0;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+  box-shadow: 0 0 0 2px var(--surface-side);
+  background: var(--att-text);
+}
+/* What sits beside the person (an open grant) folds to a dot on the avatar, so it stays visible. */
+.ks-side.collapsed .ks-me-aside {
+  display: none;
+}
+.ks-side.collapsed .ks-me:has(.ks-me-aside:not(:empty)) > summary::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--att-text);
+  box-shadow: 0 0 0 2px var(--surface-side);
+}
+/* The account menu needs more room than the icon column: it opens beside it. */
+.ks-side.collapsed .ks-me[open] > div {
+  position: fixed;
+  left: calc(var(--side-collapsed) + var(--space-8));
+  right: auto;
+  bottom: var(--space-14);
+  width: 260px;
+}
+
+/* The phone bar and the sheet. */
+.ks-phonebar {
+  display: none;
+}
+.ks-backdrop {
+  display: none;
+}
+@media (max-width: 860px) {
+  .ks-phonebar {
+    position: sticky;
+    top: 0;
+    z-index: 11;
+    display: flex;
+    align-items: center;
+    gap: var(--space-8);
+    height: 52px;
+    padding: 0 var(--space-12);
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+  }
+  .app-shell .ks-phonebar-brand,
+  .app-shell .ks-phonebar-new {
+    display: grid;
+    place-items: center;
+    height: 36px;
+    padding: 0 var(--space-8);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    box-shadow: none;
+    color: var(--ink);
+  }
+  .app-shell .ks-phonebar-new {
+    margin-left: auto;
+    width: 36px;
+    box-shadow: var(--ring);
+  }
+  .ks-side {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 12;
+    width: min(var(--side-width), 86vw);
+    padding: var(--space-14) var(--space-12);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 240ms var(--ease), visibility 0s 240ms;
+    box-shadow: none;
+  }
+  .ks-side.open {
+    transform: none;
+    visibility: visible;
+    transition-delay: 0s;
+    box-shadow: var(--float);
+  }
+  /* The sheet is never collapsed, so it has no collapse control. */
+  .ks-collapse {
+    display: none;
+  }
+  .ks-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 11;
+    background: var(--overlay);
+  }
+}
+
+@keyframes ks-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.5);
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ks-side,
+  .ks-sub,
+  .ks-note,
+  .ks-go,
+  .ks-group .ks-chev {
+    transition: none;
+  }
+  .ks-dot.live {
+    animation: none;
+  }
+}

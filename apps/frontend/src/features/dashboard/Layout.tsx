@@ -1,46 +1,44 @@
-import { Suspense, useEffect, useRef } from "react";
-import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { Suspense, useEffect } from "react";
+import { Navigate, Outlet, useLocation, useNavigate } from "react-router";
 import { AccountMenu } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
-import { openAssistant } from "./assistantStore";
-import { RailChats } from "./RailChats";
+import { openSession } from "./assistantStore";
+import { SideChats } from "./SideChats";
+import { SideNotices } from "./SideNotices";
 import { AttentionBadge } from "../closes/Attention";
 import { useQuery } from "@tanstack/react-query";
 import { workspaceQuery } from "../../data/queries";
 import { authKitClientId, useSession } from "../auth/Auth";
-import { Icon, type IconName } from "@close/ui/components/Icon";
+import { Sidebar, SidebarFootLink, type SidebarItem } from "@close/ui/components/Sidebar";
 import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
 
-type NavItem = { to: string; label: string; icon: IconName; end?: boolean };
-
-// The firm's pages. Settings holds the person's and the firm's settings; Measure opens from Settings and the
-// preparation forms from a close, so neither needs a place in the bar. Only Krith's own firm has the worked example (see examples.go), and sees it here.
-const firmNav: NavItem[] = [
-  { to: "/dashboard", label: "Home", icon: "work", end: true },
+// The firm's pages, in the sidebar's fixed order (docs/design-system.md, The shell). Settings and Help sit at the
+// foot; Measure opens from Settings and the preparation forms from a close. Only Krith's own firm has the worked
+// example (see examples.go), and sees it here.
+const firmNav: SidebarItem[] = [
+  { to: "/dashboard", label: "Home", icon: "home", end: true },
   { to: "/dashboard/closes", label: "Clients", icon: "clients" },
-  { to: "/dashboard/settings", label: "Settings", icon: "settings" },
 ];
-const exampleNav: NavItem = { to: "/dashboard/close", label: "Example", icon: "book" };
+const exampleNav: SidebarItem = { to: "/dashboard/close", label: "Example", icon: "book" };
 
 // A client's executive sees their business results and nothing of the firm's workspace; the server enforces the same.
 // Links keep the client and month they chose.
-const executiveNav = (close: string | null): NavItem[] =>
+const executiveNav = (close: string | null): SidebarItem[] =>
   (
     [
       { to: "/dashboard/executive", label: "Business overview", icon: "measure", end: true },
       { to: "/dashboard/executive/reports", label: "Reports", icon: "file" },
       { to: "/dashboard/executive/cash", label: "Cash plan", icon: "reconcile" },
       { to: "/dashboard/executive/decisions", label: "My decisions", icon: "decision" },
-    ] as NavItem[]
-  ).map((item) => ({ ...item, to: close ? `${item.to}?close=${encodeURIComponent(close)}` : item.to }));
+    ] as SidebarItem[]
+  ).map((item) => ("to" in item ? { ...item, to: close ? `${item.to}?close=${encodeURIComponent(close)}` : item.to } : item));
 
 export default function WorkspaceLayout() {
-  const search = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const signedIn = useSignedIn();
   // Unknown until the server says; nothing of the workspace shows before then, so an executive never sees it.
-  const executiveRead = useQuery({ ...workspaceQuery<{ executive: boolean }>("/executive"), enabled: signedIn });
+  const executiveRead = useQuery({ ...workspaceQuery<{ executive: boolean; closes?: { id: string; entity: string }[] }>("/executive"), enabled: signedIn });
   const executive = !signedIn ? undefined : executiveRead.data ? !!executiveRead.data.executive : executiveRead.isError ? false : undefined;
   const examples = !!useQuery({ ...workspaceQuery<{ available: boolean }>("/examples"), enabled: executive === false }).data?.available;
   // A hosted session still loading is not yet signed out.
@@ -51,17 +49,22 @@ export default function WorkspaceLayout() {
     if (executive && !location.pathname.startsWith("/dashboard/executive")) navigate("/dashboard/executive", { replace: true });
   }, [executive, location.pathname, navigate]);
   useShellThemeColor();
+  const closeId = executive ? "" : (/^\/dashboard\/closes\/(\d+)/.exec(location.pathname)?.[1] ?? "");
+  const newChat = () => {
+    openSession("new", closeId);
+  };
+  // ⇧⌘O starts a chat from anywhere; ⌘K stays the command palette's.
   useEffect(() => {
-    const focusSearch = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement;
-      // The search is hidden on a phone; the shortcut then leaves focus where it is.
-      if (event.key !== "/" || target.closest("input, textarea, select, [contenteditable]") || !search.current || search.current.offsetParent === null) return;
-      event.preventDefault();
-      search.current.focus();
+    if (!signedIn) return;
+    const key = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        newChat();
+      }
     };
-    window.addEventListener("keydown", focusSearch);
-    return () => window.removeEventListener("keydown", focusSearch);
-  }, []);
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  });
   // Signed out, the workspace shows nothing of itself, not even while the session is checked: the visitor signs in and
   // comes back to this page, at the same place on it.
   if (authKitClientId && sessionLoading)
@@ -84,80 +87,58 @@ export default function WorkspaceLayout() {
       </main>
     );
   if (authKitClientId && !signedIn) return <Navigate to={`/login?return=${encodeURIComponent(location.pathname + location.search + location.hash)}`} replace />;
-  const items = executive ? executiveNav(new URLSearchParams(location.search).get("close")) : known ? (examples ? [...firmNav, exampleNav] : firmNav) : [];
+  const chosen = new URLSearchParams(location.search).get("close");
+  const items = executive ? executiveNav(chosen) : known ? (examples ? [...firmNav, exampleNav] : firmNav) : [];
+  // An executive's line names the client whose results the links open: the one they chose, else the first.
+  const executiveCloses = executiveRead.data?.closes ?? [];
+  const client = (executiveCloses.find((c) => c.id === chosen) ?? executiveCloses[0])?.entity ?? "Your business";
+  // Home carries the count of what needs the person, until the Closes page takes it.
+  const withCount = items.map((item) => ("end" in item && item.to === "/dashboard" && !executive && signedIn ? { ...item, count: <AttentionBadge /> } : item));
+  // The firm is known by its sign-in domain until the firm's own name is kept; local development has none.
+  const firm = session?.user ? session.user.email.split("@")[1] : signedIn ? "Local development" : "";
   return (
     <div className="app-shell">
       <a className="skip" href="#main">
         Skip to content
       </a>
-      <header className="topbar">
-        <Link className="topbar-brand" to="/dashboard" aria-label="Krith, home">
-          <span className="wordmark">krith</span>
-        </Link>
-        <nav aria-label="Workspace">
-          <div className="topbar-nav">
-            {items.map((item) => (
-              <NavLink className="nav-item" end={item.end} to={item.to} key={item.to}>
-                <Icon name={item.icon} />
-                {item.label}
-                {item.end && !executive && signedIn && <AttentionBadge />}
-              </NavLink>
-            ))}
-          </div>
-        </nav>
-        <div className="topbar-tools">
-          {known && !executive && (
-            <form
-              role="search"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const query = String(new FormData(event.currentTarget).get("q") ?? "").trim();
-                navigate(`/dashboard/closes${query ? `?q=${encodeURIComponent(query)}` : ""}`);
-              }}
-            >
-              <label className="topbar-search">
-                <Icon name="search" />
-                <input ref={search} name="q" aria-label="Search clients" placeholder="Search clients" maxLength={200} autoComplete="off" />
-                <kbd aria-hidden="true">/</kbd>
-              </label>
-            </form>
+      {known && (
+        <Sidebar
+          brandTo="/dashboard"
+          brandLabel="Krith, home"
+          line={executive ? client : firm}
+          newChat={signedIn ? { onClick: newChat, hint: "⇧⌘O" } : undefined}
+          items={withCount}
+          navLabel="Workspace"
+          foot={
+            !executive && (
+              <>
+                <SidebarFootLink to="/dashboard/settings" icon="settings">
+                  Settings
+                </SidebarFootLink>
+                <SidebarFootLink to="/contact" icon="help">
+                  Help
+                </SidebarFootLink>
+              </>
+            )
+          }
+          person={<AccountMenu />}
+        >
+          {signedIn && !executive && (
+            <>
+              <SideChats closeId={closeId} navigate={navigate} />
+              <SideNotices />
+            </>
           )}
-          {known && signedIn && (
-            <button type="button" className="button primary ask-agent" aria-label="Open the agent" onClick={openAssistant}>
-              <Icon name="agent" /> <span>Agent</span>
-            </button>
-          )}
-          <AccountMenu />
+          {signedIn && executive && <SideChats closeId="" navigate={navigate} />}
+        </Sidebar>
+      )}
+      <main id="main" className="app-main">
+        <div className="page">
+          <Suspense fallback={<p role="status">Opening…</p>}>
+            {known ? <Outlet /> : <p role="status">Opening…</p>}
+          </Suspense>
         </div>
-      </header>
-      <div className="app-body">
-        {known && (
-          <nav className="rail" aria-label="Workspace places">
-            <div className="rail-group">
-              {items.map((item) => (
-                <NavLink className="rail-item" end={item.end} to={item.to} key={item.to} title={item.label} aria-label={item.label}>
-                  <Icon name={item.icon} size={18} />
-                </NavLink>
-              ))}
-            </div>
-            {signedIn && (
-              <div className="rail-group end">
-                <RailChats closeId={executive ? "" : (/^\/dashboard\/closes\/(\d+)/.exec(location.pathname)?.[1] ?? "")} navigate={navigate} />
-                <button type="button" className="rail-item" title="Agent" aria-label="Open the agent" onClick={openAssistant}>
-                  <Icon name="agent" size={18} />
-                </button>
-              </div>
-            )}
-          </nav>
-        )}
-        <main id="main" className="app-main">
-          <div className="page">
-            <Suspense fallback={<p role="status">Opening…</p>}>
-              {known ? <Outlet /> : <p role="status">Opening…</p>}
-            </Suspense>
-          </div>
-        </main>
-      </div>
+      </main>
       {executive !== undefined && <Assistant executive={executive} />}
     </div>
   );

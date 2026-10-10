@@ -84,7 +84,7 @@ function Panel({ executive }: { executive: boolean }) {
   // Closing the panel hands focus back to the top bar's Ask the agent button, which opened it.
   const opened = useRef(open);
   useEffect(() => {
-    if (!open && opened.current) document.querySelector<HTMLButtonElement>(".topbar .ask-agent")?.focus();
+    if (!open && opened.current) [...document.querySelectorAll<HTMLButtonElement>(".ks-phonebar-new, .ks-new-chat")].find((b) => b.offsetParent !== null)?.focus();
     opened.current = open;
   }, [open]);
   function toggle(next: boolean) {

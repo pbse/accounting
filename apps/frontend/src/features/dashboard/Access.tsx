@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { AccountAccess, authKitClientId, useSession } from "../auth/Auth";
 import { unlock, useUnlocked } from "../closes/workspace";
 import { Avatar } from "@close/ui/components/Avatar";
+import { Icon } from "@close/ui/components/Icon";
 
 // Every workspace page waits for access; there is nothing to try without signing in.
 export function WorkspaceGate({ children }: { children: ReactNode }) {
@@ -46,17 +47,21 @@ function SignedIn({ children }: { children: ReactNode }) {
   );
 }
 
-// The account menu in the top bar: the person's initial, and under it their session, their profile and the way out.
+// The person at the sidebar's foot: their initial, name and session, and a menu with their profile and the way out.
 export function AccountMenu() {
   const unlocked = useUnlocked();
   const session = authKitClientId ? useSession() : undefined;
   const label = session?.user?.email ?? (unlocked ? "Local development" : "Locked");
   return (
-    <details className="topbar-account">
+    <details className="ks-me">
       <summary>
         <span className="visually-hidden">Account: </span>
         <Avatar label={label} />
-        <span className="topbar-account-name">{session?.user ? session.user.email.split("@")[0] : label}</span>
+        <span className="ks-me-name">
+          <b>{session?.user ? session.user.email.split("@")[0] : label}</b>
+          <small>{session?.user ? session.user.email : unlocked ? "Local development" : "Locked"}</small>
+        </span>
+        <Icon name="select" />
       </summary>
       <div>
         {(session?.user || unlocked) && (
