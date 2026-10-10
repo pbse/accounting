@@ -27,7 +27,7 @@ These foundations already exist in code. Presence is not proof of live activatio
 | Brief, flux, aging, tie-out and portable binder | Approved financial reporting, budget comparison, cash planning and AR/AP decisions | [Brief](../services/backend/internal/transport/brief.go), [flux](../services/backend/internal/transport/flux.go), [aging](../services/backend/internal/transport/aging.go), [binder](close-review-package.md) |
 | Firm/client permissions, row-level security, retention, operations and effort records | Executive access, dependable hosted operation and honest measured customer benefit | [Architecture](architecture.md), [operations](operations.md), [effort](../services/backend/internal/transport/effort.go) |
 
-Recent merged work already added agent entry points to Attention and Client closes, an effort trend chart, and wider layout coverage. Do not rebuild them. Layout checks still do not establish complete real-provider journeys or usability. Every new screen uses Tray and the existing assistant context.
+Recent merged work already added agent entry points to Attention and Client closes, an effort trend chart, and wider layout coverage. Do not rebuild them. Layout checks still do not establish complete real-provider journeys or usability. A new screen on a page the Krith rollout has not reached uses Tray's foundations and the existing assistant context; once the Krith shell lands, new screens use [Krith](design-system.md) (see Seamless agent-first experience).
 
 ## What each user must receive
 
