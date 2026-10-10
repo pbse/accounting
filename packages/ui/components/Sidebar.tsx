@@ -50,6 +50,15 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   const menuButton = useRef<HTMLButtonElement>(null);
   const sheet = useRef<HTMLElement>(null);
   const [restore, setRestore] = useState(false);
+  // The sheet exists below 860px; widening past that closes it, so nothing stays inert on a desktop.
+  useEffect(() => {
+    if (!open) return;
+    const wide = window.matchMedia("(min-width: 861px)");
+    const leave = () => wide.matches && setOpen(false);
+    leave();
+    wide.addEventListener("change", leave);
+    return () => wide.removeEventListener("change", leave);
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     // Focus moves into the sheet; everything beside it in the shell (the skip link, the phone bar, the page, an open
