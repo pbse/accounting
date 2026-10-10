@@ -10,10 +10,10 @@ import { workspaceRequest } from "./workspace";
 
 // rev changes with every change, so a form keyed on it resets to the newest entry.
 type Template = { due_days: number | null; owner: string; reason: string; actor: string; at: string; rev: string } | null;
-type Client = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; rev: string; last_period: string; owed: string[] };
+export type RosterEntry = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; rev: string; last_period: string; owed: string[] };
 // clients are the names (lowercase) a reviewer is assigned to, as access to a client's closes is granted.
-type Person = { subject: string; name: string; firm_wide: boolean; clients: string[] };
-type Roster = { template: Template; template_hidden?: boolean; clients: Client[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
+export type Person = { subject: string; name: string; firm_wide: boolean; clients: string[] };
+type Roster = { template: Template; template_hidden?: boolean; clients: RosterEntry[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
 
 const days = Array.from({ length: 60 }, (_, i) => i + 1);
 const endedMonth = () => {
@@ -193,9 +193,10 @@ function TemplateForm({ template, people, onSaved, onCancel }: { template: Templ
   );
 }
 
-// Adds a client (without one) or changes a client's entry: active or not, the first month it owes, and its own terms.
-function ClientForm({ client, people, onSaved, onCancel }: { client?: Client; people: Person[] } & Saved) {
-  const [entity, setEntity] = useState(client?.entity ?? "");
+// Adds a client (without one, or with only its name, which is then fixed) or changes a client's entry: active or not,
+// the first month it owes, and its own terms.
+export function ClientForm({ client, named: fixed, people, onSaved, onCancel }: { client?: RosterEntry; named?: string; people: Person[] } & Saved) {
+  const [entity, setEntity] = useState(client?.entity ?? fixed ?? "");
   const [active, setActive] = useState(client?.active ?? true);
   const [since, setSince] = useState(client?.since ?? endedMonth());
   const [due, setDue] = useState(client?.due_days != null ? String(client.due_days) : "template");
@@ -233,7 +234,7 @@ function ClientForm({ client, people, onSaved, onCancel }: { client?: Client; pe
   return (
     <form onSubmit={(e) => (e.preventDefault(), void save())}>
       <fieldset disabled={busy}>
-      {!client && (
+      {!client && !fixed && (
         <label>
           Client
           <input value={entity} maxLength={200} onChange={(e) => setEntity(e.target.value)} />

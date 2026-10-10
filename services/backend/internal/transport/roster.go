@@ -227,6 +227,10 @@ type rosterClient struct {
 	Rev        string   `json:"rev"` // the entry's row, new with every change
 	LastPeriod string   `json:"last_period"`
 	Owed       []string `json:"owed"`
+	// QuickBooks and Xero are the states of the client's connections (the QuickBooks one its books are read from),
+	// empty without one, so the Clients page can say how each client's books arrive.
+	QuickBooks string `json:"quickbooks,omitempty"`
+	Xero       string `json:"xero,omitempty"`
 	// Closes is every month opened under any of the client's names, newest first, with whether its sign-off stands.
 	Closes []rosterClose `json:"closes"`
 }
@@ -276,7 +280,9 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		rows, err := tx.QueryContext(r.Context(), `SELECT r.client_entity,r.active,r.since,r.due_days,r.owner,r.reason,r.actor,r.created_at,r.id::text,
  COALESCE((SELECT max(c.period) FROM client_closes c WHERE c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)
-  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))),'')
+  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))),''),
+ COALESCE((SELECT x.state FROM quickbooks_connections x WHERE x.organization_id=r.organization_id AND lower(x.client_entity)=lower(r.client_entity) AND x.state<>'disconnected' ORDER BY x.environment='production' DESC,x.id DESC LIMIT 1),''),
+ COALESCE((SELECT x.state FROM xero_connections x WHERE x.organization_id=r.organization_id AND lower(x.client_entity)=lower(r.client_entity) AND x.state<>'disconnected' ORDER BY x.id DESC LIMIT 1),'')
  FROM current_client_roster r WHERE r.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(r.client_entity)))
  ORDER BY NOT r.active,lower(r.client_entity)`, org, firmAccess(r), subject(r))
 		if err != nil {
@@ -289,7 +295,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			var due sql.NullInt64
 			var override sql.NullString
 			var when time.Time
-			if err = rows.Scan(&c.Entity, &c.Active, &c.Since, &due, &override, &c.Reason, &c.Actor, &when, &c.Rev, &c.LastPeriod); err != nil {
+			if err = rows.Scan(&c.Entity, &c.Active, &c.Since, &due, &override, &c.Reason, &c.Actor, &when, &c.Rev, &c.LastPeriod, &c.QuickBooks, &c.Xero); err != nil {
 				break
 			}
 			if due.Valid {
@@ -572,26 +578,8 @@ type rosterPerson struct {
 // rosterPeople is the granted members who can hold closes, as rosterOwner judges them, with the clients assigned to
 // each; in the local development firm, which need not record members, the reader is one of them.
 func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPerson, error) {
-	// Each assigned client is named as its assignment names it (lowercase), as access to a client's closes is granted.
-	rows, err := tx.QueryContext(ctx, `SELECT m.subject,COALESCE((SELECT jsonb_agg(DISTINCT lower(g.client_entity)) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),'[]'::jsonb)
- FROM current_organization_members m WHERE m.organization_id=$1 AND m.granted ORDER BY m.subject`, org)
+	members, err := grantedMembers(ctx, tx, org)
 	if err != nil {
-		return nil, err
-	}
-	members := []rosterPerson{}
-	for rows.Next() {
-		var p rosterPerson
-		var clients []byte
-		if err = rows.Scan(&p.Subject, &clients); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		json.Unmarshal(clients, &p.Clients)
-		p.Name = p.Subject
-		members = append(members, p)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	if org == "local-development" {
@@ -607,6 +595,34 @@ func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPer
 	if err != nil {
 		return nil, err
 	}
+	return reviewersAmong(members, reviewers), nil
+}
+
+// grantedMembers is the firm's granted members, each with the clients assigned to them.
+func grantedMembers(ctx context.Context, tx *sql.Tx, org string) ([]rosterPerson, error) {
+	// Each assigned client is named as its assignment names it (lowercase), as access to a client's closes is granted.
+	rows, err := tx.QueryContext(ctx, `SELECT m.subject,COALESCE((SELECT jsonb_agg(DISTINCT lower(g.client_entity)) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),'[]'::jsonb)
+ FROM current_organization_members m WHERE m.organization_id=$1 AND m.granted ORDER BY m.subject`, org)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	members := []rosterPerson{}
+	for rows.Next() {
+		var p rosterPerson
+		var clients []byte
+		if err = rows.Scan(&p.Subject, &clients); err != nil {
+			return nil, err
+		}
+		json.Unmarshal(clients, &p.Clients)
+		p.Name = p.Subject
+		members = append(members, p)
+	}
+	return members, rows.Err()
+}
+
+// reviewersAmong is the members whose WorkOS role reviews work, named as WorkOS names them.
+func reviewersAmong(members []rosterPerson, reviewers map[string]reviewer) []rosterPerson {
 	out := []rosterPerson{}
 	for _, p := range members {
 		if rv := reviewers[p.Subject]; rv.review {
@@ -614,7 +630,7 @@ func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPer
 			out = append(out, p)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // canReview is a reader who reviews work: with workpapers:review, or anyone without an organization (local development).

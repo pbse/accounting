@@ -1,3 +1,4 @@
+import { clientPage } from "../../data/clients";
 import { closeTab, closeTabs, type CloseTab } from "../../data/closeTabs";
 import { monthName, useDates } from "../../data/time";
 import { useEffect, useState } from "react";
@@ -183,7 +184,7 @@ export default function ClientClose() {
       <div className="ks-crumbs">
         <Link to="/dashboard/clients">Clients</Link>
         <span>/</span>
-        <Link to={`/dashboard/clients?q=${encodeURIComponent(close.entity)}`}>{close.entity}</Link>
+        <Link to={clientPage(close.entity)}>{close.entity}</Link>
         <span>/</span>
         <b>{monthName(close.period)}</b>
         <div className="ks-tools">

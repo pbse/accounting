@@ -247,6 +247,8 @@ Each client gets a page at `/dashboard/clients/<client>`, on the Krith design sy
 
 It follows [design system](design-system.md#rollout) as any screen added during the rollout does: Krith's tokens, the Krith component from the artifact where one exists, and the rollout's stated fallback otherwise. It does not wait for the files work: on its own it moves today's QuickBooks and Xero connection panels out of the month. Until it ships, connections stay where they are today.
 
+The page landed first, reading everything above in one request (`GET /v1/closes/client?name=…`, which names the client in the query because a path segment would collide with a close's own routes) and opening from each row of Clients and from a month's breadcrumb. Clients' rows became links to it, as the design's records table has them, with the client's books, what is up next, its state and its owner; opening a month moved to the client's page, whose one action opens the oldest month in hand, else the earliest month owed. Until the connection actions move onto the Books card, the card shows the client's connections and its newest month's books, and links to the month where each connection is still managed.
+
 ### Ledger catalog and onboarding
 
 The owner's direction (2026-10-10) on which connector comes first: "I think it should be a config maybe as part of onboarding?" What follows is this document's proposal for carrying that out; its details are for the owner to confirm as the work starts.

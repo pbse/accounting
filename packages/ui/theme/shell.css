@@ -215,6 +215,13 @@ body {
 .app-shell .button.danger {
   color: var(--neg-text);
 }
+/* A row's action is a small button: never a primary in a table row. */
+.app-shell button.sm,
+.app-shell .button.sm {
+  min-height: var(--control-sm);
+  padding: 0 var(--space-10);
+  font-size: 12px;
+}
 .app-shell label {
   display: block;
   margin: 0.7rem 0;
@@ -652,6 +659,36 @@ body {
 .ks-tr:focus-within .ks-go {
   opacity: 1;
 }
+/* A row that opens its record from anywhere on it: the first cell's link covers the row, and the row's own controls sit
+   above it. The link's focus ring is drawn round the whole row. */
+.ks-tr.linked {
+  position: relative;
+}
+.app-shell .ks-tr.linked .ks-rowlink {
+  color: inherit;
+  font-weight: 500;
+  text-decoration: none;
+}
+.ks-tr.linked .ks-rowlink::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.app-shell .ks-tr.linked .ks-rowlink:focus-visible {
+  outline: none;
+}
+.ks-tr.linked .ks-rowlink:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ks-tr.linked button,
+.ks-tr.linked a:not(.ks-rowlink) {
+  position: relative;
+  z-index: 1;
+}
+.ks-tr.linked:has(.ks-rowlink:focus-visible) .ks-go {
+  opacity: 1;
+}
 .ks-tr .ks-empty-row {
   grid-column: 1 / -1;
   padding: var(--space-16) 0;
@@ -676,52 +713,14 @@ body {
 .ks-mark.blue { background: var(--client-blue); }
 .ks-mark.green { background: var(--client-green); }
 .ks-mark.slate { background: var(--client-slate); }
-/* A client's months in its row: a month to open, an open month, a signed-off month. */
-.ks-months {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-6);
-  min-width: 0;
-}
-.app-shell .ks-month {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  height: 26px;
-  min-height: 0;
-  padding: 0 var(--space-10);
-  border-radius: var(--radius-full);
-  box-shadow: var(--ring);
-  background: var(--surface);
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 500;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.app-shell .ks-month:hover {
-  box-shadow: var(--ring-strong);
-  background: var(--surface);
-}
-.app-shell .ks-month.owed {
-  box-shadow: none;
-  background: var(--att-tint);
-  color: var(--att-text);
-}
-.app-shell .ks-month.signed {
-  box-shadow: none;
-  background: var(--pos-tint);
-  color: var(--pos-text);
-}
-.app-shell .ks-month .pill {
-  height: 18px;
-  padding: 0 var(--space-6);
-}
-/* The clients table: the months take the room, and the last column holds the month-opening control. The table stacks
-   its rows when its own width, not the screen's, runs short. */
+/* The clients table: the client, how its books arrive, what is up next, its state, its owner where the reader sees
+   owners, and the way in. The table stacks its rows when its own width, not the screen's, runs short. */
 .ks-clients {
-  --ks-columns: minmax(180px, 2fr) 3fr 150px 150px;
+  --ks-columns: minmax(180px, 1.6fr) minmax(110px, 1fr) minmax(160px, 1.6fr) 190px 32px;
   container-type: inline-size;
+}
+.ks-clients.owners {
+  --ks-columns: minmax(180px, 1.6fr) minmax(110px, 1fr) minmax(160px, 1.6fr) 190px minmax(100px, 1fr) 32px;
 }
 @container (max-width: 720px) {
   .ks-clients .ks-tr {
@@ -732,36 +731,30 @@ body {
   .ks-clients .ks-tr .ks-go {
     display: none;
   }
-  .ks-clients .ks-tr details.ks-another {
-    justify-self: start;
-  }
 }
-.ks-tr details.ks-another {
+/* A client's months (the client page): the month, its state, where its books came from, its due date, and the way in. */
+.ks-client-months {
+  --ks-columns: minmax(160px, 1.4fr) 170px minmax(150px, 1.6fr) 120px 64px;
+  container-type: inline-size;
+}
+.ks-client-months .ks-tr > :last-child {
   justify-self: end;
 }
-.ks-tr details.ks-another > summary {
-  list-style: none;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--ink-3);
-  white-space: nowrap;
+.ks-client-asks {
+  --ks-columns: 2fr 1fr 32px;
 }
-.ks-tr details.ks-another > summary::-webkit-details-marker {
-  display: none;
-}
-.ks-tr details.ks-another > summary:hover {
-  color: var(--ink);
-}
-.ks-tr details.ks-another[open] > form {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--space-6);
-  margin-top: var(--space-6);
-}
-.ks-tr details.ks-another[open] > form input {
-  width: 100%;
-  margin: 0;
+@container (max-width: 640px) {
+  .ks-client-months .ks-tr {
+    grid-template-columns: 1fr auto;
+    gap: var(--space-6) var(--space-12);
+  }
+  .ks-client-months .ks-tr.head,
+  .ks-client-months .ks-tr .ks-go {
+    display: none;
+  }
+  .ks-client-months .ks-tr > :last-child {
+    justify-self: start;
+  }
 }
 @media (max-width: 860px) {
   .ks-tr {
@@ -771,9 +764,6 @@ body {
   .ks-tr.head,
   .ks-tr .ks-go {
     display: none;
-  }
-  .ks-tr details.ks-another {
-    justify-self: start;
   }
   .app-shell .ks-search {
     width: 100%;
@@ -825,6 +815,16 @@ body {
   margin: 0;
   font-size: 14px;
   color: var(--ink-3);
+}
+/* A heading over a page's second part (a client's months), under the lede and its cards. */
+.app-shell .ks-heading {
+  margin: var(--space-32) 0 var(--space-12);
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.ks-lede + .ks-cards {
+  margin-top: var(--space-24);
 }
 .ks-lede-notes {
   display: flex;

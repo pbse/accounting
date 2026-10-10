@@ -1,0 +1,175 @@
+package transport
+
+import (
+	"bytes"
+	"crypto/rand"
+	"database/sql"
+	"encoding/json"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"close.local/backend/internal/auth"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// A client's page reads the client apart from any month: its roster entry and the template it follows, every month
+// opened under any of its names (with where each month's books come from), the months it owes, its connections, its
+// currency and basis, and, for an administrator, who can do its work. A member reads only a client assigned to them,
+// and only the months they could open.
+func TestAClientPageReadsTheClient(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_ClientPage" + rand.Text()
+	// Ann reviews every client; Cy reviews only Acme, under the name its September close was opened with.
+	asFirm(t, map[string]string{"user_a": "partner", "user_c": "reviewer", "user_d": "reviewer"}, org)
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Client page fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) SELECT $1,s,true,'Synthetic','fixture' FROM unnest(ARRAY['user_a','user_c','user_d']) s`,
+		`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Acme Services LLC',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM close_export_labels WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`,
+			`DELETE FROM procedure_versions WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`,
+			`DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
+			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			if _, e := db.Exec(q, org); e != nil {
+				t.Errorf("cleanup %s: %v", q, e)
+			}
+		}
+	})
+	now := time.Now().UTC().Format("2006-01")
+	last, before := shiftMonth(now, -1), shiftMonth(now, -2)
+	// Acme is on the roster from two months ago, due ten days after each month ends by its own entry; its August close
+	// was opened under its own name and September's under a name later confirmed as its alias.
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,reason,actor) VALUES($1,'Acme Co',true,$2,10,'Synthetic','fixture')`, org, before)
+	must(err)
+	_, err = db.Exec(`INSERT INTO close_templates(organization_id,due_days,owner,reason,actor) VALUES($1,5,'','Synthetic','fixture')`, org)
+	must(err)
+	var august, september string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period,created_at) VALUES($1,'Acme Co',$2,now()-interval '2 days') RETURNING id::text`, org, before).Scan(&august))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period,created_at) VALUES($1,'Acme Services LLC',$2,now()-interval '2 days') RETURNING id::text`, org, last).Scan(&september))
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Acme Co','acme services llc','fixture',now()-interval '3 days')`, org)
+	must(err)
+	// August's books come from a QuickBooks period capture of the production connection; September's exports are labeled.
+	var connection, source string
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,company_name,environment,home_currency,fiscal_year_start)
+ VALUES($1,$2,'Acme Co','fixture','active',$3,now(),'9130','Acme Co','production','USD',4) RETURNING id::text`, august, org, rand.Text()).Scan(&connection))
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'QuickBooks period evidence.txt','d','x','fixture') RETURNING id::text`, august).Scan(&source))
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'9130','d',jsonb_build_object('period',$3::text,'source_id',$4::text,'accounts','[]'::jsonb),now(),'fixture')`, august, connection, before, source)
+	must(err)
+	var export string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'Trial balance.csv','e','x','fixture') RETURNING id::text`, september).Scan(&export))
+	_, err = db.Exec(`INSERT INTO close_export_labels(close_id,evidence_ids,exported_on,complete,final_adjustments,note,actor) VALUES($1,ARRAY[$2::bigint],current_date,true,false,'Exported by the client','fixture')`, september, export)
+	must(err)
+	_, err = db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,method,instructions,enabled,reason,actor) VALUES($1,'Acme Co','basis','cash','Cash basis',true,'Synthetic','fixture')`, org)
+	must(err)
+
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(subject string, permissions []string, path string, want int) map[string]any {
+		t.Helper()
+		r := httptest.NewRequest("GET", path, bytes.NewReader(nil)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}))
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", subject, path, w.Code, w.Body.String())
+		}
+		var out map[string]any
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	page := func(name string) string { return "/v1/closes/client?name=" + url.QueryEscape(name) }
+	admin := []string{"workpapers:review", "clients:all", "members:manage", "integrations:manage"}
+
+	// The alias names the same client, under its own name, with both months, newest first.
+	read := call("user_a", admin, page("ACME SERVICES LLC"), 200)
+	if read["entity"] != "Acme Co" || read["can_manage"] != true || read["can_connect"] != true {
+		t.Fatalf("client: %v", read)
+	}
+	months := read["months"].([]any)
+	if len(months) != 2 || months[0].(map[string]any)["id"] != september || months[1].(map[string]any)["id"] != august {
+		t.Fatalf("months: %v", months)
+	}
+	if books := months[1].(map[string]any)["books"].(map[string]any); books["source"] != "quickbooks" || books["stale"] == true {
+		t.Fatalf("August books: %v", books)
+	}
+	if books := months[0].(map[string]any)["books"].(map[string]any); books["source"] != "exports" {
+		t.Fatalf("September books: %v", books)
+	}
+	// It owes this month, which nobody opened, due ten days after it ends by its own entry.
+	owed := read["owed"].([]any)
+	if len(owed) != 1 || owed[0].(map[string]any)["period"] != now || owed[0].(map[string]any)["due_on"] != monthEnd(now).AddDate(0, 0, 10).Format("2006-01-02") {
+		t.Fatalf("owed: %v", owed)
+	}
+	if roster := read["roster"].(map[string]any); roster["since"] != before || roster["due_days"] != float64(10) || roster["owner"] != nil {
+		t.Fatalf("roster: %v", roster)
+	}
+	if template := read["template"].(map[string]any); template["due_days"] != float64(5) {
+		t.Fatalf("template: %v", template)
+	}
+	qbo := read["quickbooks"].([]any)
+	if len(qbo) != 1 || qbo[0].(map[string]any)["environment"] != "production" || qbo[0].(map[string]any)["state"] != "active" || read["xero"] != nil {
+		t.Fatalf("connections: %v %v", qbo, read["xero"])
+	}
+	if profile := read["profile"].(map[string]any); profile["currency"] != "USD" || profile["fiscal_year_start"] != float64(4) || profile["state"] != "detected" {
+		t.Fatalf("profile: %v", profile)
+	}
+	if basis := read["basis"].(map[string]any); basis["method"] != "cash" || basis["scope"] != "client" {
+		t.Fatalf("basis: %v", basis)
+	}
+	// Who can hold Acme's closes, as the roster offers owners: Ann, who reviews every client. Cy is assigned to its
+	// alias' name only, which gives him its September close to work on but not the client's months to hold.
+	people := read["people"].([]any)
+	if len(people) != 1 || people[0].(map[string]any)["subject"] != "user_a" {
+		t.Fatalf("people: %v", people)
+	}
+
+	// Cy is assigned to the name September was opened with: he reads the client with that month alone, and nothing of
+	// the client as a whole (its roster entry, the months it owes, its connections, currency and basis).
+	cy := call("user_c", []string{"workpapers:review"}, page("Acme Co"), 200)
+	if months := cy["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != september {
+		t.Fatalf("Cy's months: %v", months)
+	}
+	if cy["whole"] != false || cy["roster"] != nil || len(cy["owed"].([]any)) != 0 || len(cy["quickbooks"].([]any)) != 0 || cy["profile"] != nil || cy["basis"] != nil ||
+		cy["template"] != nil || cy["template_hidden"] != true || cy["people"] != nil || cy["can_manage"] != false || cy["can_connect"] != false {
+		t.Fatalf("Cy's read: %v", cy)
+	}
+	// Dee is assigned to Acme under its own name: she reads all of it, its August month among them, with no template.
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_d','Acme Co',true,'Synthetic','fixture')`, org)
+	must(err)
+	dee := call("user_d", []string{"workpapers:review"}, page("acme co"), 200)
+	if dee["whole"] != true || dee["roster"] == nil || len(dee["owed"].([]any)) != 1 || len(dee["quickbooks"].([]any)) != 1 || dee["template"] != nil || dee["template_hidden"] != true {
+		t.Fatalf("Dee's read: %v", dee)
+	}
+	if months := dee["months"].([]any); len(months) != 1 || months[0].(map[string]any)["id"] != august {
+		t.Fatalf("Dee's months: %v", months)
+	}
+	// A client nobody has heard of, or one the reader is not assigned to, is not found; so is one whose name is too long.
+	call("user_a", admin, page("Birch Dental"), 404)
+	_, err = db.Exec(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Birch Dental',$2)`, org, last)
+	must(err)
+	call("user_a", admin, page("Birch Dental"), 200)
+	call("user_c", []string{"workpapers:review"}, page("Birch Dental"), 404)
+	call("user_a", admin, page(strings.Repeat("x", 201)), 404)
+	// An executive reads no client.
+	call("user_a", []string{"executive:read", "clients:all"}, page("Acme Co"), 403)
+}

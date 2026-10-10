@@ -46,14 +46,29 @@ type Profile struct {
 func ClientProfile(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID string) (Profile, error) {
+	return clientProfile(ctx, q, `WITH c AS (SELECT organization_id,entity FROM client_closes WHERE id::text=$1)`, closeID)
+}
+
+// ClientProfileOf is ClientProfile for a client by its name in firm org, with no close needed: the client page reads
+// it before any month is opened.
+func ClientProfileOf(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, org, entity string) (Profile, error) {
+	return clientProfile(ctx, q, `WITH c AS (SELECT $1::text AS organization_id,$2::text AS entity)`, org, entity)
+}
+
+// clientProfile reads the profile of the one client the WITH clause c names (its organization_id and entity).
+func clientProfile(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, client string, args ...any) (Profile, error) {
 	p := Profile{Currency: "USD", FiscalStart: 1}
 	var total, known, currencies, starts int
 	var currency sql.NullString
 	var start sql.NullInt64
-	err := q.QueryRowContext(ctx, `WITH c AS (SELECT organization_id,entity FROM client_closes WHERE id::text=$1),
+	err := q.QueryRowContext(ctx, client+`,
  x AS (SELECT q.home_currency,q.fiscal_year_start FROM quickbooks_connections q JOIN c ON c.organization_id=q.organization_id AND lower(q.client_entity)=lower(c.entity) WHERE q.state='active'
  UNION ALL SELECT r.home_currency,r.fiscal_year_start FROM xero_connections r JOIN c ON c.organization_id=r.organization_id AND lower(r.client_entity)=lower(c.entity) WHERE r.state='active')
- SELECT count(*),count(home_currency),count(DISTINCT home_currency),count(DISTINCT fiscal_year_start),min(home_currency),min(fiscal_year_start) FROM x`, closeID).Scan(&total, &known, &currencies, &starts, &currency, &start)
+ SELECT count(*),count(home_currency),count(DISTINCT home_currency),count(DISTINCT fiscal_year_start),min(home_currency),min(fiscal_year_start) FROM x`, args...).Scan(&total, &known, &currencies, &starts, &currency, &start)
 	switch {
 	case err != nil:
 		return p, err

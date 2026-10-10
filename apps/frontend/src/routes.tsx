@@ -7,6 +7,7 @@ import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
 import { cashPlanQuery } from "./data/cashPlan";
+import { clientPath, waitingPath } from "./data/clients";
 import { closeTab, type CloseTab } from "./data/closeTabs";
 import { appData, effortPath, prefetch, prefetchLater, workPath, workspaceKey, workViews } from "./data/queries";
 
@@ -80,6 +81,15 @@ async function clientsLoader({ context, request }: LoaderFunctionArgs) {
   if (!prefetching) return null;
   const query = new URL(request.url).searchParams.get("q") ?? "";
   await prefetch(context, "", "/roster", ...(query ? [`?q=${encodeURIComponent(query)}`] : []));
+  return null;
+}
+
+// A client's page reads the client, then what is waiting on it, whose read takes the client's own name.
+async function clientLoader({ context, params }: LoaderFunctionArgs) {
+  if (!prefetching || !params.client) return null;
+  await prefetch(context, clientPath(params.client));
+  const own = context.get(appData).queryClient.getQueryData<{ entity?: string }>(workspaceKey(clientPath(params.client)))?.entity;
+  if (own) await prefetch(context, waitingPath(own));
   return null;
 }
 
@@ -181,6 +191,7 @@ export const routes: RouteObject[] = createRoutesFromElements(
       <Route path="close" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "close" as const })} />
       <Route path="review" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "review" as const })} />
       <Route path="clients" loader={clientsLoader} lazy={page(() => import("./features/closes/ClosesList"))} />
+      <Route path="clients/:client" loader={clientLoader} lazy={page(() => import("./features/clients/ClientPage"))} />
       <Route path="closes" loader={closesLoader} lazy={page(() => import("./features/closes/Closes"))} />
       <Route path="closes/:id" loader={closeLoader} lazy={page(() => import("./features/closes/ClientClose"))} />
       <Route path="closes/:id/workpapers/:paperId" loader={workpaperLoader} lazy={page(() => import("./features/closes/WorkpaperView"))} />
