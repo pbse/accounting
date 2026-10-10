@@ -59,15 +59,16 @@ function Panel({ executive }: { executive: boolean }) {
   const asked = usePending();
   useEffect(() => {
     if (asked && !open && !stage) toggle(true);
-  }, [asked]);
-  // Only a request made while this panel is mounted opens it, so an old one never overrides a closed panel.
+  }, [asked, stage]);
+  // Only a request made while this panel is mounted opens it, so an old one never overrides a closed panel. On Home
+  // a request is the stage's; one made there for a close's chat waits until the close's page is shown.
   const openRequests = useOpenRequests();
   const handledRequests = useRef(openRequests);
   useEffect(() => {
-    if (openRequests === handledRequests.current) return;
+    if (stage || openRequests === handledRequests.current) return;
     handledRequests.current = openRequests;
-    if (!open && !stage) toggle(true);
-  }, [openRequests]);
+    if (!open) toggle(true);
+  }, [openRequests, stage]);
   // A link such as /dashboard/closes/7?ask=… asks that close's agent once.
   const navigate = useNavigate();
   useEffect(() => {
@@ -324,11 +325,17 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
     setSteps([]);
     setAsking("");
     setError("Stopped.");
-    // A chat not yet saved stays the empty new chat it was; a saved one is read back as it was saved.
-    if (!session) return;
-    workspaceRequest(`${path}?session=${encodeURIComponent(session.id)}`).then((data) => {
+    bumpSessions();
+    // What was saved before the stop is read back. A chat not yet saved here may have been saved by the server
+    // before the stop: the scope's current chat is adopted only if it ends with the question just asked; otherwise
+    // the new chat stays the empty one it was.
+    const question = asking;
+    workspaceRequest(session ? `${path}?session=${encodeURIComponent(session.id)}` : path).then((data) => {
       if (asked !== generation.current) return;
-      setMessages(data.messages);
+      const saved = (data.messages as Message[]) ?? [];
+      const lastAsked = [...saved].reverse().find((m) => m.role === "user")?.body;
+      if (!session && !(data.session && question && lastAsked === question)) return;
+      setMessages(saved);
       if (data.session) setSession({ id: data.session.id, title: data.session.title });
     }, () => undefined);
   }
