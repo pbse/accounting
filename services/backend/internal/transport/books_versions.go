@@ -307,7 +307,7 @@ func compareVersions(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, versions []storedVersion) (checked int, mismatched []string, err error) {
 	for _, v := range versions {
-		m, closeID, _, e := captureMonth(ctx, q, v.source, v.id)
+		m, closeID, org, e := captureMonth(ctx, q, v.source, v.id)
 		if e == sql.ErrNoRows {
 			continue
 		}
@@ -321,8 +321,9 @@ func compareVersions(ctx context.Context, q interface {
 		if e != nil {
 			return checked, mismatched, e
 		}
-		// What identifies the books: the close, the month, its end and the company they are of, and when they were read.
-		if stored.close != closeID || stored.period != m.Period || stored.asOf != monthEnd(m.Period).Format("2006-01-02") || stored.company != m.realm || !stored.captured.Equal(m.CapturedAt) {
+		// What identifies the books: the firm and close, the month, its end and the company they are of, and when they
+		// were read.
+		if stored.org != org || stored.close != closeID || stored.period != m.Period || stored.asOf != monthEnd(m.Period).Format("2006-01-02") || stored.company != m.realm || !stored.captured.Equal(m.CapturedAt) {
 			mismatched = append(mismatched, name+": what identifies the books differs")
 			continue
 		}
@@ -356,8 +357,8 @@ func compareVersions(ctx context.Context, q interface {
 // storedVersionOf is a stored version: its figures, and what identifies them.
 type storedVersionOf struct {
 	booksVersion
-	close, period, asOf, company string
-	captured                     time.Time
+	org, close, period, asOf, company string
+	captured                          time.Time
 }
 
 // storedBooks reads a stored version's figures back with what identifies them, the digest of its stored ledger lines,
@@ -372,7 +373,7 @@ func storedBooks(ctx context.Context, q interface {
 	var accounts, balances, activity, uncounted []byte
 	var cashFlow []byte
 	var recorded, refused string
-	if err := q.QueryRowContext(ctx, `SELECT currency,typed,accounts,balances,activity,cash_flow,uncounted,lines_digest,lines_unreadable,close_id::text,period,as_of::text,company,captured_at FROM books_versions WHERE id=$1`, row).Scan(&v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &recorded, &refused, &stored.close, &stored.period, &stored.asOf, &stored.company, &stored.captured); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT currency,typed,accounts,balances,activity,cash_flow,uncounted,lines_digest,lines_unreadable,organization_id,close_id::text,period,as_of::text,company,captured_at FROM books_versions WHERE id=$1`, row).Scan(&v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &recorded, &refused, &stored.org, &stored.close, &stored.period, &stored.asOf, &stored.company, &stored.captured); err != nil {
 		return stored, "", "", "", err
 	}
 	json.Unmarshal(accounts, &v.Accounts)
