@@ -66,20 +66,12 @@ type ClientRead = {
     method: "accrual" | "cash" | "modified_cash";
     scope: "client" | "firm";
   } | null;
-  requests: Request[];
+  requests: AskedOfClient[];
   people?: Person[];
   people_unavailable?: string;
 };
-type Waiting = {
-  items?: {
-    id: string;
-    close_id: string;
-    period: string;
-    source_name: string;
-    kind?: string;
-    proposal?: { kind?: string };
-  }[];
-};
+// A request sent to the client that it has not answered, from any month the reader can open.
+type AskedOfClient = { id: string; close_id: string; period: string; recipient: string; sent_at: string; items: number };
 
 const basisLabels = {
   cash: "cash basis",
