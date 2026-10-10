@@ -40,6 +40,7 @@ export default function Home() {
     ? [
         counts.decisions.count ? n(counts.decisions.count, "decision") + (counts.decisions.unread ? ` (${counts.decisions.unread} new)` : "") : "",
         missed ? n(missed, "close") + " overdue" : "",
+        d && d.due_soon + d.not_opened_upcoming ? n(d.due_soon + d.not_opened_upcoming, "close") + " due this week" : "",
         counts.uncaptured.length ? n(counts.uncaptured.length, "month") + " without month-end books" : "",
         counts.books.exceptions ? n(counts.books.exceptions, "new exception") + " in the books" : "",
         counts.books.unchecked ? n(counts.books.unchecked, "capture") + " not fully checked" : "",

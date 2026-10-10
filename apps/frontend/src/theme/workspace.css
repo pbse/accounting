@@ -1076,7 +1076,8 @@ aside.assistant {
   padding-top: var(--space-24);
 }
 
-/* The conversation on the stage: the thread above, the composer gliding from the centre to the foot. */
+/* The conversation on the stage: idle, the composer floats at the stage's centre; chatting, the stage becomes a
+   column (the chat's head, the thread, the composer at the foot) and the composer rises into place. */
 .ks-stage-chat {
   position: absolute;
   inset: 0;
@@ -1088,39 +1089,46 @@ aside.assistant {
   transform: translateX(-50%);
   width: var(--composer-width);
   max-width: calc(100% - 2 * var(--space-24));
-  transition: top 380ms var(--ease);
   z-index: 5;
 }
-.ks-stage.chatting .ks-stage-chat .ks-composer {
-  top: calc(100% - 128px);
+.ks-stage.chatting .ks-stage-chat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: 0 var(--space-24) var(--space-20);
 }
-/* On the stage there is nothing to close or go back from. */
-.ks-stage-chat .assistant-back,
-.ks-stage-chat .assistant-close {
-  display: none;
+.ks-stage.chatting .ks-stage-chat > * {
+  width: var(--composer-width);
+  max-width: 100%;
+  margin: 0 auto;
+}
+.ks-stage.chatting .ks-stage-chat .ks-composer {
+  position: static;
+  transform: none;
+  margin-top: auto;
+  animation: ks-rise 320ms var(--ease) both;
+}
+@keyframes ks-rise {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 .ks-stage-chat .ks-thread-head {
-  position: absolute;
-  left: 50%;
-  top: 0;
-  width: var(--composer-width);
-  max-width: calc(100% - 2 * var(--space-24));
-  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
   padding: var(--space-8) 0;
   background: var(--surface);
-  z-index: 2;
 }
 .ks-stage-chat .assistant-messages {
-  position: absolute;
-  left: 50%;
-  top: 64px;
-  bottom: 150px;
-  width: var(--composer-width);
-  max-width: calc(100% - 2 * var(--space-24));
-  transform: translateX(-50%);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: var(--space-8) 0 var(--space-16);
   gap: 18px;
 }
@@ -1129,22 +1137,10 @@ aside.assistant {
   font-size: 15px;
   line-height: 24px;
 }
-.ks-stage-chat .assistant-error {
-  position: absolute;
-  left: 50%;
-  bottom: 138px;
-  width: var(--composer-width);
-  max-width: calc(100% - 2 * var(--space-24));
-  transform: translateX(-50%);
-}
 .ks-stage-chat .assistant-chats {
-  position: absolute;
-  left: 50%;
-  top: 64px;
-  bottom: 150px;
-  width: var(--composer-width);
-  max-width: calc(100% - 2 * var(--space-24));
-  transform: translateX(-50%);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* The composer (docs/design-system.md, Composer): a box with room for sentences and three controls. */
@@ -1392,15 +1388,14 @@ aside.assistant .ks-box textarea {
   .ks-hello,
   .ks-week,
   .ks-stage-chat,
-  .ks-stage-chat .ks-composer,
-  .ks-stage-chat .ks-thread-head,
-  .ks-stage-chat .assistant-messages,
-  .ks-stage-chat .assistant-error,
-  .ks-stage-chat .assistant-chats {
+  .ks-stage-chat .ks-composer {
     position: static;
     width: auto;
     max-width: none;
     transform: none;
+  }
+  .ks-stage.chatting .ks-stage-chat {
+    padding: 0;
   }
   .ks-hello h2 {
     font-size: 30px;
