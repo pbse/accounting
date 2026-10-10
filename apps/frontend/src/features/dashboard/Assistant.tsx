@@ -409,9 +409,11 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
   const head = (
     <>
       <header>
-        <button type="button" className="assistant-back" onClick={onClose} aria-label="Close the agent">
-          <Icon name="back" />
-        </button>
+        {drawer && (
+          <button type="button" className="assistant-back" onClick={onClose} aria-label="Close the agent">
+            <Icon name="back" />
+          </button>
+        )}
         <strong>
           <AgentMark size="sm">Agent</AgentMark>
         </strong>
@@ -444,9 +446,11 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
               </ul>
             )}
           </span>
-          <button type="button" className="assistant-close" onClick={onClose} aria-label="Close the agent">
-            ×
-          </button>
+          {drawer && (
+            <button type="button" className="assistant-close" onClick={onClose} aria-label="Close the agent">
+              ×
+            </button>
+          )}
         </span>
       </header>
       <p className="assistant-context" aria-label="This chat">
