@@ -49,18 +49,30 @@ export function Sidebar({ brandTo, brandLabel, line, newChat, items, navLabel, c
   useEffect(() => setOpen(false), [location.pathname, location.search]);
   const menuButton = useRef<HTMLButtonElement>(null);
   const sheet = useRef<HTMLElement>(null);
+  const [restore, setRestore] = useState(false);
   useEffect(() => {
     if (!open) return;
-    // Focus moves into the sheet; the phone bar behind it leaves the tab order while it is open.
+    // Focus moves into the sheet; the phone bar and the page behind it leave the tab order while it is open.
     sheet.current?.focus();
+    const page = document.getElementById("main");
+    page?.setAttribute("inert", "");
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setOpen(false);
-      menuButton.current?.focus();
+      setRestore(true);
     };
     window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("keydown", key);
+      page?.removeAttribute("inert");
+    };
   }, [open]);
+  // Escape hands focus back to the menu button once the bar is no longer inert.
+  useEffect(() => {
+    if (open || !restore) return;
+    menuButton.current?.focus();
+    setRestore(false);
+  }, [open, restore]);
   const toggleCollapsed = () => {
     const next = !collapsed;
     setCollapsed(next);
