@@ -16,24 +16,18 @@ type Line = { area: string; state: "done" | "attention" | "waiting" | "info" | "
 type Brief = { headline: string; lines: Line[] };
 
 const area = (line: Line) => line.area[0].toUpperCase() + line.area.slice(1);
-// What the brief says needs the person: its headline counts the actions ("3 things need you: …"), which can outnumber
-// the areas they fall in; the areas are what the tasks show.
-// Sign-off is the page's one action: available when the brief's sign-off line says the close is ready (readiness
-// with no blockers), never while blockers wait or once it is signed off.
-export function signOffAvailable(brief: Brief | undefined) {
-  const line = brief?.lines.find((l) => l.area === "sign-off");
-  return !!line && line.state === "attention" && /ready/i.test(line.text);
-}
+// What needs the person: the areas whose line needs attention, which are the tasks shown, so the sentence and the
+// list always agree. A section that could not be read is said so, never counted as the person's work.
 export function needsOf(brief: Brief) {
-  // A section that could not be read is said so, never counted as the person's work.
   const needs = brief.lines.filter((l) => l.state === "attention");
-  const counted = /^(\d+) things? needs? you/.exec(brief.headline);
-  return { needs, count: Math.max(needs.length, counted ? Number(counted[1]) : 0) };
+  return { needs, count: needs.length };
 }
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
+// Read with the page, again every 30 seconds and on returning to the tab, and after any change made through the
+// workspace client (which marks every workspace read stale), so the sentence and the action follow the close.
 export function useBrief(closeId: string) {
-  return useQuery(workspaceQuery<Brief>(`/${closeId}/brief`));
+  return useQuery({ ...workspaceQuery<Brief>(`/${closeId}/brief`), refetchInterval: 30_000, refetchOnWindowFocus: true });
 }
 
 // The sentence: how many steps are left for the person, or what the close waits on, or that it is ready. Under it,
