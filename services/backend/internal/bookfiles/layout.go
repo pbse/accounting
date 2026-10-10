@@ -169,6 +169,9 @@ type Line struct {
 	Name    string   `json:"name"`
 	Type    string   `json:"type,omitempty"`
 	Balance *big.Rat `json:"-"`
+	// Cells is where each value of the row was read, by what the column holds; Ref is the cell the balance came from
+	// (the balance column's, else the debit's, else the credit's), or the row's first cell when it has no amount.
+	Cells map[Meaning]string `json:"cells"`
 	// Debit and Credit are the row's two columns as written, in a two-column layout, for checking totals by column.
 	Debit, Credit *big.Rat `json:"-"`
 	// Amount is Balance as an exact decimal, for storing.
@@ -236,21 +239,7 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 		}
 		return nil
 	}
-	from := -1
-	for j := i - 1; j >= 0 && from < 0; j-- {
-		if (lines[j].Kind == Heading || lines[j].Kind == Posting) && strings.EqualFold(strings.TrimSpace(lines[j].Name), label) {
-			from = j
-		}
-	}
-	if from < 0 {
-		from = 0
-		for j := i - 1; j >= 0; j-- {
-			if lines[j].Kind == Total {
-				from = j + 1
-				break
-			}
-		}
-	}
+	from := coveredFrom(lines, i)
 	if debit != nil && credit != nil {
 		// Written as two columns, each column must equal its column's sum over the rows it totals.
 		debits, credits := columnSums(lines[from:i])
@@ -263,6 +252,55 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 		return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows it totals come to %s", t.Row, t.Name, exact(t.Balance), exact(covered))}
 	}
 	return nil
+}
+
+// combinedLabel splits a total's label into the sections it combines: "Liabilities & Equity", "Liabilities and Equity".
+var combinedLabel = regexp.MustCompile(`\s*(?:&|\+|\band\b)\s*`)
+
+// coveredFrom is where the rows the total at lines[i] covers start: the heading or parent account it is named for; for
+// a total combining sections ("Total Liabilities & Equity"), the first of what each section's own heading or total
+// covers; else the row after the total before it.
+func coveredFrom(lines []Line, i int) int {
+	label := strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(lines[i].Name, "")))
+	named := func(name string) int {
+		for j := i - 1; j >= 0; j-- {
+			if (lines[j].Kind == Heading || lines[j].Kind == Posting) && strings.EqualFold(strings.TrimSpace(lines[j].Name), name) {
+				return j
+			}
+		}
+		return -1
+	}
+	if j := named(label); j >= 0 {
+		return j
+	}
+	if parts := combinedLabel.Split(label, -1); len(parts) > 1 {
+		from := i
+		for _, part := range parts {
+			j := named(part)
+			if j < 0 {
+				// A section with no heading is known by its own total.
+				for k := i - 1; k >= 0 && j < 0; k-- {
+					if lines[k].Kind == Total && strings.EqualFold(strings.TrimSpace(totalLabel.ReplaceAllString(lines[k].Name, "")), part) {
+						j = coveredFrom(lines, k)
+					}
+				}
+			}
+			if j < 0 {
+				from = -1
+				break
+			}
+			from = min(from, j)
+		}
+		if from >= 0 {
+			return from
+		}
+	}
+	for j := i - 1; j >= 0; j-- {
+		if lines[j].Kind == Total {
+			return j + 1
+		}
+	}
+	return 0
 }
 
 // Read applies a confirmed layout to its table: each row below the header becomes a line, a total (a row named
@@ -301,7 +339,7 @@ func (l Layout) Read(t Table) Reading {
 		if r.Number <= l.HeaderRow {
 			continue
 		}
-		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cents: true}
+		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cells: map[Meaning]string{}, Cents: true}
 		var debit, credit, balance *big.Rat
 		hasAmount, signed := false, false
 		for _, c := range r.Cells {
@@ -312,6 +350,7 @@ func (l Layout) Read(t Table) Reading {
 			if line.Ref == "" {
 				line.Ref = c.Ref
 			}
+			line.Cells[meaning] = c.Ref
 			switch meaning {
 			case AccountNumber:
 				line.Number = strings.TrimSpace(c.Value)
@@ -327,6 +366,10 @@ func (l Layout) Read(t Table) Reading {
 				}
 				hasAmount = true
 				line.Cents = line.Cents && a.Cents
+				// A currency written beside an amount must be the Trial Balance's: books in two currencies never add up.
+				if l.Currency != "" && a.Mark != "" && !MarkAgrees(a.Mark, l.Currency) {
+					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is marked in another currency than %s", c.Ref, c.Value, l.Currency))
+				}
 				// A Dr or Cr marker says the side itself, whichever column the amount sits in: its value is then already
 				// signed as balances are, a credit negative.
 				switch {
@@ -386,6 +429,11 @@ func (l Layout) Read(t Table) Reading {
 		}
 		if line.Balance != nil {
 			line.Amount = exact(line.Balance)
+		}
+		for _, m := range []Meaning{Credit, Debit, Balance} {
+			if ref, ok := line.Cells[m]; ok && hasAmount {
+				line.Ref = ref
+			}
 		}
 		reading.Lines = append(reading.Lines, line)
 		i := len(reading.Lines) - 1

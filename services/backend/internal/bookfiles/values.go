@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/big"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -25,6 +26,8 @@ type Amount struct {
 	// Side is dr or cr when the amount carried a Dr or Cr marker (Value is then signed as balances are, a credit
 	// negative), else "".
 	Side string
+	// Mark is the currency mark or code written beside the amount ("$", "EUR", "USD $"), else "".
+	Mark string
 }
 
 // ErrNotAmount is a value that is not an amount in the stated style.
@@ -57,8 +60,14 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 	}
 	// Parentheses, a leading or trailing minus and a currency mark or code can wrap one another in any order
 	// ($ (12.00), -$12.00, (12.00) USD); each is taken off until none is left.
+	var marks []string
 	for changed := true; changed; {
 		before := s
+		for _, m := range currencyMarks.FindAllString(s, -1) {
+			if m = strings.TrimSpace(m); m != "" {
+				marks = append(marks, m)
+			}
+		}
 		s = strings.TrimSpace(currencyMarks.ReplaceAllString(s, ""))
 		switch {
 		case strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")"):
@@ -102,7 +111,32 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 		resolution := new(big.Rat).SetFrac(big.NewInt(scale), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(len(fraction))), nil))
 		cents = cents && resolution.Cmp(big.NewRat(1, 100)) <= 0
 	}
-	return Amount{Value: value, Cents: cents, Side: side}, nil
+	return Amount{Value: value, Cents: cents, Side: side, Mark: strings.Join(marks, " ")}, nil
+}
+
+// symbolCurrencies are the currencies each mark can stand for.
+var symbolCurrencies = map[rune][]string{
+	'$': {"USD", "CAD", "AUD", "NZD", "SGD", "HKD", "MXN", "TWD", "ARS", "CLP", "COP", "UYU", "BSD", "BBD", "BZD", "BMD", "BND", "KYD", "FJD", "GYD", "JMD", "LRD", "NAD", "SBD", "SRD", "TTD", "XCD"},
+	'€': {"EUR"}, '£': {"GBP", "EGP", "GIP", "FKP", "SHP"}, '¥': {"JPY", "CNY"}, '₹': {"INR"},
+}
+
+var currencyCode = regexp.MustCompile(`[A-Z]{3}`)
+
+// MarkAgrees says whether an amount's currency mark can be currency: every code it writes is currency, and every symbol
+// is one currency's symbol. An amount with no mark agrees with any.
+func MarkAgrees(mark, currency string) bool {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	for _, code := range currencyCode.FindAllString(mark, -1) {
+		if code != currency {
+			return false
+		}
+	}
+	for _, r := range mark {
+		if names, ok := symbolCurrencies[r]; ok && !slices.Contains(names, currency) {
+			return false
+		}
+	}
+	return true
 }
 
 // pointGrouped and commaGrouped are a number with a decimal point or a decimal comma: its whole part, either plain or

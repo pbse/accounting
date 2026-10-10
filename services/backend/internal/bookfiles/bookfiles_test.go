@@ -198,8 +198,9 @@ func TestATrialBalanceIsReadWithItsLayout(t *testing.T) {
 	for _, l := range reading.Lines {
 		kinds[l.Name] = l.Kind
 	}
-	if kinds["Checking"] != Posting || kinds["TOTAL"] != Total || reading.Lines[0].Amount != "1500.25" || reading.Lines[1].Amount != "-1000" || reading.Lines[0].Ref != "R6C1" {
-		t.Fatalf("lines with their balances (debit minus credit) and locations: %+v", reading.Lines)
+	if kinds["Checking"] != Posting || kinds["TOTAL"] != Total || reading.Lines[0].Amount != "1500.25" || reading.Lines[1].Amount != "-1000" ||
+		reading.Lines[0].Ref != "R6C2" || reading.Lines[1].Ref != "R7C3" || reading.Lines[1].Cells[AccountName] != "R7C1" || reading.Lines[1].Cells[Credit] != "R7C3" {
+		t.Fatalf("lines with their balances (debit minus credit), each at the cell it came from: %+v", reading.Lines)
 	}
 	// A ledger with sections, nested totals and a parent account that has its own balance, and a signed balance column
 	// in which a credit is positive.
@@ -296,5 +297,43 @@ func TestTheReaderTakesNothingForGranted(t *testing.T) {
 	}))
 	if err != nil || cells(file.Tables[0])["A1"].Value != "2026-09-30" || cells(file.Tables[0])["B1"].Kind != Date {
 		t.Fatalf("localized built-in date formats: %+v %v", file.Tables, err)
+	}
+}
+
+// Amounts marked in another currency are held; a total combining sections covers each; UTF-16 without a byte-order
+// mark is read so, for a person to confirm; and a shared formula written in lower case moves with its copy.
+func TestTheReaderHoldsWhatDoesNotAddUp(t *testing.T) {
+	marked, _ := Read("tb.csv", []byte("Account,Balance\nBank,$100.00\nCapital,-100.00 EUR\n"))
+	layout, _ := ProposeLayout(marked.Tables[0])
+	layout.Currency = "USD"
+	if reading := layout.Read(marked.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "another currency than USD") {
+		t.Fatalf("an amount in euros in a dollar Trial Balance: %+v", reading)
+	}
+	layout.Currency = "CAD"
+	if reading := layout.Read(marked.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "R3C2") {
+		t.Fatalf("a dollar sign can be Canadian; EUR cannot: %+v", reading)
+	}
+	if !MarkAgrees("USD $", "usd") || MarkAgrees("€", "USD") || !MarkAgrees("", "GBP") {
+		t.Fatal("marks agree with the currencies they can stand for")
+	}
+	sections, _ := Read("tb.csv", []byte("Account,Balance\nBank,300.00\nTotal Assets,300.00\nLoan,-100.00\nTotal Liabilities,-100.00\nCapital,-200.00\nTotal Equity,-200.00\nTotal Liabilities & Equity,-300.00\n"))
+	layout, _ = ProposeLayout(sections.Tables[0])
+	if reading := layout.Read(sections.Tables[0]); !reading.Balanced || len(reading.Problems) != 0 {
+		t.Fatalf("a total of liabilities and equity covers both: %+v", reading)
+	}
+	wrong, _ := Read("tb.csv", []byte("Account,Balance\nBank,300.00\nTotal Assets,300.00\nLoan,-100.00\nTotal Liabilities,-100.00\nCapital,-200.00\nTotal Equity,-200.00\nTotal Liabilities & Equity,-200.00\n"))
+	if reading := layout.Read(wrong.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Row 8") {
+		t.Fatalf("a wrong combined total is caught: %+v", reading)
+	}
+	var utf16 []byte
+	for _, r := range "Account,Balance\nBank,1.00\nCapital,-1.00\n" {
+		utf16 = append(utf16, byte(r), 0)
+	}
+	file, err := Read("tb.csv", utf16)
+	if err != nil || file.Encoding != "utf-16le" || cells(file.Tables[0])["R2C1"].Value != "Bank" || !slices.ContainsFunc(file.Unsure, func(s string) bool { return strings.Contains(s, "encoding") }) {
+		t.Fatalf("UTF-16 without a byte-order mark: %+v %v", file, err)
+	}
+	if got := shiftFormula("a1*2+$b$1+sum(c1:c3)", 2, 1); got != "b3*2+$b$1+sum(d3:d5)" {
+		t.Fatalf("lower-case references move and keep their case: %s", got)
 	}
 }

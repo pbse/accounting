@@ -75,20 +75,43 @@ func delimiterName(d rune) string {
 }
 
 // decode is the file's text, its encoding, and whether the encoding is certain: declared by a byte-order mark, or
-// valid UTF-8.
+// valid UTF-8 with no NUL in it. Text with NULs at every other byte and no mark is UTF-16 without one, read so but left
+// for a person to confirm.
 func decode(body []byte) (string, string, bool) {
 	switch {
 	case bytes.HasPrefix(body, []byte("\xEF\xBB\xBF")):
-		return string(body[3:]), "utf-8", utf8.Valid(body[3:])
+		return string(body[3:]), "utf-8", utf8.Valid(body[3:]) && bytes.IndexByte(body[3:], 0) < 0
 	case bytes.HasPrefix(body, []byte("\xFF\xFE")):
 		return utf16Text(body, false), "utf-16le", true
 	case bytes.HasPrefix(body, []byte("\xFE\xFF")):
 		return utf16Text(body, true), "utf-16be", true
-	case utf8.Valid(body):
-		return string(body), "utf-8", true
+	}
+	if odd, even := nulsAt(body, 1), nulsAt(body, 0); odd > 0.3 && even < 0.05 {
+		return utf16Text(body, false), "utf-16le", false
+	} else if even > 0.3 && odd < 0.05 {
+		return utf16Text(body, true), "utf-16be", false
+	}
+	if utf8.Valid(body) {
+		return string(body), "utf-8", bytes.IndexByte(body, 0) < 0
 	}
 	decoded, _ := charmap.Windows1252.NewDecoder().Bytes(body)
 	return string(decoded), "windows-1252", false
+}
+
+// nulsAt is the share of the file's bytes at even (0) or odd (1) positions that are NUL, over its first 4,096 bytes:
+// text in UTF-16 without a byte-order mark has a NUL beside each ASCII character.
+func nulsAt(body []byte, parity int) float64 {
+	n, nuls := 0, 0
+	for i := parity; i < min(len(body), 4096); i += 2 {
+		n++
+		if body[i] == 0 {
+			nuls++
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return float64(nuls) / float64(n)
 }
 
 // utf16Text decodes UTF-16, dropping its byte-order mark.

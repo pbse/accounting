@@ -297,8 +297,8 @@ func ReadWorkbook(body []byte) (File, error) {
 	return file, nil
 }
 
-// cellReference is an A1 reference in a formula: its column and row, each with the $ that fixes it.
-var cellReference = regexp.MustCompile(`(\$?)([A-Z]{1,3})(\$?)([0-9]{1,7})`)
+// cellReference is an A1 reference in a formula, in either case: its column and row, each with the $ that fixes it.
+var cellReference = regexp.MustCompile(`(\$?)([A-Za-z]{1,3})(\$?)([0-9]{1,7})`)
 
 // shiftFormula is formula as copied rows and columns away: each relative reference moves by as much, a fixed ($) part
 // stays, and one moved off the sheet becomes #REF!. Text in quotes and quoted sheet names are left as they are, and a
@@ -357,7 +357,7 @@ func shiftFormula(formula string, rows, columns int) string {
 		}
 		m := formula[start:end]
 		groups := cellReference.FindStringSubmatch(m)
-		column, row := columnOf(groups[2]+"1"), rowOf("A"+groups[4])
+		column, row := columnOf(strings.ToUpper(groups[2])+"1"), rowOf("A"+groups[4])
 		if groups[1] == "" {
 			column += columns
 		}
@@ -367,7 +367,12 @@ func shiftFormula(formula string, rows, columns int) string {
 		if column < 0 || column >= 16384 || row < 1 || row > 1048576 {
 			out.WriteString("#REF!")
 		} else {
-			out.WriteString(groups[1] + strings.TrimRight(cellRef(column, 1), "1") + groups[3] + strconv.Itoa(row))
+			// The reference keeps its spelling: a column written in lower case stays so.
+			letters := strings.TrimRight(cellRef(column, 1), "1")
+			if groups[2] != strings.ToUpper(groups[2]) {
+				letters = strings.ToLower(letters)
+			}
+			out.WriteString(groups[1] + letters + groups[3] + strconv.Itoa(row))
 		}
 		i = end
 	}
