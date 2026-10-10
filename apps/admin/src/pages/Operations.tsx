@@ -78,7 +78,6 @@ export function Jobs() {
   return (
     <>
       <PageHeader
-        icon="blocked"
         title="Stuck work"
       >
         Background work that failed or has waited too long, across firms: what each firm's operations screen shows. Firms act on it from there.
@@ -148,7 +147,6 @@ export function Connections() {
   return (
     <>
       <PageHeader
-        icon="link"
         title="Connections"
       >
         QuickBooks, Xero, Stripe and email sending across firms, and when each last brought data in. Reconnecting stays with the firm.

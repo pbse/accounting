@@ -135,7 +135,7 @@ export default function Prepare() {
 
   return (
     <>
-      <PageHeader icon="prepaid" title={`${terms.name} schedule`}>
+      <PageHeader title={`${terms.name} schedule`}>
         Enter the source terms and confirm the method. We’ll calculate the schedule and a proposed adjustment. Save the draft to a client close when
         ready; nothing is posted.
       </PageHeader>

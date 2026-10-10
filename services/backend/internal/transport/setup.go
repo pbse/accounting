@@ -131,7 +131,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 					break
 				}
 				// Production QuickBooks is authorized on the close's Settings tab; sandbox and Xero on Evidence.
-				item.Href = "/dashboard/closes"
+				item.Href = "/dashboard/clients"
 				if close != "" {
 					item.Href = "/dashboard/closes/" + close + map[string]string{"production": "?tab=settings#quickbooks-production", "sandbox": "?tab=evidence#quickbooks-ledger", "": "?tab=evidence#xero"}[environment]
 				}
@@ -153,11 +153,11 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		steps := []setupStep{
 			{"firm", "Enroll the firm", true, firm, "/dashboard/settings?tab=firm"},
 			{"team", "Add a team member", teammates > 0, plural(teammates, "teammate", "teammates") + " besides you. A firm administrator invites members by email under Settings → People.", "/dashboard/settings?tab=people"},
-			{"client", "Open a client close", closes > 0, plural(closes, "client close", "client closes") + " you can open.", "/dashboard/closes"},
+			{"client", "Open a client close", closes > 0, plural(closes, "client close", "client closes") + " you can open.", "/dashboard/clients"},
 		}
 		switch {
 		case closeID == "":
-			steps = append(steps, setupStep{"ledger", "Connect the books or label historical exports", false, "Open a client close first.", "/dashboard/closes"}, setupStep{"rules", "Confirm the period and rules", false, "Open a client close first.", "/dashboard/closes"})
+			steps = append(steps, setupStep{"ledger", "Connect the books or label historical exports", false, "Open a client close first.", "/dashboard/clients"}, setupStep{"rules", "Confirm the period and rules", false, "Open a client close first.", "/dashboard/clients"})
 		default:
 			books := "Connect QuickBooks (production on the close's Settings tab, sandbox on Evidence) or Xero (Evidence) for " + entity + ", or upload and label its historical exports on Evidence."
 			// A live connection counts first; labeled exports count only while they are the current documents.
@@ -194,7 +194,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		case closeID != "":
 			steps = append(steps, setupStep{"prepared", "Receive the first prepared draft", false, "Upload evidence to " + label + ", then confirm the proposed facts in Work.", base + "?tab=evidence"})
 		default:
-			steps = append(steps, setupStep{"prepared", "Receive the first prepared draft", false, "Open a client close first.", "/dashboard/closes"})
+			steps = append(steps, setupStep{"prepared", "Receive the first prepared draft", false, "Open a client close first.", "/dashboard/clients"})
 		}
 		var granted []string
 		if a := auth.Actor(r.Context()); a != nil && a.Organization != "" {

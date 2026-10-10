@@ -1,17 +1,18 @@
-/* A grey track of pills; the selected one is solid blue, like the current page in the top bar. */
+/* A grey track (docs/design-system.md, Segmented); the selected segment is white with a soft shadow. */
 .segmented {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 2px;
-  padding: var(--space-4);
-  border-radius: var(--radius-full);
+  padding: 3px;
+  border-radius: 9px;
   background: var(--fill);
 }
 .app-shell .segmented button,
 .app-shell .segmented a {
-  padding: 6px var(--space-12);
+  min-height: var(--control-sm);
+  padding: 0 var(--space-12);
   border: 0;
-  border-radius: var(--radius-full);
+  border-radius: 7px;
   background: transparent;
   box-shadow: none;
   color: var(--ink-2);
@@ -22,19 +23,22 @@
 }
 .app-shell .segmented button:hover:not(:disabled),
 .app-shell .segmented a:hover {
-  background: var(--surface);
+  background: none;
+  box-shadow: none;
   color: var(--ink);
 }
 .app-shell .segmented [aria-pressed="true"],
 .app-shell .segmented [aria-current="page"],
 .app-shell .segmented [aria-pressed="true"]:hover,
 .app-shell .segmented [aria-current="page"]:hover {
-  background: var(--blue);
-  color: var(--on-chip);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(24 24 27 / 8%);
+  color: var(--ink);
 }
 .segmented .count {
   margin-left: 6px;
-  opacity: 0.8;
+  color: var(--ink-3);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 .segmented .count.alert::after {
@@ -44,10 +48,7 @@
   height: 7px;
   margin-left: 6px;
   border-radius: var(--radius-full);
-  background: var(--red);
+  background: var(--neg-text);
   vertical-align: middle;
 }
-.app-shell .segmented [aria-pressed="true"] .count.alert::after,
-.app-shell .segmented [aria-current="page"] .count.alert::after {
-  background: var(--on-chip);
-}
+

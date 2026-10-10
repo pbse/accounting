@@ -29,7 +29,6 @@ export function StartRun() {
   return (
     <>
       <PageHeader
-        icon="run"
         title="Start a run"
       >
         Runs as the firm you name, recorded with your reason.

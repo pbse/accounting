@@ -347,7 +347,6 @@ export default function WorkpaperView() {
         {close.entity} · {close.period}
       </BackLink>
       <PageHeader
-        icon="file"
         title={
           <>
             {paperLabel(saved)} · draft #{saved.id}

@@ -17,10 +17,11 @@ import { workspaceQuery } from "../../data/queries";
 import { useDates } from "../../data/time";
 import { BulkReview, type QueueItem } from "../review/BulkReview";
 import { DailyBooks } from "./DailyBooks";
+import { DeadlinesSection, OwedSection, UncapturedSection, dueWords } from "./Lists";
 import { Dependencies } from "./Dependencies";
 import { Goals } from "./Goals";
 
-type HomeCounts = {
+export type HomeCounts = {
   as_of: string;
   closes: number;
   can_add: boolean;
@@ -42,7 +43,7 @@ type HomeCounts = {
 };
 
 const views = { all: "All", unread: "New", mine: "Assigned to me", snoozed: "Snoozed" } as const;
-type View = keyof typeof views;
+export type View = keyof typeof views;
 
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 // A collapsed list opens before it scrolls into view, so a card reaches what it counted.
@@ -118,7 +119,7 @@ export default function Home() {
   );
   return (
     <section className="bare" aria-label="Home">
-      <PageHeader icon="work" title="Home">
+      <PageHeader title="Home">
         {counts ? (waiting.length ? `${waiting.join(" · ")}.` : "Nothing is waiting on you right now.") : "Your clients' closes at a glance."}
       </PageHeader>
       {error && <p role="alert">{error}</p>}
@@ -191,7 +192,7 @@ export default function Home() {
               <h2>Add your first client</h2>
               <p>Name the client and open its month. The agent reads the books and the documents you give it and prepares the close; you decide.</p>
             </span>
-            <Link className="button primary" to="/dashboard/closes">
+            <Link className="button primary" to="/dashboard/clients">
               Add a client
             </Link>
           </section>
@@ -199,80 +200,19 @@ export default function Home() {
           <section aria-label="No month open yet">
             <h2>No month is open for your clients yet</h2>
             <p>
-              Open one from <Link to="/dashboard/closes">Clients</Link> when a client is assigned to you; a firm administrator assigns clients in the Security center.
+              Open one from <Link to="/dashboard/clients">Clients</Link> when a client is assigned to you; a firm administrator assigns clients in the Security center.
             </p>
           </section>
         )
       ) : (
         <>
           <Setup onEnrolled={bump} />
-          {deadlines && (
-            <>
-              <SectionHeader title="Deadlines" id="deadlines">
-                <small>Overdue or due within a week and not signed off, and closes with no due date.</small>
-              </SectionHeader>
-              {counts!.due.length + undated.length > 0 && (
-                <RowList label="Due closes">
-                  {[...counts!.due, ...undated].map((item) => (
-                    <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
-                      <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
-                      {!item.due_on ? <span className="status">No date</span> : item.due_on < today ? <span className="status danger">Overdue</span> : <span className="status warn">Due soon</span>}
-                      <small>{{ open: "Not signed off", reopen_required: "Changed since sign-off", unknown: "Sign-off could not be rechecked", signed_off: "Signed off" }[item.state]}</small>
-                      <Icon name="arrow" />
-                    </Link>
-                  ))}
-                </RowList>
-              )}
-              <NotOpened months={[...dueUnopened, ...undatedUnopened]} due />
-            </>
-          )}
+          {counts && <DeadlinesSection counts={counts} today={today} />}
           <Decisions today={today} tick={tick} snapshot={counts?.inbox} reopened={reopened} canReview={counts?.can_review ?? false} teamTotal={counts?.decisions.team ?? 0} view={view} onView={setView} onChange={bump} />
-          {counts && counts.uncaptured.length > 0 && (
-            <>
-              <SectionHeader title="Books to capture" id="uncaptured">
-                <small>Ended months with no usable month-end capture: capture them, or label historical exports.</small>
-              </SectionHeader>
-              <RowList label="Books to capture">
-                {counts.uncaptured.map((item) => (
-                  <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}?tab=evidence`}>
-                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
-                    <span className="status warn">No month-end books</span>
-                    <span />
-                    <Icon name="arrow" />
-                  </Link>
-                ))}
-              </RowList>
-            </>
-          )}
+          <UncapturedSection counts={counts} today={today} />
           <Dependencies />
           <DailyBooks canReview={counts?.can_review ?? false} onReviewed={bump} />
-          {counts && (counts.owed.length > 0 || counts.not_opened.length > 0) && (
-            <details className="owed" id="owed">
-              <summary>
-                Closes owed through this month · {counts.signed_off.done} of {counts.signed_off.total} signed off
-              </summary>
-              <RowList label="Closes owed">
-                {counts.owed.map((item) => (
-                  <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
-                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={item.due_on ? dueWords(item.due_on, today, dates.calendarDay) : "No due date"} />
-                    <span className={item.state === "signed_off" ? "status ok" : item.state === "open" ? "status warn" : "status danger"}>
-                      {{ signed_off: "Signed off", open: "Not signed off", reopen_required: "Changed since sign-off", unknown: "Sign-off could not be rechecked" }[item.state]}
-                    </span>
-                    <span />
-                    <Icon name="arrow" />
-                  </Link>
-                ))}
-                {counts.not_opened.map((m) => (
-                  <div className="row" key={`${m.entity}:${m.period}`}>
-                    <EntityCell name={m.entity} title={`${m.entity} · ${m.period}`} detail={m.due_on ? dueWords(m.due_on, today, dates.calendarDay) : "No due date"} />
-                    <span className="status danger">Not opened</span>
-                    <span />
-                    <span />
-                  </div>
-                ))}
-              </RowList>
-            </details>
-          )}
+          <OwedSection counts={counts} today={today} />
         </>
       )}
       {!empty && (queueError || queueClient || reviewed || (queue && queue.count > 0)) && (
@@ -311,12 +251,6 @@ export default function Home() {
   );
 }
 
-const dueWords = (dueOn: string, today: string, day: (value: string) => string) => {
-  if (!dueOn) return "";
-  const date = day(dueOn);
-  return dueOn < today ? `Overdue since ${date}` : `Due ${date}`;
-};
-
 // A client or month filter for a capped list, with what the list shows of its whole.
 export function ClientFilter({ value, onChange, shown, of }: { value: string; onChange: (value: string) => void; shown: number; of: number }) {
   return (
@@ -341,7 +275,7 @@ type Reopened = HomeCounts["owed"][number];
 
 // The default list (every decision, page one) comes with the counts, read in their snapshot; another view or page is
 // read on its own, and any action re-reads the counts, which bring the list again.
-function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view, onView, onChange }: { today: string; tick: number; snapshot?: AttentionInbox; reopened: Reopened[]; canReview: boolean; teamTotal: number; view: View; onView: (view: View) => void; onChange: () => void }) {
+export function Decisions({ today, tick, snapshot, reopened, canReview, teamTotal, view, onView, onChange }: { today: string; tick: number; snapshot?: AttentionInbox; reopened: Reopened[]; canReview: boolean; teamTotal: number; view: View; onView: (view: View) => void; onChange: () => void }) {
   const dates = useDates();
   const [page, setPage] = useState(0);
   const [read, setRead] = useState<AttentionInbox>();

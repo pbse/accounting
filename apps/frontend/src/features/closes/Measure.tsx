@@ -49,7 +49,6 @@ export default function Measure() {
   return (
     <>
       <PageHeader
-        icon="measure"
         title="Human effort"
         actions={
           <label className="title-actions">

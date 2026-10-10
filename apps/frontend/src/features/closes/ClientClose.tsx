@@ -164,7 +164,7 @@ export default function ClientClose() {
   if (deleted)
     return (
       <p role="status">
-        Close removed. Deletion receipt #{deleted}. <Link to="/dashboard/closes">Return to client closes</Link>
+        Close removed. Deletion receipt #{deleted}. <Link to="/dashboard/clients">Return to client closes</Link>
       </p>
     );
   if (loading && !close) return <p role="status">Opening close…</p>;
@@ -178,7 +178,7 @@ export default function ClientClose() {
   return (
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
-      <BackLink to="/dashboard/closes">Clients</BackLink>
+      <BackLink to="/dashboard/clients">Clients</BackLink>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
       <PageHeader avatar={close.entity} title={close.entity} actions={<PrepareActions close={close} />}>
         {monthName(close.period)} <PlanChips plan={close} />

@@ -137,7 +137,6 @@ export function Run() {
     <>
       <BackLink to="/runs">Runs</BackLink>
       <PageHeader
-        icon="run"
         title={<>#{run.id} {run.workflow}</>}
         actions={
           <span className={`status ${stateTone[run.state] ?? ""}`}>{run.state}{run.waiting_on && ` · ${run.waiting_on}`}</span>

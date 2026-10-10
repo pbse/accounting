@@ -185,7 +185,6 @@ export function Work({ closeId, onPrepared }: { closeId?: string; onPrepared?: (
         <SectionHeader title="Work from your evidence">{updated}</SectionHeader>
       ) : (
         <PageHeader
-          icon="work"
           title="Preparation"
           actions={
             <form

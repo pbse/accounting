@@ -139,7 +139,7 @@ export default function PrepareOwner() {
   const reset = () => setResult(undefined);
   return (
     <>
-      <PageHeader icon="owner" title="Owner items">
+      <PageHeader title="Owner items">
         Move one owner-related transaction once the client has told you its purpose. If they haven't answered yet, save the question instead; nothing is
         proposed until they do.
       </PageHeader>

@@ -56,7 +56,6 @@ export function Plans() {
   return (
     <>
       <PageHeader
-        icon="file"
         title={templates ? "Plan templates" : "Plans"}
         actions={
           <div className="title-actions"><Link className="button primary" to={templates ? "/plans/new?template=1" : "/plans/new"}>{templates ? "New template" : "New plan"}</Link></div>
@@ -188,7 +187,6 @@ function PlanDetail({ id }: { id: string }) {
     <>
       <BackLink to={p.is_template ? "/plans?templates=1" : "/plans"}>{p.is_template ? "Templates" : "Plans"}</BackLink>
       <PageHeader
-        icon="file"
         title={<>{p.is_template ? "Template" : "Plan"} #{p.id} {shown(p.title)}</>}
         actions={
           <span className={`status ${tone[p.state] ?? ""}`}>{p.state}</span>

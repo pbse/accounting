@@ -233,7 +233,7 @@ func agentLink(t mcpTool, args map[string]any) chatCitation {
 		case "/v1/closes/review-queue":
 			return chatCitation{t.title, "/dashboard#review-queue"}
 		case "/v1/closes":
-			return chatCitation{t.title, "/dashboard/closes"}
+			return chatCitation{t.title, "/dashboard/clients"}
 		}
 		return chatCitation{t.title, "/dashboard"}
 	}

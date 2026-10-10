@@ -24,7 +24,6 @@ export function Overview() {
   return (
     <>
       <PageHeader
-        icon="work"
         title="Overview"
         actions={
           <div className="title-actions">

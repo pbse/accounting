@@ -204,7 +204,6 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
       <>
         <BackLink to={`/plans/${source}`}>Plan #{source}</BackLink>
         <PageHeader
-          icon="file"
           title={editing ? `Edit plan #${source}` : `Copy plan #${source}`}
         >
           Editing or copying a plan means reading it: reveal it first.
@@ -230,7 +229,6 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
     <>
       <BackLink to={editing ? `/plans/${editing}` : "/plans"}>{editing ? `Plan #${editing}` : "Plans"}</BackLink>
       <PageHeader
-        icon="file"
         title={editing ? `Edit plan #${editing}` : template ? "New template" : "New plan"}
       >
         Steps run in order; a step waits for the steps it comes after, and a “when” runs it only on that outcome.

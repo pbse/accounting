@@ -30,7 +30,6 @@ export function Workflows() {
   return (
     <>
       <PageHeader
-        icon="book"
         title="Workflows"
         actions={
           <div className="title-actions"><Link className="button primary" to="/runs/new">Start a run</Link></div>

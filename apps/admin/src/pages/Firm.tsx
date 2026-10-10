@@ -32,7 +32,6 @@ export function Firm() {
       {f && firm.data && (
         <>
           <PageHeader
-            icon="firm"
             title={f.name}
             actions={
               <span className={`status ${f.enabled ? "ok" : "danger"}`}>{f.enabled ? "Active" : "Suspended"}</span>

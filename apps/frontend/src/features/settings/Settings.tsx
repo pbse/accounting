@@ -96,7 +96,7 @@ export default function Settings() {
   return (
     <>
       {/* Keyed by section so each section counts as its own rendered page (scripts/layout-check.mjs). */}
-      <PageHeader key={tab} icon="settings" title="Settings">
+      <PageHeader key={tab} title="Settings">
         {descriptions[tab]}
       </PageHeader>
       <VerticalTabs label="Settings sections" items={items} value={tab}>
