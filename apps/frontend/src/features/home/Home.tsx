@@ -41,18 +41,21 @@ export default function Home() {
   // This week: the most pressing closes with a decision of the reader's, as the decision list orders them, and the
   // closes whose sign-off no longer stands, which count as decisions without an attention event.
   const today = (counts?.as_of ?? "").slice(0, 10);
-  const reopened = [...(counts?.owed.filter((item) => item.state === "reopen_required" || item.state === "unknown") ?? []), ...(counts?.reopened_later ?? [])].map((item) => ({
+  // A sign-off that no longer stands is the reviewer's decision; without review authority it is a teammate's, as
+  // Closes files it.
+  const reopened = (counts?.can_review ? [...counts.owed.filter((item) => item.state === "reopen_required" || item.state === "unknown"), ...counts.reopened_later] : []).map((item) => ({
     close_id: item.close_id,
     entity: item.entity,
     due_on: item.due_on,
     text: item.state === "unknown" ? "Sign-off could not be rechecked" : "Changed since sign-off",
   }));
+  // Reopened sign-offs lead, as the decision list orders them.
   const week = [
+    ...reopened,
     ...(counts?.inbox.groups ?? [])
       .map((g) => ({ ...g, events: g.events.filter((e) => e.yours && !e.snoozed_until) }))
       .filter((g) => g.events.length > 0)
       .map((g) => ({ close_id: g.close_id, entity: g.entity, due_on: g.due_on, text: g.events[0].text })),
-    ...reopened,
   ]
     .filter((item, i, all) => all.findIndex((other) => other.close_id === item.close_id) === i)
     .slice(0, 3);

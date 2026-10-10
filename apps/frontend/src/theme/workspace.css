@@ -930,8 +930,8 @@ aside.assistant {
    fills the stage. Below 860px the stage is flow. */
 .app-shell section.ks-stage {
   position: relative;
-  height: calc(100vh - 20px);
-  min-height: 640px;
+  /* Tall enough for the greeting, the composer and three rows; on a short screen the page scrolls. */
+  height: max(calc(100vh - 20px), 780px);
   margin: 0 calc(-1 * var(--space-24));
   padding: 0 var(--space-24);
   overflow: hidden;
