@@ -151,7 +151,8 @@ export default function ClientClose() {
   const location = useLocation();
   const [params, setParams] = useSearchParams();
   const { close, papers, more, error, refreshError, loading, reload } = useClose(id);
-  const brief = useBrief(id ?? "").data;
+  const briefRead = useBrief(id ?? "");
+  const brief = briefRead.data;
   const dates = useDates();
   const [deleted, setDeleted] = useState("");
   const tab: Tab = closeTab(params.get("tab"));
@@ -173,8 +174,9 @@ export default function ClientClose() {
   const shown = papers.filter(filters[filter][1]);
   const base = `/dashboard/closes/${close.id}`;
   const latest = more ? " among the latest 100" : "";
-  // Sign off is the page's one action, and waits until readiness says the close is ready.
-  const signOffBlocked = !signOffAvailable(brief);
+  // Sign off is the page's one action, and waits until readiness says the close is ready, read without error: a
+  // status that could not be refreshed offers nothing on it.
+  const signOffBlocked = !!briefRead.error || !signOffAvailable(brief);
   return (
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
