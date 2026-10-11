@@ -315,6 +315,9 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 			return PolicyRequired(map[string]string{"loan": "Loan schedules", "payroll": "Payroll entries"}[kind] + " need the firm's approved " + kind + " procedure for this client (a firm default or client override) before drafts are saved")
 		}
 	}
+	if err := ProcedureCurrent(ctx, q, closeID, kind); err != nil {
+		return err
+	}
 	var method string
 	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT p.method FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),(SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1),'')`, closeID, kind).Scan(&method)
 	if err != nil || method == "" {
@@ -415,4 +418,69 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		_, err = tx.ExecContext(ctx, `UPDATE sandbox_postings p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id::text=$1 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',$2::text)) AND p.state='approved'`, closeID, current)
 	}
 	return source, err
+}
+
+// ProcedureCurrent refuses work under a month's pinned copy of a procedure that is no longer the scope's current,
+// enabled version: a changed or revoked method leaves no superseded authority valid for queued work, approval or the
+// next month. A month with no pinned copy has nothing to refuse here.
+func ProcedureCurrent(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID, kind string) error {
+	var pinned, latest string
+	var latestEnabled bool
+	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT e.procedure_id::text FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),''),
+ COALESCE(l.id::text,''),COALESCE(l.enabled,false)
+ FROM (SELECT 1) one LEFT JOIN LATERAL (SELECT p.id,p.enabled FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1) l ON true`, closeID, kind).Scan(&pinned, &latest, &latestEnabled)
+	if err != nil {
+		return err
+	}
+	if pinned != "" && (pinned != latest || !latestEnabled) {
+		return PolicyRequired("The firm's " + strings.ReplaceAll(kind, "_", " ") + " procedure changed after it was applied to this month; apply the current version before saving or approving drafts")
+	}
+	return nil
+}
+
+// ApprovalAuthority refuses approving, or posting from, a draft under method authority the firm has since withdrawn:
+// a pinned procedure copy that is no longer current, a scope whose latest version is disabled (the method was
+// revoked), or a draft recording a method other than the current version's. A client with no procedure for the kind
+// is not refused here; saving such a draft is governed by CheckProcedureMethod.
+func ApprovalAuthority(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID, kind string, paper []byte) error {
+	if err := ProcedureCurrent(ctx, q, closeID, kind); err != nil {
+		return err
+	}
+	var exists, enabled bool
+	var method string
+	err := q.QueryRowContext(ctx, `SELECT true,p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&exists, &enabled, &method)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return PolicyRequired("The firm retired its " + strings.ReplaceAll(kind, "_", " ") + " procedure for this client; a draft prepared under it cannot be approved or posted")
+	}
+	var recorded struct {
+		Method string `json:"method"`
+		Input  struct {
+			Method, Convention string
+			EntityType         string `json:"entity_type"`
+		} `json:"input"`
+	}
+	json.Unmarshal(paper, &recorded)
+	used := recorded.Method
+	if used == "" {
+		used = recorded.Input.Method
+	}
+	used = prepaids.Boundary(used, recorded.Input.Convention)
+	// An owner treatment records the client's entity type, which the draft must have used.
+	if kind == "owner" {
+		used = recorded.Input.EntityType
+	}
+	if used != "" && method != "" && used != method {
+		return PolicyRequired(fmt.Sprintf("The draft's method %q differs from the firm's current procedure method %q; prepare it again under the current procedure", used, method))
+	}
+	return nil
 }

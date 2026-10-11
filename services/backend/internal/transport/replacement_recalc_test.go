@@ -208,6 +208,13 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	otherPaper, _ := json.Marshal(map[string]any{"input": map[string]string{"amount": "600.00"}, "sources": []map[string]string{{"id": snapshotSource, "digest": preparation.Digest([]byte("period snapshot")), "name": "QuickBooks 2026-09 accrual period evidence.txt", "role": "support"}}})
 	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','other-digest',$2) RETURNING id::text`, closeID, string(otherPaper)).Scan(&other))
 	_, otherReview, otherDigest := review(other)
+	// A procedure revoked after the month pinned it leaves no authority to approve under: approval waits for the
+	// current version to be applied.
+	var revoked string
+	must(db.QueryRow(`INSERT INTO procedure_versions(organization_id,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor) SELECT organization_id,entity,'prepaid','equal_full_months_v1','Revoked','Insurance','Prepaid Expenses',false,'Revoked by the firm','fixture' FROM client_closes WHERE id::text=$1 RETURNING id::text`, closeID).Scan(&revoked))
+	call("POST", base+"/workpapers/"+other+"/reviews", map[string]string{"decision": "approved", "note": "Unrelated", "digest": otherDigest, "expected_review_id": otherReview}, 409)
+	_, err = db.Exec(`DELETE FROM procedure_versions WHERE id::text=$1`, revoked)
+	must(err)
 	call("POST", base+"/workpapers/"+other+"/reviews", map[string]string{"decision": "approved", "note": "Unrelated", "digest": otherDigest, "expected_review_id": otherReview}, 200)
 
 	// A corrected invoice arrives with a higher premium. Its intake runs first, while the old invoice is still current, so

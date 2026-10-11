@@ -1,10 +1,12 @@
 package transport
 
 import (
+	"close.local/backend/internal/preparation"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -20,11 +22,19 @@ import (
 // draftApproved requires a current approved draft before a posting decision. Approving the posting of a
 // pending draft approves the draft too, in the caller's transaction, when the approver may review drafts.
 func draftApproved(ctx context.Context, tx *sql.Tx, closeID, paperID string, actor *auth.Claims, approving bool) (int, string) {
-	var state, digest, reviewID string
-	if err := tx.QueryRowContext(ctx, `SELECT review_state,digest,review_id FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&state, &digest, &reviewID); err != nil {
+	var state, digest, reviewID, kind string
+	var paper []byte
+	if err := tx.QueryRowContext(ctx, `SELECT review_state,digest,review_id,kind,paper FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&state, &digest, &reviewID, &kind, &paper); err != nil {
 		return 409, "A current accountant-approved workpaper is required."
 	}
 	if state == "approved" {
+		// An approval given under a procedure the firm has since changed or revoked authorizes no external effect.
+		var policy preparation.PolicyRequired
+		if err := preparation.ApprovalAuthority(ctx, tx, closeID, kind, paper); errors.As(err, &policy) {
+			return 409, err.Error()
+		} else if err != nil {
+			return 503, "The firm's procedure could not be checked."
+		}
 		return 0, ""
 	}
 	if !approving || state != "pending" || !slices.Contains(actor.Permissions, "workpapers:review") {
