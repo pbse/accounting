@@ -438,6 +438,10 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Bluegrass Dental PLLC and Birch Dental together had net income of 300.00.", derived(0, "sum", "300.00", "t52", "/closes/0/net_income", "t52", "/closes/1/net_income"))
 	rejected("Net income is 3.", "nothing it cites measures it", e("t51", 0, "/coverage/total", "3"))
 
+	// Round twenty-five: an unscheduled balance is an actual, not a forecast.
+	reads["t53"] = read(`{"state":"ready","currency":"USD","opening":{"amount":"64120.00","stale":false},"open_items":{"complete":true},"unscheduled":[{"label":"Invoice #99","amount":"1200.00"}],"weeks":[]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	ok("Invoice #99 has an unscheduled balance of 1,200.00.", e("t53", 0, "/unscheduled/0/amount", "1200.00"), e("t53", 0, "/unscheduled/0/label", "Invoice #99"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

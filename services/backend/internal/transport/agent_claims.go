@@ -371,7 +371,10 @@ func claimOf(read agentRead, path string) claim {
 	// A cash plan is a forecast, except the captured opening balance it starts from. Every figure of it is as fresh as
 	// that opening, and the forecast is incomplete while its open items are.
 	if read.tool == "cash_plan" {
-		if keys[0] != "opening" && keys[0] != "open_items" {
+		// Only the projection is forecast: its weeks, the lowest point, the scenario and what falls after the horizon.
+		// An unscheduled or past-due item's balance is the captured actual.
+		switch keys[0] {
+		case "weeks", "lowest", "scenario", "after_horizon":
 			c.forecast = true
 		}
 		if root, ok := read.value.(map[string]any); ok {
