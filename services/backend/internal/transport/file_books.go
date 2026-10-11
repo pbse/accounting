@@ -200,6 +200,15 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 		return nil, tieRefusal{503, "The month's books are unavailable."}
 	}
 	if thisBooks == nil {
+		// An acceptance whose books are still to be written is not one to give again.
+		var accepted bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM client_closes c JOIN books_import_acceptances a ON a.organization_id=c.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(c.organization_id,c.entity) AND a.period=c.period
+ WHERE c.id::text=$1 AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id))`, closeID).Scan(&accepted); err != nil {
+			return nil, tieRefusal{503, "The month's books are unavailable."}
+		}
+		if accepted {
+			return map[string]any{"state": "waiting", "reason": "The month's accepted file is being written as its books: look again in a minute."}, nil
+		}
 		return map[string]any{"state": "waiting", "reason": "This month's books are its files: accept a reading of the month's file first."}, nil
 	}
 	if len(this.Holds) > 0 {
