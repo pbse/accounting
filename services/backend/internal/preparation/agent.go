@@ -734,11 +734,10 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		}
 		return true, tx.Commit()
 	}
-	// Under an organization-wide model profile, membership alone made the creator eligible; the client's evidence still
-	// goes to the model only while the creator holds this client.
-	if calls > 0 && llm.ViaWideProfile(ctx, org) {
+	// Background inference requires the creator's current membership and client grant.
+	if calls > 0 && llm.RequiresClientGrant(ctx) {
 		var granted bool
-		if err = tx.QueryRowContext(ctx, `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, actor, entity).Scan(&granted); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT $1='local-development' OR (EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) AND EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted))`, org, actor, entity).Scan(&granted); err != nil {
 			return false, err
 		}
 		if !granted {

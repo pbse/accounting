@@ -44,10 +44,6 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "completion policy mismatch", 400)
 		return
 	}
-	if !s.allows(in.Scope) {
-		http.Error(w, "unknown access profile", 403)
-		return
-	}
 	if in.Agent == "codex" && settings.mode != "api_key" && !in.Request.AllowUncappedOutputTokens {
 		http.Error(w, "Codex subscription requires allow_uncapped_output_tokens", 400)
 		return
@@ -80,14 +76,6 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "completion deadline expired", 504)
 			return
 		}
-	}
-	if checkDatabase(ctx, s.db) != nil {
-		http.Error(w, "read-only database unavailable", 503)
-		return
-	}
-	if _, err := readRecords(ctx, s.db, in.Scope, 0); err != nil {
-		http.Error(w, "access denied", 403)
-		return
 	}
 	out, err := s.execute(ctx, runRequest{Model: in.Agent, Instructions: prompt, MaxModelCalls: 1, MaxOutputTokens: in.Request.MaxOutputTokens, CompletionImages: in.Request.Images, CompletionSchema: schema, CompletionModel: model, CompletionEffort: effort})
 	if errors.Is(err, llm.ErrRefused) {
@@ -124,20 +112,6 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(raw)
-}
-
-// allows accepts a completion scope that is a configured profile, or a member of an organization-wide profile; the
-// member's own membership and client grants are then checked by every read, as for an exact profile.
-func (s *server) allows(scope llm.Scope) bool {
-	if scope.Subject == "" || scope.Subject == llm.AnyMember {
-		return false
-	}
-	for _, p := range s.cfg.Profiles {
-		if scope == p || p.Subject == llm.AnyMember && p.Organization == scope.Organization && p.AccessProfile == scope.AccessProfile {
-			return true
-		}
-	}
-	return false
 }
 
 func completionPrompt(in llm.Request) (json.RawMessage, string, error) {

@@ -7,6 +7,7 @@ import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
 import { cashPlanQuery } from "./data/cashPlan";
+import { clientPath } from "./data/clients";
 import { closeTab, type CloseTab } from "./data/closeTabs";
 import { appData, effortPath, prefetch, prefetchLater, workPath, workspaceKey, workViews } from "./data/queries";
 
@@ -80,6 +81,12 @@ async function clientsLoader({ context, request }: LoaderFunctionArgs) {
   if (!prefetching) return null;
   const query = new URL(request.url).searchParams.get("q") ?? "";
   await prefetch(context, "", "/roster", ...(query ? [`?q=${encodeURIComponent(query)}`] : []));
+  return null;
+}
+
+// A client's page reads the client, in one request.
+async function clientLoader({ context, params }: LoaderFunctionArgs) {
+  if (prefetching && params.client) await prefetch(context, clientPath(params.client));
   return null;
 }
 
@@ -181,6 +188,7 @@ export const routes: RouteObject[] = createRoutesFromElements(
       <Route path="close" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "close" as const })} />
       <Route path="review" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "review" as const })} />
       <Route path="clients" loader={clientsLoader} lazy={page(() => import("./features/closes/ClosesList"))} />
+      <Route path="clients/:client" loader={clientLoader} lazy={page(() => import("./features/clients/ClientPage"))} />
       <Route path="closes" loader={closesLoader} lazy={page(() => import("./features/closes/Closes"))} />
       <Route path="closes/:id" loader={closeLoader} lazy={page(() => import("./features/closes/ClientClose"))} />
       <Route path="closes/:id/workpapers/:paperId" loader={workpaperLoader} lazy={page(() => import("./features/closes/WorkpaperView"))} />

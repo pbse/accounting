@@ -30,7 +30,7 @@ test('deployment accepts complete private-service configuration', () => {
 test('deployment fails before mutation for missing credential metadata or invalid profiles', () => {
   for (const overrides of [
     { OPENAI_API_KEY: '' }, { CONTEXT_MACHINE_TOKEN: '' },
-    { CONTEXT_MACHINE_PROFILES: 'null' }, { CONTEXT_MACHINE_PROFILES: '[]' },
+    { CONTEXT_MACHINE_PROFILES: 'null' },
     { CONTEXT_MACHINE_MODEL: 'shell' },
   ]) {
     const result = check(overrides);
@@ -58,7 +58,7 @@ test('deployment selects available credentials without requiring the unused prov
 test('preflight reports missing selected-agent settings together without credentials', () => {
   const result = check({ CONTEXT_MACHINE_DATABASE_URL: '', CONTEXT_MACHINE_PROFILES: '', CODEX_MODEL: '', OPENAI_API_KEY: '' });
   assert.notEqual(result.status, 0);
-  for (const name of ['CONTEXT_MACHINE_DATABASE_URL', 'CONTEXT_MACHINE_PROFILES', 'CODEX_MODEL', 'OPENAI_API_KEY or CODEX_ACCESS_TOKEN']) assert.ok(result.stderr.includes(name), name);
+  for (const name of ['CONTEXT_MACHINE_DATABASE_URL', 'CODEX_MODEL', 'OPENAI_API_KEY or CODEX_ACCESS_TOKEN']) assert.ok(result.stderr.includes(name), name);
   assert.ok(!result.stderr.includes(configured.CONTEXT_MACHINE_TOKEN));
 });
 
@@ -163,6 +163,13 @@ fs.writeFileSync(process.env.CAPTURED, JSON.stringify({ args: process.argv.slice
       assert.throws(() => readFileSync(upload.args[upload.args.indexOf('--secrets-file') + 1]), { code: 'ENOENT' });
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('data-only inference needs no owner profile while database research profiles remain validated', () => {
+ for(const profiles of ['', '[]']) {
+  assert.equal(check({CONTEXT_MACHINE_PROFILES:profiles,LLM_PROVIDER:'context_machine'}).status,0);
+  assert.equal(check({CONTEXT_MACHINE_PROFILES:profiles,LLM_PROVIDER:'context_machine',CODEX_AUTH_MODE:'subscription',CODEX_ACCESS_TOKEN:'test-only',OPENAI_API_KEY:'',LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS:'true'}).status,0);
+ }
 });
 
 test('personal Codex managed login and Claude subscriptions require one owner profile', () => {
