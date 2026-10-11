@@ -124,24 +124,45 @@ func ProposeLayout(t Table) (Layout, []string) {
 	if layout.HeaderRow == 0 {
 		return layout, append(questions, "Which row heads the Trial Balance, and what does each column hold?")
 	}
-	// A column headed "Class" is the account's classification when its values say one ("Asset", "Expense"), else a
-	// class the rows are split by ("Retail", "East").
+	// A column headed "Class" is a class the rows are split by when an account appears under two of its values ("Sales"
+	// and "Marketing" alike), or when its values do not say a classification ("Retail", "East"); else it is the
+	// account's classification ("Asset", "Expense").
 	for column, m := range layout.Columns {
 		if m != AccountType || !strings.EqualFold(strings.TrimSpace(headerText(t, layout.HeaderRow, column)), "class") {
 			continue
 		}
 		said, classes := 0, 0
+		under := map[string]map[string]bool{}
 		for _, r := range t.Rows {
+			if r.Number <= layout.HeaderRow {
+				continue
+			}
+			account, value := "", ""
 			for _, c := range r.Cells {
-				if r.Number > layout.HeaderRow && c.Column == column && strings.TrimSpace(c.Value) != "" {
-					said++
-					if class, _, _ := classOf(c.Value); class != "" {
-						classes++
-					}
+				switch v := strings.TrimSpace(c.Value); {
+				case c.Column == column:
+					value = v
+				case layout.Columns[c.Column] == AccountName || layout.Columns[c.Column] == AccountNumber:
+					account += "|" + strings.ToLower(v)
 				}
 			}
+			if value == "" {
+				continue
+			}
+			said++
+			if class, _, _ := classOf(value); class != "" {
+				classes++
+			}
+			if under[account] == nil {
+				under[account] = map[string]bool{}
+			}
+			under[account][strings.ToLower(value)] = true
 		}
-		if said > 0 && classes*2 < said {
+		split := false
+		for account, values := range under {
+			split = split || account != "" && len(values) > 1
+		}
+		if said > 0 && (split || classes*2 < said) {
 			layout.Columns[column] = Dimension
 		}
 	}
