@@ -376,6 +376,12 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		t.Fatalf("a Unicode client name is matched without shifting offsets: %v", names)
 	}
 
+	// Round seventeen: a stale caveat contradicted; a causal verb; a cash plan is not a budget.
+	rejected("The old report is stale, but net income is 20,100.00 now.", "the cited read is stale", e("t7", 0, "/pack/profit_and_loss/measures/0/amount", "20100.00"))
+	rejected("Marketing raised revenue, which rose 4,940.00.", "cause the reads do not show", e("t6", 0, "/rows/0/change", "4940.00"))
+	ok("Marketing may have raised revenue, which rose 4,940.00.", e("t6", 0, "/rows/0/change", "4940.00"))
+	ok("The plan has cash at 23,400.00 forecast for that week.", e("t30", 0, "/weeks/0/closing", "23400.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

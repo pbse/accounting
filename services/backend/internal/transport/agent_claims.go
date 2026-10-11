@@ -427,7 +427,10 @@ var (
 	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|driven by|reflecting)\b`)
 	claimCausalEvidence = regexp.MustCompile(`\b(because|due to|caused|causes|driven|drove|drives|resulted|result of|results from|led to|leads to|owing to|thanks to|after|following|boosted|lifted|raised|increased|reduced|lowered|cut|added|brought|grew|rose|fell|dropped)\b`)
 	// Words that name a change as such, beside its figure ("Rent's variance against budget is 500.00").
-	claimVarianceNamed  = regexp.MustCompile(`\b(variance|difference|change|movement|swing|gap)\b`)
+	claimVarianceNamed = regexp.MustCompile(`\b(variance|difference|change|movement|swing|gap)\b`)
+	// Verbs that state a cause acting on a measure ("marketing raised revenue").
+	claimCausalVerb     = regexp.MustCompile(`\b(raised|drove|boosted|lifted|caused|pushed up|pushed down|cut|reduced|lowered|led to|resulted in|brought down|brought up|hurt|dragged down|weighed on|increased|decreased)\b`)
+	claimContrast       = regexp.MustCompile(`\b(but|however|yet|although|though|now|currently|today)\b`)
 	claimScenario       = regexp.MustCompile(`\b(scenario|what-if|if)\b`)
 	claimFromTo         = regexp.MustCompile(`(?i)\bfrom\s+(\w+(?:\s+\d{4})?)\s+to\s+(\w+(?:\s+\d{4})?)`)
 	claimNegation       = regexp.MustCompile(`\b(not|no|never|without|neither|nor|unrelated|isn't|wasn't|didn't|doesn't|don't|won't|cannot|can't|hasn't|haven't)\b|n't\b`)
@@ -767,7 +770,7 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 		return "the sentence states the budget " + o.normalized + " without saying it is the budget"
 	}
 	// An actual amount is not called a budget; a variance is rightly said to be against the budget.
-	if (c.kind == "level" || c.kind == "prior") && len(o.before) > 0 && claimBudget.MatchString(strings.Join(o.before, " ")) {
+	if (c.kind == "level" || c.kind == "prior") && !c.forecast && len(o.before) > 0 && claimBudget.MatchString(strings.Join(o.before, " ")) {
 		return "the sentence calls " + o.normalized + " a budget, but the cited field is " + c.describe()
 	}
 	// A forecast is said to be one, in the figure's own clause or an introduction before it ("cash closed at 23,400.00,
@@ -846,8 +849,21 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			}
 		}
 	}
-	// A stale read is said to be one; a forecast built from incomplete inputs is said to be incomplete.
-	if c.stale && !claimStaleSaid.MatchString(lowerLine) {
+	// A stale read is said to be one, of this figure: in its clause, or an introduction the sentence does not then
+	// contradict ("the old report is stale, but net income is 20,100.00 now"); a forecast built from incomplete inputs is
+	// said to be incomplete.
+	staleSaid := claimStaleSaid.MatchString(lowerClause) || introduced(line, o, claimStaleSaid) && !claimContrast.MatchString(strings.ToLower(line[:o.end]))
+	// Or a caveat right after the figure, before the next one, uncontradicted ("…64,120.00 at the last capture, which
+	// is stale").
+	if !staleSaid {
+		rest := line[o.end:]
+		if next := agentFigure.FindStringIndex(rest); next != nil {
+			rest = rest[:next[0]]
+		}
+		lowerRest := strings.ToLower(rest)
+		staleSaid = claimStaleSaid.MatchString(lowerRest) && !claimContrast.MatchString(lowerRest)
+	}
+	if c.stale && !staleSaid {
 		return "the sentence states " + o.normalized + " as current, but the cited read is stale"
 	}
 	if c.incomplete && !claimIncompleteSaid.MatchString(lowerLine) {
@@ -861,8 +877,22 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim, reads map[string]agentRead) string {
 	lower := strings.ToLower(line)
 	bounds := claimClause.FindAllStringIndex(lower, -1)
-	// Each cause the sentence states ("because of…", "due to…") is checked on its own.
-	for _, at := range claimCausal.FindAllStringIndex(lower, -1) {
+	// Each cause the sentence states ("because of…", "due to…") is checked on its own; so is a causal verb with a
+	// measure after it ("marketing raised revenue"), whose cause is what comes before the verb.
+	connectives := claimCausal.FindAllStringIndex(lower, -1)
+	for _, at := range claimCausalVerb.FindAllStringIndex(lower, -1) {
+		end := len(lower)
+		for _, b := range bounds {
+			if b[0] >= at[1] {
+				end = b[0]
+				break
+			}
+		}
+		if after := metricsIn(lower[at[1]:end]); len(after) > 0 {
+			connectives = append(connectives, []int{at[0], at[1], 1})
+		}
+	}
+	for _, at := range connectives {
 		// A hedge counts only in the cause's own clause ("may be due to"), not elsewhere ("…, which may be reviewed").
 		clauseStart, clauseEnd := 0, len(lower)
 		for _, b := range bounds {
@@ -878,14 +908,18 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 		if claimHedge.MatchString(lower[clauseStart:at[1]]) {
 			continue
 		}
-		// The cause is what follows the connective in its clause; a cited passage or cause field must name it.
-		cause := line[at[1]:clauseEnd]
+		// The cause is what follows the connective in its clause, or for a causal verb what precedes it, and the effect
+		// the other side; a cited passage or cause field must name it.
+		cause, effect := line[at[1]:clauseEnd], line[clauseStart:at[0]]
+		if len(at) > 2 {
+			cause, effect = line[clauseStart:at[0]], line[at[1]:clauseEnd]
+		}
 		supported := false
 		for i, s := range entries {
 			switch {
 			case s.quote != "" && claimNegation.MatchString(strings.ToLower(s.quote)):
 				// "The campaign did not affect revenue" contradicts the cause rather than supporting it.
-			case s.quote != "" && sharesWord(cause, s.quote) && claimCausalEvidence.MatchString(strings.ToLower(s.quote)) && effectNamed(line[clauseStart:at[0]], s.quote, claims):
+			case s.quote != "" && sharesWord(cause, s.quote) && claimCausalEvidence.MatchString(strings.ToLower(s.quote)) && effectNamed(effect, s.quote, claims):
 				// The passage names the cause, says it acted, and names the effect the sentence claims ("revenue rose
 				// after the campaign started"); "the campaign raised payroll" supports no claim about revenue.
 				supported = true
