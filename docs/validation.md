@@ -4277,3 +4277,12 @@ Handoff slice 3 ([one decision across chat and close pages](agent-first-implemen
 Tests: `TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState` gains two checks: a partial reply is a decision and still listed when 20 days old while its work waits (seen to fail without the fix); a complete reply is marked informational. The closest attention, Home, goal, handoff and request tests passed against a fresh local PostgreSQL migrated through 150.
 
 Not changed (follow-up): the chat card asking a person to review shows the draft's state only after the server refuses a stale request; approval requests have no unique index if a card's outcome fails to record after the request committed.
+
+## 2026-10-11 — Statements do not hold an unrelated prepaid invoice (B03/B04)
+
+Handoff slice 4 ([preparation from mixed evidence](agent-first-implementation-handoff.md#b01b03b04b11--preparation-from-mixed-evidence)), first part. `UnrelatedEvidence` accepted only another prepaid invoice read by the OpenAI engine, so any bank statement, payroll summary or lender statement in the close held a correct invoice for a person, and the context-machine engine's readings never counted. It now also accepts, from either model engine, a statement: read as reconciliation, payroll or loan, or as unsupported work citing its own document as a statement (how a standing-alone bank statement is read, since a reconciliation reading needs a ledger CSV too). It counts when its text names neither this vendor nor this invoice number and nowhere prints this invoice's amount in any form (`documents.AmountIn`: 1,200.00, 1200 or $1,200; a credits heading with the amount on the next line included); such a reading also re-reads an invoice held over it.
+
+Test: `TestUnrelatedInvoicesInOneCloseArePreparedStraightThrough` adds four documents read as unsupported. A plain statement with a "Deposits and other credits" header is unrelated. These are not: one listing Acme's 1,200.00 under its credits heading; one printing "Payment 1200"; one naming Acme's invoice number; and a bank letter the agent cited as support, not as a statement. The check was seen to fail with the old prepaid-only rule. The closest preparation and mixed-close tests passed against a fresh local PostgreSQL.
+
+Not changed: a statement that shows this invoice's payment by vendor name still holds it (conservative); a credit note uploaded after a draft is saved does not reopen the draft.
+

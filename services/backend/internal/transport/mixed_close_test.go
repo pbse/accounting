@@ -242,4 +242,31 @@ func mixedClose(t *testing.T, serial bool) {
 			t.Fatalf("%q is weighed by a person, while Beacon's invoice is unrelated to Acme's: %v", extra, unrelated)
 		}
 	}
+	// A bank statement, read (as one standing alone is) as unsupported work citing itself as a statement, is another
+	// matter, its "credits" header included, unless it prints Acme's amount anywhere or names its invoice; a document the
+	// agent did not call a statement is not.
+	statement := func(name, body, role string) string {
+		t.Helper()
+		id := insert(name, body, "ready")
+		job := start(id)
+		_, e := db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_build_object('kind','unsupported','engine','openai','summary','Bank statement','facts','[]'::jsonb,'questions',jsonb_build_array('Which work does this statement support?'),'sources',jsonb_build_array(jsonb_build_object('id',$2::text,'role',$3::text))) WHERE job_id::text=$1`, job, id, role)
+		must(e)
+		_, e = db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`, job)
+		must(e)
+		return id
+	}
+	plain := statement("bank.txt", "First National Bank\nStatement for September 2026\nDeposits and other credits 4,500.00\nCheck 1042 250.00", "statement")
+	refunded := statement("bank-refund.txt", "First National Bank\nStatement for September 2026\nDeposits and other credits\n09/14 1,200.00", "statement")
+	named := statement("bank-acme.txt", "First National Bank\nStatement for September 2026\nPayment INV-778 250.00", "statement")
+	whole := statement("bank-whole.txt", "First National Bank\nStatement for September 2026\nPayment 1200", "statement")
+	unnamed := statement("letter.txt", "First National Bank\nNotice of new fees", "support")
+	var raw []byte
+	must(db.QueryRow(`SELECT proposal FROM preparation_intakes WHERE job_id::text=$1`, jobA).Scan(&raw))
+	var proposal preparation.Proposal
+	must(json.Unmarshal(raw, &proposal))
+	unrelated, err := preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal)
+	must(err)
+	if !unrelated[plain] || unrelated[refunded] || unrelated[named] || unrelated[unnamed] || unrelated[whole] {
+		t.Fatalf("a plain bank statement is another matter; one printing Acme's amount or naming its invoice, or a document not read as a statement, is not: %v", unrelated)
+	}
 }
