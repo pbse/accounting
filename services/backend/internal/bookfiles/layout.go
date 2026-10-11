@@ -124,7 +124,38 @@ func ProposeLayout(t Table) (Layout, []string) {
 	if layout.HeaderRow == 0 {
 		return layout, append(questions, "Which row heads the Trial Balance, and what does each column hold?")
 	}
-	// A column headed "Class" is a class the rows are split by when an account appears under two of its values ("Sales"
+	has := func(m Meaning) bool {
+		for _, v := range layout.Columns {
+			if v == m {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(AccountName) && !has(AccountNumber) {
+		// An export that leaves the account column's header empty (QuickBooks Online's does) usually has the accounts
+		// in its first column with text beneath the header: proposed, and asked about.
+		first := -1
+		for _, r := range t.Rows {
+			if r.Number <= layout.HeaderRow {
+				continue
+			}
+			for _, c := range r.Cells {
+				if _, taken := layout.Columns[c.Column]; !taken && c.Kind != Number && (first < 0 || c.Column < first) {
+					if _, err := ParseAmount(c.Value, layout.Style); err != nil {
+						first = c.Column
+					}
+				}
+			}
+		}
+		if first >= 0 {
+			layout.Columns[first] = AccountName
+			questions = append(questions, fmt.Sprintf("Does column %s name the account?", strings.TrimRight(cellRef(first, 1), "1")))
+		} else {
+			questions = append(questions, "Which column names the account?")
+		}
+	}
+	// Once the account column is known, a column headed "Class" is a class the rows are split by when an account appears under two of its values ("Sales"
 	// and "Marketing" alike), or when its values do not say a classification ("Retail", "East"); else it is the
 	// account's classification ("Asset", "Expense").
 	for column, m := range layout.Columns {
@@ -164,37 +195,6 @@ func ProposeLayout(t Table) (Layout, []string) {
 		}
 		if said > 0 && (split || classes*2 < said) {
 			layout.Columns[column] = Dimension
-		}
-	}
-	has := func(m Meaning) bool {
-		for _, v := range layout.Columns {
-			if v == m {
-				return true
-			}
-		}
-		return false
-	}
-	if !has(AccountName) && !has(AccountNumber) {
-		// An export that leaves the account column's header empty (QuickBooks Online's does) usually has the accounts
-		// in its first column with text beneath the header: proposed, and asked about.
-		first := -1
-		for _, r := range t.Rows {
-			if r.Number <= layout.HeaderRow {
-				continue
-			}
-			for _, c := range r.Cells {
-				if _, taken := layout.Columns[c.Column]; !taken && c.Kind != Number && (first < 0 || c.Column < first) {
-					if _, err := ParseAmount(c.Value, layout.Style); err != nil {
-						first = c.Column
-					}
-				}
-			}
-		}
-		if first >= 0 {
-			layout.Columns[first] = AccountName
-			questions = append(questions, fmt.Sprintf("Does column %s name the account?", strings.TrimRight(cellRef(first, 1), "1")))
-		} else {
-			questions = append(questions, "Which column names the account?")
 		}
 	}
 	if !(has(Debit) && has(Credit)) && !has(Balance) {

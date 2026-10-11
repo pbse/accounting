@@ -300,6 +300,11 @@ func TestTheReaderTakesNothingForGranted(t *testing.T) {
 	if l, _ := ProposeLayout(byTeam.Tables[0]); l.Columns[1] != Dimension {
 		t.Fatalf("an account under two classes is split by them: %v", l.Columns)
 	}
+	// So with the account column's header left blank, as QuickBooks Online leaves it.
+	unheaded, _ := Read("tb.csv", []byte(",Class,Debit,Credit\nTravel,Sales,100.00,\nTravel,Marketing,50.00,\nBank,,,150.00\n"))
+	if l, _ := ProposeLayout(unheaded.Tables[0]); l.Columns[0] != AccountName || l.Columns[1] != Dimension {
+		t.Fatalf("an unheaded account column, split by class: %v", l.Columns)
+	}
 	both, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,100.00,50.00\nCapital,,50.00\nTOTAL,100.00,100.00\n"))
 	layout, _ = ProposeLayout(both.Tables[0])
 	if reading := layout.Read(both.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {
