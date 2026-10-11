@@ -4314,3 +4314,9 @@ Slice 4 (takeover and coverage). Coverage decisions were bound to one capture, s
 
 Test: `TestCoverageRequestsQuarantineAndResolution` recaptures after excluding two accounts: both stay excluded with the carried reason, an account never excluded still asks, and another QuickBooks company's capture carries nothing; each seen to fail without its part of the fix. The closest coverage, Xero coverage, request and readiness tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — A changed or revoked procedure authorizes nothing further (B11)
+
+Slice 5. A month's pinned copy of a procedure kept authorizing work after the firm published a new or disabled version: approval checked basis, currency and independence but not the procedure, and the standing-approval worker approves through the same path. `preparation.ProcedureCurrent` now refuses when the pinned copy is not the scope's current version, and `CheckProcedureMethod` (saving and straight-through work) calls it. Approval and every posting path's approval check (`draftApproved`) call `ApprovalAuthority`, which also refuses when the scope's latest version is disabled or the draft records a different method; a client with no procedure for the kind is unaffected, so existing drafts of kinds without procedures still approve.
+
+Test: `TestReplacedInvoiceIsRecalculatedStraightThrough` publishes a disabled version for the client and the approval is refused (409), then succeeds once the version is gone; seen to pass wrongly (200) without the approval check. The closest procedure, review, standing-approval, carry-forward, payroll, loan and straight-through tests passed on a fresh local PostgreSQL.
+

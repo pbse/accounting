@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -113,6 +114,13 @@ func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, deci
 		// A draft prepared before the client's profile changed is approved only in the currency the profile now holds.
 		if err := preparation.CurrencyIssue(ctx, tx, closeID, raw); err != nil {
 			return "", 409, err.Error()
+		}
+		// Approval applies the firm's current method authority: a changed, revoked or different procedure refuses it.
+		var policy preparation.PolicyRequired
+		if err := preparation.ApprovalAuthority(ctx, tx, closeID, kind, raw); errors.As(err, &policy) {
+			return "", 409, err.Error()
+		} else if err != nil {
+			return "", 503, "The firm's procedure could not be checked."
 		}
 		issue, err := independenceIssue(ctx, tx, closeID, paperID, actor)
 		if err != nil {
