@@ -76,10 +76,12 @@ const attentionQuery = `WITH scope AS (
   CASE WHEN count(*)=1 THEN min(g.single) ELSE min(g.cause)||': drafts '||string_agg('#'||g.id,', ' ORDER BY g.id)||' need review again'||CASE WHEN bool_or(g.approved) THEN ', approved ones included' ELSE '' END END,
   string_agg(g.id::text,',' ORDER BY g.id)
  FROM (SELECT x.id,x.close_id,GREATEST(x.created_at,c.replaced_at,c.later_at) AS at,COALESCE(c.sources,'')||'|'||COALESCE(c.parent,'')||'|'||COALESCE(c.later,'') AS sig,c.approved,
-  CASE WHEN c.later IS NOT NULL THEN 'A later document, '||c.later_name||', names the invoice of draft #'||x.id||' and speaks of a credit or change; check it before approving'
+  CASE WHEN c.later IS NOT NULL AND x.kind='payroll' THEN 'A later document, '||c.later_name||', names the payroll provider of draft #'||x.id||' and speaks of an amendment; check it before approving'
+   WHEN c.later IS NOT NULL THEN 'A later document, '||c.later_name||', names the invoice of draft #'||x.id||' and speaks of a credit or change; check it before approving'
    ELSE 'A source of draft #'||x.id||' changed' END||CASE WHEN c.approved THEN ' after it was approved' ELSE '' END AS single,
   CASE WHEN c.later IS NOT NULL THEN 'later:'||c.later WHEN c.changed IS NOT NULL THEN 'sources:'||c.changed WHEN c.parent IS NOT NULL THEN 'parent:'||COALESCE(x.paper->'carry_forward'->>'paper_id',x.paper->'recurring_accrual'->>'paper_id') ELSE 'draft:'||x.id END AS cause_key,
-  CASE WHEN c.later IS NOT NULL THEN 'A later document, '||c.later_name||', speaks of a credit or change to their invoice'
+  CASE WHEN c.later IS NOT NULL AND x.kind='payroll' THEN 'A later document, '||c.later_name||', names their payroll provider and speaks of an amendment'
+   WHEN c.later IS NOT NULL THEN 'A later document, '||c.later_name||', speaks of a credit or change to their invoice'
    WHEN c.changed_count=1 THEN c.changed_name||' changed' WHEN c.changed_count>1 THEN c.changed_count||' of their sources changed'
    WHEN c.parent IS NOT NULL THEN 'The draft they carry forward changed' ELSE 'A source changed' END AS cause
   FROM drafts x CROSS JOIN LATERAL (SELECT
