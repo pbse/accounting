@@ -82,8 +82,14 @@ func TestReviewAndEvidenceReplacement(t *testing.T) {
 		papers = append(papers, id)
 		digests = append(digests, digest)
 	}
+	// Returning a draft says why; an approval may carry no note at all (one click on Overview).
+	call("POST", base+"/workpapers/"+papers[0]+"/reviews", map[string]string{"decision": "changes_requested", "note": " ", "digest": digests[0], "expected_review_id": ""}, 422)
 	for i, paper := range papers {
-		body := map[string]string{"decision": "approved", "note": "Checked invoice and full-month method.", "digest": digests[i], "expected_review_id": ""}
+		note := "Checked invoice and full-month method."
+		if i == len(papers)-1 {
+			note = ""
+		}
+		body := map[string]string{"decision": "approved", "note": note, "digest": digests[i], "expected_review_id": ""}
 		call("POST", base+"/workpapers/"+paper+"/reviews", body, 200)
 		call("POST", base+"/workpapers/"+paper+"/reviews", body, 409)
 	}
