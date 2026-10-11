@@ -184,9 +184,13 @@ const filesCapture = `(SELECT 'file:'||v.id FROM client_closes fc JOIN books_imp
 // requestBindings is each binding b a consolidated request q approved, with its account's newest binding cur.
 const requestBindings = `jsonb_array_elements(q.coverage_scope->'bindings') b LEFT JOIN LATERAL (SELECT c.id::text AS id,c.excluded,c.job_ids FROM coverage_bindings c WHERE c.close_id=d.close_id AND COALESCE('xero:'||c.xero_snapshot_id,'file:'||c.file_version_id,c.snapshot_id::text)=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1) cur ON true`
 
+// ledgerFree is SQL over work_requests q: a consolidated request that binds no ledger account and no capture (the
+// questions a close's goal drafted from its documents), whose currency is its jobs' alone.
+const ledgerFree = `(COALESCE(q.coverage_scope->>'snapshot_id','')='' AND jsonb_array_length(COALESCE(q.coverage_scope->'bindings','[]'::jsonb))=0)`
+
 // RequestCoverageIsCurrent is SQL over work_requests q and request_drafts d: a consolidated request is still on its
 // close's latest ledger capture, with a current source and active connection, and every binding is the current one.
-const RequestCoverageIsCurrent = `(q.coverage_scope IS NULL OR (` + requestCapture + `
+const RequestCoverageIsCurrent = `(q.coverage_scope IS NULL OR ` + ledgerFree + ` OR (` + requestCapture + `
  AND NOT EXISTS(SELECT 1 FROM ` + requestBindings + ` WHERE COALESCE(cur.id,'') IS DISTINCT FROM b->>'id')))`
 
 // RequestReleased is SQL over request_jobs rj of work_requests q: work the request came to cover after its approval,
@@ -196,7 +200,7 @@ const RequestReleased = `(rj.job_id IS DISTINCT FROM q.job_id AND (q.coverage_sc
 
 // RequestCoverageFollowsReply is RequestCoverageIsCurrent once a request has a reply: an account's binding may also have
 // moved to add the request's released work, keeping every job it had when the request was approved.
-const RequestCoverageFollowsReply = `(q.coverage_scope IS NULL OR (` + requestCapture + `
+const RequestCoverageFollowsReply = `(q.coverage_scope IS NULL OR ` + ledgerFree + ` OR (` + requestCapture + `
  AND NOT EXISTS(SELECT 1 FROM ` + requestBindings + ` CROSS JOIN LATERAL (SELECT COALESCE((SELECT a.job_ids FROM coverage_bindings a WHERE a.id=NULLIF(b->>'id','')::bigint),'[]'::jsonb) AS jobs) approved
   WHERE COALESCE(cur.id,'') IS DISTINCT FROM b->>'id' AND (cur.id IS NULL OR cur.excluded OR NOT cur.job_ids @> approved.jobs
    OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(cur.job_ids) added WHERE NOT approved.jobs ? added

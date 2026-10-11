@@ -8,6 +8,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { workspaceRequest } from "./workspace";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
+import { ProposedRequest } from "./ProposedRequest";
 
 type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
 type Handoff = { id: string; job_id: string; account_id?: string; name: string; note: string; by: string; at: string; mine: boolean; handed: string };
@@ -327,6 +328,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
   const link = (item: Item) => (item.drafts[0] ? `/dashboard/closes/${closeId}/workpapers/${item.drafts[0]}` : `/dashboard/closes/${closeId}?job=${item.job_id}`);
   return (
     <>
+      <ProposedRequest closeId={closeId} onApproved={refresh} />
       <p>
         <strong>{headline(goal, progress, needs)}</strong>
       </p>

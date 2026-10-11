@@ -741,6 +741,9 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 	if err = replyReceipts(ctx, tx, g); err != nil {
 		return err
 	}
+	if _, err = draftGoalRequest(ctx, tx, g); err != nil {
+		return err
+	}
 	// Work lists every delegated close from this summary; what people owe is counted as the goal card counts it.
 	if g.finish == "signoff" {
 		if progress, err = readGoalProgress(ctx, tx, g.close, g.finish); err != nil {
