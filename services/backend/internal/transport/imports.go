@@ -105,6 +105,33 @@ func fileImportsOn(ctx context.Context, q rowReader, org string) (bool, error) {
 	return on, err
 }
 
+// keepImport keeps body as one of client name's files for period, named filename, replacing the file replaces names
+// (with why), unless the same file is already kept for that month (a retry after a lost answer): the import's id, and
+// whether it was kept before.
+func keepImport(ctx context.Context, tx *sql.Tx, org, name, period, filename string, body []byte, format, replaces, why, actor string) (string, bool, error) {
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	var id string
+	switch err := tx.QueryRowContext(ctx, `SELECT id::text FROM books_imports WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND period=$3 AND digest=$4 ORDER BY books_imports.id DESC LIMIT 1`,
+		org, name, period, digest).Scan(&id); err {
+	case nil:
+		return id, true, nil
+	case sql.ErrNoRows:
+	default:
+		return "", false, err
+	}
+	err := tx.QueryRowContext(ctx, `INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,replaces,replaces_reason,actor)
+ SELECT $1,$2,$3,$4,$5,$6,$7,(SELECT p.id FROM books_imports p WHERE p.id::text=$8 AND p.organization_id=$1 AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)),$10,$9
+ ON CONFLICT DO NOTHING RETURNING id::text`,
+		org, name, period, filename, digest, body, format, replaces, actor, why).Scan(&id)
+	// A retry that overlapped this one kept the file first: it is the import.
+	if err == sql.ErrNoRows {
+		err = tx.QueryRowContext(ctx, `SELECT id::text FROM books_imports WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND period=$3 AND digest=$4`, org, name, period, digest).Scan(&id)
+		return id, err == nil, err
+	}
+	return id, false, err
+}
+
 // importClient is the client a file request names (?name=), seen whole by the reader, in a firm with file imports on;
 // otherwise it answers and ok is false.
 func importClient(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, bool) {
@@ -607,7 +634,6 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if read.Format == "xlsx" {
 			format = "xlsx"
 		}
-		sum := sha256.Sum256(body)
 		// A replacement names a file of this client's, and says why: one that names no such file is refused, never kept
 		// unlinked.
 		replaces, why := strings.TrimSpace(r.FormValue("replaces")), strings.TrimSpace(r.FormValue("replaces_reason"))
@@ -633,29 +659,10 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		// The same file sent again for the same month (a retry after a lost answer) is the import already kept.
-		var repeat string
-		switch err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND period=$3 AND digest=$4 ORDER BY books_imports.id DESC LIMIT 1`,
-			organization(r), name, period, hex.EncodeToString(sum[:])).Scan(&repeat); err {
-		case nil:
-			jsonReply(w, 200, map[string]any{"id": repeat, "repeat": true})
+		id, repeat, err := keepImport(r.Context(), tx, organization(r), name, period, filename, body, format, replaces, why, reviewerName(r))
+		if err == nil && repeat {
+			jsonReply(w, 200, map[string]any{"id": id, "repeat": true})
 			return
-		case sql.ErrNoRows:
-		default:
-			problem(w, 503, "The file could not be kept.")
-			return
-		}
-		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,replaces,replaces_reason,actor)
- SELECT $1,$2,$3,$4,$5,$6,$7,(SELECT p.id FROM books_imports p WHERE p.id::text=$8 AND p.organization_id=$1 AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)),$10,$9
- ON CONFLICT DO NOTHING RETURNING id::text`,
-			organization(r), name, period, filename, hex.EncodeToString(sum[:]), body, format, replaces, reviewerName(r), why).Scan(&id)
-		// A retry that overlapped this one kept the file first: it is the import.
-		if err == sql.ErrNoRows {
-			if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND period=$3 AND digest=$4`, organization(r), name, period, hex.EncodeToString(sum[:])).Scan(&id); err == nil {
-				jsonReply(w, 200, map[string]any{"id": id, "repeat": true})
-				return
-			}
 		}
 		if err != nil {
 			problem(w, 503, "The file could not be kept.")

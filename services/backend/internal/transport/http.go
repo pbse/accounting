@@ -83,6 +83,7 @@ func apiWithStores(db, sessions *sql.DB, token string) http.Handler {
 	mux.HandleFunc("POST /v1/client-request", system(clientRequest(db)))
 	mux.HandleFunc("POST /v1/client-request/scan", system(clientAttachmentScan(db)))
 	mux.HandleFunc("POST /v1/client-request/scan-text", system(clientAttachmentScan(db)))
+	mux.HandleFunc("POST /v1/client-request/scan-file", system(clientAttachmentScan(db)))
 	mux.HandleFunc("POST /v1/contact", system(contactForm(db, defaultContactLimits)))
 	verifier := workspaceVerifier()
 	protectPreparation := func(next http.HandlerFunc) http.HandlerFunc {
@@ -199,7 +200,7 @@ func apiWithStores(db, sessions *sql.DB, token string) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-Passcode")
 		w.WriteHeader(http.StatusNoContent)
 	}
-	for _, path := range []string{"/v1/accruals:prepare", "/v1/loans:prepare", "/v1/owners:prepare", "/v1/payroll:prepare", "/v1/workpapers:prepare", "/v1/reconciliations:prepare", "/v1/settlements:prepare", "/v1/organizations/enroll", "/v1/closes", "/v1/closes/{path...}", "/v1/client-request", "/v1/client-request/scan", "/v1/client-request/scan-text", "/v1/contact"} {
+	for _, path := range []string{"/v1/accruals:prepare", "/v1/loans:prepare", "/v1/owners:prepare", "/v1/payroll:prepare", "/v1/workpapers:prepare", "/v1/reconciliations:prepare", "/v1/settlements:prepare", "/v1/organizations/enroll", "/v1/closes", "/v1/closes/{path...}", "/v1/client-request", "/v1/client-request/scan", "/v1/client-request/scan-text", "/v1/client-request/scan-file", "/v1/contact"} {
 		mux.HandleFunc("OPTIONS "+path, preflight)
 	}
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -14,6 +14,8 @@ type Request = {
   questions?: Question[];
   open?: boolean;
   rescan?: boolean;
+  // A request for the month's books takes its books files: a CSV or Excel workbook, scanned whole.
+  books?: boolean;
 };
 const stateLabels: Record<string, string> = { answered: "Answered", awaiting_document: "Waiting for your document", "": "Not answered yet" };
 // Green only for what is done; a document still to come asks for attention, an open question stays neutral.
@@ -83,9 +85,9 @@ export default function ClientRequest() {
   }, [token, refresh]);
   async function scanFiles(files: File[]) {
     for (const file of files) {
-      const textFile = /\.(txt|csv)$/i.test(file.name);
-      setScanStatus(`Checking ${file.name} with ${textFile ? "the on-demand text scanner (startup may take a few minutes)" : "Cloudflare"}…`);
-      const response = await fetch(`${apiBaseUrl}/v1/client-request/${textFile ? "scan-text" : "scan"}`, {
+      const textFile = request?.books || /\.(txt|csv)$/i.test(file.name);
+      setScanStatus(`Checking ${file.name} with ${textFile ? "the on-demand antivirus scanner (startup may take a few minutes)" : "Cloudflare"}…`);
+      const response = await fetch(`${apiBaseUrl}/v1/client-request/${request?.books ? "scan-file" : textFile ? "scan-text" : "scan"}`, {
         method: "POST", credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
         headers: { Authorization: `Bearer ${token}`, ...(passcode ? { "X-Request-Passcode": passcode } : {}), "Content-Type": textFile ? "application/octet-stream" : "application/pdf" },
         body: file,
@@ -217,11 +219,11 @@ export default function ClientRequest() {
                       );
                     })}
                   </ol>
-                  <label>Supporting documents<input name="files" type="file" accept=".pdf,.txt,.csv" multiple /></label>
+                  <label>Supporting documents<input name="files" type="file" accept={request?.books ? ".csv,.xlsx" : ".pdf,.txt,.csv"} multiple /></label>
                   {(request.questions ?? []).some((q) => q.state === "awaiting_document") && (
                     <p className="note">Sending a document you said would follow? Tick “I'm attaching the document with this reply” on its question and attach the file.</p>
                   )}
-                  <p>Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total. Files stay quarantined until automated scanning and the firm's release.</p>
+                  <p>{request?.books ? "Your books as a CSV or Excel workbook (.xlsx), up to 5 MiB each." : "Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total."} Files stay quarantined until automated scanning and the firm's release.</p>
                   <label>
                     <input type="checkbox" name="confirmed" required /> This reply concerns {request.entity} for {request.period}. I understand it will be reviewed by the firm.
                   </label>
@@ -234,7 +236,7 @@ export default function ClientRequest() {
                   <p>Select the same original files if scanning was interrupted or the firm needs a fresh scan. This cannot add new documents or change your reply.</p>
                   <form onSubmit={retryScans}>
                     <fieldset disabled={busy}>
-                      <label>Original documents<input type="file" name="files" accept=".pdf,.txt,.csv" multiple required /></label>
+                      <label>Original documents<input type="file" name="files" accept={request?.books ? ".csv,.xlsx" : ".pdf,.txt,.csv"} multiple required /></label>
                       <button>Retry malware scanning</button>
                     </fieldset>
                   </form>

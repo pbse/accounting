@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"close.local/backend/internal/bookfiles"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/wf"
 )
@@ -27,14 +29,37 @@ type clientFile struct {
 	Digest string
 }
 
-func validEvidenceFile(name string, body []byte) bool {
-	if name == "" || len(name) > 200 || strings.ContainsAny(name, "/\\") || len(body) == 0 {
+// validFileName is a client file's name: a plain name, no path or control characters.
+func validFileName(name string) bool {
+	if name == "" || len(name) > 200 || strings.ContainsAny(name, "/\\") {
 		return false
 	}
 	for _, c := range name {
 		if unicode.IsControl(c) {
 			return false
 		}
+	}
+	return true
+}
+
+// validBooksFile is a client's books file (docs/books-sources.md, Client-provided books): a CSV in whatever encoding its
+// ledger wrote, or an Excel workbook, up to the scanner's 5 MiB.
+func validBooksFile(name string, body []byte) bool {
+	if !validFileName(name) || len(body) == 0 || len(body) > 5*1024*1024 {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".csv":
+		return !bytes.Contains(body, []byte{0})
+	case ".xlsx":
+		return bytes.HasPrefix(body, []byte("PK\x03\x04"))
+	}
+	return false
+}
+
+func validEvidenceFile(name string, body []byte) bool {
+	if !validFileName(name) || len(body) == 0 {
+		return false
 	}
 	ext := strings.ToLower(filepath.Ext(name))
 	if ext == ".pdf" {
@@ -93,8 +118,9 @@ func clientSubmission(w http.ResponseWriter, r *http.Request) (string, bool, []c
 			f.Close()
 			total += len(body)
 			digest := preparation.Digest(body)
-			if e != nil || !validEvidenceFile(h.Filename, body) || total > 20*1024*1024 || seen[digest] {
-				problem(w, 422, "Use distinct UTF-8 TXT/CSV up to 512 KiB or complete PDF up to 5 MiB; 20 MiB total.")
+			// Which a request takes is checked once its request is known: books files for a request for the month's books.
+			if e != nil || !(validEvidenceFile(h.Filename, body) || validBooksFile(h.Filename, body)) || total > 20*1024*1024 || seen[digest] {
+				problem(w, 422, "Use distinct UTF-8 TXT/CSV up to 512 KiB or complete PDF up to 5 MiB (for a request for books, CSV or Excel up to 5 MiB); 20 MiB total.")
 				return "", false, nil, false
 			}
 			seen[digest] = true
@@ -166,8 +192,53 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 		case "reject":
 			_, err = tx.ExecContext(r.Context(), `UPDATE client_attachments SET state='rejected',claim=NULL,decided_by=$2,decision_note=$3 WHERE id=$1`, id, actor, in.Reason)
 		case "release":
-			if !clean || preparation.Digest(body) != digest || !validEvidenceFile(name, body) {
+			var books string
+			if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(coverage_scope->>'books','') FROM work_requests WHERE id::text=$1`, rid).Scan(&books); err != nil {
+				problem(w, 503, "Attachment storage unavailable.")
+				return
+			}
+			fileValid := validEvidenceFile
+			if books != "" {
+				fileValid = validBooksFile
+			}
+			if !clean || preparation.Digest(body) != digest || !fileValid(name, body) {
 				problem(w, 409, "A current clean scan of these exact bytes is required. No bypass is available.")
+				return
+			}
+			// A file answering a request for the month's books is kept as one of the client's files for that month, to be
+			// read and accepted like one a member sent, not as evidence.
+			if books != "" {
+				var org, entity string
+				var on bool
+				if err = tx.QueryRowContext(r.Context(), `SELECT c.organization_id,c.entity,o.file_imports FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE c.id::text=$1`, closeID).Scan(&org, &entity, &on); err != nil {
+					problem(w, 503, "Attachment storage unavailable.")
+					return
+				}
+				if !on {
+					problem(w, 409, "File imports are not switched on for your firm, so a books file cannot be released.")
+					return
+				}
+				read, e := bookfiles.Read(name, body)
+				if e != nil {
+					problem(w, 409, "The file cannot be read as books: "+e.Error()+". Reject it and ask the client for another export.")
+					return
+				}
+				format := "csv"
+				if read.Format == "xlsx" {
+					format = "xlsx"
+				}
+				var importID string
+				if importID, _, err = keepImport(r.Context(), tx, org, entity, books, name, body, format, "", "", actor); err == nil {
+					_, err = tx.ExecContext(r.Context(), `UPDATE client_attachments SET state='released',import_id=$2::bigint,decided_by=$3,decision_note=$4 WHERE id=$1`, id, importID, actor, in.Reason)
+				}
+				if err == nil {
+					err = tx.Commit()
+				}
+				if err != nil {
+					problem(w, 503, "The books file could not be kept.")
+					return
+				}
+				jsonReply(w, 200, map[string]any{"saved": true, "import_id": importID})
 				return
 			}
 			if err = preparation.RequestCoverageFollows(r.Context(), tx, closeID, rid); err != nil {
@@ -248,7 +319,9 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		textScan := r.URL.Path == "/v1/client-request/scan-text"
+		// A books file is scanned whole by the antivirus service's binary endpoint, as text is by its text one.
+		fileScan := r.URL.Path == "/v1/client-request/scan-file"
+		textScan := r.URL.Path == "/v1/client-request/scan-text" || fileScan
 		key := os.Getenv("UPLOAD_SCAN_KEY")
 		trusted := len(key) >= 32 && subtle.ConstantTimeCompare([]byte(key), []byte(r.Header.Get("X-Close-Upload-Scan-Key"))) == 1
 		if !textScan && !trusted {
@@ -264,12 +337,13 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		nameHint, limit := "upload.pdf", int64(5*1024*1024)
-		if textScan {
+		if textScan && !fileScan {
 			nameHint, limit = "upload.txt", 512*1024
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		body, err := io.ReadAll(r.Body)
-		if err != nil || !validEvidenceFile(nameHint, body) {
+		// A books file is checked as what its name says once its attachment is found.
+		if err != nil || (!fileScan && !validEvidenceFile(nameHint, body)) || (fileScan && !validBooksFile("upload.csv", body) && !validBooksFile("upload.xlsx", body)) {
 			problem(w, 422, "Submit one original file within its size and type limits for scanning.")
 			return
 		}
@@ -280,10 +354,11 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 		var id, state, name string
-		const lookup = `SELECT a.id::text,a.state,a.name FROM client_request_links l JOIN client_attachments a ON a.request_id=l.request_id JOIN client_closes c ON c.id=a.close_id JOIN organizations o ON o.id=c.organization_id WHERE l.digest=$1 AND l.used_at IS NOT NULL AND l.revoked_at IS NULL AND l.expires_at>now() AND o.enabled AND a.digest=$2 FOR UPDATE OF a`
-		err = tx.QueryRowContext(r.Context(), lookup, preparation.Digest([]byte(token)), preparation.Digest(body)).Scan(&id, &state, &name)
+		var books bool
+		const lookup = `SELECT a.id::text,a.state,a.name,COALESCE(q.coverage_scope ? 'books',false) FROM client_request_links l JOIN client_attachments a ON a.request_id=l.request_id JOIN work_requests q ON q.id=a.request_id JOIN client_closes c ON c.id=a.close_id JOIN organizations o ON o.id=c.organization_id WHERE l.digest=$1 AND l.used_at IS NOT NULL AND l.revoked_at IS NULL AND l.expires_at>now() AND o.enabled AND a.digest=$2 FOR UPDATE OF a`
+		err = tx.QueryRowContext(r.Context(), lookup, preparation.Digest([]byte(token)), preparation.Digest(body)).Scan(&id, &state, &name, &books)
 		ext := strings.ToLower(filepath.Ext(name))
-		if err != nil || (!textScan && ext != ".pdf") || (textScan && ext != ".txt" && ext != ".csv") {
+		if err != nil || (!textScan && ext != ".pdf") || (textScan && !fileScan && ext != ".txt" && ext != ".csv") || (fileScan && (!books || !validBooksFile(name, body))) {
 			problem(w, 404, "Original attachment unavailable for this request. Use the same file and unexpired private link.")
 			return
 		}
@@ -299,6 +374,15 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 			if url == "" || len(key) < 32 {
 				problem(w, 503, "Text scanner is not configured. File remains quarantined.")
 				return
+			}
+			if fileScan {
+				u, e := neturl.Parse(url)
+				if e != nil {
+					problem(w, 503, "Text scanner configuration invalid.")
+					return
+				}
+				u.Path = "/scan-file"
+				url = u.String()
 			}
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(4 * time.Minute))
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
@@ -333,7 +417,7 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 			}
 			defer tx.Rollback()
 			// Recheck authorization after scanning; a revoked link or rejection wins.
-			err = tx.QueryRowContext(r.Context(), lookup, preparation.Digest([]byte(token)), preparation.Digest(body)).Scan(&id, &state, &name)
+			err = tx.QueryRowContext(r.Context(), lookup, preparation.Digest([]byte(token)), preparation.Digest(body)).Scan(&id, &state, &name, &books)
 			if err != nil || state == "rejected" || state == "infected" {
 				problem(w, 409, "Request or attachment changed during scanning.")
 				return
