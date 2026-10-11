@@ -83,8 +83,9 @@ func lineMetrics(label string) map[string]bool {
 	return found
 }
 
-// basisPhrase is an accounting basis named in words ("on the cash basis"), whose "cash" is not the cash measure.
-var basisPhrase = regexp.MustCompile(`(?i)\b(?:modified cash|cash|accrual)[ -]basis\b`)
+// basisPhrase is an accounting basis or the cash plan named in words ("on the cash basis", "the cash plan"), whose
+// "cash" is not the cash measure.
+var basisPhrase = regexp.MustCompile(`(?i)\b(?:(?:modified cash|cash|accrual)[ -]basis|(?:13-week )?cash[ -]plan)\b`)
 
 // withoutBases blanks the accounting-basis phrases in a lowered text, keeping its length.
 func withoutBases(lower []byte) []byte {

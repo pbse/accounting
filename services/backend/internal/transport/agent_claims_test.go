@@ -487,6 +487,11 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Supplies are under budget by 630.00.", e("t47", 0, "/lines/0/month/variance", "-630.00"))
 	rejected("Supplies are over budget by 6.3%.", "but the variance is -6.3", e("t29", 0, "/lines/0/month/percent", "-6.3"))
 
+	// Round thirty-four: a whole object binds no figure; the cash plan's name is not cash.
+	reads["t62"] = read(`{"data":{"receivables":"8000.00"}}`, "Working capital", "working_capital", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Net income is 8,000.00.", "bound to no read", e("t62", 0, "/data", `{"receivables":"8000.00"}`))
+	ok("The cash plan has 2 unapproved schedules.", e("t19", 0, "/unapproved_schedules", "2"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

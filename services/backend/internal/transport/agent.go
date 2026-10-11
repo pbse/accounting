@@ -737,7 +737,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 			fieldClaim = claimOf(read, s.path)
 			// A percentage field stored as a bare number ("6.3") is a percentage: it binds "6.3%", never "6.3".
-			if fieldClaim.kind != "percent" {
+			// A whole object or list cited at once binds no figure: each figure is cited at its own field, where what it
+			// measures is known.
+			_, isObject := valueNode(read.value, s.path).(map[string]any)
+			_, isList := valueNode(read.value, s.path).([]any)
+			if fieldClaim.kind != "percent" && !isObject && !isList {
 				if n := normalizeFigure(s.value); n != "" {
 					bound[s.sentence][n] = true
 				}
@@ -1645,4 +1649,27 @@ func blankName(text, name string) string {
 		from += i + len(want)
 	}
 	return string(out)
+}
+
+// valueNode is the decoded value at a pointer, whatever it is, or nil.
+func valueNode(value any, pointer string) any {
+	if !strings.HasPrefix(pointer, "/") {
+		return nil
+	}
+	for _, key := range strings.Split(pointer[1:], "/") {
+		key = strings.ReplaceAll(strings.ReplaceAll(key, "~1", "/"), "~0", "~")
+		switch t := value.(type) {
+		case map[string]any:
+			value = t[key]
+		case []any:
+			i, err := strconv.Atoi(key)
+			if err != nil || i < 0 || i >= len(t) {
+				return nil
+			}
+			value = t[i]
+		default:
+			return nil
+		}
+	}
+	return value
 }

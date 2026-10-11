@@ -4163,6 +4163,8 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - a total and its drivers stated in different sentences are reconciled across the answer;
   - "over budget by 630.00" is held to the variance's sign like "630.00 over budget";
   - reading an older publication says "superseded" even when the current pack cannot be built; only the newest is then "unverified";
+  - a whole object or list cited at once binds no figure, so every figure is cited at a typed leaf;
+  - "the cash plan" is the plan's name, not the cash measure;
   - `TestFirmClientsFindsTheNamesAnAnswerUses` (new, database): the firm's clients named in an answer are found by the database across all clients with no cap (including a two-letter name), and never another firm's.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
