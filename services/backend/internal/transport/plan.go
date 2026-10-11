@@ -35,8 +35,10 @@ var planWords = map[string]string{"done": "done", "agent": "I'm on it", "you": "
 // elsewhere is a QuickBooks period capture the ledger reads do not use, which keeps the scheduled first capture away.
 type booksRead struct {
 	source string // the capture in use: quickbooks, xero, files or none
-	// file is a month on files' accepted file's books, nil while it has none.
+	// file is a month on files' accepted file's books, nil while it has none; pending, that an accepted file's books are
+	// still being written.
 	file             *fileMonth
+	pending          bool
 	captured         time.Time
 	stale            bool
 	quickbooks, xero string       // the client's connection states, "" without one
@@ -88,7 +90,9 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
 	// A month whose books are its files reads its accepted file's, whatever the client's connections.
 	if err == nil && b.chosen == "files" {
 		if _, b.file, err = fileMonthBooks(ctx, tx, closeID); err == nil && b.file != nil {
-			b.source, b.captured = "files", b.file.ExportedAt
+			b.source, b.captured = "files", b.file.ReadAt
+		} else if err == nil {
+			b.pending, err = fileBooksPending(ctx, tx, closeID)
 		}
 	}
 	return b, err
@@ -112,6 +116,8 @@ func booksStep(b booksRead, closeID, entity, period string) planStep {
 	// A current capture is read; otherwise an active connection, QuickBooks' first, can read the books; only then does a
 	// connection need a person.
 	switch {
+	case b.chosen == "files" && b.pending:
+		s.State, s.Text, s.Link = "agent", "The accepted file is being written as "+month+"'s books; I'll read them within a minute.", page
 	case b.chosen == "files" && b.file == nil:
 		s.State, s.Text, s.Link = "you", month+"'s books are its files: accept a reading of the month's file on "+entity+"'s page.", page
 	case b.chosen == "files" && len(b.file.Holds) > 0:

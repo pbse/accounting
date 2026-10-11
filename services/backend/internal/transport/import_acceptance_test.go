@@ -410,6 +410,17 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if step := planOf(); step.State != "done" || step.Text != "Read from the accepted file Acme 2027-01.csv, exported Oct 5." {
 		t.Fatalf("the plan reads January's books from its file: %v", step)
 	}
+	// While the accepted file's books are being written, the plan waits on them rather than asking for another acceptance.
+	pendingTx, err := db.BeginTx(t.Context(), nil)
+	must(err)
+	_, err = pendingTx.Exec(`DELETE FROM books_versions WHERE close_id=$1::bigint AND source='files'`, januaryClose)
+	must(err)
+	pending, err := readBooks(t.Context(), pendingTx, januaryClose)
+	pendingTx.Rollback()
+	must(err)
+	if step := booksStep(pending, januaryClose, "Acme Co", "2027-01"); step.State != "agent" || !strings.Contains(step.Text, "being written") {
+		t.Fatalf("the plan waits on an accepted file's books: %v", step)
+	}
 	// Its exceptions check the file's balances, named as from the file.
 	exceptions := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/quickbooks/exceptions", nil, 200)["balances"].(map[string]any)
 	if snapshot := exceptions["snapshot"].(map[string]any); snapshot["source"] != "files" || snapshot["file"] != "Acme 2027-01.csv" || len(exceptions["items"].([]any)) != 0 {

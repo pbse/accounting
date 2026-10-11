@@ -154,6 +154,8 @@ type fileMonth struct {
 	Holds                                  []string
 	// ExportedAt is when the file's books were taken from the client's ledger: the day it was exported, from midnight UTC.
 	ExportedAt time.Time
+	// ReadAt is when the books version was written from the accepted file.
+	ReadAt time.Time
 }
 
 // fileMonthBooks is close id's books from its files: the version of the month's newest current acceptance (on its
@@ -164,12 +166,12 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 	var accounts, balances, activity, cashFlow, uncounted []byte
 	var unavailable, org, entity, importID string
 	var checks []byte
-	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,i.name,v.as_of::text,v.basis,a.exported_on::timestamp AT TIME ZONE 'UTC',v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable,a.checks,c.organization_id,c.entity,a.import_id::text
+	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,i.name,v.as_of::text,v.basis,a.exported_on::timestamp AT TIME ZONE 'UTC',v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable,a.checks,v.captured_at,c.organization_id,c.entity,a.import_id::text
  FROM client_closes c JOIN books_import_acceptances a ON a.organization_id=c.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(c.organization_id,c.entity) AND a.period=c.period
  JOIN books_imports i ON i.id=a.import_id JOIN books_versions v ON v.source='files' AND v.source_id=a.id::text AND v.close_id=c.id
  WHERE c.id::text=$1 AND a.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=c.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(c.organization_id,c.entity) AND b.period=c.period
    AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id))`, closeID).
-		Scan(&m.Version, &m.Acceptance, &m.File, &m.AsOf, &m.Basis, &m.ExportedAt, &v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &unavailable, &checks, &org, &entity, &importID)
+		Scan(&m.Version, &m.Acceptance, &m.File, &m.AsOf, &m.Basis, &m.ExportedAt, &v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &unavailable, &checks, &m.ReadAt, &org, &entity, &importID)
 	if err == sql.ErrNoRows {
 		return nil, nil, nil
 	}
@@ -224,9 +226,8 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 	}
 	if thisBooks == nil {
 		// An acceptance whose books are still to be written is not one to give again.
-		var accepted bool
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM client_closes c JOIN books_import_acceptances a ON a.organization_id=c.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(c.organization_id,c.entity) AND a.period=c.period
- WHERE c.id::text=$1 AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id))`, closeID).Scan(&accepted); err != nil {
+		accepted, err := fileBooksPending(ctx, tx, closeID)
+		if err != nil {
 			return nil, tieRefusal{503, "The month's books are unavailable."}
 		}
 		if accepted {
@@ -390,4 +391,14 @@ func filesVersion(c string) string {
  JOIN books_versions v ON v.source='files' AND v.source_id=a.id::text AND v.close_id=fc.id
  WHERE fc.id=` + c + ` AND books_source(fc.organization_id,fc.entity,fc.period)='files' AND a.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=fc.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(fc.organization_id,fc.entity) AND b.period=fc.period
    AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id)))`
+}
+
+// fileBooksPending says whether close id's month has a current acceptance (on its file's latest reading and scope) whose
+// books are not read: while fileMonthBooks finds none, that acceptance's version is still to be written, and the
+// acceptance is not one to give again.
+func fileBooksPending(ctx context.Context, q rowReader, closeID string) (bool, error) {
+	var accepted bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM client_closes c JOIN books_import_acceptances a ON a.organization_id=c.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(c.organization_id,c.entity) AND a.period=c.period
+ WHERE c.id::text=$1 AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id))`, closeID).Scan(&accepted)
+	return accepted, err
 }
