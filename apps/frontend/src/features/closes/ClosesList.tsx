@@ -128,7 +128,8 @@ export default function ClosesList() {
     if (r.closes.length) return <span className="pill">Signed off</span>;
     return <span className="pill neutral">New</span>;
   };
-  // How the client's books arrive: each ledger connected, with a word when it is not working.
+  // How the client's books arrive: each ledger connected, with a word when it is not working, and labeled exports, with
+  // a word when one has been replaced since.
   const books = (r: ClientRow) => {
     const states = roster?.connections?.[r.key];
     const ledgers = (
@@ -139,7 +140,8 @@ export default function ClosesList() {
     )
       .filter(([, state]) => state)
       .map(([ledger, state]) => (state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`));
-    return ledgers.length ? ledgers.join(", ") : states?.exports === "stale" ? "Exports, one replaced since labeled" : states?.exports ? "Exports, as reported" : "—";
+    if (states?.exports) ledgers.push(states.exports === "stale" ? "Exports · one replaced" : "Exports");
+    return ledgers.length ? ledgers.join(", ") : "—";
   };
   // What is up next, in the order the work comes (as the client's page says it): the oldest month open with its due
   // date, the earliest month it owes, or nothing until this month ends.

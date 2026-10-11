@@ -580,11 +580,11 @@ function books(client: ClientRead, day: (value: string) => string) {
   // after it with its own state, and each that needs attention gets its own way in.
   const source = newest?.books?.source;
   const also = (others: Ledger[]) => others.map((o) => ` ${o.name} is also connected (${o.status}).`).join("");
-  if (newest?.books && source === "exports" && ledgers.length) {
+  if (newest?.books && source === "exports") {
     const failing = ledgers.filter((l) => !l.ok);
     return {
       short: "books from exports",
-      line: `${latest.trim()}${also(ledgers)}`,
+      line: `${latest.trim()}${ledgers.length ? also(ledgers) : " No ledger is connected."}`,
       held: newest.entity as string | undefined,
       month: newest as ClientRead["months"][number] | undefined,
       chip: (newest.books.stale ? ["Exports replaced", "pill muted"] : failing.length ? failing[0].chip : ["From exports", "pill neutral"]) as [string, string],
@@ -595,7 +595,8 @@ function books(client: ClientRead, day: (value: string) => string) {
       fix: failing,
     };
   }
-  const lead = ledgers.find((l) => l.source === source) ?? ledgers.find((l) => l.ok) ?? ledgers[0];
+  // The connection a captured month was read from is the one of its source held under the month's own name, if any.
+  const lead = ledgers.find((l) => l.source === source && l.held.toLowerCase() === newest?.entity.toLowerCase()) ?? ledgers.find((l) => l.source === source) ?? ledgers.find((l) => l.ok) ?? ledgers[0];
   if (lead) {
     const others = ledgers.filter((l) => l !== lead);
     const failing = others.filter((l) => !l.ok);
