@@ -31,9 +31,11 @@ type recurringAccrualItem struct {
 	// Defaults for the person's one confirmation: the account's credit balance in this capture's Trial Balance (only
 	// when the balance sits on its credit side), last month's reversal choice, and this month's document when exactly
 	// one the agent read as an accrual shows the rule's amount.
-	BookedBalance     string             `json:"booked_balance,omitempty"`
-	ReverseNextMonth  bool               `json:"reverse_next_month"`
-	SuggestedEvidence string             `json:"suggested_evidence,omitempty"`
+	BookedBalance     string `json:"booked_balance,omitempty"`
+	ReverseNextMonth  bool   `json:"reverse_next_month"`
+	SuggestedEvidence string `json:"suggested_evidence,omitempty"`
+	// suggestedCurrency is the currency the suggested document itself states ("" when its reading names none).
+	suggestedCurrency string
 	Paper             accruals.Workpaper `json:"-"`
 }
 
@@ -211,7 +213,7 @@ func suggestEvidence(items []recurringAccrualItem, docs []accrualDocument) {
 			return d.amount != amount || (d.currency != "" && d.currency != items[i].Paper.Input.Currency)
 		})
 		if len(matches) == 1 {
-			items[i].SuggestedEvidence = matches[0].id
+			items[i].SuggestedEvidence, items[i].suggestedCurrency = matches[0].id, matches[0].currency
 		}
 	}
 }
@@ -292,48 +294,156 @@ func registerRecurringAccrual(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Rule, review or period evidence changed. Refresh the comparison.")
 			return
 		}
-		var sourceName, sourceDigest string
-		err = tx.QueryRowContext(r.Context(), `SELECT name,digest FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND superseded_by IS NULL AND extraction_state='ready'`, in.EvidenceID, r.PathValue("id")).Scan(&sourceName, &sourceDigest)
-		if err != nil || in.EvidenceID == snapshot.SourceID {
-			problem(w, 422, "Choose fresh current-month service evidence, separate from the ledger report.")
+		// A person's choice for this month replaces the sweep's still-queued one for the same rule, so it is not stranded
+		// behind it.
+		if _, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='cancelled',error='Replaced by a person''s choice for this month' WHERE close_id::text=$1 AND created_by='scheduled-recurring-accrual' AND state='queued' AND plans->0->'recurring_accrual'->>'paper_id'=$2`, r.PathValue("id"), selected.ID); err != nil {
+			problem(w, 503, "Recurring accrual unavailable.")
 			return
 		}
-		when, _ := time.Parse("2006-01", period)
-		input := selected.Paper.Input
-		input.ClosePeriod = period
-		input.ServiceStart = when.Format("2006-01-02")
-		input.ServiceEnd = when.AddDate(0, 1, -1).Format("2006-01-02")
-		input.SourceReference = fmt.Sprintf("%s (#%s); prior rule draft #%s", sourceName, in.EvidenceID, selected.ID)
-		input.BookedBalance = prepaids.Money(balance)
-		input.BookingReference = fmt.Sprintf("QuickBooks snapshot #%s, Trial Balance account #%s, %s", snapshot.ID, selected.AccountID, selected.Location)
-		input.ReverseNextMonth = in.ReverseNextMonth
-		input.MethodConfirmed, input.BookingConfirmed, input.ExamplesConfirmed = true, true, true
-		if len(input.SourceReference) > 200 || len(input.BookingReference) > 200 {
-			problem(w, 422, "Source or ledger reference is too long.")
+		job, status, message := queueRecurringAccrual(r.Context(), tx, r.PathValue("id"), entity, period, actor, snapshot, previous, selected, in.EvidenceID, prepaids.Money(balance), in.ReverseNextMonth, "")
+		if status != 0 {
+			problem(w, status, message)
 			return
 		}
-		raw, _ := json.Marshal(input)
-		plan := preparation.Plan{Kind: "accrual", Input: raw, Sources: []preparation.Source{{ID: in.EvidenceID, Digest: sourceDigest, Name: sourceName, Role: "current_service"}, {ID: snapshot.SourceID, Digest: snapshot.SourceDigest, Name: "QuickBooks " + period + " period reports", Role: "period_ledger", Location: selected.Location}}, RecurringAccrual: &preparation.RecurringAccrual{CloseID: "", PaperID: selected.ID, Digest: selected.Digest, ReviewID: selected.ReviewID, Period: previous}}
-		err = tx.QueryRowContext(r.Context(), `SELECT close_id::text FROM workpapers WHERE id::text=$1`, selected.ID).Scan(&plan.RecurringAccrual.CloseID)
-		if err == nil {
-			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM workpapers WHERE close_id::text=$1 AND kind='accrual' AND paper->'recurring_accrual'->>'paper_id'=$2 AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=workpapers.close_id AND newer.paper->>'revises'=workpapers.id::text) ORDER BY workpapers.id DESC LIMIT 1),'')`, r.PathValue("id"), selected.ID).Scan(&plan.Revises)
-		}
-		if err != nil || preparation.ValidateRecurringAccrual(r.Context(), tx, plan, r.PathValue("id"), entity, period) != nil {
-			problem(w, 409, "Reviewed predecessor changed.")
-			return
-		}
-		if _, err = preparation.Calculate(plan, entity, period); err != nil {
-			problem(w, 422, err.Error())
-			return
-		}
-		plans, _ := json.Marshal([]preparation.Plan{plan})
-		jobDigest := preparation.Digest([]byte("recurring-accrual:" + selected.ID + ":" + selected.ReviewID + ":" + snapshot.ID + ":" + in.EvidenceID + ":" + input.BookedBalance + ":" + fmt.Sprint(in.ReverseNextMonth)))
-		var job string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(close_id,digest) DO UPDATE SET digest=preparation_jobs.digest RETURNING id::text`, r.PathValue("id"), jobDigest, string(plans), actor).Scan(&job)
-		if err != nil || tx.Commit() != nil {
+		if err = tx.Commit(); err != nil {
 			jobProblem(w, err, "Could not queue recurring accrual.")
 			return
 		}
 		jsonReply(w, 202, map[string]string{"job_id": job})
 	})
+}
+
+// queueRecurringAccrual queues one month of a reviewed recurring accrual rule from this month's service document and
+// booked balance, for a person (or the firm's standing approval) to decide; it changes nothing it does not queue.
+// note, when set, is added to the source reference (the sweep marks its own reading for confirmation).
+func queueRecurringAccrual(ctx context.Context, tx *sql.Tx, closeID, entity, period, actor string, snapshot recurringSnapshot, previous string, selected *recurringAccrualItem, evidenceID, bookedBalance string, reverse bool, note string) (string, int, string) {
+	var sourceName, sourceDigest string
+	err := tx.QueryRowContext(ctx, `SELECT name,digest FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND superseded_by IS NULL AND extraction_state='ready'`, evidenceID, closeID).Scan(&sourceName, &sourceDigest)
+	if err != nil || evidenceID == snapshot.SourceID {
+		return "", 422, "Choose fresh current-month service evidence, separate from the ledger report."
+	}
+	when, _ := time.Parse("2006-01", period)
+	input := selected.Paper.Input
+	input.ClosePeriod = period
+	input.ServiceStart = when.Format("2006-01-02")
+	input.ServiceEnd = when.AddDate(0, 1, -1).Format("2006-01-02")
+	input.SourceReference = fmt.Sprintf("%s (#%s); prior rule draft #%s%s", sourceName, evidenceID, selected.ID, note)
+	input.BookedBalance = bookedBalance
+	input.BookingReference = fmt.Sprintf("QuickBooks snapshot #%s, Trial Balance account #%s, %s", snapshot.ID, selected.AccountID, selected.Location)
+	input.ReverseNextMonth = reverse
+	input.MethodConfirmed, input.BookingConfirmed, input.ExamplesConfirmed = true, true, true
+	if len(input.SourceReference) > 200 || len(input.BookingReference) > 200 {
+		return "", 422, "Source or ledger reference is too long."
+	}
+	raw, _ := json.Marshal(input)
+	plan := preparation.Plan{Kind: "accrual", Input: raw, Sources: []preparation.Source{{ID: evidenceID, Digest: sourceDigest, Name: sourceName, Role: "current_service"}, {ID: snapshot.SourceID, Digest: snapshot.SourceDigest, Name: "QuickBooks " + period + " period reports", Role: "period_ledger", Location: selected.Location}}, RecurringAccrual: &preparation.RecurringAccrual{CloseID: "", PaperID: selected.ID, Digest: selected.Digest, ReviewID: selected.ReviewID, Period: previous}}
+	err = tx.QueryRowContext(ctx, `SELECT close_id::text FROM workpapers WHERE id::text=$1`, selected.ID).Scan(&plan.RecurringAccrual.CloseID)
+	if err == nil {
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT id::text FROM workpapers WHERE close_id::text=$1 AND kind='accrual' AND paper->'recurring_accrual'->>'paper_id'=$2 AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=workpapers.close_id AND newer.paper->>'revises'=workpapers.id::text) ORDER BY workpapers.id DESC LIMIT 1),'')`, closeID, selected.ID).Scan(&plan.Revises)
+	}
+	if err != nil || preparation.ValidateRecurringAccrual(ctx, tx, plan, closeID, entity, period) != nil {
+		return "", 409, "Reviewed predecessor changed."
+	}
+	if _, err = preparation.Calculate(plan, entity, period); err != nil {
+		return "", 422, err.Error()
+	}
+	plans, _ := json.Marshal([]preparation.Plan{plan})
+	jobDigest := preparation.Digest([]byte("recurring-accrual:" + selected.ID + ":" + selected.ReviewID + ":" + snapshot.ID + ":" + evidenceID + ":" + input.BookedBalance + ":" + fmt.Sprint(reverse)))
+	var job string
+	// The same choice made again re-queues its job if it was cancelled (a person confirming what the sweep queued), as
+	// that person's, with the plan just validated.
+	if err = tx.QueryRowContext(ctx, `INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(close_id,digest) DO UPDATE SET digest=preparation_jobs.digest,
+ state=CASE WHEN preparation_jobs.state='cancelled' THEN 'queued' ELSE preparation_jobs.state END,error=CASE WHEN preparation_jobs.state='cancelled' THEN '' ELSE preparation_jobs.error END,
+ plans=CASE WHEN preparation_jobs.state='cancelled' THEN EXCLUDED.plans ELSE preparation_jobs.plans END,created_by=CASE WHEN preparation_jobs.state='cancelled' THEN EXCLUDED.created_by ELSE preparation_jobs.created_by END RETURNING id::text`, closeID, jobDigest, string(plans), actor).Scan(&job); err != nil {
+		return "", 503, "Could not queue recurring accrual."
+	}
+	return job, 0, ""
+}
+
+// sweepRecurringAccruals queues, for up to 20 open closes after the cursor, each reviewed recurring accrual whose month
+// the books and documents already give in full: no blocker, a booked balance read from this capture's Trial Balance and
+// exactly one current document showing the rule's amount. A rule already tried against this capture, by a person or a
+// sweep, is left alone; nothing is approved here.
+func sweepRecurringAccruals(ctx context.Context, db *sql.DB, cursor string) (string, int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT c.id::text FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE c.id>$1::bigint AND o.enabled
+ AND NOT `+seedInProgress("c")+`
+ AND COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')<>'signed_off'
+ AND EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload->>'period'=c.period AND `+sourceAllows("c.id", "quickbooks")+`)
+ ORDER BY c.id LIMIT 20`, cursor)
+	if err != nil {
+		return cursor, 0, err
+	}
+	closes := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			break
+		}
+		closes = append(closes, id)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return cursor, 0, err
+	}
+	next := "0"
+	if len(closes) == 20 {
+		next = closes[19]
+	}
+	queued := 0
+	for _, id := range closes {
+		n, err := queueRecurringAccruals(ctx, db, id)
+		if err != nil {
+			return next, queued, err
+		}
+		queued += n
+	}
+	return next, queued, nil
+}
+
+func queueRecurringAccruals(ctx context.Context, db *sql.DB, closeID string) (int, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var org, entity, period, decision string
+	if err = tx.QueryRowContext(ctx, `SELECT c.organization_id,c.entity,c.period,COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'') FROM client_closes c WHERE c.id::text=$1 FOR UPDATE`, closeID).Scan(&org, &entity, &period, &decision); err != nil || decision == "signed_off" {
+		return 0, err
+	}
+	snapshot, items, _, previous, err := recurringAccrualPreview(ctx, tx, closeID, org)
+	if err != nil || !snapshot.Active {
+		return 0, err
+	}
+	queued := 0
+	for i := range items {
+		item := &items[i]
+		// The document must itself state the rule's currency: an unstated one is an ambiguity a person settles.
+		if item.Blocker != "" || item.BookedBalance == "" || item.SuggestedEvidence == "" || item.suggestedCurrency != item.Paper.Input.Currency {
+			continue
+		}
+		var tried bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM preparation_jobs WHERE close_id::text=$1 AND plans->0->'recurring_accrual'->>'paper_id'=$2 AND plans->0->'sources' @> jsonb_build_array(jsonb_build_object('id',$3::text)))`, closeID, item.ID, snapshot.SourceID).Scan(&tried); err != nil {
+			return 0, err
+		}
+		if tried {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `SAVEPOINT accrual`); err != nil {
+			return 0, err
+		}
+		if _, status, _ := queueRecurringAccrual(ctx, tx, closeID, entity, period, "scheduled-recurring-accrual", snapshot, previous, item, item.SuggestedEvidence, item.BookedBalance, item.ReverseNextMonth, "; agent-read, confirm before approving"); status != 0 {
+			if _, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT accrual`); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `RELEASE SAVEPOINT accrual`); err != nil {
+			return 0, err
+		}
+		queued++
+	}
+	return queued, tx.Commit()
 }
