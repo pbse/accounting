@@ -24,6 +24,9 @@ var delimiters = []rune{',', ';', '\t', '|'}
 // encoding and delimiter.
 func ReadCSV(name string, body []byte) (File, error) {
 	text, encoding, sure := decode(body)
+	if encoding == "windows-1252" && undefined1252(body) {
+		return File{}, errUndefined1252
+	}
 	if strings.HasPrefix(encoding, "utf-16") && !utf16Whole(body, encoding == "utf-16be") {
 		return File{}, errUTF16
 	}
@@ -56,8 +59,8 @@ func ReadCSVAs(name string, body []byte, encoding, delimiter string) (File, erro
 		text = utf16Text(body, encoding == "utf-16be")
 	case "windows-1252":
 		decoded, err := charmap.Windows1252.NewDecoder().Bytes(body)
-		if err != nil {
-			return File{}, errors.New("the file cannot be read as Windows-1252")
+		if err != nil || undefined1252(body) {
+			return File{}, errUndefined1252
 		}
 		text = string(decoded)
 	default:
@@ -119,6 +122,20 @@ func nulsAt(body []byte, parity int) float64 {
 		return 0
 	}
 	return float64(nuls) / float64(n)
+}
+
+// errUndefined1252 is a file read as Windows-1252 with bytes that code page leaves undefined: they would read as
+// replacement characters, so the file is in another encoding.
+var errUndefined1252 = errors.New("the file has bytes Windows-1252 does not define, so it is in another encoding: choose UTF-8 or UTF-16, or export it again")
+
+// undefined1252 says the bytes include one Windows-1252 leaves undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D).
+func undefined1252(body []byte) bool {
+	for _, b := range body {
+		if b == 0x81 || b == 0x8D || b == 0x8F || b == 0x90 || b == 0x9D {
+			return true
+		}
+	}
+	return false
 }
 
 // errUTF16 is UTF-16 cut short or with a broken character: nothing is dropped to read it.

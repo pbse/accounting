@@ -561,3 +561,21 @@ func TestQuotesSignsAndEarlyDates(t *testing.T) {
 		t.Fatalf("the 1904 system: %s", got)
 	}
 }
+
+// A sheet's name is not a reference to shift, and bytes Windows-1252 leaves undefined are refused, not replaced.
+func TestSheetNamesAndUndefinedBytes(t *testing.T) {
+	if got := shiftFormula("Q1!A1+'Q 2'!B2+SUM(Q1!C1:C3)", 2, 1); got != "Q1!B3+'Q 2'!C4+SUM(Q1!D3:D5)" {
+		t.Fatalf("sheet names stay: %s", got)
+	}
+	body := []byte("Account,Balance\nCaf\xe9,100\nCapital,-100\n")
+	if file, err := Read("tb.csv", body); err != nil || file.Encoding != "windows-1252" || cells(file.Tables[0])["R2C1"].Value != "Café" {
+		t.Fatalf("Windows-1252: %+v %v", file, err)
+	}
+	undefined := []byte("Account,Balance\nBank\x81,100\nCapital,-100\n")
+	if _, err := Read("tb.csv", undefined); err == nil {
+		t.Fatal("an undefined byte is refused")
+	}
+	if _, err := ReadCSVAs("tb.csv", undefined, "windows-1252", "comma"); err == nil {
+		t.Fatal("an undefined byte is refused when confirmed too")
+	}
+}

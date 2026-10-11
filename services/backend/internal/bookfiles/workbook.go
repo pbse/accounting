@@ -383,7 +383,9 @@ func shiftFormula(formula string, rows, columns int) string {
 			return b == '_' || b == '.' || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 		}
 		out.WriteString(formula[i:start])
-		if word(before) || word(after) || after == '(' {
+		// A function's name is followed by its parenthesis, and a sheet's name by its exclamation mark (Q1!A1): neither is a
+		// reference.
+		if word(before) || word(after) || after == '(' || after == '!' {
 			out.WriteString(formula[start:end])
 			i = end
 			continue
