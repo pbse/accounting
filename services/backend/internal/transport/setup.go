@@ -87,7 +87,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		}
 		if err == nil {
 			// QuickBooks counts only through the connection its captures read, which prefers production.
-			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM quickbooks_connections WHERE id=`+quickbooks.ReadingConnection("NULLIF($3,'')::bigint")+` AND state='active') OR EXISTS(SELECT 1 FROM xero_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND state='active')`, org, entity, closeID).Scan(&ledger)
+			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM quickbooks_connections WHERE id=`+quickbooks.ReadingConnection("NULLIF($3,'')::bigint")+` AND state='active') OR EXISTS(SELECT 1 FROM xero_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND state='active')`, org, entity, closeID).Scan(&ledger)
 		}
 		if err == nil {
 			if err = tx.QueryRowContext(r.Context(), `SELECT w.id::text,w.close_id::text FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1 AND `+access("c.entity")+` ORDER BY w.id DESC LIMIT 1`, org, all, me).Scan(&paper, &paperClose); err == sql.ErrNoRows {
@@ -156,7 +156,8 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		case closeID == "":
 			steps = append(steps, setupStep{"ledger", "Connect the books or label historical exports", false, "Open a client close first.", "/dashboard/clients"}, setupStep{"rules", "Confirm the period and rules", false, "Open a client close first.", "/dashboard/clients"})
 		default:
-			books := "Connect QuickBooks (production on the close's Settings tab, sandbox on Evidence) or Xero (Evidence) for " + entity + ", or upload and label its historical exports on Evidence."
+			books := "Connect QuickBooks or Xero on " + entity + "'s page, or upload and label its historical exports on the month's Evidence tab."
+			link := "/dashboard/clients/" + url.PathEscape(entity)
 			// A live connection counts first; labeled exports count only while they are the current documents.
 			historical, labelErr := latestExportLabel(r.Context(), tx, closeID)
 			if labelErr != nil {
@@ -167,6 +168,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 			if ledger {
 				books = entity + "'s books are connected."
 			} else if labeled {
+				link = base + "?tab=evidence#historical-exports"
 				books = entity + " uses historical exports a person labeled (exported " + historical.ExportedOn + "), not a live ledger connection."
 			} else if !quickbooks.OAuthConfiguredFor("production") && !quickbooks.OAuthConfigured() && !xero.Configured() {
 				books = "QuickBooks and Xero are not configured on this server; upload " + entity + "'s ledger reports as evidence and label them as historical exports instead."
@@ -175,7 +177,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 			if len(rules) > 0 {
 				applied = "Approved procedures apply to " + entity + " for " + strings.Join(rules, ", ") + "."
 			}
-			steps = append(steps, setupStep{"ledger", "Connect the books or label historical exports", ledger || labeled, books, base + "?tab=evidence"}, setupStep{"rules", "Confirm the period and rules", len(rules) > 0, label + ". " + applied, base + "?tab=settings"})
+			steps = append(steps, setupStep{"ledger", "Connect the books or label historical exports", ledger || labeled, books, link}, setupStep{"rules", "Confirm the period and rules", len(rules) > 0, label + ". " + applied, base + "?tab=settings"})
 		}
 		switch {
 		case paper != "":
