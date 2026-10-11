@@ -261,7 +261,7 @@ func latestCapture(ctx context.Context, db *sql.DB, closeID string) (c capture, 
  COALESCE((SELECT c.id::text FROM quickbooks_entity_syncs c WHERE c.close_id=s.close_id AND c.evidence_id=s.evidence_id AND c.state='completed' ORDER BY c.id DESC LIMIT 1),''),
  COALESCE((SELECT home_currency FROM quickbooks_connections WHERE id=s.connection_id),'')
  FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))`, closeID).Scan(&c.ID, &c.EvidenceID, &c.Finished, &c.Exceptions, &c.RowsSync, &c.HomeCurrency)
+ WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "quickbooks")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))`, closeID).Scan(&c.ID, &c.EvidenceID, &c.Finished, &c.Exceptions, &c.RowsSync, &c.HomeCurrency)
 	return c, err
 }
 

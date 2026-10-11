@@ -43,6 +43,8 @@ type booksRead struct {
 	synced           sql.NullTime
 	ended, daily     bool
 	elsewhere        bool
+	// chosen is the month's books source: newest, or QuickBooks or Xero alone.
+	chosen string
 }
 
 func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, error) {
@@ -54,7 +56,7 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
  COALESCE(h.state,''),xs.captured_at,COALESCE(xs.stale,false),c.period<to_char(now() AT TIME ZONE 'UTC','YYYY-MM'),
  (c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM') OR EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.state='active'))
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off',
- EXISTS(SELECT 1 FROM quickbooks_snapshots z WHERE z.close_id=c.id AND z.payload ? 'period')
+ EXISTS(SELECT 1 FROM quickbooks_snapshots z WHERE z.close_id=c.id AND z.payload ? 'period'),books_source(c.organization_id,c.entity,c.period)
  FROM client_closes c
  LEFT JOIN quickbooks_connections x ON x.id=`+quickbooks.ReadingConnection("c.id")+`
  LEFT JOIN LATERAL (SELECT s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR k.state<>'active' AS stale FROM quickbooks_snapshots s JOIN quickbooks_connections k ON k.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
@@ -63,7 +65,14 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
  LEFT JOIN LATERAL (SELECT h.state FROM xero_connections h WHERE h.organization_id=c.organization_id AND client_identity(h.organization_id,h.client_entity)=client_identity(c.organization_id,c.entity) AND h.state<>'disconnected'
   ORDER BY h.state='active' DESC,h.id DESC LIMIT 1) h ON true
  LEFT JOIN LATERAL (SELECT s.captured_at,k.state<>'active' AS stale FROM xero_snapshots s JOIN xero_connections k ON k.id=s.connection_id WHERE s.close_id=c.id AND `+sourceAllows("c.id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) xs ON true
- WHERE c.id=$1`, closeID).Scan(&b.quickbooks, &qbAt, &qbStale, &b.sync, &b.failure, &b.failed, &b.synced, &b.xero, &xeroAt, &xeroStale, &b.ended, &b.daily, &b.elsewhere)
+ WHERE c.id=$1`, closeID).Scan(&b.quickbooks, &qbAt, &qbStale, &b.sync, &b.failure, &b.failed, &b.synced, &b.xero, &xeroAt, &xeroStale, &b.ended, &b.daily, &b.elsewhere, &b.chosen)
+	// A month whose books come from one provider alone reads nothing from the other, and asks nothing of it.
+	switch b.chosen {
+	case "xero":
+		b.quickbooks, b.sync, b.failure, b.failed, b.synced, b.elsewhere = "", "", "", sql.NullTime{}, sql.NullTime{}, false
+	case "quickbooks":
+		b.xero = ""
+	}
 	b.elsewhere = b.elsewhere && !qbAt.Valid
 	switch {
 	case err != nil:
@@ -137,6 +146,9 @@ func booksStep(b booksRead, closeID, entity, period string) planStep {
 		s.State, s.Text, s.Link = "you", "Reconnect QuickBooks for "+entity+" on its page so I can read the books.", page
 	case b.xero != "":
 		s.State, s.Text, s.Link = "you", "Reconnect Xero for "+entity+" on its page so I can read the books.", page
+	case b.chosen == "quickbooks" || b.chosen == "xero":
+		name := map[string]string{"quickbooks": "QuickBooks", "xero": "Xero"}[b.chosen]
+		s.State, s.Text, s.Link = "you", month+"'s books are read from "+name+" alone, which is not connected. Connect "+name+" on "+entity+"'s page, or choose another source there.", page
 	default:
 		s.State, s.Text, s.Link = "none", "No ledger is connected, so I cover the uploaded documents only. Connect QuickBooks or Xero on "+entity+"'s page to check the books.", page
 	}

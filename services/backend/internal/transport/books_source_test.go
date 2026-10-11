@@ -123,4 +123,22 @@ func TestTheBooksSourceIsChosenAndHonoured(t *testing.T) {
 	}
 	// A default naming QuickBooks leaves July's books as they were, and stands.
 	call("user_a", partner, map[string]any{"client": "Acme Co", "period": "", "source": "quickbooks", "reason": "Kept in QuickBooks", "rev": rev}, 200)
+
+	// September has only a QuickBooks capture; read from Xero alone, its plan asks for a Xero capture, never QuickBooks.
+	var september string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme Co','2026-09') RETURNING id::text`, org).Scan(&september))
+	capture(september, "2026-09")
+	// Chosen against a choice since replaced, it is refused; against the newest, it stands.
+	call("user_a", partner, map[string]any{"client": "Acme Co", "period": "2026-09", "source": "xero", "reason": "September moved to Xero", "rev": rev}, 409)
+	var newest string
+	must(db.QueryRow(`SELECT max(id)::text FROM books_sources WHERE organization_id=$1`, org).Scan(&newest))
+	call("user_a", partner, map[string]any{"client": "Acme Co", "period": "2026-09", "source": "xero", "reason": "September moved to Xero", "rev": newest}, 200)
+	tx, err := db.Begin()
+	must(err)
+	defer tx.Rollback()
+	b, err := readBooks(t.Context(), tx, september)
+	must(err)
+	if step := booksStep(b, september, "Acme Co", "2026-09"); b.source != "none" || strings.Contains(step.Text, "QuickBooks") || !strings.Contains(step.Text, "Xero") {
+		t.Fatalf("September's plan: %s %+v", b.source, step)
+	}
 }
