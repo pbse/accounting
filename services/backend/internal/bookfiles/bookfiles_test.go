@@ -410,7 +410,7 @@ func TestNothingIsDroppedUnseen(t *testing.T) {
 	}
 	epoch := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 	for serial, want := range map[float64]string{46295: "2026-09-30", 46295.5: "2026-09-30T12:00:00", 46295.25 + 1.0/86400000*7: "2026-09-30T06:00:00.007"} {
-		if got := serialDate(epoch, serial); got != want {
+		if got, _ := serialDate(epoch, serial); got != want {
 			t.Fatalf("%v: %s, not %s", serial, got, want)
 		}
 	}
@@ -531,5 +531,33 @@ func TestMissingBalancesStrayColumnsAndSides(t *testing.T) {
 	layout, _ = ProposeLayout(gross.Tables[0])
 	if reading := layout.Read(gross.Tables[0]); reading.Debits != "150" || reading.Credits != "150" || !reading.Balanced {
 		t.Fatalf("each side as written: %+v", reading)
+	}
+}
+
+// An open quote is refused, never left to swallow rows; two signs are not read; and the 1900 date system's early serials
+// are the dates Excel shows.
+func TestQuotesSignsAndEarlyDates(t *testing.T) {
+	if _, err := Read("tb.csv", []byte("Account,Balance\n\"Bank,100\nCapital,-100\n")); err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("an open quote: %v", err)
+	}
+	if file, err := Read("tb.csv", []byte("Account,Memo,Balance\nBank,\"Main, checking\",100\nCapital,,-100\n")); err != nil || cells(file.Tables[0])["R2C2"].Value != "Main, checking" {
+		t.Fatalf("a quoted field: %+v %v", file, err)
+	}
+	for _, text := range []string{"--100", "(100)-", "-(100)"} {
+		if _, err := ParseAmount(text, NumberStyle{Scale: 1}); err == nil {
+			t.Fatalf("%q is not read", text)
+		}
+	}
+	epoch := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
+	for serial, want := range map[float64]string{1: "1900-01-01", 59: "1900-02-28", 61: "1900-03-01", 46295: "2026-09-30"} {
+		if got, ok := serialDate(epoch, serial); !ok || got != want {
+			t.Fatalf("serial %v: %s, not %s", serial, got, want)
+		}
+	}
+	if _, ok := serialDate(epoch, 60); ok {
+		t.Fatal("serial 60 is no date")
+	}
+	if got, _ := serialDate(time.Date(1904, 1, 1, 0, 0, 0, 0, time.UTC), 1); got != "1904-01-02" {
+		t.Fatalf("the 1904 system: %s", got)
 	}
 }

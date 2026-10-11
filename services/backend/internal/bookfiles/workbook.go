@@ -266,7 +266,9 @@ func ReadWorkbook(body []byte) (File, error) {
 					cell.Kind, cell.Value = Number, c.Value
 					if c.Value != "" && c.Style >= 0 && c.Style < len(dated) && dated[c.Style] {
 						if serial, err := strconv.ParseFloat(c.Value, 64); err == nil {
-							cell.Kind, cell.Value = Date, serialDate(epoch, serial)
+							if date, ok := serialDate(epoch, serial); ok {
+								cell.Kind, cell.Value = Date, date
+							}
 						}
 					}
 				}
@@ -300,22 +302,32 @@ func ReadWorkbook(body []byte) (File, error) {
 }
 
 // serialDate is a stored date serial as a date, with its time of day when it has one, to the millisecond (Excel keeps
-// a time as the day's fraction): 46295 is 2026-09-30, 46295.5 is 2026-09-30T12:00:00.
-func serialDate(epoch time.Time, serial float64) string {
+// a time as the day's fraction): 46295 is 2026-09-30, 46295.5 is 2026-09-30T12:00:00. In the 1900 date system Excel
+// counts a 29 February 1900 that never was, so serials before it are a day later than the epoch alone gives, and serial
+// 60 is no date (ok is false).
+func serialDate(epoch time.Time, serial float64) (string, bool) {
 	day := math.Floor(serial + 1e-9)
-	millis := int64(math.Round((serial - day) * 86400000))
+	if epoch.Year() == 1899 && day < 61 {
+		if day == 60 {
+			return "", false
+		}
+		if day < 60 {
+			day++
+		}
+	}
+	millis := int64(math.Round((serial - math.Floor(serial+1e-9)) * 86400000))
 	date := epoch.AddDate(0, 0, int(day))
 	if millis <= 0 {
-		return date.Format("2006-01-02")
+		return date.Format("2006-01-02"), true
 	}
 	if millis >= 86400000 {
-		return date.AddDate(0, 0, 1).Format("2006-01-02")
+		return date.AddDate(0, 0, 1).Format("2006-01-02"), true
 	}
 	at := date.Add(time.Duration(millis) * time.Millisecond)
 	if millis%1000 != 0 {
-		return at.Format("2006-01-02T15:04:05.000")
+		return at.Format("2006-01-02T15:04:05.000"), true
 	}
-	return at.Format("2006-01-02T15:04:05")
+	return at.Format("2006-01-02T15:04:05"), true
 }
 
 // cellReference is an A1 reference in a formula, in either case: its column and row, each with the $ that fixes it.

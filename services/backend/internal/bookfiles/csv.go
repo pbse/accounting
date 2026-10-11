@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -219,15 +220,21 @@ func guessDelimiter(text string) (rune, bool) {
 }
 
 // parseCSV reads text with delimiter into one table, a cell for each non-empty field, each with its row and column.
+// Quotes are read strictly: a quote left open would otherwise swallow the rows after it, so a file with one is refused
+// with its line.
 func parseCSV(name string, text string, delimiter rune) (File, error) {
 	file := File{Format: "csv"}
 	r := csv.NewReader(strings.NewReader(text))
-	r.Comma, r.LazyQuotes, r.FieldsPerRecord, r.ReuseRecord = delimiter, true, -1, false
+	r.Comma, r.LazyQuotes, r.FieldsPerRecord, r.ReuseRecord = delimiter, false, -1, false
 	table := Table{Name: name, Rows: []Row{}}
 	for {
 		record, err := r.Read()
 		if err == io.EOF {
 			break
+		}
+		var parse *csv.ParseError
+		if errors.As(err, &parse) && (errors.Is(err, csv.ErrQuote) || errors.Is(err, csv.ErrBareQuote)) {
+			return file, fmt.Errorf("line %d has a quotation mark that is not closed or not allowed, so the rows after it cannot be told apart: export the file again", parse.StartLine)
 		}
 		if err != nil {
 			return file, errors.New("the CSV cannot be read: " + err.Error())
