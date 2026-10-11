@@ -1159,7 +1159,7 @@ func checkLayout(l bookfiles.Layout) string {
 		return "Say what the columns hold."
 	}
 	for column, meaning := range l.Columns {
-		if column < 0 || column > 16383 || !strings.Contains(" account_number account_name account_type debit credit balance opening movement year_to_date dimension ", " "+string(meaning)+" ") {
+		if column < 0 || column > 16383 || !strings.Contains(" account_number account_name account_type debit credit balance opening movement year_to_date dimension date reference memo party ", " "+string(meaning)+" ") {
 			return "Choose each column's meaning from the list."
 		}
 	}
@@ -1168,6 +1168,9 @@ func checkLayout(l bookfiles.Layout) string {
 	}
 	if l.BalanceSign != "" && l.BalanceSign != "debit" && l.BalanceSign != "credit" {
 		return "Say whether a positive balance is a debit or a credit."
+	}
+	if l.DateOrder != "" && l.DateOrder != bookfiles.YMD && l.DateOrder != bookfiles.MDY && l.DateOrder != bookfiles.DMY {
+		return "Say whether dates are written year, month or day first."
 	}
 	if l.AsOf != "" {
 		if _, err := time.Parse("2006-01-02", l.AsOf); err != nil {

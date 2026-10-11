@@ -39,6 +39,8 @@ type Supplement = {
 type AcceptedBooks = { file: string; accepted_at: string; same: boolean; differences: string[]; effects: string[] };
 type AcceptanceRead = {
   confirmed: boolean;
+  // ledger says the file is the month's ledger detail, read but not yet a month's books.
+  ledger?: string;
   accepted_books?: AcceptedBooks | null;
   supplement?: Supplement | null;
   checks: Check[];
@@ -108,6 +110,7 @@ function AcceptForm({ client, id, data, onClose }: { client: string; id: string;
               {!was.current && <strong>{was.map_changed ? "The account map has changed how this file's accounts are classified since then: the month's books keep the earlier map until you accept this one again." : "That was of an earlier reading or attestation: accept this one again."}</strong>}
             </p>
           )}
+          {data.ledger && <p className="note">{data.ledger}</p>}
           {data.accepted_books && (
             <>
               <p>

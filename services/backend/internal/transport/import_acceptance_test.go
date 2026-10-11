@@ -730,6 +730,16 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if left != 0 {
 		t.Fatalf("a deleted file's books go with it: %d", left)
 	}
+	// A ledger file is read line by line; its month-end balances arrive with the next step, so it is not yet accepted.
+	ledger := send1("2026-08", "Date,Account,Description,Debit,Credit\n08/25/2026,6000 Rent,August rent,200.00,\n08/25/2026,1000 Business Checking,August rent,,200.00\n")
+	confirmColumns(ledger, "2026-08-31", map[string]string{"0": "date", "1": "account_name", "2": "memo", "3": "debit", "4": "credit"})
+	attest(ledger)
+	ledgerPath := "/v1/closes/client/import/acceptance?name=Acme%20Co&id=" + ledger
+	ledgerRead := call("user_a", partner, "GET", ledgerPath, nil, 200)
+	if ledgerRead["can_accept"] != false || !strings.Contains(fmt.Sprint(ledgerRead["ledger"]), "ledger detail") {
+		t.Fatalf("a ledger file waits for its balances: %v", ledgerRead)
+	}
+	call("user_a", partner, "POST", ledgerPath, with(ledgerRead, map[string]any{"exported_on": "2026-10-05"}), 409)
 	// With file imports switched off, the checks are read, and nothing is accepted.
 	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)
 	must(err)

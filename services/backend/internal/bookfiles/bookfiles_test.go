@@ -901,3 +901,51 @@ func TestTheSheetAndTheLocale(t *testing.T) {
 		t.Fatal("a dollar's locale decides which it is")
 	}
 }
+
+// A General Ledger is read line by line: each posting row a dated line of the month, with its transaction's number, its
+// payee and its description; the running balance beside it left out. Dates written in numbers read in the order they
+// show, or, when they could read either way, wait for it.
+func TestALedgerIsReadLineByLine(t *testing.T) {
+	gl, _ := Read("gl.csv", []byte("General Ledger\nJanuary 2027\n\nDate,Num,Name,Account,Description,Debit,Credit,Balance\n01/05/2027,1001,Acme Supplies,6000 Rent,January rent,200.00,,200.00\n01/05/2027,1001,Acme Supplies,1000 Business Checking,January rent,,200.00,0.00\n01/20/2027,INV-7,Big Client,1000 Business Checking,Invoice 7,700.25,,700.25\n01/20/2027,INV-7,Big Client,4000 Sales,Invoice 7,,700.25,0.00\n"))
+	layout, questions := ProposeLayout(gl.Tables[0])
+	if !layout.Ledger() || layout.HeaderRow != 4 || layout.Columns[0] != LineDate || layout.Columns[1] != Reference || layout.Columns[2] != Party || layout.Columns[3] != AccountName ||
+		layout.Columns[4] != Memo || layout.Columns[5] != Debit || layout.Columns[6] != Credit || !slices.Equal(layout.IgnoredColumns, []int{7}) || layout.DateOrder != MDY ||
+		!slices.ContainsFunc(questions, func(q string) bool { return strings.Contains(q, "running balance") }) {
+		t.Fatalf("a ledger's columns, its running balance left out, its dates month first: %+v %v", layout, questions)
+	}
+	layout.AsOf = "2027-01-31"
+	reading := layout.Read(gl.Tables[0])
+	if !reading.Balanced || len(reading.Problems) != 0 || len(reading.Lines) != 4 {
+		t.Fatalf("a ledger's lines balance: %+v", reading)
+	}
+	if l := reading.Lines[0]; l.Kind != Posting || l.Date != "2027-01-05" || l.Reference != "1001" || l.Party != "Acme Supplies" || l.Memo != "January rent" || l.Name != "6000 Rent" || l.Amount != "200" {
+		t.Fatalf("a line with its date, number, payee and description: %+v", l)
+	}
+	// Dates that could read either way wait for their order; one outside the month holds the ledger.
+	early, _ := Read("gl.csv", []byte("Date,Account,Debit,Credit\n01/05/2027,Rent,200.00,\n02/01/2027,Checking,,200.00\n"))
+	layout, questions = ProposeLayout(early.Tables[0])
+	layout.AsOf = "2027-01-31"
+	if layout.DateOrder != "" || !slices.ContainsFunc(questions, func(q string) bool { return strings.Contains(q, "day first") }) {
+		t.Fatalf("dates that read either way are asked about: %+v %v", layout, questions)
+	}
+	if reading = layout.Read(early.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "day first or month first") {
+		t.Fatalf("until their order is confirmed: %v", reading.Problems)
+	}
+	layout.DateOrder = MDY
+	if reading = layout.Read(early.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "outside the month of 2027-01-31") || reading.Lines[0].Date != "2027-01-05" {
+		t.Fatalf("a line dated in February: %v", reading.Problems)
+	}
+	// A workbook's date with its time is that day; a two-digit year written first reads when the order says so.
+	for _, c := range []struct {
+		cell  Cell
+		order string
+		want  string
+	}{{Cell{Kind: Date, Value: "2027-01-31T12:00:00"}, "", "2027-01-31"}, {Cell{Value: "27/01/31"}, YMD, "2027-01-31"}, {Cell{Value: "Jan 31, 2027"}, "", "2027-01-31"}, {Cell{Kind: Date, Value: "2027-01-31T23:00:00-05:00"}, "", "2027-01-31"}, {Cell{Kind: Date, Value: "2027-01-31T12:00:00Z"}, "", "2027-01-31"}} {
+		if got, err := readDate(c.cell, c.order); err != nil || got != c.want {
+			t.Fatalf("%v read as %q (%v), not %s", c.cell, got, err, c.want)
+		}
+	}
+	if got, err := readDate(Cell{Kind: Date, Value: "2027-01-31garbage"}, ""); err == nil {
+		t.Fatalf("a malformed stored date is no date: %q", got)
+	}
+}
