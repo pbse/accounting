@@ -197,6 +197,8 @@ The opening baseline reviews the takeover month's month-end tie-out; it does not
 - **Reviewed comparatives.** Earlier months imported as files (or captured) and accepted as prior-period figures, with their scope and basis. They feed comparisons and trends; they are not closes and carry no sign-off. Publication rules that today require comparison months to be signed off are amended to accept a reviewed comparative, labelled as such.
 - **Cross-source identity.** Comparisons and budgets match months today by the provider's company identity (budget actuals key on source and realm). A client moving from files to a live ledger, or the other way, needs a person to confirm that both are the same company and to map the accounts across, once; until then the months are not compared.
 
+As built (cross-source identity, the link): the client's page lists, for a client with files, each ledger company its months were captured from, and whether a reviewer has confirmed it is the files' company. Confirming maps each file account the client's account map holds to one of the company's accounts, proposed by name (without numbers, and a parent's last part) from the company's newest readable month, each ledger account at most once; an account may be left unmapped. Each confirmation is a new version with its reason (`books_company_links`, migration 163), the newest in force. A link keeps only the accounts a map still holds: a deleted file's accounts leave the links with it, as they leave the maps. Comparisons across the two sources use it next.
+
 ## One authoritative books version per month
 
 - Each client has a **default source**: QuickBooks, Xero or Files (more ledgers later). Each month records the books version it reads and where it came from.

@@ -11,6 +11,7 @@ import { ClientForm, LedgerPicker, type CatalogLedger, type LedgerChoice, type P
 import { PostingCard, QuickBooksAction, type ProductionGrant } from "./QuickBooksBooks";
 import { XeroAction, XeroPostingCard, type XeroGrant } from "./XeroBooks";
 import { FilesCard } from "./Files";
+import { CompanyLinksCard } from "./CompanyLinks";
 import { workspaceRequest } from "../closes/workspace";
 
 type Books = {
@@ -377,6 +378,7 @@ export default function ClientPage() {
             <XeroPostingCard key={id} client={client} connection={id} onChanged={reread} />
           ))}
           {client.whole && (client.file_imports || (client.files ?? 0) > 0) && <FilesCard key={name} client={name} />}
+          {client.whole && (client.files ?? 0) > 0 && <CompanyLinksCard key={`links-${name}`} client={name} />}
           <Card
             icon="history"
             tone={!roster ? "wait" : "done"}
