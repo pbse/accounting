@@ -76,7 +76,7 @@ func openingBlockers(ctx context.Context, tx *sql.Tx, closeID string, tie tieOut
 		var confirmed, sameCompanies bool
 		var setupProfile []byte
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM takeover_setups WHERE close_id::text=$1),
- COALESCE((SELECT content->'profile' FROM takeover_setups WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1),'null'::jsonb),
+ COALESCE((SELECT content->'profile' FROM takeover_setups WHERE close_id::text=$1 ORDER BY takeover_setups.id DESC LIMIT 1),'null'::jsonb),
  COALESCE((SELECT t.content->'companies' IS NULL OR (SELECT jsonb_agg(jsonb_build_object('provider',e->>'provider','company',e->>'company') ORDER BY e->>'provider',e->>'company') FROM jsonb_array_elements(t.content->'companies') e) IS NOT DISTINCT FROM (SELECT jsonb_agg(jsonb_build_object('provider',e->>'provider','company',e->>'company') ORDER BY e->>'provider',e->>'company') FROM jsonb_array_elements(`+takeoverCompanies+`) e)
   FROM takeover_setups t WHERE t.close_id=c.id ORDER BY t.id DESC LIMIT 1),true)
  FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&confirmed, &setupProfile, &sameCompanies); err != nil {

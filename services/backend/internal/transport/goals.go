@@ -806,7 +806,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		}
 		var goal *view
 		g := &view{}
-		err = tx.QueryRowContext(r.Context(), `SELECT id::text,author,COALESCE(due_on::text,''),state,created_at,reached_at,finished_at,finish,ready_at,events FROM close_goals WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&g.ID, &g.Author, &g.DueOn, &g.State, &g.CreatedAt, &g.ReachedAt, &g.FinishedAt, &g.Finish, &g.ReadyAt, &g.Events)
+		err = tx.QueryRowContext(r.Context(), `SELECT id::text,author,COALESCE(due_on::text,''),state,created_at,reached_at,finished_at,finish,ready_at,events FROM close_goals WHERE close_id=$1 ORDER BY close_goals.id DESC LIMIT 1`, closeID).Scan(&g.ID, &g.Author, &g.DueOn, &g.State, &g.CreatedAt, &g.ReachedAt, &g.FinishedAt, &g.Finish, &g.ReadyAt, &g.Events)
 		switch err {
 		case nil:
 			goal = g

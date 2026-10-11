@@ -40,7 +40,7 @@ const waitingCoverage = `(` + openCoverage + ` AND NOT EXISTS(SELECT 1 FROM requ
 const attentionQuery = `WITH scope AS (
  SELECT c.id,c.entity,c.period,COALESCE(c.due_on::text,'') AS due_on,c.priority,CASE WHEN c.owner='' THEN 'none' WHEN c.owner=$3 THEN 'mine' ELSE 'other' END AS owner
  FROM client_closes c WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
- AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'
 ), drafts AS (
  SELECT x.id,x.close_id,x.kind,x.created_at,x.review_id,x.review_state,x.paper,
   COALESCE(jsonb_typeof(x.paper->'sources')='array' AND x.paper->'sources'<>'[]'::jsonb,false) AS sourced,
@@ -69,7 +69,7 @@ const attentionQuery = `WITH scope AS (
  SELECT 'fix:'||x.id||':'||x.review_id,'fix',x.close_id,(SELECT created_at FROM workpaper_reviews WHERE id::text=x.review_id),'Changes were requested on draft #'||x.id,x.id::text FROM drafts x WHERE x.review_state='changes_requested'
  UNION ALL
  SELECT 'changed:'||x.id||':'||left(md5(COALESCE(c.sources,'')||'|'||COALESCE(c.parent,'')),16),'changed',x.close_id,GREATEST(x.created_at,c.replaced_at),
-  'A source of draft #'||x.id||' changed'||CASE WHEN (SELECT decision FROM workpaper_reviews WHERE workpaper_id=x.id ORDER BY id DESC LIMIT 1)='approved' THEN ' after it was approved' ELSE '' END,x.id::text
+  'A source of draft #'||x.id||' changed'||CASE WHEN (SELECT decision FROM workpaper_reviews WHERE workpaper_id=x.id ORDER BY workpaper_reviews.id DESC LIMIT 1)='approved' THEN ' after it was approved' ELSE '' END,x.id::text
   FROM drafts x CROSS JOIN LATERAL (SELECT
    (SELECT string_agg(e.id||'/'||e.digest||'/'||COALESCE(e.superseded_by::text,''),',' ORDER BY e.id) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src JOIN evidence e ON e.id::text=src->>'id') AS sources,
    (SELECT max(e.replaced_at) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src JOIN evidence e ON e.id::text=src->>'id') AS replaced_at,

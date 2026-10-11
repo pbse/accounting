@@ -24,7 +24,7 @@ const reminderStatus = `(SELECT jsonb_build_object('left',o.reminder_max-(SELECT
  'due_at',(SELECT min(e.occurred_at) FROM email_delivery_events e WHERE e.connection_id=m.connection_id AND e.provider_id=m.provider_id AND lower(e.recipient)=lower(q.recipient) AND e.kind='delivered')+make_interval(days=>o.reminder_after_days),
  'expires_at',(SELECT l.expires_at FROM client_request_links l WHERE l.digest=m.link_digest))
  FROM request_drafts rd JOIN client_closes rc ON rc.id=rd.close_id JOIN organizations o ON o.id=rc.organization_id
- LEFT JOIN LATERAL (SELECT connection_id,provider_id,link_digest FROM email_outbox WHERE request_id=q.id ORDER BY created_at DESC,id DESC LIMIT 1) m ON true WHERE rd.id=q.draft_id)`
+ LEFT JOIN LATERAL (SELECT connection_id,provider_id,link_digest FROM email_outbox WHERE request_id=q.id ORDER BY email_outbox.created_at DESC,email_outbox.id DESC LIMIT 1) m ON true WHERE rd.id=q.draft_id)`
 
 // reminderFollow is SQL for waiting request q, in Work's order: exhausted once the firm's rule allows no more reminders,
 // expiring once the link lapsed or lapses before the next is due, and due while a reminder could be approved now, as the

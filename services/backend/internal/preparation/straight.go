@@ -988,10 +988,16 @@ func pendingEvidence(close string) string {
 	return `EXISTS(SELECT 1 FROM evidence o WHERE o.close_id=` + close + ` AND o.purpose='work' AND o.superseded_by IS NULL AND o.extraction_state NOT IN ('ready','failed'))`
 }
 
-// UnrelatedEvidence is the close's documents that positively are another invoice: another job's own document, fully
-// read, that the agent read as a prepaid invoice (its latest reading, even while that job is read again) whose vendor and
-// invoice number its current text prints and differ from this proposal's, and whose text names neither this vendor nor this invoice number (whole words) and speaks of no credit,
-// cancellation, refund, adjustment, reversal or void. Anything else stays something a person weighs.
+// UnrelatedEvidence is the close's documents that positively are another matter: another job's own document, fully read
+// by a model (its latest reading, even while that job is read again), whose text names neither this vendor nor this
+// invoice number (whole words), and that is either
+//   - another prepaid invoice, whose own vendor and invoice number its text prints and differ from this proposal's, and
+//     which speaks of no credit, cancellation, refund, adjustment, reversal or void; or
+//   - a statement: read as a reconciliation, payroll summary or lender statement, or as unsupported work whose own
+//     document it cites as a statement (an ordinary bank or card statement), which nowhere prints this invoice's amount
+//     (a payment or refund of it would).
+//
+// Anything else stays something a person weighs.
 func UnrelatedEvidence(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, closeID, jobID string, p Proposal) (map[string]bool, error) {
@@ -1000,9 +1006,15 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 	if vendor == "" || number == "" {
 		return out, nil
 	}
+	amount := ""
+	for _, f := range p.Facts {
+		if f.Field == "amount" {
+			amount = strings.ReplaceAll(strings.TrimSpace(f.Value), ",", "")
+		}
+	}
 	rows, err := q.QueryContext(ctx, `SELECT e.id::text,COALESCE(e.content,''),i.proposal FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
 
- WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind'='prepaid' AND i.proposal->>'engine'='openai'`, closeID, jobID)
+ WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -1019,6 +1031,18 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 			continue
 		}
 		lower, normal := strings.ToLower(text), documents.NormalizeEntity(text)
+		if other.Kind != "prepaid" {
+			statement := other.Kind != "unsupported"
+			for _, src := range other.Sources {
+				statement = statement || src.ID == id && src.Role == "statement"
+			}
+			// The amount in any form a statement prints it (1,200.00, 1200, $1,200 or 1,20,000.00) keeps it related.
+			cents, _ := prepaids.Amount(amount)
+			if statement && amount != "" && !thisVendor.MatchString(normal) && !thisNumber.MatchString(lower) && !documents.AmountIn(text, amount) && !distinctFigures(text)[cents] {
+				out[id] = true
+			}
+			continue
+		}
 		v, n := identity(other)
 		if v == "" || n == "" || v == vendor || n == number || !wholeWord(v).MatchString(normal) || !wholeWord(n).MatchString(lower) {
 			continue

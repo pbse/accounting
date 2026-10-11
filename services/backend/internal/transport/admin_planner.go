@@ -141,7 +141,7 @@ func adminDraftPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		var entity, period string
 		var signed bool
 		var work []byte
-		err := tx.QueryRowContext(ctx, `SELECT c.entity,c.period,COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),false),
+		err := tx.QueryRowContext(ctx, `SELECT c.entity,c.period,COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),false),
  COALESCE((SELECT jsonb_object_agg(state,n) FROM (SELECT state,count(*) AS n FROM preparation_jobs WHERE close_id=c.id GROUP BY state) s),'{}'::jsonb)
  FROM client_closes c WHERE c.id::text=$1 AND c.organization_id=$2`, in.CloseID, in.Firm).Scan(&entity, &period, &signed, &work)
 		if errors.Is(err, sql.ErrNoRows) {

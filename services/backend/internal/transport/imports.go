@@ -365,7 +365,7 @@ func confirmedBrief(ctx context.Context, q rowReader, org, name, id string) (*co
 	var layout, reading []byte
 	err := q.QueryRowContext(ctx, `SELECT id::text,layout,reading-'lines',reason,actor,created_at,encoding,delimiter,COALESCE(jsonb_array_length(reading->'lines'),0),
  (SELECT count(*) FROM jsonb_array_elements(COALESCE(reading->'lines','[]'::jsonb)) e WHERE e->>'kind'='posting')
- FROM books_layouts WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND import_id::text=$3 ORDER BY id DESC LIMIT 1`, org, name, id).
+ FROM books_layouts WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND import_id::text=$3 ORDER BY books_layouts.id DESC LIMIT 1`, org, name, id).
 		Scan(&c.ID, &layout, &reading, &c.Reason, &c.Actor, &c.At, &c.CSV.Encoding, &c.CSV.Delimiter, &c.LineCount, &c.Accounts)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -387,7 +387,7 @@ func latestLayout(ctx context.Context, q rowReader, org, name, id string) (*conf
 	var c confirmedRead
 	var layout []byte
 	err := q.QueryRowContext(ctx, `SELECT id::text,layout,reason,actor,created_at,encoding,delimiter FROM books_layouts
- WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND ($3='' OR import_id::text=$3) ORDER BY id DESC LIMIT 1`, org, name, id).
+ WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND ($3='' OR import_id::text=$3) ORDER BY books_layouts.id DESC LIMIT 1`, org, name, id).
 		Scan(&c.ID, &layout, &c.Reason, &c.Actor, &c.At, &c.CSV.Encoding, &c.CSV.Delimiter)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -635,7 +635,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		// The same file sent again for the same month (a retry after a lost answer) is the import already kept.
 		var repeat string
-		switch err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND period=$3 AND digest=$4 ORDER BY id DESC LIMIT 1`,
+		switch err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND period=$3 AND digest=$4 ORDER BY books_imports.id DESC LIMIT 1`,
 			organization(r), name, period, hex.EncodeToString(sum[:])).Scan(&repeat); err {
 		case nil:
 			jsonReply(w, 200, map[string]any{"id": repeat, "repeat": true})

@@ -1026,7 +1026,7 @@ func (s *seeder) takeover(ctx context.Context, closeID string) {
 	}
 	// The takeover cleanup was done in the first month: each inherited balance was agreed to its statement.
 	var baselineID string
-	s.db.QueryRowContext(ctx, `SELECT id::text FROM opening_baselines WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&baselineID)
+	s.db.QueryRowContext(ctx, `SELECT id::text FROM opening_baselines WHERE close_id::text=$1 ORDER BY opening_baselines.id DESC LIMIT 1`, closeID).Scan(&baselineID)
 	for _, item := range items {
 		s.must(ctx, "resolve "+item.Label, "POST", "/v1/closes/"+closeID+"/opening-baseline/resolve", map[string]any{"baseline_id": baselineID, "item": item.Key, "reference": "Agreed to the June bank and vendor statements; no correcting entry needed."})
 	}
@@ -1441,7 +1441,7 @@ func (s *seeder) reopen(ctx context.Context, c *seed.Client, closeID, period str
 			continue
 		}
 		var evidenceID string
-		s.db.QueryRowContext(ctx, `SELECT id::text FROM evidence WHERE close_id::text=$1 AND name=$2 ORDER BY id LIMIT 1`, closeID, w.File).Scan(&evidenceID)
+		s.db.QueryRowContext(ctx, `SELECT id::text FROM evidence WHERE close_id::text=$1 AND name=$2 ORDER BY evidence.id LIMIT 1`, closeID, w.File).Scan(&evidenceID)
 		if evidenceID == "" {
 			return
 		}
@@ -1607,7 +1607,7 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 	for _, o := range obligations {
 		if _, ok := s.must(ctx, "obligation "+str(o["name"]), "POST", path+"/cash-obligations", o); ok {
 			var id string
-			s.db.QueryRowContext(ctx, `SELECT id::text FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND name=$3 AND approved_at IS NULL ORDER BY id DESC LIMIT 1`, s.o.Organization, c.Name, str(o["name"])).Scan(&id)
+			s.db.QueryRowContext(ctx, `SELECT id::text FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND name=$3 AND approved_at IS NULL ORDER BY cash_obligations.id DESC LIMIT 1`, s.o.Organization, c.Name, str(o["name"])).Scan(&id)
 			s.recordRow(ctx, "cash_obligations", id)
 			s.must(ctx, "approve obligation "+str(o["name"]), "POST", path+"/cash-obligations", map[string]any{"action": "approve", "id": id})
 		}
@@ -1716,7 +1716,7 @@ func (s *seeder) afterwards(ctx context.Context) {
 	for _, name := range []string{"Harbor Fixture LLC", "Cedar & Pine Coffee Co.", "Summit Peak Fitness LLC"} {
 		closeID := s.closeFor(ctx, name, "2026-09")
 		var syncID string
-		s.db.QueryRowContext(ctx, `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&syncID)
+		s.db.QueryRowContext(ctx, `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 ORDER BY quickbooks_entity_syncs.id DESC LIMIT 1`, closeID).Scan(&syncID)
 		if syncID != "" {
 			s.call(ctx, "POST", "/v1/closes/"+closeID+"/daily-review", map[string]any{"sync_id": syncID, "source": "quickbooks"})
 		}
@@ -1772,12 +1772,12 @@ func (s *seeder) afterwards(ctx context.Context) {
 // take is not claimed.
 func (s *seeder) overviewAnswer(ctx context.Context) string {
 	rows, err := s.db.QueryContext(ctx, `SELECT c.entity,
- COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),''),
+ COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),''),
  (SELECT count(*) FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='pending'),
  (SELECT count(*) FROM preparation_jobs j WHERE j.close_id=c.id AND j.state='needs_confirmation'),
  (SELECT count(*) FROM preparation_jobs j WHERE j.close_id=c.id AND j.state='waiting_client'),
  (SELECT count(*) FROM preparation_jobs j WHERE j.close_id=c.id AND j.state='failed'),
- EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=c.id AND e.superseded_by IS NOT NULL AND e.replaced_at>COALESCE((SELECT created_at FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'-infinity')),
+ EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=c.id AND e.superseded_by IS NOT NULL AND e.replaced_at>COALESCE((SELECT created_at FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'-infinity')),
  EXISTS(SELECT 1 FROM quickbooks_snapshots q WHERE q.close_id=c.id),
  COALESCE(c.due_on<CURRENT_DATE,false)
  FROM client_closes c WHERE c.organization_id=$1 AND c.period='2026-09' AND lower(c.entity)=ANY($2) ORDER BY c.entity`, s.o.Organization, s.clientNames())
@@ -1837,7 +1837,7 @@ func (s *seeder) overviewAnswer(ctx context.Context) string {
 // openCount says how many of the demonstration's September closes are open, as the closes stand.
 func (s *seeder) openCount(ctx context.Context) string {
 	var open int
-	s.db.QueryRowContext(ctx, `SELECT count(*) FROM client_closes c WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($2) AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'`, s.o.Organization, s.clientNames()).Scan(&open)
+	s.db.QueryRowContext(ctx, `SELECT count(*) FROM client_closes c WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($2) AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'`, s.o.Organization, s.clientNames()).Scan(&open)
 	return fmt.Sprintf("%d September closes are open.", open)
 }
 
@@ -1845,8 +1845,8 @@ func (s *seeder) openCount(ctx context.Context) string {
 func (s *seeder) ownershipAnswer(ctx context.Context) string {
 	var mine, others []string
 	rows, err := s.db.QueryContext(ctx, `SELECT entity,owner=$2 FROM client_closes c WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($3)
- AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
-  OR EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=c.id AND e.superseded_by IS NOT NULL AND e.replaced_at>COALESCE((SELECT created_at FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'-infinity'))) ORDER BY entity`, s.o.Organization, s.o.Subject, s.clientNames())
+ AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'
+  OR EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=c.id AND e.superseded_by IS NOT NULL AND e.replaced_at>COALESCE((SELECT created_at FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'-infinity'))) ORDER BY entity`, s.o.Organization, s.o.Subject, s.clientNames())
 	if err == nil {
 		for rows.Next() {
 			var entity string
@@ -1988,7 +1988,7 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
  OR (EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.routine_id::text=ANY($3))
   AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND NOT g.routine_id::text=ANY($3))
   AND c.owner='' AND c.priority='normal' AND c.due_on IS NULL AND c.retain_until IS NULL AND NOT c.legal_hold AND NOT c.takeover
-  AND `+routineUntouched+`)) ORDER BY period DESC,id DESC`, o.Organization, closes, recorded["close_routines"])
+  AND `+routineUntouched+`)) ORDER BY c.period DESC,c.id DESC`, o.Organization, closes, recorded["close_routines"])
 	if err != nil {
 		return err
 	}

@@ -215,13 +215,6 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	}
 	confirm(novemberPath, map[string]any{"accept": true, "reason": "Same accounts as before"}, 200)
 	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["recorded"] != true {
-		rows, _ := db.Query(`SELECT id,period,reason,import_id,created_at,clock_timestamp() FROM books_account_maps WHERE organization_id=$1 ORDER BY id`, org)
-		for rows.Next() {
-			var a, b, c, d, e, f sql.NullString
-			rows.Scan(&a, &b, &c, &d, &e, &f)
-			t.Logf("version %s %s %q import %s at %s now %s", a.String, b.String, c.String, d.String, e.String, f.String)
-		}
-		openTransactions(t, db)
 		t.Fatalf("November's file recorded: %v", read)
 	}
 	// November's layout confirmed again asks for its map again; confirming it records the new reading in place of the

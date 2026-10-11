@@ -232,7 +232,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 		}
 		var entityName, period, environment string
 		var signed bool
-		if err := db.QueryRowContext(r.Context(), `SELECT entity,period,COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=client_closes.id ORDER BY id DESC LIMIT 1),false),COALESCE((SELECT x.environment FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("client_closes.id")+`),'') FROM client_closes WHERE id::text=$1 AND organization_id=$2`, closeID, a.Organization).Scan(&entityName, &period, &signed, &environment); err != nil || (signed && in.Action != "verify") {
+		if err := db.QueryRowContext(r.Context(), `SELECT entity,period,COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=client_closes.id ORDER BY close_signoffs.id DESC LIMIT 1),false),COALESCE((SELECT x.environment FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("client_closes.id")+`),'') FROM client_closes WHERE id::text=$1 AND organization_id=$2`, closeID, a.Organization).Scan(&entityName, &period, &signed, &environment); err != nil || (signed && in.Action != "verify") {
 			problem(w, 409, "Use an open close for this client.")
 			return
 		}

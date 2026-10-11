@@ -195,7 +195,7 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
  'replied',`+requestReplied("q.id")+`,
  'live',COALESCE((SELECT revoked_at IS NULL AND expires_at>now() FROM client_request_links WHERE request_id=q.id ORDER BY issued_at DESC LIMIT 1),false)) ORDER BY q.id DESC),'[]') FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1 AND q.coverage_scope IS NOT NULL`, r.PathValue("id")).Scan(&requests)
 		if err == nil {
-			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'request_id',request_id::text,'name',name,'digest',digest,'state',state,'error',error,'source_id',source_id::text,'scan_version',scan_version,'scanned_at',scanned_at,'decision_note',decision_note) ORDER BY id),'[]') FROM client_attachments WHERE close_id=$1`, r.PathValue("id")).Scan(&attachments)
+			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'request_id',request_id::text,'name',name,'digest',digest,'state',state,'error',error,'source_id',source_id::text,'scan_version',scan_version,'scanned_at',scanned_at,'decision_note',decision_note) ORDER BY client_attachments.id),'[]') FROM client_attachments WHERE close_id=$1`, r.PathValue("id")).Scan(&attachments)
 		}
 		// While its link is live, a replied request says whether the client can still add to it, and an unanswered one
 		// why the client can no longer answer it, as the link decides.

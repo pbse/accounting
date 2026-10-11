@@ -214,7 +214,7 @@ func settleOccurrence(o cashObligation, on string, sameWeek func(a, b string) bo
 // cashMatchesOf are the client's standing decisions on bills in one ledger.
 func cashMatchesOf(ctx context.Context, db *sql.DB, org, entity, company string) ([]cashMatch, error) {
 	rows, err := db.QueryContext(ctx, `SELECT id::text,obligation_id::text,occurrence_on::text,document,label,relation,amount::text,paid,COALESCE(document_date::text,''),decided_by,decided_at FROM cash_obligation_matches
- WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND company=$3 AND retired_at IS NULL ORDER BY id`, org, entity, company)
+ WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND company=$3 AND retired_at IS NULL ORDER BY cash_obligation_matches.id`, org, entity, company)
 	if err != nil {
 		return nil, err
 	}

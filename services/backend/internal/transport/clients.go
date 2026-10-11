@@ -299,7 +299,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		var template map[string]any
 		var templateDue sql.NullInt64
 		var templateOwner, templateRev string
-		switch err = tx.QueryRowContext(ctx, `SELECT due_days,owner,id::text FROM close_templates WHERE organization_id=$1 AND $2 ORDER BY id DESC LIMIT 1`, org, firm).Scan(&templateDue, &templateOwner, &templateRev); err {
+		switch err = tx.QueryRowContext(ctx, `SELECT due_days,owner,id::text FROM close_templates WHERE organization_id=$1 AND $2 ORDER BY close_templates.id DESC LIMIT 1`, org, firm).Scan(&templateDue, &templateOwner, &templateRev); err {
 		case nil:
 			template = map[string]any{"due_days": nil, "owner": templateOwner, "rev": templateRev}
 			if templateDue.Valid {
@@ -345,7 +345,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		if err == nil {
-			if grants, err = grantIDs(ctx, tx, `SELECT id::text FROM xero_posting_grants WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY id DESC`, org, name); err == nil {
+			if grants, err = grantIDs(ctx, tx, `SELECT id::text FROM xero_posting_grants WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY xero_posting_grants.id DESC`, org, name); err == nil {
 				for _, id := range grants {
 					g, e := scanXeroGrant(tx.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE id=$1::bigint`, id))
 					if e != nil {

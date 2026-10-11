@@ -216,15 +216,6 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+first, map[string]any{"action": "confirm", "layout": manual, "reason": "Headers named by hand"}, 200)
 	next := upload("user_b", preparer, "Konten August.csv", "2026-08", custom, 201)["id"].(string)
 	if p := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+next, nil, 200)["proposal"].(map[string]any); p["reused"] != true {
-		rows, _ := db.Query(`SELECT id,import_id,layout->'headers',layout->>'header_row',layout->>'table',encoding,delimiter FROM books_layouts WHERE organization_id=$1 ORDER BY id DESC LIMIT 3`, org)
-		for rows.Next() {
-			var a, b, c, d, e, f, g sql.NullString
-			rows.Scan(&a, &b, &c, &d, &e, &f, &g)
-			t.Logf("layout %v import %v headers %v row %v table %v enc %v delim %v", a.String, b.String, c.String, d.String, e.String, f.String, g.String)
-		}
-		full := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+next, nil, 200)
-		t.Logf("first=%s next=%s read: enc %v delim %v unsure %v rows %v", first, next, full["encoding"], full["delimiter"], full["unsure"], full["tables"].([]any)[0].(map[string]any)["rows"])
-		openTransactions(t, db)
 		t.Fatalf("a layout confirmed by hand is proposed again: %v", p)
 	}
 
@@ -388,22 +379,5 @@ func TestACSVChoiceIsCheckedAndKeysTheRowsKept(t *testing.T) {
 		parseKey("csv", csvChoice{}, nil, &confirmedRead{ID: "3", CSV: utf8Comma}) != parseKey("csv", csvChoice{}, nil, &confirmedRead{ID: "4", CSV: utf8Comma}) ||
 		parseKey("csv", csvChoice{}, nil, &confirmedRead{CSV: utf8Comma}) == parseKey("csv", utf8Comma, nil, nil) {
 		t.Fatal("the key is how the file is read")
-	}
-}
-
-// openTransactions logs the database's connections inside a transaction they have not finished: a stale read in a test
-// (issue #369) would come from a pooled connection left in one.
-func openTransactions(t *testing.T, db *sql.DB) {
-	t.Helper()
-	rows, err := db.Query(`SELECT pid,state,COALESCE(to_char(xact_start,'HH24:MI:SS.MS'),''),COALESCE(backend_xmin::text,''),left(query,160) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND xact_start IS NOT NULL`)
-	if err != nil {
-		t.Logf("open transactions unavailable: %v", err)
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var pid, state, start, xmin, query string
-		rows.Scan(&pid, &state, &start, &xmin, &query)
-		t.Logf("connection %s %s since %s xmin %s: %s", pid, state, start, xmin, query)
 	}
 }
