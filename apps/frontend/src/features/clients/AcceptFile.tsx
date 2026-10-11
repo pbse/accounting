@@ -24,8 +24,20 @@ type Acceptance = {
   current: boolean;
   map_changed?: boolean;
 };
+// A file accepted for a month whose books come from a live ledger supplements them: reconciled to its capture, and not
+// used when it differs.
+type Supplement = {
+  state: "reconciled" | "differs" | "unavailable";
+  period: string;
+  ledger?: "quickbooks" | "xero";
+  captured_at?: string;
+  accounts?: number;
+  differences?: string[];
+  reason?: string;
+};
 type AcceptanceRead = {
   confirmed: boolean;
+  supplement?: Supplement | null;
   checks: Check[];
   holds?: number;
   period?: string;
@@ -92,6 +104,26 @@ function AcceptForm({ client, id, data, onClose }: { client: string; id: string;
               {was.final_adjustments ? ", with the final adjustments in." : ", before the final adjustments."}{" "}
               {!was.current && <strong>{was.map_changed ? "The account map has changed how this file's accounts are classified since then: the month's books keep the earlier map until you accept this one again." : "That was of an earlier reading or attestation: accept this one again."}</strong>}
             </p>
+          )}
+          {data.supplement && (
+            <>
+              <p>
+                {monthName(data.supplement.period)}’s books come from {data.supplement.ledger === "xero" ? "Xero" : data.supplement.ledger === "quickbooks" ? "QuickBooks" : "its ledger"}, so this file supplements them and never
+                replaces them:{" "}
+                {data.supplement.state === "unavailable"
+                  ? data.supplement.reason
+                  : data.supplement.state === "reconciled"
+                    ? `it agrees with the capture of ${dates.dateTime(data.supplement.captured_at ?? "")} to the cent, across ${data.supplement.accounts} accounts.`
+                    : `it does not agree with the capture of ${dates.dateTime(data.supplement.captured_at ?? "")}, and is not used.`}
+              </p>
+              {data.supplement.state === "differs" && (
+                <ul>
+                  {(data.supplement.differences ?? []).map((d) => (
+                    <li key={d}>{d}</li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
           <p>{data.holds ? `${data.holds} check${data.holds === 1 ? "" : "s"} hold${data.holds === 1 ? "s" : ""} what depend${data.holds === 1 ? "s" : ""} on them. None refuses the file.` : "Every check passes."}</p>
           <ul className="ks-filelist">
