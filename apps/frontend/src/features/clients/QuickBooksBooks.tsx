@@ -262,7 +262,9 @@ const kinds: [string, string][] = [
 export function PostingCard({ client, onChanged }: { client: Client; onChanged: () => void }) {
   const dates = useDates();
   const name = client.entity;
-  const production = client.quickbooks.find((c) => c.environment === "production");
+  // The production connection grants are made on: the working one, under any of the client's names, else the first.
+  const production =
+    client.quickbooks.find((c) => c.environment === "production" && (c.state === "active" || c.state === "refreshing")) ?? client.quickbooks.find((c) => c.environment === "production");
   const grant = client.production_grant;
   const currency = client.profile?.currency ?? "USD";
   const [open, setOpen] = useState<"" | "grant" | "revoke">("");

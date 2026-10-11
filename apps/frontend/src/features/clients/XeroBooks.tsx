@@ -31,6 +31,9 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
   const [error, setError] = useState("");
   const [agreed, setAgreed] = useState(false);
   const [tenant, setTenant] = useState("");
+  // The connection whose organisation is being chosen: the one waiting for it, or the one picked in Manage.
+  const [choosing, setChoosing] = useState<XeroConnection | undefined>(undefined);
+  const chosen = choosing ?? (c?.state === "choose_tenant" ? c : undefined);
   // Xero's answer opens the step that finishes it.
   useEffect(() => {
     if (returned) setOpen("finish");
@@ -40,12 +43,13 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
     setOpen("");
     setError("");
     setAgreed(false);
+    setChoosing(undefined);
   };
-  async function act(action: string, extra: Record<string, unknown> = {}) {
+  async function act(action: string, connection: XeroConnection | undefined, extra: Record<string, unknown> = {}) {
     setBusy(true);
     setError("");
     try {
-      const result = await workspaceRequest(path(name), { action, confirmed: agreed, connection_id: c?.id ?? "", ...extra });
+      const result = await workspaceRequest(path(name), { action, confirmed: agreed, connection_id: connection?.id ?? "", ...extra });
       if (action === "connect") {
         window.location.assign(result.url);
         return;
@@ -100,7 +104,7 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
         {!client.xero_configured && <p className="note">Xero is not set up on this server yet.</p>}
         {agree(<>I may connect {name}’s books for the firm.</>)}
         {actions(
-          <button type="button" className="primary" disabled={busy || !agreed || !client.xero_configured} onClick={() => void act("connect")}>
+          <button type="button" className="primary" disabled={busy || !agreed || !client.xero_configured} onClick={() => void act("connect", undefined)}>
             {busy ? "Opening Xero…" : "Continue to Xero"}
           </button>,
         )}
@@ -114,17 +118,17 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
         {error && <p role="alert">{error}</p>}
         {agree(<>I started this sign-in for {name}.</>)}
         {actions(
-          <button type="button" className="primary" disabled={busy || !agreed} onClick={() => void act("callback", { code: answer.get("xero_code"), state: answer.get("xero_state") })}>
+          <button type="button" className="primary" disabled={busy || !agreed} onClick={() => void act("callback", c, { code: answer.get("xero_code"), state: answer.get("xero_state") })}>
             {busy ? "Finishing…" : "Finish connecting"}
           </button>,
         )}
       </Dialog>
-      {c?.state === "choose_tenant" && (
+      {chosen && (
         <Dialog open={open === "choose"} onClose={close} title="Choose the organisation" description={`Which organisation authorised in this sign-in is ${name}’s? Only it is read.`}>
           {error && <p role="alert">{error}</p>}
           <fieldset>
             <legend>Organisation</legend>
-            {c.tenants.map((t) => (
+            {chosen.tenants.map((t) => (
               <label key={t.tenantId}>
                 <input type="radio" name="tenant" value={t.tenantId} checked={tenant === t.tenantId} onChange={() => setTenant(t.tenantId)} /> {t.tenantName}
               </label>
@@ -133,10 +137,10 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
           {agree(<>The organisation I chose is {name}’s.</>)}
           {actions(
             <>
-              <button type="button" className="danger" disabled={busy || !agreed} onClick={() => void act("disconnect")}>
+              <button type="button" className="danger" disabled={busy || !agreed} onClick={() => void act("disconnect", chosen)}>
                 Disconnect
               </button>
-              <button type="button" className="primary" disabled={busy || !agreed || !tenant} onClick={() => void act("confirm", { tenant_id: tenant })}>
+              <button type="button" className="primary" disabled={busy || !agreed || !tenant} onClick={() => void act("confirm", chosen, { tenant_id: tenant })}>
                 {busy ? "Saving…" : "Use this organisation"}
               </button>
             </>,
@@ -144,21 +148,42 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
         </Dialog>
       )}
       {c && (
-        <Dialog open={open === "manage"} onClose={close} title={`Xero for ${name}`} description="The connected organisation, where it stands, and how to disconnect it.">
+        <Dialog open={open === "manage"} onClose={close} title={`Xero for ${name}`} description="Each connected organisation, where it stands, and what you can do with it.">
           {error && <p role="alert">{error}</p>}
-          <p>
-            <b>{c.tenant_name || "Organisation not chosen yet"}</b> · {stateWords[c.state] ?? c.state.replaceAll("_", " ")}
-          </p>
-          {c.error && <p role="alert">{c.error}</p>}
-          {c.state === "authorizing" && <p className="note">The sign-in was not finished. Disconnect it to start again.</p>}
-          {c.state === "reconnect_required" && <p className="note">Xero no longer accepts this sign-in. Disconnect it, then connect again.</p>}
+          {client.xero.map((x) => (
+            <div className="ks-connection" key={x.id}>
+              <p>
+                <b>{x.tenant_name || "Organisation not chosen yet"}</b> · {stateWords[x.state] ?? x.state.replaceAll("_", " ")}
+              </p>
+              {x.error && <p role="alert">{x.error}</p>}
+              {x.state === "authorizing" && <p className="note">The sign-in was not finished. Disconnect it to start again.</p>}
+              {x.state === "reconnect_required" && <p className="note">Xero no longer accepts this sign-in. Disconnect it, then connect again.</p>}
+              <div className="setting-actions">
+                {x.state === "choose_tenant" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChoosing(x);
+                      setAgreed(false);
+                      setOpen("choose");
+                    }}
+                  >
+                    Choose the organisation
+                  </button>
+                )}
+                <button type="button" className="danger" disabled={busy || !agreed} onClick={() => void act("disconnect", x)}>
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          ))}
           <p className="note">Disconnecting stops reading and removes the stored sign-in. Remove the app under Connected Apps in Xero as well to withdraw its access there.</p>
           {agree(<>I act for {name} on its Xero connection.</>)}
-          {actions(
-            <button type="button" className="danger" disabled={busy || !agreed} onClick={() => void act("disconnect")}>
-              {busy ? "Disconnecting…" : "Disconnect"}
-            </button>,
-          )}
+          <DialogActions>
+            <button type="button" onClick={close}>
+              Close
+            </button>
+          </DialogActions>
         </Dialog>
       )}
     </>
@@ -189,7 +214,8 @@ const kinds: [string, string][] = [
 export function XeroPostingCard({ client, onChanged }: { client: Client; onChanged: () => void }) {
   const dates = useDates();
   const name = client.entity;
-  const c = current(client, false);
+  // Grants are made on the working connection, under any of the client's names.
+  const c = client.xero.find((x) => x.state === "active") ?? client.xero[0];
   const grant = client.xero_grant;
   const currency = client.profile?.currency ?? "USD";
   const [open, setOpen] = useState<"" | "grant" | "revoke">("");

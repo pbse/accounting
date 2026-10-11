@@ -127,13 +127,14 @@ func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedG
 	var encrypted []byte
 	var expires time.Time
 	var currency sql.NullString
+	var company string
 	connectionID := g.ConnectionID
 	if kind == "" {
-		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency FROM quickbooks_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2)
- AND environment='production' AND state='active' AND realm=$3 AND company_name=client_entity ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency)
+		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency,company_name FROM quickbooks_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2)
+ AND environment='production' AND state='active' AND realm=$3 AND company_name=client_entity ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency, &company)
 	} else {
-		err = db.QueryRowContext(ctx, `SELECT credential,access_expires_at,home_currency FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)
- AND environment='production' AND state='active' AND realm=$4 AND company_name=client_entity`, connectionID, org, entity, g.Realm).Scan(&encrypted, &expires, &currency)
+		err = db.QueryRowContext(ctx, `SELECT credential,access_expires_at,home_currency,company_name FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)
+ AND environment='production' AND state='active' AND realm=$4 AND company_name=client_entity`, connectionID, org, entity, g.Realm).Scan(&encrypted, &expires, &currency, &company)
 	}
 	if err != nil || time.Until(expires) < 2*time.Minute {
 		return quickbooks.Sandbox{}, g, "", refusal{409, "Refresh the active production connection before posting."}
@@ -143,7 +144,8 @@ func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedG
 	if err != nil || json.Unmarshal(raw, &credentials) != nil || credentials.Access == "" {
 		return quickbooks.Sandbox{}, g, "", refusal{503, "Production credential unavailable."}
 	}
-	return quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Accounts: g.AccountIDs, Production: true, Currency: currency.String}, g, connectionID, nil
+	// Drafts are checked against the month's own name; the provider against the company the connection was confirmed for.
+	return quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Company: company, Accounts: g.AccountIDs, Production: true, Currency: currency.String}, g, connectionID, nil
 }
 
 func productionScope(ctx context.Context, db *sql.DB, closeID, org string) (string, error) {
