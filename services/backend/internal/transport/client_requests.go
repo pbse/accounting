@@ -371,8 +371,24 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		sent := []clientAnswer{}
+		// A question answered by a document attached to this reply is answered by it: the answer names the files.
+		names := make([]string, 0, len(files))
+		for _, f := range files {
+			names = append(names, f.Name)
+		}
 		for _, a := range answers {
 			a.Answer = strings.TrimSpace(a.Answer)
+			if a.State == "document" {
+				if len(files) == 0 {
+					problem(w, 422, "Attach the document to this reply, or mark it as one you will send later.")
+					return
+				}
+				note := a.Answer
+				a.State, a.Answer = "answered", "Document attached with this reply: "+strings.Join(names, ", ")
+				if note != "" {
+					a.Answer += ". " + note
+				}
+			}
 			if a.Position < 1 || a.Position > len(questions) || utf8.RuneCountInString(a.Answer) > 4000 || !slices.Contains([]string{"answered", "awaiting_document", ""}, a.State) || a.State == "answered" && a.Answer == "" {
 				problem(w, 422, "Answer each question in up to 4,000 characters, or mark it as a document you will send later.")
 				return
@@ -438,6 +454,18 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			problem(w, 422, "Your answers together are too long. Shorten them to under 20,000 characters in total.")
 			return
 		}
+		// A file the firm already refused (rejected, or infected) answers nothing; the client is asked for another.
+		for _, file := range files {
+			var refused bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_attachments WHERE request_id::text=$1 AND digest=$2 AND state IN ('rejected','infected'))`, requestID, file.Digest).Scan(&refused); err != nil {
+				problem(w, 503, "Request unavailable.")
+				return
+			}
+			if refused {
+				problem(w, 422, file.Name+" was already refused by the firm. Attach a different file, or contact the firm.")
+				return
+			}
+		}
 		var pendingCount, pendingSize int
 		if err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(octet_length(body)),0) FROM client_attachments WHERE close_id=$1`, closeID).Scan(&pendingCount, &pendingSize); err != nil {
 			problem(w, 503, "Attachment capacity unavailable.")
@@ -484,8 +512,14 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		if err == nil {
 			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_attachments WHERE request_id::text=$1 AND state IN ('queued','scanning','failed'))`, requestID).Scan(&rescan)
 		}
-		// Work resumes on its own only once every question is answered; a partial reply waits for the firm.
-		if err == nil && complete {
+		// Work resumes on its own only once every question is answered; a partial reply waits for the firm. An answer that is
+		// an attached document also waits until none of the request's documents still waits for its scan or release: the
+		// last release resumes the work.
+		var pendingFiles bool
+		if err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT `+documentAnswersPending+``, requestID).Scan(&pendingFiles)
+		}
+		if err == nil && complete && !pendingFiles {
 			if jobID != "" {
 				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_evidence',error='' WHERE id=$1 AND state='waiting_client'`, jobID)
 			}
@@ -515,3 +549,8 @@ func rowsAffected(result sql.Result, err error) (int64, error) {
 	}
 	return result.RowsAffected()
 }
+
+// documentAnswersPending is SQL for whether request $1 has an answer that is an attached document while one of its
+// documents still waits for its scan or release.
+const documentAnswersPending = `(EXISTS(SELECT 1 FROM work_request_answers WHERE request_id::text=$1::text AND state='answered' AND answer LIKE 'Document attached with this reply:%')
+ AND EXISTS(SELECT 1 FROM client_attachments WHERE request_id::text=$1::text AND state IN ('queued','scanning','clean','failed')))`

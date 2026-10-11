@@ -561,7 +561,12 @@ func TestRequestTakesTheRestAfterTheFirmActs(t *testing.T) {
 		return taking
 	}
 	// The client sends X and promises Y; the firm releases X, binds its work to the account and finishes it.
-	reply([]clientAnswer{{1, "answered", "Invoice X attached"}, {2, "awaiting_document", ""}}, "x.txt", "Invoice X amount: 100.00", 200)
+	reply([]clientAnswer{{1, "document", ""}, {2, "awaiting_document", ""}}, "x.txt", "Invoice X amount: 100.00", 200)
+	var answered string
+	must(db.QueryRow(`SELECT state||': '||answer FROM work_request_answers WHERE request_id=$1 AND position=1`, request.ID).Scan(&answered))
+	if answered != "answered: Document attached with this reply: x.txt" {
+		t.Fatalf("a question answered by the attached document records it: %q", answered)
+	}
 	jobX := release("x.txt", 200)
 	bind("x", []string{jobX}, false)
 	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed' WHERE id=$1`, jobX)

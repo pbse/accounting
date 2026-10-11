@@ -217,10 +217,12 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 					_, err = wf.EmitForClose(r.Context(), tx, closeID, "client_request.replied:"+rid, map[string]string{"request_id": rid, "close_id": closeID, "source_id": sid}, actor)
 				}
 			}
-			// Work waiting on a partial reply stays with the firm until the client completes it or the firm resumes it.
+			// Work waiting on a partial reply stays with the firm until the client completes it or the firm resumes it; a
+			// complete reply resumes with its last document's release, not before.
 			var partial bool
 			if err == nil {
-				err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT NOT complete FROM request_submissions WHERE request_id=$1 ORDER BY id DESC LIMIT 1),false)`, rid).Scan(&partial)
+				err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT NOT complete FROM request_submissions WHERE request_id=$1 ORDER BY id DESC LIMIT 1),false)
+ OR `+documentAnswersPending, rid).Scan(&partial)
 			}
 			if err == nil && !partial {
 				err = preparation.ResumeRequestJobs(r.Context(), tx, rid)
