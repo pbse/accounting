@@ -944,8 +944,9 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 				if m[0] == int(p.Month()) && (m[1] == 0 || m[1] == p.Year()) {
 					match = true
 				}
-				// A change runs from the month before: naming either month places it.
-				if c.kind == "change" && m[0] == int(before.Month()) && (m[1] == 0 || m[1] == before.Year()) {
+				// A change runs from the month before: that month places it only as the comparison ("from September"),
+				// never as when it happened ("in September").
+				if c.kind == "change" && m[0] == int(before.Month()) && (m[1] == 0 || m[1] == before.Year()) && comparedMonth(line, before) {
 					match = true
 				}
 			}
@@ -2034,4 +2035,20 @@ func driverStated(line string, read agentRead, row string, movement *big.Rat) bo
 		}
 	}
 	return strings.HasSuffix(row, "/unattributed") && claimRemainder.MatchString(strings.ToLower(line))
+}
+
+// claimComparedBefore ends with a comparison word, optionally followed by the prior figure and "in" ("from September",
+// "from 19,940.00 in September", "versus last month's September").
+var claimComparedBefore = regexp.MustCompile(`(?i)\b(from|since|over|versus|vs\.?|compared with|compared to|than|against|on)\s+(?:[$€£]?\s?-?[\d,]+(?:\.\d+)?\s+(?:in|for)\s+)?$`)
+
+// comparedMonth says whether a sentence names a month as the period compared against ("from September", "versus
+// September"), rather than as when something happened.
+func comparedMonth(line string, month time.Time) bool {
+	for _, at := range claimMonth.FindAllStringSubmatchIndex(line, -1) {
+		named := namedMonths(line[at[0]:at[1]])
+		if len(named) == 1 && named[0][0] == int(month.Month()) && claimComparedBefore.MatchString(line[:at[0]]) {
+			return true
+		}
+	}
+	return false
 }
