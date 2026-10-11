@@ -56,7 +56,8 @@ func registerFirmExport(mux *http.ServeMux, db *sql.DB) {
 		}
 		// Each client's files are listed without their bytes, with where each downloads as it was sent.
 		files := []map[string]any{}
-		rows, err := tx.QueryContext(r.Context(), `SELECT to_jsonb(i)-'content',i.id::text,i.client_entity FROM books_imports i WHERE i.organization_id=$1 ORDER BY i.id`, org)
+		rows, err := tx.QueryContext(r.Context(), `SELECT to_jsonb(i),i.id::text,i.client_entity FROM (SELECT id,organization_id,client_entity,period,name,digest,format,replaces,holds,actor,created_at
+ FROM books_imports WHERE organization_id=$1) i ORDER BY i.id`, org)
 		if err != nil {
 			problem(w, 503, "The firm export could not be read.")
 			return

@@ -214,4 +214,15 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	if all["more"] != false || len(rest["imports"].([]any)) != len(all["imports"].([]any))-1 {
 		t.Fatalf("the list's pages: %v %v", all["more"], len(rest["imports"].([]any)))
 	}
+
+	// A column left out keeps its header: a next file with something else there is asked about afresh.
+	memo := upload("user_b", preparer, "Memo May.csv", "2026-05", "Account,Debit,Credit,Memo\nCash,100.00,,petty\nCapital,,100.00,\n", 201)["id"].(string)
+	memoTable := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+memo, nil, 200)["tables"].([]any)[0].(map[string]any)["name"]
+	withMemo := map[string]any{"table": memoTable, "header_row": 1, "columns": map[string]string{"0": "account_name", "1": "debit", "2": "credit"}, "ignored_columns": []int{3},
+		"style": map[string]any{"decimal_comma": false, "scale": 1}, "as_of": "2026-05-31", "currency": "USD"}
+	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+memo, map[string]any{"action": "confirm", "layout": withMemo, "reason": "Memo left out"}, 200)
+	changed := upload("user_b", preparer, "Memo June.csv", "2026-06", "Account,Debit,Credit,Adjustment\nCash,100.00,,5.00\nCapital,,100.00,\n", 201)["id"].(string)
+	if p := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+changed, nil, 200)["proposal"].(map[string]any); p["reused"] != false {
+		t.Fatalf("a left-out column now headed otherwise is asked about: %v", p)
+	}
 }

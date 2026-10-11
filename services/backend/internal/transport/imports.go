@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -249,8 +250,10 @@ func headersOf(t bookfiles.Table, l bookfiles.Layout) map[int]string {
 		if r.Number != l.HeaderRow {
 			continue
 		}
+		// The columns read and those left out on purpose: a column left out keeps its header, so a file whose header
+		// there says something else is not read with the layout again unasked.
 		for _, c := range r.Cells {
-			if _, ok := l.Columns[c.Column]; ok {
+			if _, ok := l.Columns[c.Column]; ok || slices.Contains(l.IgnoredColumns, c.Column) {
 				headers[c.Column] = strings.TrimSpace(c.Value)
 			}
 		}
@@ -388,26 +391,33 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The file's layout is unavailable.")
 			return
 		}
-		// A CSV is read as asked (?encoding=&delimiter=), else as its layout was confirmed, else as the reader reads it.
+		var saved *confirmedRead
+		if confirmed == nil {
+			if saved, err = latestLayout(r.Context(), db, org, name, ""); err != nil {
+				problem(w, 503, "The file's layout is unavailable.")
+				return
+			}
+		}
+		// A CSV is read as asked (?encoding=&delimiter=), else as its layout was confirmed, else as the client's last
+		// file was confirmed (its exports keep their format), else as the reader reads it.
 		as := csvChoice{Encoding: r.URL.Query().Get("encoding"), Delimiter: r.URL.Query().Get("delimiter")}
-		if as.Encoding == "" && confirmed != nil {
+		explicit := as.Encoding != ""
+		if !explicit && confirmed != nil {
 			as = confirmed.CSV
 		}
 		summary, file, err := readImport(r.Context(), db, org, name, id, as)
+		if err == nil && !explicit && confirmed == nil && saved != nil && saved.CSV.Encoding != "" && summary.Format == "csv" {
+			// The client's own choice is tried first; a file it cannot read is read as the reader reads it.
+			if s, f, e := readImport(r.Context(), db, org, name, id, saved.CSV); e == nil {
+				summary, file = s, f
+			}
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
 			return
 		}
 		if err != nil {
 			problem(w, 422, "The file cannot be read that way: "+err.Error()+".")
-			return
-		}
-		var saved *confirmedRead
-		if err == nil && confirmed == nil {
-			saved, err = latestLayout(r.Context(), db, org, name, "")
-		}
-		if err != nil {
-			problem(w, 503, "The file's layout is unavailable.")
 			return
 		}
 		summary.Confirmed = confirmed

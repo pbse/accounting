@@ -350,7 +350,7 @@ export default function ClientPage() {
           {postingConnections(client.xero.map((x) => x.id), client.xero_grants).map((id) => (
             <XeroPostingCard key={id} client={client} connection={id} onChanged={reread} />
           ))}
-          {client.file_imports && client.whole && <FilesCard client={name} />}
+          {client.file_imports && client.whole && <FilesCard key={name} client={name} />}
           <Card
             icon="history"
             tone={!roster ? "wait" : "done"}
