@@ -8,6 +8,39 @@ import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { workspaceRequest } from "./workspace";
 
+// A ledger in the catalog (GET /v1/closes/ledgers), with whether its native connector is switched on for this firm and
+// the steps that export its books.
+export type CatalogLedger = { id: string; name: string; connector: string; connected: boolean; exports: { trial_balance: string; general_ledger: string; open_items: string } };
+// The ledger a client keeps: a catalog entry, another ledger by the name given, or not known yet.
+export type LedgerChoice = { ledger: string; other_name: string };
+
+// LedgerPicker chooses the ledger a client keeps, from the firm's catalog, another named one, or not known yet.
+export function LedgerPicker({ value, onChange }: { value: LedgerChoice; onChange: (next: LedgerChoice) => void }) {
+  const catalog = useQuery(workspaceQuery<{ ledgers: CatalogLedger[] }>("/ledgers"));
+  return (
+    <>
+      <label>
+        Ledger
+        <select value={value.ledger} onChange={(e) => onChange({ ledger: e.target.value, other_name: e.target.value === "other" ? value.other_name : "" })}>
+          <option value="unknown">Not known yet</option>
+          {(catalog.data?.ledgers ?? []).map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}
+            </option>
+          ))}
+          <option value="other">Another ledger…</option>
+        </select>
+      </label>
+      {value.ledger === "other" && (
+        <label>
+          Its name
+          <input value={value.other_name} maxLength={120} onChange={(e) => onChange({ ledger: "other", other_name: e.target.value })} />
+        </label>
+      )}
+    </>
+  );
+}
+
 // rev changes with every change, so a form keyed on it resets to the newest entry.
 type Template = { due_days: number | null; owner: string; reason: string; actor: string; at: string; rev: string } | null;
 export type RosterEntry = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; rev: string; last_period: string; owed: string[] };
@@ -202,6 +235,8 @@ export function ClientForm({ client, named: fixed, people, onSaved, onCancel }: 
   const [due, setDue] = useState(client?.due_days != null ? String(client.due_days) : "template");
   const [owner, setOwner] = useState(client?.owner === null || client?.owner === undefined ? "template" : client.owner);
   const [reason, setReason] = useState("");
+  // The ledger a client being added keeps, recorded with its entry; its page corrects it later.
+  const [ledger, setLedger] = useState<LedgerChoice>({ ledger: "unknown", other_name: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Owners who can do this client's work: a role reviewing every client, or a reviewer assigned to it.
@@ -221,9 +256,13 @@ export function ClientForm({ client, named: fixed, people, onSaved, onCancel }: 
         owner: owner === "template" ? null : owner,
         reason: reason.trim(),
         rev: client?.rev ?? "",
+        ...(client ? {} : { ledger: ledger.ledger, other_name: ledger.other_name.trim() }),
       });
       setReason("");
-      if (!client) setEntity("");
+      if (!client) {
+        setEntity("");
+        setLedger({ ledger: "unknown", other_name: "" });
+      }
       onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The roster could not be saved.");
@@ -240,6 +279,7 @@ export function ClientForm({ client, named: fixed, people, onSaved, onCancel }: 
           <input value={entity} maxLength={200} onChange={(e) => setEntity(e.target.value)} />
         </label>
       )}
+      {!client && <LedgerPicker value={ledger} onChange={setLedger} />}
       <label className="checkbox-label">
         <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active: owes a close each month
       </label>
@@ -272,7 +312,7 @@ export function ClientForm({ client, named: fixed, people, onSaved, onCancel }: 
       {error && <p role="alert">{error}</p>}
       <DialogActions>
         <button type="button" onClick={() => onCancel(error)}>Cancel</button>
-        <button className="primary" disabled={busy || !reason.trim() || !entity.trim() || !since || ineligible}>
+        <button className="primary" disabled={busy || !reason.trim() || !entity.trim() || !since || ineligible || (!client && ledger.ledger === "other" && !ledger.other_name.trim())}>
           {client ? "Save" : "Add client"}
         </button>
       </DialogActions>
