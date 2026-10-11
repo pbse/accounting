@@ -13,6 +13,7 @@ import (
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/xero"
 )
 
 // A client's page (docs/books-sources.md, Client page): one read of everything the firm keeps about a client, apart
@@ -125,7 +126,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client not found.")
 			return
 		}
-		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r), "can_review": canReview(r) && whole}
+		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r), "can_grant": canGrant(r), "can_review": canReview(r) && whole}
 
 		// Every month opened under any of the client's names that the reader could open, newest first, each with where
 		// its books come from now: the newer of its QuickBooks period capture (from the connection its books are read
@@ -261,9 +262,11 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["requests"] = requests
-		// A member who can open only some of the client's months, under another of its names, sees those alone.
+		// A member who can open only some of the client's months, under another of its names, sees those alone: nothing
+		// of the client as a whole, its connections and posting grants included, and no action on it.
 		if !whole {
 			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["profiles"], out["basis"] = nil, nil, true, []any{}, []any{}, nil, []any{}, nil
+			out["production_grants"], out["xero_grants"], out["can_grant"], out["can_connect"], out["can_manage"] = []any{}, []any{}, false, false, false
 			jsonReply(w, 200, out)
 			return
 		}
@@ -316,13 +319,47 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'client_entity',x.client_entity,'environment',x.environment,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
   ORDER BY lower(x.client_entity)=lower($2) DESC,x.environment='production' DESC,x.id DESC)
   FROM quickbooks_connections x WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity($1,$2) AND x.state<>'disconnected'),'[]'::jsonb),
- COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'client_entity',x.client_entity,'state',x.state,'tenant_name',x.tenant_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'client_entity',x.client_entity,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
   ORDER BY lower(x.client_entity)=lower($2) DESC,x.id DESC)
   FROM xero_connections x WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity($1,$2) AND x.state<>'disconnected'),'[]'::jsonb)`, org, name).Scan(&quickbooksRaw, &xeroRaw); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
 		out["quickbooks"], out["xero"] = json.RawMessage(quickbooksRaw), json.RawMessage(xeroRaw)
+		// Which ledgers this server can connect, and the client's QuickBooks and Xero posting grants, if any, under any of
+		// its names (its own first).
+		out["quickbooks_setup"] = map[string]bool{"sandbox": quickbooks.OAuthConfigured(), "production": quickbooks.OAuthConfiguredFor("production")}
+		out["xero_configured"] = xero.Configured()
+		// Every posting grant of the client still in force, under any of its names, each on its own connection.
+		productionGrants, xeroGrants := []productionGrant{}, []xeroGrant{}
+		var grants []string
+		if grants, err = grantIDs(ctx, tx, `SELECT g.id::text FROM production_posting_grants g WHERE g.organization_id=$1 AND client_identity(g.organization_id,g.client_entity)=client_identity($1,$2) AND g.revoked_at IS NULL ORDER BY g.id DESC`, org, name); err == nil {
+			for _, id := range grants {
+				g, e := scanGrant(tx.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.id=$1::bigint`, id))
+				if e != nil {
+					err = e
+					break
+				}
+				productionGrants = append(productionGrants, g)
+			}
+		}
+		if err == nil {
+			if grants, err = grantIDs(ctx, tx, `SELECT id::text FROM xero_posting_grants WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY id DESC`, org, name); err == nil {
+				for _, id := range grants {
+					g, e := scanXeroGrant(tx.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE id=$1::bigint`, id))
+					if e != nil {
+						err = e
+						break
+					}
+					xeroGrants = append(xeroGrants, g)
+				}
+			}
+		}
+		if err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		out["production_grants"], out["xero_grants"] = productionGrants, xeroGrants
 
 		// The client's currency and fiscal year in force this month (its confirmed profile, else as its connected ledgers
 		// report them, under any of its names), its confirmed profile's history, and its approved basis (a client override
@@ -429,9 +466,54 @@ func clientPeople(ctx context.Context, tx *sql.Tx, org, who string, reviewers ma
 	}), nil
 }
 
+// canGrant is a member of a hosted firm who may grant and revoke a client's production posting (posting:approve), as the
+// grant routes require.
+func canGrant(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return a != nil && a.Organization != "" && slices.Contains(a.Permissions, "posting:approve")
+}
+
 // canConnect is a member of a hosted firm who may connect and disconnect a client's ledgers (integrations:manage), as
 // the connection routes require.
 func canConnect(r *http.Request) bool {
 	a := auth.Actor(r.Context())
 	return a != nil && a.Organization != "" && slices.Contains(a.Permissions, "integrations:manage")
+}
+
+// wholeClient is the client a request names (?name=) when the reader may act on it as a whole; otherwise it answers
+// that the client is not found, as for a close the reader cannot open, and ok is false.
+func wholeClient(w http.ResponseWriter, r *http.Request, db *sql.DB) (name string, ok bool) {
+	asked := strings.TrimSpace(r.URL.Query().Get("name"))
+	if asked == "" || utf8.RuneCountInString(asked) > 200 {
+		problem(w, 404, "Client not found.")
+		return "", false
+	}
+	name, known, allowed, whole, err := clientNamed(r.Context(), db, organization(r), asked, firmAccess(r), subject(r))
+	if err != nil {
+		problem(w, 503, "The client is unavailable.")
+		return "", false
+	}
+	if !known || !allowed || !whole {
+		problem(w, 404, "Client not found.")
+		return "", false
+	}
+	return name, true
+}
+
+// grantIDs is the ids query returns.
+func grantIDs(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

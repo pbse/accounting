@@ -1,6 +1,6 @@
 # Deploying the context machine
 
-The service runs on **Cloudflare Containers**, behind a private Worker service binding. Its image installs **Codex CLI 0.157.1** and **Claude Code 2.1.284**. Both execute on demand; Cloudflare starts the container when called. There are no interactive CLI sessions or public research URLs.
+The service runs on **Cloudflare Containers**, behind a private Worker service binding. Its image installs **Codex CLI 0.162.1** and **Claude Code 2.1.284**. Both execute on demand; Cloudflare starts the container when called. There are no interactive CLI sessions or public research URLs.
 
 ```text
 API / preparation Go container
@@ -242,3 +242,5 @@ Production's automatic deployment reuses the merged PR's exact CI head. It waits
 The pinned Codex CLI also starts with plugins, connected apps, hooks, subagents and shell snapshots explicitly disabled, avoiding background plugin downloads in the temporary run directory. The only research MCP tools remain the two scoped record reads; completion mode removes them and the parent proxy advertises no executable tools.
 
 The direct Claude image endpoint limits each base64-encoded image to 10 MB ([current vision documentation](https://platform.claude.com/docs/en/build-with-claude/vision#request-limits)); this gateway does not use the lower-limit Bedrock/Vertex transports. Automatic CI evidence expires after seven days, and an expired artifact fails promptly with a rerun-CI instruction. An absent image route never reports an unused Gemini key as an active reader. Context-machine image failures stop model attempts for the remaining PDF pages instead of repeatedly consuming reservations.
+
+Codex 0.162.1 can place tool definitions in Responses `additional_tools` input items for GPT-6.1 Sol. The proxy removes these carriers and supplies its own fixed record-tool schemas for research. Completion never advertises executable tools. Every provider turn is buffered within the existing 4 MiB limit and checked before reaching the CLI: completion rejects all executable calls; research accepts only the two scoped record functions. This also prevents a hallucinated call to a hidden CLI executor.

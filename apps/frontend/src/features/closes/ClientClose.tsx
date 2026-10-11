@@ -28,8 +28,7 @@ import { Evidence, PreparationJobs } from "./Evidence";
 import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
 import { Memory } from "./Memory";
-import { ProductionAccess } from "./ProductionAccess";
-import { QuickBooks } from "./QuickBooks";
+import { MonthBooks } from "./MonthBooks";
 import { Xero } from "./Xero";
 import { HistoricalExports } from "./HistoricalExports";
 import { Stripe } from "./Stripe";
@@ -239,6 +238,8 @@ export default function ClientClose() {
       )}
       {tab === "books" && (
         <div className="stack">
+          <MonthBooks key={`books-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
+          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
           <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
           <Flux key={`flux-${close.id}`} closeId={close.id} />
@@ -293,8 +294,6 @@ export default function ClientClose() {
       {tab === "evidence" && (
         <div className="stack">
           <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
-          <QuickBooks key={`qbo-${close.id}`} closeId={close.id} entity={close.entity} />
-          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} />
           <HistoricalExports key={`history-${close.id}`} closeId={close.id} />
           <Stripe key={`stripe-${close.id}`} closeId={close.id} entity={close.entity} />
           <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
@@ -327,7 +326,6 @@ export default function ClientClose() {
         <div className="stack">
           <Memory key={`memory-${close.id}`} closeId={close.id} />
           <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} onApplied={() => void reload()} />
-          <ProductionAccess closeId={close.id} entity={close.entity} currency={close.profile?.currency ?? "USD"} />
           <Replay key={`replay-${close.id}`} closeId={close.id} />
           <RetentionControls close={close} onDeleted={setDeleted} />
         </div>

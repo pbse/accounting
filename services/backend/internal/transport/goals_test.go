@@ -1213,7 +1213,7 @@ func TestWorkShowsWhereEachDelegatedCloseStands(t *testing.T) {
 	must(err)
 	step(zeta)
 	got = list()
-	if z := got["Zeta"].Summary; z.Books.State != "you" || z.Books.Text != "Reconnect QuickBooks for Zeta so I can read the books." || got["first"].Entity != "Zeta" {
+	if z := got["Zeta"].Summary; z.Books.State != "you" || z.Books.Text != "Reconnect QuickBooks for Zeta on its page so I can read the books." || got["first"].Entity != "Zeta" {
 		t.Fatalf("books that need reconnecting come first: %+v %s", z.Books, got["first"].Entity)
 	}
 	// Its accounts come from a capture that is out of date, so they wait on a new one rather than on decisions.

@@ -99,8 +99,8 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   const tab = closeTab(url.searchParams.get("tab"));
   const reads: Partial<Record<CloseTab, string[]>> = {
     overview: [`/${id}/brief`, `/${id}/goal?verify=1`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")],
-    books: [`/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/coverage`, `/${id}/aging`, `/${id}/open-items`],
-    evidence: [`/${id}/evidence?checks=1`, `/${id}/preparations`, `/${id}/jobs`, `/${id}/quickbooks`, `/${id}/quickbooks/entities`, `/${id}/xero`, `/${id}/stripe`],
+    books: [`/${id}/quickbooks`, `/${id}/quickbooks/entities`, `/${id}/xero`, `/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/coverage`, `/${id}/aging`, `/${id}/open-items`],
+    evidence: [`/${id}/evidence?checks=1`, `/${id}/preparations`, `/${id}/jobs`, `/${id}/stripe`],
     requests: [`/${id}/requests`, `/${id}/email-replies`],
     reports: [`/${id}/management-pack`, `/${id}/management-pack/publications`, `/${id}/budget`],
     signoff: [`/${id}/takeover-setup`, `/${id}/opening-baseline`, `/${id}/readiness`, `/${id}/effort`],
