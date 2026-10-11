@@ -36,11 +36,12 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 		today, week := now.Format("2006-01-02"), now.AddDate(0, 0, 7).Format("2006-01-02")
 		rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.entity,c.period,COALESCE(c.due_on::text,''),CASE WHEN c.owner='' THEN 'none' WHEN c.owner=$3 THEN 'mine' ELSE 'other' END,
  COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')='signed_off',
- q.captured_at,COALESCE(q.usable,false),q.accounts,q.trial_balance,x.captured_at,COALESCE(x.active,false),x.payload
+ q.captured_at,COALESCE(q.usable,false),q.accounts,q.trial_balance,x.captured_at,COALESCE(x.active,false),x.payload,f.exported_at
  FROM client_closes c
  LEFT JOIN LATERAL (SELECT s.captured_at,x.state='active' AND e.id IS NOT NULL AND e.superseded_by IS NULL AS usable,s.payload->'accounts' AS accounts,s.payload->'reports'->'TrialBalance' AS trial_balance FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
   WHERE s.close_id=c.id AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) q ON true
  LEFT JOIN LATERAL (SELECT s.captured_at,x.state='active' AS active,s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id AND x.state<>'disconnected' WHERE s.close_id=c.id AND s.period=c.period AND `+sourceAllows("c.id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) x ON true
+ LEFT JOIN LATERAL `+filesVersion("c.id")+` f ON true
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND (c.period<=$4 OR c.due_on<=$5::date) ORDER BY c.period DESC,c.id DESC`, organization(r), firmAccess(r), subject(r), now.Format("2006-01"), week)
 		if err != nil {
@@ -58,16 +59,19 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 		captured := 0
 		for rows.Next() {
 			var m member
-			var qboAt, xeroAt sql.NullTime
+			var qboAt, xeroAt, filesAt sql.NullTime
 			var qboUsable, xeroActive bool
 			var qboAccounts, qboTrialBalance, xeroPayload []byte
-			if err = rows.Scan(&m.CloseID, &m.Entity, &m.Period, &m.DueOn, &m.Owner, &m.signed, &qboAt, &qboUsable, &qboAccounts, &qboTrialBalance, &xeroAt, &xeroActive, &xeroPayload); err != nil {
+			if err = rows.Scan(&m.CloseID, &m.Entity, &m.Period, &m.DueOn, &m.Owner, &m.signed, &qboAt, &qboUsable, &qboAccounts, &qboTrialBalance, &xeroAt, &xeroActive, &xeroPayload, &filesAt); err != nil {
 				break
 			}
 			// The newest capture of either provider decides, and counts only when the close's own reads can use it: the
 			// coverage read for its account list and the tie-out's balances read for its Trial Balance.
+			// A month whose books are its files has them once a reading of its file is accepted.
 			usable := false
 			switch {
+			case filesAt.Valid:
+				usable = true
 			case xeroAt.Valid && (!qboAt.Valid || xeroAt.Time.After(qboAt.Time)):
 				usable = xeroActive && xeroBooksUsable(xeroPayload)
 			case qboAt.Valid && qboUsable:

@@ -34,7 +34,11 @@ var planWords = map[string]string{"done": "done", "agent": "I'm on it", "you": "
 // daily is whether the scheduled reads take this close: its month is current or just ended, or an agent works on it.
 // elsewhere is a QuickBooks period capture the ledger reads do not use, which keeps the scheduled first capture away.
 type booksRead struct {
-	source           string // the capture in use: quickbooks, xero or none
+	source string // the capture in use: quickbooks, xero, files or none
+	// file is a month on files' accepted file's books, nil while it has none; pending, that an accepted file's books are
+	// still being written.
+	file             *fileMonth
+	pending          bool
 	captured         time.Time
 	stale            bool
 	quickbooks, xero string       // the client's connection states, "" without one
@@ -83,6 +87,14 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
 	default:
 		b.source = "none"
 	}
+	// A month whose books are its files reads its accepted file's, whatever the client's connections.
+	if err == nil && b.chosen == "files" {
+		if _, b.file, err = fileMonthBooks(ctx, tx, closeID); err == nil && b.file != nil {
+			b.source, b.captured = "files", b.file.ReadAt
+		} else if err == nil {
+			b.pending, err = fileBooksPending(ctx, tx, closeID)
+		}
+	}
 	return b, err
 }
 
@@ -104,6 +116,14 @@ func booksStep(b booksRead, closeID, entity, period string) planStep {
 	// A current capture is read; otherwise an active connection, QuickBooks' first, can read the books; only then does a
 	// connection need a person.
 	switch {
+	case b.chosen == "files" && b.pending:
+		s.State, s.Text, s.Link = "agent", "The accepted file is being written as "+month+"'s books; I'll read them within a minute.", page
+	case b.chosen == "files" && b.file == nil:
+		s.State, s.Text, s.Link = "you", month+"'s books are its files: accept a reading of the month's file on "+entity+"'s page.", page
+	case b.chosen == "files" && len(b.file.Holds) > 0:
+		s.State, s.Text, s.Link = "you", "The accepted file "+b.file.File+" has checks that hold its statements: "+strings.Join(b.file.Holds, "; ")+". Resolve them on "+entity+"'s page.", page
+	case b.chosen == "files":
+		s.State, s.Text, s.Link = "done", "Read from the accepted file "+b.file.File+", exported "+day(b.file.ExportedAt)+".", page
 	case b.source == "xero" && !b.stale:
 		s.State, s.Text, s.Link = "done", "Read from Xero's Trial Balance captured "+day(b.captured)+"."+again("it"), xero
 	case b.source == "quickbooks" && !b.stale:
@@ -198,24 +218,29 @@ func goalPlan(p goalProgress, b booksRead, closeID, entity, period, finish strin
 		}
 	}
 	accounts := planStep{Key: "accounts", Title: "Cover every account", Link: base + "#coverage-work"}
-	// The accounts come from the books' capture, QuickBooks' or Xero's (ledgerCoverage).
-	capture := "QuickBooks"
-	if p.accounts != nil && strings.HasPrefix(p.accounts.SnapshotID, xeroCapture) {
-		capture = "Xero"
+	// The accounts come from the books' capture, QuickBooks' or Xero's, or a month on files' accepted file (ledgerCoverage).
+	capture := "QuickBooks capture"
+	switch {
+	case p.accounts != nil && strings.HasPrefix(p.accounts.SnapshotID, xeroCapture):
+		capture = "Xero capture"
+	case p.accounts != nil && strings.HasPrefix(p.accounts.SnapshotID, fileCapture):
+		capture = "accepted file"
 	}
 	switch {
 	case p.accounts != nil && p.accounts.Stale:
-		accounts.State, accounts.Text = "waits", "Waits on a new "+capture+" capture: these accounts come from an out-of-date one."
+		accounts.State, accounts.Text = "waits", "Waits on a new "+capture+": these accounts come from an out-of-date one."
 	case p.Coverage != nil && p.Coverage.Open == 0:
-		accounts.State, accounts.Text = "done", fmt.Sprintf("All %d accounts in the %s capture are resolved or excluded.", p.Coverage.Total, capture)
+		accounts.State, accounts.Text = "done", fmt.Sprintf("All %d accounts in the %s are resolved or excluded.", p.Coverage.Total, capture)
 	case p.Coverage != nil:
-		accounts.State, accounts.Text = "you", fmt.Sprintf("%d of %d accounts in the %s capture still need a coverage decision or resolution.", p.Coverage.Open, p.Coverage.Total, capture)
+		accounts.State, accounts.Text = "you", fmt.Sprintf("%d of %d accounts in the %s still need a coverage decision or resolution.", p.Coverage.Open, p.Coverage.Total, capture)
 		// A review goal's finish covers the documents, so its accounts are a note for sign-off.
 		if finish == "review" {
 			accounts.State, accounts.Text = "none", "Before sign-off, "+accounts.Text
 		}
 	case p.limited:
 		accounts.State, accounts.Text = "unknown", "This close has more than 100 intake jobs, more than account coverage reads, so its accounts are not shown."
+	case b.chosen == "files":
+		accounts.State, accounts.Text = "waits", "Waits on the month's accepted file."
 	case b.quickbooks != "":
 		accounts.State, accounts.Text = "waits", "Waits on the month's QuickBooks capture."
 	case b.xero != "":
