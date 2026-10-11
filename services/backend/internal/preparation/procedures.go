@@ -50,7 +50,8 @@ type Profile struct {
 	Ledger *LedgerProfile `json:"ledger,omitempty"`
 }
 
-// LedgerProfile is what a client's connected ledgers report.
+// LedgerProfile is what a client's connected ledgers report that differs from its confirmed profile: a currency, a fiscal
+// year's first month (0 when that agrees), or that they disagree with one another.
 type LedgerProfile struct {
 	Currency    string `json:"currency,omitempty"`
 	FiscalStart int    `json:"fiscal_year_start,omitempty"`
@@ -69,16 +70,24 @@ func (p Profile) Question() string {
 	case p.State == "differs" && p.Ledger.Conflict:
 		return fmt.Sprintf("This client's confirmed profile is %s from month %d, but its connected ledgers disagree with each other; disconnect the wrong one", p.Currency, p.FiscalStart)
 	case p.State == "differs":
-		return fmt.Sprintf("This client's confirmed profile is %s with its year from month %d, but its connected ledger reports %s from month %d; correct the profile or the connection", p.Currency, p.FiscalStart, p.Ledger.Currency, p.Ledger.FiscalStart)
+		var reports []string
+		if p.Ledger.Currency != "" {
+			reports = append(reports, p.Ledger.Currency)
+		}
+		if p.Ledger.FiscalStart != 0 {
+			reports = append(reports, fmt.Sprintf("a fiscal year from month %d", p.Ledger.FiscalStart))
+		}
+		return fmt.Sprintf("This client's confirmed profile is %s with its year from month %d, but its connected ledger reports %s; correct the profile or the connection", p.Currency, p.FiscalStart, strings.Join(reports, " and "))
 	}
 	return ""
 }
 
-// ClientProfile is the profile of a close's client for the close's month.
+// ClientProfile is the profile of a close's client for the close's month, from its connections under any of the
+// client's names (a month opened under an alias reads the client's connections).
 func ClientProfile(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID string) (Profile, error) {
-	return clientProfile(ctx, q, `WITH c AS (SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1)`, `lower(%[1]s.client_entity)=lower(c.entity)`, closeID)
+	return clientProfile(ctx, q, `WITH c AS (SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1)`, closeID)
 }
 
 // ClientProfileOf is ClientProfile for a client by its name in firm org, with no close needed, for month (YYYY-MM), read
@@ -87,55 +96,84 @@ func ClientProfile(ctx context.Context, q interface {
 func ClientProfileOf(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, org, entity, month string) (Profile, error) {
-	return clientProfile(ctx, q, `WITH c AS (SELECT $1::text AS organization_id,$2::text AS entity,$3::text AS period)`, `client_identity(%[1]s.organization_id,%[1]s.client_entity)=client_identity(c.organization_id,c.entity)`, org, entity, month)
+	return clientProfile(ctx, q, `WITH c AS (SELECT $1::text AS organization_id,$2::text AS entity,$3::text AS period)`, org, entity, month)
 }
 
 // clientProfile reads the profile of the one client the WITH clause c names (its organization_id, entity and the month,
-// period), from its confirmed profile, matched by client identity, and its connections, matched by match (SQL with
-// %[1]s for the connection's alias).
+// period), from its confirmed profile and its active connections, both matched by client identity.
 func clientProfile(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, client, match string, args ...any) (Profile, error) {
+}, client string, args ...any) (Profile, error) {
 	p := Profile{Currency: "USD", FiscalStart: 1}
-	var total, known, currencies, starts int
-	var currency, confirmed, effective sql.NullString
-	var start, confirmedStart sql.NullInt64
+	var raw []byte
+	var confirmed, effective sql.NullString
+	var confirmedStart sql.NullInt64
 	err := q.QueryRowContext(ctx, client+`,
- x AS (SELECT q.home_currency,q.fiscal_year_start FROM quickbooks_connections q JOIN c ON c.organization_id=q.organization_id AND `+fmt.Sprintf(match, "q")+` WHERE q.state='active'
- UNION ALL SELECT r.home_currency,r.fiscal_year_start FROM xero_connections r JOIN c ON c.organization_id=r.organization_id AND `+fmt.Sprintf(match, "r")+` WHERE r.state='active')
- SELECT count(*),count(home_currency),count(DISTINCT home_currency),count(DISTINCT fiscal_year_start),min(home_currency),min(fiscal_year_start),
-  (SELECT f.currency FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1),
-  (SELECT f.fiscal_year_start FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1),
-  (SELECT f.effective_from FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1)
- FROM x`, args...).Scan(&total, &known, &currencies, &starts, &currency, &start, &confirmed, &confirmedStart, &effective)
-	switch {
-	case err != nil:
+ x AS (SELECT q.home_currency,q.fiscal_year_start FROM quickbooks_connections q JOIN c ON c.organization_id=q.organization_id AND client_identity(q.organization_id,q.client_entity)=client_identity(c.organization_id,c.entity) WHERE q.state='active'
+ UNION ALL SELECT r.home_currency,r.fiscal_year_start FROM xero_connections r JOIN c ON c.organization_id=r.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(c.organization_id,c.entity) WHERE r.state='active'),
+ f AS (SELECT f.currency,f.fiscal_year_start,f.effective_from FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1)
+ SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('currency',home_currency,'start',fiscal_year_start)) FROM x),'[]'::jsonb),(SELECT currency FROM f),(SELECT fiscal_year_start FROM f),(SELECT effective_from FROM f)`, args...).Scan(&raw, &confirmed, &confirmedStart, &effective)
+	if err != nil {
 		return p, err
-	case total == 0:
+	}
+	var connections []struct {
+		Currency *string `json:"currency"`
+		Start    *int    `json:"start"`
+	}
+	json.Unmarshal(raw, &connections)
+	currencies, starts := map[string]bool{}, map[int]bool{}
+	known := 0
+	for _, c := range connections {
+		if c.Currency != nil {
+			currencies[*c.Currency] = true
+			known++
+		}
+		if c.Start != nil {
+			starts[*c.Start] = true
+		}
+	}
+	switch {
+	case len(connections) == 0:
 		p.State = "none"
-	case currencies > 1 || starts > 1:
+	case len(currencies) > 1 || len(starts) > 1:
 		p.State = "conflict"
-	case known < total:
+	case known < len(connections):
 		p.State = "unknown"
 	default:
-		p.State, p.Currency = "detected", currency.String
-		if start.Valid {
-			p.FiscalStart = int(start.Int64)
+		p.State = "detected"
+		for c := range currencies {
+			p.Currency = c
+		}
+		for s := range starts {
+			p.FiscalStart = s
 		}
 	}
 	if !confirmed.Valid {
 		return p, nil
 	}
-	// The confirmed profile stands; a connection that reports otherwise asks a question.
-	ledger := p
-	p = Profile{Currency: confirmed.String, FiscalStart: int(confirmedStart.Int64), State: "confirmed", EffectiveFrom: effective.String}
-	switch {
-	case ledger.State == "conflict":
-		p.State, p.Ledger = "differs", &LedgerProfile{Conflict: true}
-	case ledger.State == "detected" && (ledger.Currency != p.Currency || ledger.FiscalStart != p.FiscalStart):
-		p.State, p.Ledger = "differs", &LedgerProfile{Currency: ledger.Currency, FiscalStart: ledger.FiscalStart}
+	// The confirmed profile stands; a connection that reports otherwise, in any field it reports, asks a question.
+	confirmedProfile := Profile{Currency: confirmed.String, FiscalStart: int(confirmedStart.Int64), State: "confirmed", EffectiveFrom: effective.String}
+	if len(currencies) > 1 || len(starts) > 1 {
+		confirmedProfile.State, confirmedProfile.Ledger = "differs", &LedgerProfile{Conflict: true}
+		return confirmedProfile, nil
 	}
-	return p, nil
+	// Ledger names only what differs: the currency, the fiscal year's first month, or both.
+	ledger := LedgerProfile{}
+	differs := false
+	for c := range currencies {
+		if c != confirmedProfile.Currency {
+			ledger.Currency, differs = c, true
+		}
+	}
+	for s := range starts {
+		if s != confirmedProfile.FiscalStart {
+			ledger.FiscalStart, differs = s, true
+		}
+	}
+	if differs {
+		confirmedProfile.State, confirmedProfile.Ledger = "differs", &ledger
+	}
+	return confirmedProfile, nil
 }
 
 // CurrencyIssue refuses a draft that is not in the client's detected home currency.

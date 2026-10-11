@@ -130,6 +130,17 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "The client's profile changed since you read it. Review it and try again.")
 			return
 		}
+		// A change never alters what a month already reviewed or signed off was prepared under: those months are reopened
+		// first, or the change starts after them.
+		var held []string
+		if held, err = profileChangeHolds(ctx, tx, org, name, in.EffectiveFrom, in.Currency, in.FiscalStart); err != nil {
+			problem(w, 503, "The client's profile is unavailable.")
+			return
+		}
+		if len(held) > 0 {
+			problem(w, 409, "This would change the currency or fiscal year of months already reviewed or signed off ("+strings.Join(held, ", ")+"). Start the change after them, or reopen them first.")
+			return
+		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO client_profiles(organization_id,client_entity,effective_from,currency,fiscal_year_start,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7)`,
 			org, name, in.EffectiveFrom, in.Currency, in.FiscalStart, in.Reason, reviewerName(r)); err != nil {
 			problem(w, 503, "The client's profile could not be saved.")
@@ -147,4 +158,40 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]any{"profile": profile, "profiles": history})
 	})
+}
+
+// profileChangeHolds is the months of the client, from month from, that are signed off or hold an approved workpaper and
+// whose currency or fiscal year the profile (currency, start) would change.
+func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, currency string, start int) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
+ AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off' OR EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'))
+ ORDER BY c.period`, org, name, from)
+	if err != nil {
+		return nil, err
+	}
+	type month struct{ id, period string }
+	var reviewed []month
+	for rows.Next() {
+		var m month
+		if err = rows.Scan(&m.id, &m.period); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		reviewed = append(reviewed, m)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	var held []string
+	for _, m := range reviewed {
+		p, err := preparation.ClientProfile(ctx, tx, m.id)
+		if err != nil {
+			return nil, err
+		}
+		if p.Currency != currency || p.FiscalStart != start {
+			held = append(held, m.period)
+		}
+	}
+	return held, nil
 }

@@ -676,9 +676,15 @@ function profileLine(name: string, profile: Profile, assumed: boolean) {
     case "differs":
       return profile.ledger?.conflict
         ? `${year}, confirmed from ${monthName(profile.effective_from ?? "")}, but its connected ledgers disagree with each other: disconnect the wrong one. Drafts wait until then.`
-        : `${year}, confirmed from ${monthName(profile.effective_from ?? "")}, but its connected ledger reports ${profile.ledger?.currency} from ${fiscalMonth(profile.ledger?.fiscal_year_start ?? 1)}: correct the profile or the connection. Drafts wait until then.`;
+        : `${year}, confirmed from ${monthName(profile.effective_from ?? "")}, but its connected ledger reports ${ledgerReports(profile)}: correct the profile or the connection. Drafts wait until then.`;
   }
   return `${year}${assumed ? (profile.state === "none" ? ", assumed until a ledger is connected or the profile is confirmed" : ", assumed until the ledger’s currency is read") : ""}.`;
+}
+
+// ledgerReports says what a connected ledger reports that differs from the confirmed profile.
+function ledgerReports(profile: Profile) {
+  const parts = [profile.ledger?.currency, profile.ledger?.fiscal_year_start ? `a fiscal year starting in ${fiscalMonth(profile.ledger.fiscal_year_start)}` : ""].filter(Boolean);
+  return parts.join(" and ");
 }
 
 // ProfileForm confirms or changes the client's profile from a month on, against its newest profile as read, and shows

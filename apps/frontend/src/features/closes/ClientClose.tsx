@@ -65,7 +65,7 @@ function profileLabel(p: Profile) {
   if (p.state === "differs")
     return p.ledger?.conflict
       ? `${p.currency} confirmed, but the connected ledgers disagree with each other: disconnect the wrong one`
-      : `${p.currency} confirmed, but the ledger reports ${p.ledger?.currency}: correct the client's profile or its connection`;
+      : `${p.currency} confirmed, but the ledger reports ${[p.ledger?.currency, p.ledger?.fiscal_year_start ? "another fiscal year" : ""].filter(Boolean).join(" and ")}: correct the client's profile or its connection`;
   if (p.state === "unknown") return "USD assumed until the ledger's currency is read: reconnect QuickBooks, or capture a Xero snapshot";
   return `${p.currency} · fiscal year starts ${new Date(2000, p.fiscal_year_start - 1).toLocaleString("en-US", { month: "long" })}`;
 }

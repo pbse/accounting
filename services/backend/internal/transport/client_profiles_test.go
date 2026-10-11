@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -107,7 +108,7 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	call("user_a", partner, "POST", "/v1/closes/client/profile", confirm, 409)
 
 	// The question holds drafts until it is answered; a month before the profile took effect keeps the connection's.
-	if p := profileOf(august); p.State != "differs" || p.Currency != "USD" || !p.Unsettled() || !strings.Contains(p.Question(), "reports CAD from month 4") {
+	if p := profileOf(august); p.State != "differs" || p.Currency != "USD" || !p.Unsettled() || !strings.Contains(p.Question(), "reports CAD and a fiscal year from month 4") {
 		t.Fatalf("August: %+v %q", p, p.Question())
 	}
 	if e := preparation.CurrencyIssue(t.Context(), db, august, []byte(`{"input":{"currency":"USD"}}`)); e == nil || !strings.Contains(e.Error(), "correct the profile or the connection") {
@@ -117,6 +118,14 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 		t.Fatalf("December 2025 keeps the connection's: %+v", p)
 	}
 
+	// August is signed off under US dollars: a change reaching back to it is refused until it is reopened.
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, august)
+	must(err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, august) })
+	backdated := map[string]any{"client": "Maple Co", "currency": "CAD", "fiscal_year_start": 4, "effective_from": "2026-08", "reason": "Backdated", "rev": saved["profiles"].([]any)[0].(map[string]any)["id"]}
+	if out := call("user_a", partner, "POST", "/v1/closes/client/profile", backdated, 409); !strings.Contains(fmt.Sprint(out), "2026-08") {
+		t.Fatalf("the signed-off month is named: %v", out)
+	}
 	// The firm finds the connection is right: the profile is corrected to match it, from September, and the question
 	// closes from then; July and August keep US dollars as confirmed.
 	history := saved["profiles"].([]any)
@@ -127,8 +136,8 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	if p := profileOf(september); p.State != "confirmed" || p.Currency != "CAD" || p.EffectiveFrom != "2026-09" || p.Unsettled() {
 		t.Fatalf("September: %+v", p)
 	}
-	if p := profileOf(alias); p.State != "confirmed" || p.Currency != "USD" {
-		t.Fatalf("July, opened under the alias (whose name holds no connection), keeps its confirmed profile: %+v", p)
+	if p := profileOf(alias); p.State != "differs" || p.Currency != "USD" {
+		t.Fatalf("July, opened under the alias, reads the client's connection and keeps its confirmed profile, asking: %+v", p)
 	}
 
 	// The client page shows the profile in force and its history, newest first, under the client's own name.
@@ -149,6 +158,12 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	}
 	if e := preparation.CurrencyIssue(t.Context(), db, files, []byte(`{"input":{"currency":"USD"}}`)); e == nil || !strings.Contains(e.Error(), "kept in GBP") {
 		t.Fatalf("a draft in another currency than the confirmed one: %v", e)
+	}
+	// A connection whose currency is not read yet still asks when its fiscal year differs.
+	_, err = db.Exec(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,fiscal_year_start) VALUES($1,$2,'Fern Studio','fixture','active',$3,now(),'78',1)`, files, org, rand.Text())
+	must(err)
+	if p := profileOf(files); p.State != "differs" || p.Ledger == nil || p.Ledger.FiscalStart != 1 || p.Ledger.Currency != "" || !strings.Contains(p.Question(), "reports a fiscal year from month 1;") {
+		t.Fatalf("a differing fiscal year with the currency unread: %+v", p)
 	}
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Nobody Ltd", "currency": "GBP", "fiscal_year_start": 4, "effective_from": "2026-04", "reason": "x", "rev": ""}, 404)
 }
