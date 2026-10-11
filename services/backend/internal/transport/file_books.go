@@ -224,7 +224,7 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 			m.Holds = append(m.Holds, c.Title)
 		}
 	}
-	live, err := liveHolds(ctx, q, org, entity, importID, m.Acceptance, kept)
+	live, err := liveHolds(ctx, q, org, entity, importID, m.Acceptance, kept, b.Balances)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -234,8 +234,9 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 
 // liveHolds are what holds an accepted file's statements since it was accepted, beyond the checks it was accepted with
 // (kept): a newer account map classifying one of its accounts differently, until the file is accepted again on it (the
-// books stay as accepted meanwhile); and the prior month's accepted books changed so that it no longer rolls from them.
-func liveHolds(ctx context.Context, q rowReader, org, entity, importID, acceptance string, kept []importCheck) ([]string, error) {
+// books stay as accepted meanwhile); the prior month's accepted books changed so that it no longer rolls from them; and,
+// for a ledger whose stored balances (stored, when given) were derived from them, so that they derive others now.
+func liveHolds(ctx context.Context, q rowReader, org, entity, importID, acceptance string, kept []importCheck, stored map[string]*big.Rat) ([]string, error) {
 	state, found, err := readFileState(ctx, q, org, entity, importID)
 	if err != nil || !found {
 		return nil, err
@@ -250,6 +251,18 @@ func liveHolds(ctx context.Context, q rowReader, org, entity, importID, acceptan
 	}
 	if c := rollForward(state); c.State == "holds" && !slices.ContainsFunc(kept, func(k importCheck) bool { return k.Key == "roll_forward" && k.State == "holds" }) {
 		holds = append(holds, "it no longer rolls forward: "+c.Detail)
+	}
+	if state.layout.Layout.Ledger() && stored != nil {
+		changed := !state.derived
+		for _, a := range state.reading.Accounts {
+			live, _ := new(big.Rat).SetString(a.Balance)
+			if was := stored[a.Key]; live == nil || was == nil && live.Sign() != 0 || was != nil && live.Cmp(was) != 0 {
+				changed = true
+			}
+		}
+		if changed {
+			holds = append(holds, "the prior month's accepted books changed since this ledger was accepted, so its balances no longer roll from them; accept it again")
+		}
 	}
 	return holds, nil
 }
@@ -758,7 +771,7 @@ func reviewedComparative(ctx context.Context, q rowReader, org, entity, period s
 			m.Holds = append(m.Holds, c.Title)
 		}
 	}
-	live, err := liveHolds(ctx, q, org, entity, importID, acceptance, kept)
+	live, err := liveHolds(ctx, q, org, entity, importID, acceptance, kept, nil)
 	if err != nil {
 		return nil, nil, err
 	}
