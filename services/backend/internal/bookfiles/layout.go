@@ -238,6 +238,9 @@ type Reading struct {
 	Problems []string `json:"problems"`
 	// Notes are how the reader read what it could have read another way, for a person to confirm.
 	Notes []string `json:"notes"`
+	// FormulasMarked says each line marks the amounts read from formula results: a reading saved before lines did says
+	// nothing of its formulas.
+	FormulasMarked bool `json:"formulas_marked"`
 }
 
 var totalName = regexp.MustCompile(`(?i)^(grand\s+|sub[\s-]?)?totals?\b|\b(sub[\s-]?)?totals?$`)
@@ -380,7 +383,7 @@ func coveredFrom(lines []Line, i int) int {
 // then left out of the balances, and every amount is read exactly in the layout's style. Nothing is dropped: a value
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
-	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}}
+	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}, FormulasMarked: true}
 	// A layout reads the sheet it was confirmed for: another with the same columns is another sheet's figures.
 	if l.Table != "" && t.Name != l.Table {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("The layout reads the sheet %q, not %q", l.Table, t.Name))

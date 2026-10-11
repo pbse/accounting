@@ -260,6 +260,12 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if c := checksOf(call("user_a", partner, "GET", path, nil, 200))["formulas"]; c["state"] != "passes" {
 		t.Fatalf("a CSV's amounts are stored values: %v", c)
 	}
+	// A workbook reading saved before formula results were marked says nothing of them, so it holds.
+	_, err = db.Exec(`UPDATE books_layouts SET reading=reading-'formulas_marked' WHERE import_id::text=$1`, workbookFile)
+	must(err)
+	if c := checksOf(call("user_a", partner, "GET", workbookPath, nil, 200))["formulas"]; c["state"] != "holds" {
+		t.Fatalf("an unmarked workbook reading holds: %v", c)
+	}
 	// With file imports switched off, the checks are read, and nothing is accepted.
 	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)
 	must(err)
