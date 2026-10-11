@@ -172,8 +172,8 @@ function MonthBooks() {
                 <p className="note">
                   {books.data.parity.pending > 0 && `${books.data.parity.pending} captures were still waiting for their version when it ran. `}
                   {books.data.parity.since > 0 && `${books.data.parity.since} versions have been written since, and are checked at the next run. `}
-                  {books.data.parity.waiting > 0 && `${books.data.parity.waiting} captures are waiting for their version now. `}
-                  It gates a reader’s switch only while none waits and none has been written since.
+                  {books.data.parity.waiting > 0 && `${books.data.parity.waiting} captures have no version now. `}
+                  It gates a reader’s switch only while every capture has its version and none has been written since.
                 </p>
               )}
               {books.data.parity.mismatched.length > 0 && (

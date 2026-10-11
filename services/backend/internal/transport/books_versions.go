@@ -451,15 +451,15 @@ func storedBooks(ctx context.Context, q interface {
 // adminBooks is the month-books record's state across firms, for staff deciding when a reader may switch to it
 // (delivery step 5): how many month-end captures there are, how many have a version and how many are unreadable, and
 // the worker's latest finished parity run, with the captures where it disagrees (identifiers only), how many captures
-// were still waiting when it began, how many versions were written since and how many captures wait now: it is the
-// gate only when all three are none.
+// were still waiting when it began, how many versions were written since and how many captures have no version now,
+// whether queued or not: it is the gate only when all three are none.
 func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var captures, pending, unreadable int
 	var parity json.RawMessage
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM quickbooks_snapshots WHERE payload ? 'period')+(SELECT count(*) FROM xero_snapshots),
  (SELECT count(*) FROM (`+unversionedCaptures+`) x),(SELECT count(*) FROM books_versions WHERE unreadable<>''),
- COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through),'waiting',(SELECT count(*) FROM books_pending)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &pending, &unreadable, &parity)
+ COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through),'waiting',(SELECT count(*) FROM (`+unversionedCaptures+`) w)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &pending, &unreadable, &parity)
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "books read")

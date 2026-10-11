@@ -236,4 +236,10 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if read["pending"].(float64) < 1 || read["versions"].(float64) != read["captures"].(float64)-read["pending"].(float64) {
 		t.Fatalf("the staff read: %v", read)
 	}
+	// A parity run's gate stays uncleared while a capture has no version, queued or not.
+	must(runBooksParity(t.Context(), db))
+	read = adminJSON(t, apiWithStore(db, token), token, "GET", "/v1/admin/books", "", 200)
+	if parity := read["parity"].(map[string]any); parity["waiting"].(float64) < 1 {
+		t.Fatalf("the gate counts captures without a version: %v", parity)
+	}
 }
