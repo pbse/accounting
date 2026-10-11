@@ -650,6 +650,8 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	sentenceMoney := make([][]moneyEntry, len(lines))
 	// Whether a sentence computes from a stale field, which lets it say "stale".
 	sentenceStale := make([]bool, len(lines))
+	// The fields each sentence's derived figures are computed from.
+	sentenceDerived := make([][]claim, len(lines))
 	// The clients each sentence's cited fields are of, so a client it names without a cited field is caught.
 	sentenceClients := make([]map[string]bool, len(lines))
 	for i := range lines {
@@ -706,6 +708,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			for _, in := range s.of {
 				driver(s.sentence, in.step, in.path)
 				c := claimOf(reads[in.step], in.path)
+				sentenceDerived[s.sentence] = append(sentenceDerived[s.sentence], c)
 				if c.entity != "" {
 					sentenceClients[s.sentence][strings.ToLower(c.entity)] = true
 				}
@@ -798,7 +801,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			rows[strings.ToLower(c.label)] = true
 		}
 		var movedTo []movedLevel
-		totalAt := map[string]int{}
+		totalAt, totalSeen := map[string]int{}, map[string]bool{}
 		remainderAt[i] = totalAt
 		used := make([]bool, len(sentenceMoney[i]))
 		reasons := make([]string, len(sentenceMoney[i]))
@@ -821,7 +824,8 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 							group := rowGroup(m.step, m.path)
 							if m.claim.driver || m.claim.cause {
 								addDriver(i, group, m.step+m.path, r)
-							} else {
+							} else if !totalSeen[m.step+m.path] {
+								totalSeen[m.step+m.path] = true
 								sentenceTotals[i][group] = append(sentenceTotals[i][group], r)
 								totalAt[group] = o.start
 							}
@@ -865,6 +869,30 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 	}
 	for i := range lines {
+		// Every measure a financial sentence names is one its cited fields measure: "net income and receivables are
+		// each 8,000.00" needs net income cited too.
+		if len(sentenceMoney[i]) > 0 || len(sentenceDerived[i]) > 0 {
+			covered := map[string]bool{}
+			for _, m := range sentenceMoney[i] {
+				for k := range m.claim.keys {
+					covered[k] = true
+				}
+			}
+			for _, c := range sentenceDerived[i] {
+				for k := range c.keys {
+					covered[k] = true
+				}
+			}
+			for _, m := range metricsAt(lines[i]) {
+				hit := false
+				for _, k := range m.keys {
+					hit = hit || covered[k]
+				}
+				if !hit {
+					return nil, "the sentence names " + strings.Trim(strings.ToLower(lines[i][m.start:m.end]), " ,.;:()") + ", but nothing it cites measures it"
+				}
+			}
+		}
 		// A client the sentence names must be one its cited fields are of: "Birch and Bluegrass each had 21,780.00"
 		// needs Birch's figure too.
 		if len(sentenceClients[i]) > 0 {

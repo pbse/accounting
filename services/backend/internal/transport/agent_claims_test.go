@@ -213,7 +213,8 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Net income is 21,780.00.", "the cited read is stale", e("t15", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
 	ok("The published net income is 21,780.00, which could not be verified against the books.", e("t15", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
 	rejected("Revenue rose 4,940.00 because of the marketing campaign, and expenses rose due to seasonality.", "due to seasonality",
-		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "revenue rose after the marketing campaign started"})
+		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "revenue rose after the marketing campaign started"},
+		e("t2", 0, "/profit_and_loss/sections/1/total/change", "3100.00"))
 	reads["t16"] = read(`{"state":"ready","changes":[{"account":"Patient fees","change":"4940.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}]},{"account":"Expenses","change":"3100.00"}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
 	rejected("Patient fees rose 4,940.00, driven by new patients at 3,000.00, while expenses rose 3,100.00.", "account for 3000.00 of 4940.00",
 		e("t16", 0, "/changes/0/change", "4940.00"), e("t16", 0, "/changes/0/new/0/this_month", "3000.00"), e("t16", 0, "/changes/1/change", "3100.00"))
@@ -401,6 +402,18 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	reads["t46"] = read(`{"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00"}]}}}`, "Published report", "read_publication", "", "")
 	rejected("Net income totals 43,560.00.", "read two ways", derived(0, "sum", "43560.00", "t2", ni+"/amount", "t46", "/pack/profit_and_loss/measures/0/amount"))
 	ok("Revenue rose 4,940.00, because of the marketing campaign.", e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "revenue rose after the marketing campaign started"})
+
+	// Round twenty: every named measure cited; a money variance's sign; a total cited twice; two clients each cited.
+	rejected("Net income and receivables are each 8,000.00.", "names net income, but nothing it cites measures it", e("t1", 0, "/receivables", "8000.00"))
+	reads["t47"] = read(`{"currency":"USD","lines":[{"name":"Supplies","month":{"actual":"9370.00","budget":"10000.00","variance":"-630.00"}}]}`, "Budget against actual", "budget_comparison", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Supplies are 630.00 over budget.", "but the variance is -630", e("t47", 0, "/lines/0/month/variance", "-630.00"))
+	ok("Supplies are 630.00 under budget.", e("t47", 0, "/lines/0/month/variance", "-630.00"))
+	rejected("Patient fees rose 4,940.00, driven by new patients at 3,000.00.", "account for 3000.00 of 4940.00",
+		e("t10", 0, "/changes/0/change", "4940.00"), e("t10", 0, "/changes/0/change", "4940.00"), e("t10", 0, "/changes/0/new/0/this_month", "3000.00"))
+	reads["t48"] = read(`{"closes":[{"id":"13","entity":"Birch Dental","period":"2026-10","currency":"USD","net_income":"21780.00"},{"id":"14","entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","net_income":"21780.00"}]}`, "List client closes", "list_closes", "", "")
+	ok("Bluegrass Dental PLLC and Birch Dental each had net income of 21,780.00.", e("t48", 0, "/closes/0/net_income", "21780.00"), e("t48", 0, "/closes/1/net_income", "21780.00"))
+	rejected("Bluegrass Dental PLLC's net income is 19,000.00, less than Birch Dental's 21,780.00.", "the sentence gives",
+		e("t48", 0, "/closes/0/net_income", "21780.00"), e("t25", 0, "/closes/0/amount", "19000.00"))
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))

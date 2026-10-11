@@ -337,9 +337,10 @@ func claimOf(read agentRead, path string) claim {
 		c.kind = "budget"
 	case claimPercentKeys[last]:
 		c.kind = "percent"
-		if len(ancestors) > 0 {
-			_, c.variance = ancestors[len(ancestors)-1]["budget"]
-		}
+	}
+	// A variance or percentage beside a budget is a variance against it, stated over or under in its sign.
+	if (last == "variance" || claimPercentKeys[last]) && len(ancestors) > 0 {
+		_, c.variance = ancestors[len(ancestors)-1]["budget"]
 	}
 	for i, k := range keys {
 		switch {
@@ -838,17 +839,25 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			}
 		}
 	}
-	// The client named is the field's client, exactly: every client named beside the figure (else in the sentence).
+	// The client named is the field's client, exactly: the clients named beside the figure (with those of figure-less
+	// clauses joined before it, "X and Y each had …"), else in the sentence, must include the field's. Every client the
+	// sentence names must also have a cited field, which agentSupport checks.
 	if c.entity != "" {
-		named := clientsNamed(o.clause, entities)
+		named := clientsNamed(figureClauses(line, o), entities)
 		if len(named) == 0 {
 			named = clientsNamed(line, entities)
 		}
+		ownName, others := false, []string{}
 		for _, e := range named {
 			// A payee or customer the sentence cites may share a client's name ("Birch Dental" paid Bluegrass).
-			if !isSameClient(e, c.entity) && !rows[strings.ToLower(e)] {
-				return "the sentence gives " + o.normalized + " to " + e + ", but the cited figure is " + c.entity + "'s"
+			if isSameClient(e, c.entity) {
+				ownName = true
+			} else if !rows[strings.ToLower(e)] {
+				others = append(others, e)
 			}
+		}
+		if !ownName && len(others) > 0 {
+			return "the sentence gives " + o.normalized + " to " + others[0] + ", but the cited figure is " + c.entity + "'s"
 		}
 	}
 	// The currency and basis named are the field's.
@@ -1700,4 +1709,32 @@ func strconvBool(b bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+// figureClauses is a figure's clause with the figure-less clauses joined before it, which share its subject ("Bluegrass
+// and Birch each had net income of 21,780.00").
+func figureClauses(line string, o occurrence) string {
+	start := strings.Index(line, o.clause)
+	if start < 0 {
+		return o.clause
+	}
+	bounds := claimClause.FindAllStringIndex(line, -1)
+	text := o.clause
+	end := start
+	for i := len(bounds) - 1; i >= 0; i-- {
+		if bounds[i][1] > end {
+			continue
+		}
+		from := 0
+		if i > 0 {
+			from = bounds[i-1][1]
+		}
+		previous := line[from:bounds[i][0]]
+		if agentFigure.MatchString(previous) {
+			break
+		}
+		text = previous + " " + text
+		end = from
+	}
+	return text
 }
