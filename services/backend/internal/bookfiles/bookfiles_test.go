@@ -910,7 +910,7 @@ func TestALedgerIsReadLineByLine(t *testing.T) {
 	layout, questions := ProposeLayout(gl.Tables[0])
 	if !layout.Ledger() || layout.HeaderRow != 4 || layout.Columns[0] != LineDate || layout.Columns[1] != Reference || layout.Columns[2] != Party || layout.Columns[3] != AccountName ||
 		layout.Columns[4] != Memo || layout.Columns[5] != Debit || layout.Columns[6] != Credit || !slices.Equal(layout.IgnoredColumns, []int{7}) || layout.DateOrder != MDY ||
-		!slices.ContainsFunc(questions, func(q string) bool { return strings.Contains(q, "running balance") }) {
+		!slices.ContainsFunc(questions, func(q string) bool { return strings.Contains(q, "(Balance) is left out") }) {
 		t.Fatalf("a ledger's columns, its running balance left out, its dates month first: %+v %v", layout, questions)
 	}
 	layout.AsOf = "2027-01-31"
@@ -947,5 +947,30 @@ func TestALedgerIsReadLineByLine(t *testing.T) {
 	}
 	if got, err := readDate(Cell{Kind: Date, Value: "2027-01-31garbage"}, ""); err == nil {
 		t.Fatalf("a malformed stored date is no date: %q", got)
+	}
+}
+
+// QuickBooks' General Ledger heads each account's lines with its name, totals them under it, and carries columns of no
+// figure of the month's (the transaction type, the split account, the running balance): each line is the heading's
+// account's, and those columns are left out.
+func TestALedgerHeadedByAccountReadsEachLineAsItsAccounts(t *testing.T) {
+	gl, _ := Read("gl.csv", []byte("General Ledger\nAcme Co\nJanuary 2027\n\n,Date,Transaction Type,Num,Name,Memo/Description,Split,Amount,Balance\nBusiness Checking,,,,,,,,\n,01/05/2027,Expense,1001,Acme Supplies,January rent,Rent,-200.00,-200.00\n,01/20/2027,Invoice,INV-7,Big Client,Invoice 7,Sales,700.25,500.25\nTotal for Business Checking,,,,,,,500.25,\nRent,,,,,,,,\n,01/05/2027,Expense,1001,Acme Supplies,January rent,Business Checking,200.00,200.00\nTotal for Rent,,,,,,,200.00,\nSales,,,,,,,,\n,01/20/2027,Invoice,INV-7,Big Client,Invoice 7,Business Checking,-700.25,-700.25\nTotal for Sales,,,,,,,-700.25,\nTOTAL,,,,,,,0.00,\n"))
+	layout, _ := ProposeLayout(gl.Tables[0])
+	if !layout.Ledger() || layout.Columns[0] != AccountName || layout.Columns[7] != Balance || !slices.Equal(layout.IgnoredColumns, []int{2, 6, 8}) {
+		t.Fatalf("the account column under an empty header, the amount, and the columns left out: %+v", layout)
+	}
+	layout.AsOf = "2027-01-31"
+	reading := layout.Read(gl.Tables[0])
+	if !reading.Balanced || len(reading.Problems) != 0 {
+		t.Fatalf("a ledger headed by account balances, its totals agreeing: %+v", reading)
+	}
+	accounts := map[int]string{}
+	for _, l := range reading.Lines {
+		if l.Kind == Posting {
+			accounts[l.Row] = l.Name + " " + l.Amount + " " + l.Date
+		}
+	}
+	if len(accounts) != 4 || accounts[7] != "Business Checking -200 2027-01-05" || accounts[11] != "Rent 200 2027-01-05" || accounts[14] != "Sales -700.25 2027-01-20" {
+		t.Fatalf("each line is its heading's account's: %v", accounts)
 	}
 }

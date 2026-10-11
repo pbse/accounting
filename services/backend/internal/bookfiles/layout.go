@@ -132,8 +132,9 @@ func ProposeLayout(t Table) (Layout, []string) {
 			if ledger {
 				words = append(slices.Clone(ledgerWords), headerWords...)
 			}
-			// A ledger's running balance beside its lines' amounts is no column of the month's figures: left out.
-			if ledger && regexp.MustCompile(`(?i)^(running\s*)?balance$`).MatchString(text) {
+			// A ledger's running balance beside its lines' amounts, and its transaction type and split account (QuickBooks'),
+			// are no columns of the month's figures: left out.
+			if ledger && regexp.MustCompile(`(?i)^((running\s*)?balance|transaction\s*type|split)$`).MatchString(text) {
 				layout.IgnoredColumns = append(layout.IgnoredColumns, c.Column)
 				continue
 			}
@@ -167,7 +168,7 @@ func ProposeLayout(t Table) (Layout, []string) {
 	// A ledger's running balance was left out with the header row it heads, not another's.
 	if layout.HeaderRow != 0 {
 		layout.IgnoredColumns = slices.DeleteFunc(layout.IgnoredColumns, func(c int) bool {
-			return !regexp.MustCompile(`(?i)^(running\s*)?balance$`).MatchString(strings.TrimSpace(headerText(t, layout.HeaderRow, c)))
+			return !regexp.MustCompile(`(?i)^((running\s*)?balance|transaction\s*type|split)$`).MatchString(strings.TrimSpace(headerText(t, layout.HeaderRow, c)))
 		})
 	} else {
 		layout.IgnoredColumns = nil
@@ -295,7 +296,7 @@ func ProposeLayout(t Table) (Layout, []string) {
 			}
 		}
 		for _, c := range layout.IgnoredColumns {
-			questions = append(questions, fmt.Sprintf("Column %s is a running balance, left out: is it?", strings.TrimRight(cellRef(c, 1), "1")))
+			questions = append(questions, fmt.Sprintf("Column %s (%s) is left out as no figure of the month's: is it?", strings.TrimRight(cellRef(c, 1), "1"), strings.TrimSpace(headerText(t, layout.HeaderRow, c))))
 		}
 		return layout, append(questions, "Which month-end is this ledger's, and in which currency?", "Are the amounts in units, or in thousands?")
 	}
@@ -586,6 +587,11 @@ func (l Layout) Read(t Table) Reading {
 	// order.
 	ledger := l.Ledger()
 	var eitherWays, outsideMonth []int
+	// heading is the account a ledger's heading row names (QuickBooks' General Ledger heads each account's lines with
+	// its name), the account of the lines beneath it that name none, until its total; headed are those lines, named
+	// after the table is read, so its totals are checked as written.
+	var heading, headingRef string
+	headed := map[int][2]string{}
 	// beside is each column the layout does not name, with the rows that hold an amount in it beside the row's own.
 	beside := map[int][]int{}
 	var columns []int
@@ -845,9 +851,19 @@ func (l Layout) Read(t Table) Reading {
 		}
 		reading.Lines = append(reading.Lines, line)
 		i := len(reading.Lines) - 1
+		if ledger {
+			switch {
+			case line.Kind == Heading:
+				heading, headingRef = line.Label(), line.Cells[AccountName]
+			case line.Kind == Total:
+				heading, headingRef = "", ""
+			case line.Kind == Posting && line.Name == "" && line.Number == "" && heading != "":
+				headed[i] = [2]string{heading, headingRef}
+			}
+		}
 		switch line.Kind {
 		case Posting:
-			if line.Name == "" && line.Number == "" {
+			if _, ok := headed[i]; line.Name == "" && line.Number == "" && !ok {
 				reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d has amounts but no account", r.Number))
 			}
 			if !line.Cents {
@@ -881,6 +897,9 @@ func (l Layout) Read(t Table) Reading {
 	}
 	for _, c := range slices.Sorted(maps.Keys(beside)) {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("Column %s holds values in rows %s outside the chosen columns: choose what it holds, or mark it ignored", strings.TrimRight(cellRef(c, 1), "1"), rowList(beside[c])))
+	}
+	for i, h := range headed {
+		reading.Lines[i].Name, reading.Lines[i].Cells[AccountName] = h[0], h[1]
 	}
 	if len(eitherWays) > 0 {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("The dates in rows %s could be read day first or month first: confirm how the dates are written", rowList(eitherWays)))
