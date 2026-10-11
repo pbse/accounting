@@ -1218,6 +1218,10 @@ body {
   font-weight: 400;
   color: var(--ink-3);
 }
+/* Documents: each document, how it arrived, when, and where its preparation stands. */
+.ks-docs .ks-tr {
+  --ks-columns: minmax(0, 2fr) minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 1.5fr) 24px;
+}
 .ks-tr .r {
   justify-self: end;
   text-align: right;
@@ -1649,6 +1653,13 @@ body {
   }
   .ks-drafts .ks-tr > :nth-child(3),
   .ks-drafts .ks-tr > :nth-child(4) {
+    display: none;
+  }
+  .ks-docs .ks-tr {
+    --ks-columns: minmax(0, 1fr) auto 24px;
+  }
+  .ks-docs .ks-tr > :nth-child(2),
+  .ks-docs .ks-tr > :nth-child(3) {
     display: none;
   }
 }

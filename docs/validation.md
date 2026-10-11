@@ -4583,3 +4583,30 @@ Tests and checks, on local PostgreSQL:
 - The layout check passes.
 - Screenshots of Workpapers with two drafts ready for review, two documents in preparation and one awaiting a decision.
 
+## 2026-10-11 — Close page Documents from the canvas (B02–B10)
+
+Documents is the fourth tab, board 4.
+- **Evidence list:** `GET /v1/closes/{id}/evidence` now gives each file:
+  - `arrived`: upload, email, request, reply, answer, stripe, procedure or quickbooks, read in one place from what each saving path records;
+  - its latest non-cancelled preparation job: `job_id`, `job_state`, and `kind` (the work it was read as).
+- **Evidence list, how arrival and jobs are found:**
+  - Ledger captures are identified by their QuickBooks records (entity syncs, snapshots and ledger selections), never by a file's name.
+  - A document's job is its own intake, or else the job that reads it: an answer it was given, or the requests a reply belongs to.
+  - A reply whose job has not moved since the reply's receipt is `unread_reply`: shown as received, not counted as read.
+- **Attention:** a file forwarded to the close's address and scanned clean is now a release decision (`forwarded:<id>`). Before, it waited inside a collapsed panel, counted nowhere. Facts to confirm and failed preparation now count on Documents' badge.
+- **Header:** the lede counts the documents the agent has read (waiting for a person or the client counts as read; reading, preparing or failed does not) and the ones waiting for the person. The fact line says whether a forwarding address is open and until when. The ⋯ menu has upload, forward, replace or compare, and run saved instructions.
+- **Body:**
+  - The decisions on Documents.
+  - The documents as one table: arrival, date, preparation status, and a filter by what each was read as, with Upload on the header row. Replaced documents and ledger captures fold to lines.
+  - The rail: documents read, pages, invoices not in the ledger yet, when the address closes, and the connections.
+- **Views:** adding, forwarding and comparing documents (the existing Evidence section); historical exports; Stripe reports; saved preparation instructions. `#source-…` and `#historical-exports` open their view. Historical exports and Stripe open when shown.
+- **Docs:** the records-page paragraph in docs/design-system.md had run onto the Workpapers bullet; it is its own paragraph again.
+
+Tests and checks, on local PostgreSQL:
+- `TestEvidencePreparationRoundTrip` checks that an uploaded document lists its arrival and preparation job.
+- `TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState` checks that a clean forwarded file is a release decision on its close.
+- `internal/transport` passes, except the Poppler-only export test.
+- `tsc` passes.
+- The layout check passes: 95 page views on a fresh migrated database, in Edge.
+- Screenshots of Documents with four documents: one read, one awaiting a decision, two in preparation.
+

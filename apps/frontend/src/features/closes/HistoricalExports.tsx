@@ -6,7 +6,7 @@ type File = { id: string; name: string; purpose?: string; superseded_by: string 
 
 // Uploaded exports stand in for a live ledger only as a person labels them: when exported, whether they cover the month,
 // and whether they already hold the final close adjustments.
-export function HistoricalExports({ closeId }: { closeId: string }) {
+export function HistoricalExports({ closeId, open }: { closeId: string; open?: boolean }) {
   const [label, setLabel] = useState<Label | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [chosen, setChosen] = useState<string[]>([]);
@@ -40,7 +40,7 @@ export function HistoricalExports({ closeId }: { closeId: string }) {
     }
   }
   return (
-    <details id="historical-exports" onToggle={(e) => e.currentTarget.open && void load()}>
+    <details id="historical-exports" open={open} onToggle={(e) => e.currentTarget.open && void load()}>
       <summary>Historical exports</summary>
       <p>
         Without a live QuickBooks or Xero connection, label the uploaded ledger exports this close uses. The label is what you report; it is shown as reported, never as a
