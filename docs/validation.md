@@ -4047,7 +4047,7 @@ Handoff slice 1 ([financial answers that support the actual claim](agent-first-i
 
 Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose value's number appeared in the sentence, so `{"receivables":"8000.00"}` supported "Net income is 8,000.00." (the maturity review's probe). The fix reads each cited field's identity from its read (`internal/transport/agent_claims.go`) and holds each stated money figure to it; a `derive` support form lets the server recompute a total, difference or percentage exactly.
 
-- **`TestAgentClaimsBindWhatAFigureMeasures` (new), 27 rejections and 18 acceptances.** The rejections are:
+- **`TestAgentClaimsBindWhatAFigureMeasures` (new). The original set has 27 rejections and 18 acceptances.** The rejections are:
   - the reproduction itself;
   - a figure with no named metric;
   - gross profit or an expense line called net income or revenue;
@@ -4066,6 +4066,12 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - a wrong derived sum or ratio, an uncited input, a ratio to a zero base, and amounts mixed with changes.
 
   The acceptances include the same claims correctly worded, a multi-period comparison, a zero-base budget line where 540.00 is both the actual and the variance, a source-linked difference and sum, and a ratio at its stated precision. Citations name fields from typed facts (`Management pack › Net income · change`).
+  Review follow-ups add these cases:
+  - a firm client that no read mentions (Acme Dental) is still caught as another client;
+  - a budget percentage cited as a net-income margin is rejected;
+  - a derived sum across two clients must name each client, a sum across accounting bases is refused, and a sum across months must name both months;
+  - the changes read's real payee rows (`new`, `changed`, `unattributed`, each with this and last month) count as drivers, so 3,000.00 plus 1,000.00 of a 4,940.00 change must name the 940.00 unattributed;
+  - a quoted passage supports a cause only when it names it.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.

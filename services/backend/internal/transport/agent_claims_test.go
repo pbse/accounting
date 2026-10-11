@@ -145,6 +145,37 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Net income is 16.9% of patient fees.", "not 16.9%", derived(0, "ratio", "16.9%", "t2", ni+"/amount", "t2", "/profit_and_loss/sections/0/lines/0/amount"))
 	// A ratio to a zero base is refused rather than invented.
 	rejected("Marketing is 100% of its budget.", "cannot be computed", derived(0, "ratio", "100%", "t4", "/lines/1/month/actual", "t4", "/lines/1/month/budget"))
+	// Review follow-ups. A client the reads never mention, named from the firm's clients, is still another client.
+	reads["t8"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","basis":"cash","profit_and_loss":{"measures":[{"name":"Net income","amount":"20500.00"}]}}`, "Management pack, cash basis", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	reads["t9"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-09","basis":"accrual","profit_and_loss":{"measures":[{"name":"Net income","amount":"19940.00"}]}}`, "September pack", "management_pack", "Bluegrass Dental PLLC", "2026-09")
+	reads["t10"] = read(`{"state":"ready","changes":[{"account":"Patient fees","change":"4940.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}],"changed":[{"name":"Hygiene fees","this_month":"6000.00","last_month":"5000.00"}],"unattributed":{"this_month":"940.00","last_month":"0.00"}}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	reads["t11"] = agentRead{text: "October patient visits rose after the marketing campaign started.", doc: true, link: chatCitation{"Evidence #9", "/dashboard/closes/7"}, title: "Read evidence text"}
+	if _, why := agentSupport("facts", "Acme Dental's net income is 21,780.00.", []agentSupportEntry{e("t2", 0, ni+"/amount", "21780.00")}, reads, nil, "Acme Dental", "Bluegrass Dental PLLC"); !strings.Contains(why, "to Acme Dental") {
+		t.Fatalf("a firm client no read named is still another client: %q", why)
+	}
+	// A percentage is held to its line like an amount.
+	rejected("Net income margin is 6.3%.", "calls 6.3% net income", e("t4", 0, "/lines/0/month/percent", "6.3%"))
+	ok("Rent is 6.3% over budget.", e("t4", 0, "/lines/0/month/percent", "6.3%"))
+	// A derived figure stays within one client and basis, and names every month it combines.
+	rejected("Net income totals 43,560.00 for Bluegrass Dental PLLC.", "must name each", derived(0, "sum", "43560.00", "t2", ni+"/amount", "t5", "/closes/0/net_income"))
+	ok("Net income of Bluegrass Dental PLLC and Birch Dental totals 43,560.00.", derived(0, "sum", "43560.00", "t2", ni+"/amount", "t5", "/closes/0/net_income"))
+	rejected("Net income totals 42,280.00 on both bases.", "different accounting bases", derived(0, "sum", "42280.00", "t2", ni+"/amount", "t8", "/profit_and_loss/measures/0/amount"))
+	rejected("Net income totals 41,720.00.", "must name September 2026", derived(0, "sum", "41720.00", "t2", ni+"/amount", "t9", "/profit_and_loss/measures/0/amount"))
+	ok("Net income totals 41,720.00 across September and October.", derived(0, "sum", "41720.00", "t2", ni+"/amount", "t9", "/profit_and_loss/measures/0/amount"))
+	// The changes read's payee rows are drivers: their movements must add up to the change, or the rest is named.
+	rejected("Patient fees rose 4,940.00, driven by new patients at 3,000.00 and hygiene fees rising 1,000.00.", "account for 4000.00 of 4940.00",
+		e("t10", 0, "/changes/0/change", "4940.00"), e("t10", 0, "/changes/0/new/0/this_month", "3000.00"),
+		derived(0, "difference", "1000.00", "t10", "/changes/0/changed/0/this_month", "t10", "/changes/0/changed/0/last_month"))
+	ok("Patient fees rose 4,940.00, driven by new patients at 3,000.00 and hygiene fees rising 1,000.00; 940.00 of patient fees is unattributed.",
+		e("t10", 0, "/changes/0/change", "4940.00"), e("t10", 0, "/changes/0/new/0/this_month", "3000.00"),
+		derived(0, "difference", "1000.00", "t10", "/changes/0/changed/0/this_month", "t10", "/changes/0/changed/0/last_month"),
+		e("t10", 0, "/changes/0/unattributed/this_month", "940.00"))
+	// A quote supports a cause only when it names it.
+	rejected("Revenue rose 4,940.00 because of higher fees.", "cause the reads do not show",
+		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "patient visits rose after"})
+	ok("Revenue rose 4,940.00 because of the marketing campaign.",
+		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "after the marketing campaign started"})
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"context"
+	"database/sql"
 	"math/big"
 	"regexp"
 	"sort"
@@ -110,7 +112,7 @@ var (
 	claimMoneyKeys   = map[string]bool{"amount": true, "balance": true, "ledger_balance": true, "statement_balance": true, "supported": true, "trial_balance": true, "total": true, "actual": true, "budget": true, "opening": true, "closing": true, "lowest": true, "receipts": true, "disbursements": true, "net": true, "open": true, "due": true}
 	// A cash plan's week fields name what they measure.
 	claimKeyMetrics = map[string]string{"opening": "cash", "closing": "cash", "lowest": "cash", "receipts": "receipts", "disbursements": "disbursements"}
-	claimLabelKeys  = []string{"name", "account", "label", "line", "title", "customer", "vendor"}
+	claimLabelKeys  = []string{"name", "payee", "account", "label", "line", "title", "customer", "vendor"}
 	claimCauseRe    = regexp.MustCompile(`driver|cause|reason|explanation|because|why|note`)
 	claimMoneyValue = regexp.MustCompile(`^[(−-]?\$?\d[\d,]*\.\d{2}\)?$`)
 )
@@ -241,7 +243,7 @@ func claimOf(read agentRead, path string) claim {
 		case k == "prior_month" && i == len(keys)-1:
 			c.kind = "prior"
 		}
-		if claimCauseRe.MatchString(k) {
+		if claimCauseRe.MatchString(k) || i == 2 && keys[0] == "changes" && (k == "new" || k == "missing" || k == "changed" || k == "unattributed") {
 			c.cause = true
 		}
 	}
@@ -488,7 +490,7 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 		if len(named) == 0 && !labelNamed(line, c.label) {
 			return "the sentence does not say what " + o.normalized + " measures; the cited field is " + c.describe()
 		}
-	} else if c.money {
+	} else if c.money || c.kind == "percent" {
 		if !labelNamed(line, c.label) {
 			if len(named) > 0 {
 				return "the sentence calls " + o.normalized + " " + keysNamed(named) + ", but the cited field is " + c.describe()
@@ -509,7 +511,7 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 				return "the sentence states a " + direction + " of " + o.normalized + ", but the cited change is " + normalizeFigure(got)
 			}
 		}
-	case "level", "budget", "percent":
+	case "level", "budget":
 		if direction == "rise" || direction == "fall" || direction == "change" {
 			return "the sentence states " + o.normalized + " as a change, but the cited field is an amount (" + c.describe() + ")"
 		}
@@ -629,17 +631,54 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 
 // checkCauses holds a sentence's stated cause to its support: a cause must be cited (a driver, a reason, a document's
 // words) or said as a possibility, never asserted from an amount alone.
-func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim) string {
+func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim, reads map[string]agentRead) string {
 	lower := strings.ToLower(line)
-	if !claimCausal.MatchString(lower) || claimHedge.MatchString(lower) {
+	at := claimCausal.FindStringIndex(lower)
+	if at == nil || claimHedge.MatchString(lower) {
 		return ""
 	}
+	// The cause is what follows the connective ("because of new patients"); a cited passage or cause field must name it.
+	cause := line[at[1]:]
 	for i, s := range entries {
-		if s.quote != "" || claims[i].cause {
+		switch {
+		case s.quote != "" && labelNamed(cause, s.quote):
 			return ""
+		case claims[i].cause:
+			got, _ := valueAt(reads[s.step].value, s.path)
+			if labelNamed(cause, got) || labelNamed(cause, claims[i].label) {
+				return ""
+			}
 		}
 	}
 	return "the sentence states a cause the reads do not show; cite it, or say it as a possibility"
+}
+
+// driverMovement is a cited payee row's movement in a changes read: this month less last month, whichever of its fields
+// is cited, so a sentence naming drivers is held to the total they explain. ok is false for any other field.
+func driverMovement(read agentRead, path string) (string, *big.Rat, bool) {
+	keys := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(keys) < 4 || keys[0] != "changes" {
+		return "", nil, false
+	}
+	switch keys[2] {
+	case "new", "missing", "changed":
+		if len(keys) < 5 {
+			return "", nil, false
+		}
+	case "unattributed":
+		row := "/" + strings.Join(keys[:3], "/")
+		this, _ := valueAt(read.value, row+"/this_month")
+		last, _ := valueAt(read.value, row+"/last_month")
+		movement, ok := derive("difference", []string{this, last})
+		return row, movement, ok
+	default:
+		return "", nil, false
+	}
+	row := "/" + strings.Join(keys[:4], "/")
+	this, _ := valueAt(read.value, row+"/this_month")
+	last, _ := valueAt(read.value, row+"/last_month")
+	movement, ok := derive("difference", []string{this, last})
+	return row, movement, ok
 }
 
 // checkRemainder holds a stated movement and its drivers together: when a sentence attributes a change to drivers
@@ -836,6 +875,46 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 	}
 	named := metricsIn(line)
 	lower := strings.ToLower(line)
+	clientsOf, bases, months := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, c := range claims {
+		if c.entity != "" {
+			clientsOf[strings.ToLower(c.entity)] = true
+		}
+		if c.basis != "" {
+			bases[c.basis] = true
+		}
+		if !c.forecast && len(c.period) == 7 {
+			months[c.period] = true
+		}
+	}
+	if len(bases) > 1 {
+		return "a derived figure combines figures on different accounting bases"
+	}
+	if len(clientsOf) > 1 {
+		for e := range clientsOf {
+			if !strings.Contains(lower, e) {
+				return "a derived figure combines several clients' figures; the sentence must name each"
+			}
+		}
+	}
+	if len(months) > 1 {
+		named := namedMonths(line)
+		ordered := []string{}
+		for m := range months {
+			ordered = append(ordered, m)
+		}
+		sort.Strings(ordered)
+		for _, m := range ordered {
+			p, _ := time.Parse("2006-01", m)
+			found := false
+			for _, n := range named {
+				found = found || n[0] == int(p.Month()) && (n[1] == 0 || n[1] == p.Year())
+			}
+			if !found {
+				return "a derived figure combines several months; the sentence must name " + p.Format("January 2006")
+			}
+		}
+	}
 	for i, c := range claims {
 		if len(c.keys) > 0 && overlaps(named, c.keys) || labelNamed(line, c.label) {
 		} else {
@@ -853,7 +932,7 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		if c.stale && !claimStaleSaid.MatchString(lower) {
 			return "the sentence computes from a stale read without saying so"
 		}
-		if !c.forecast && len(c.period) == 7 {
+		if !c.forecast && len(c.period) == 7 && len(months) == 1 {
 			if months := namedMonths(line); len(months) > 0 {
 				p, _ := time.Parse("2006-01", c.period)
 				match := false
@@ -865,13 +944,14 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 				}
 			}
 		}
+		// A client the sentence names must be one the inputs are of.
 		if c.entity != "" {
 			for _, e := range entities {
 				le := strings.ToLower(e)
-				if len(e) >= 3 && strings.Contains(lower, le) && !strings.Contains(strings.ToLower(c.entity), le) && !strings.Contains(le, strings.ToLower(c.entity)) {
+				if len(e) >= 3 && strings.Contains(lower, le) {
 					inputs := false
-					for _, other := range claims {
-						inputs = inputs || strings.EqualFold(other.entity, e)
+					for other := range clientsOf {
+						inputs = inputs || strings.Contains(other, le) || strings.Contains(le, other)
 					}
 					if !inputs {
 						return "the sentence names " + e + ", but its figure is computed from " + c.entity + "'s"
@@ -885,3 +965,21 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 }
 
 func strconvItoa(n int) string { return big.NewInt(int64(n)).String() }
+
+// firmClients is every client name the firm has closes for, so the support gate knows a client a sentence names even
+// when no read mentioned it. A failed read returns none; the reads' own clients are still checked.
+func firmClients(ctx context.Context, db *sql.DB, org string) []string {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT entity FROM client_closes WHERE organization_id=$1 LIMIT 5000`, org)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil && strings.TrimSpace(name) != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}

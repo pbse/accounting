@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"net/url"
 	"regexp"
@@ -573,7 +574,7 @@ type agentRead struct {
 // agentSupport checks an answer against the reads: every support step ran, every pointer or quote resolves to its
 // value, every figure in the text is bound, every sentence of a facts answer has support, and a help, refusal or card
 // answer states no fact. It returns the citations to keep, or why the answer is rejected.
-func agentSupport(kind, text string, support []agentSupportEntry, reads map[string]agentRead, names []string) ([]chatCitation, string) {
+func agentSupport(kind, text string, support []agentSupportEntry, reads map[string]agentRead, names []string, clients ...string) ([]chatCitation, string) {
 	figures := agentFigures(text)
 	lower := strings.ToLower(text)
 	// A link the answer carries must have come from a read; the model writes none of its own.
@@ -626,12 +627,30 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	}
 	cited := []chatCitation{}
 	seen := map[string]bool{}
+	// The clients a sentence may name: those the reads carry and every client of the firm, so a figure is never given
+	// to a client the reads did not mention.
 	entities := entitiesIn(reads)
+	for _, c := range clients {
+		if c != "" && !slices.ContainsFunc(entities, func(e string) bool { return strings.EqualFold(e, c) }) {
+			entities = append(entities, c)
+		}
+	}
 	// Per sentence: the claims its entries cite, and the signed changes it states, for the cause and remainder checks.
 	sentenceClaims := make([]map[int]claim, len(lines))
 	sentenceEntries := make([][]agentSupportEntry, len(lines))
 	sentenceChanges := make([][]*big.Rat, len(lines))
 	sentenceMoney := make([][]moneyEntry, len(lines))
+	sentenceDrivers := make([]map[string]*big.Rat, len(lines))
+	for i := range lines {
+		sentenceDrivers[i] = map[string]*big.Rat{}
+	}
+	driver := func(sentence int, step, path string) {
+		if read, ok := reads[step]; ok {
+			if row, movement, ok := driverMovement(read, path); ok {
+				sentenceDrivers[sentence][step+row] = movement
+			}
+		}
+	}
 	for i := range lines {
 		sentenceClaims[i] = map[int]claim{}
 	}
@@ -649,6 +668,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 			if why := deriveSupport(s, lines[s.sentence], reads, entities, bound[s.sentence], cite); why != "" {
 				return nil, why
+			}
+			for _, in := range s.of {
+				driver(s.sentence, in.step, in.path)
 			}
 			covered[s.sentence] = true
 			continue
@@ -679,10 +701,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			// The field bears on its sentence by its value, its words, or the line or metric it is of (Lab fees, net
 			// income); a money figure is then held to what the field measures, below, once every entry is in.
 			fieldClaim = claimOf(read, s.path)
+			driver(s.sentence, s.step, s.path)
 			if !substantiates(lines[s.sentence], got, s.path) && !labelNamed(lines[s.sentence], fieldClaim.label) && !overlaps(metricsIn(lines[s.sentence]), fieldClaim.keys) {
 				return nil, "a cited field does not bear on its sentence"
 			}
-			if n := normalizeFigure(got); n != "" && fieldClaim.money && !isCalendar(n) {
+			if n := normalizeFigure(got); n != "" && (fieldClaim.money || fieldClaim.kind == "percent" || strings.HasSuffix(n, "%")) && !isCalendar(n) {
 				sentenceMoney[s.sentence] = append(sentenceMoney[s.sentence], moneyEntry{fieldClaim, got, n})
 			}
 		case s.quote != "":
@@ -777,10 +800,14 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 	}
 	for i := range lines {
-		if why := checkCauses(lines[i], sentenceEntries[i], sentenceClaims[i]); why != "" {
+		if why := checkCauses(lines[i], sentenceEntries[i], sentenceClaims[i], reads); why != "" {
 			return nil, why
 		}
-		if why := checkRemainder(lines[i], sentenceChanges[i]); why != "" {
+		changes := sentenceChanges[i]
+		for _, k := range slices.Sorted(maps.Keys(sentenceDrivers[i])) {
+			changes = append(changes, sentenceDrivers[i][k])
+		}
+		if why := checkRemainder(lines[i], changes); why != "" {
 			return nil, why
 		}
 	}
@@ -1363,7 +1390,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		}
 		entries = append(entries, entry)
 	}
-	citations, rejected := agentSupport(answer.Kind, text, entries, reads, names)
+	citations, rejected := agentSupport(answer.Kind, text, entries, reads, names, firmClients(ctx, db, org)...)
 	if rejected != "" {
 		out.outcome, out.why = "not_kept", rejected
 		return out
