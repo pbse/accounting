@@ -450,3 +450,32 @@ func TestEnclosingTotalsAndUnsupportedFiles(t *testing.T) {
 		}
 	}
 }
+
+// A Trial Balance with codes alone writes its totals in the code column; an amount with a side marker and a sign is not
+// read; and UTF-16 cut short is refused, not trimmed.
+func TestCodesSignsAndCutText(t *testing.T) {
+	codes, _ := Read("tb.csv", []byte("Code,Debit,Credit\n1000,100.00,\nTOTAL ASSETS,100.00,\n3000,,100.00\nTOTAL EQUITY,,100.00\n"))
+	layout, _ := ProposeLayout(codes.Tables[0])
+	layout.Columns = map[int]Meaning{0: AccountNumber, 1: Debit, 2: Credit}
+	if reading := layout.Read(codes.Tables[0]); reading.Debits != "100" || reading.Credits != "100" || len(reading.Problems) != 0 || reading.Lines[1].Kind != Total {
+		t.Fatalf("totals in the code column: %+v", reading)
+	}
+	for _, text := range []string{"-100 Cr", "(100) Cr", "Dr -5"} {
+		if _, err := ParseAmount(text, NumberStyle{Scale: 1}); err == nil {
+			t.Fatalf("%q is not read", text)
+		}
+	}
+	whole := []byte{0xFF, 0xFE}
+	for _, r := range "Account,Balance\nBank,100.5" {
+		whole = append(whole, byte(r), 0)
+	}
+	if _, err := Read("tb.csv", whole[:len(whole)-1]); err == nil {
+		t.Fatal("UTF-16 cut short is refused")
+	}
+	if _, err := ReadCSVAs("tb.csv", whole[2:len(whole)-1], "utf-16le", "comma"); err == nil {
+		t.Fatal("UTF-16 cut short is refused when confirmed too")
+	}
+	if _, err := Read("tb.csv", whole); err != nil {
+		t.Fatalf("whole UTF-16: %v", err)
+	}
+}

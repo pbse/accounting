@@ -70,6 +70,11 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 			}
 		}
 		s = strings.TrimSpace(currencyMarks.ReplaceAllString(s, ""))
+		signed := strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") || strings.HasSuffix(s, "-") || strings.HasPrefix(s, "-")
+		// A side marker and a sign together (-100 Cr) contradict or repeat each other: the amount is not read.
+		if signed && side != "" {
+			return Amount{}, ErrNotAmount
+		}
 		switch {
 		case strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")"):
 			negative, s = !negative, strings.TrimSpace(s[1:len(s)-1])

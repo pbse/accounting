@@ -200,6 +200,15 @@ type Line struct {
 	Hidden bool               `json:"hidden,omitempty"`
 }
 
+// Label is what names the row: its account name, else its account number (a Trial Balance with codes alone writes its
+// totals there).
+func (l Line) Label() string {
+	if l.Name != "" {
+		return l.Name
+	}
+	return l.Number
+}
+
 // Reading is a table read with a confirmed layout: its lines, and the checks that hold what depends on them.
 type Reading struct {
 	Lines []Line `json:"lines"`
@@ -226,7 +235,7 @@ var totalLabel = regexp.MustCompile(`(?i)^(grand\s+)?totals?\b(\s+for\b)?[\s:-]*
 // covers the posting rows since the total before it.
 func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 	t := lines[i]
-	label := strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(t.Name, "")))
+	label := strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(t.Label(), "")))
 	sum := func(from int) *big.Rat {
 		covered := new(big.Rat)
 		for _, l := range lines[from:i] {
@@ -248,12 +257,12 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 		if debit != nil && credit != nil {
 			debits, credits = columnSums(lines[:i])
 			if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
-				return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows above come to %s and %s", t.Row, t.Name, exact(debit), exact(credit), exact(debits), exact(credits))}
+				return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows above come to %s and %s", t.Row, t.Label(), exact(debit), exact(credit), exact(debits), exact(credits))}
 			}
 			return nil
 		}
 		if net := new(big.Rat).Sub(debits, credits); net.Cmp(t.Balance) != 0 {
-			return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows above come to %s", t.Row, t.Name, exact(t.Balance), exact(net))}
+			return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows above come to %s", t.Row, t.Label(), exact(t.Balance), exact(net))}
 		}
 		return nil
 	}
@@ -262,12 +271,12 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 		// Written as two columns, each column must equal its column's sum over the rows it totals.
 		debits, credits := columnSums(lines[from:i])
 		if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
-			return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows it totals come to %s and %s", t.Row, t.Name, exact(debit), exact(credit), exact(debits), exact(credits))}
+			return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows it totals come to %s and %s", t.Row, t.Label(), exact(debit), exact(credit), exact(debits), exact(credits))}
 		}
 		return nil
 	}
 	if covered := sum(from); covered.Cmp(t.Balance) != 0 {
-		return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows it totals come to %s", t.Row, t.Name, exact(t.Balance), exact(covered))}
+		return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows it totals come to %s", t.Row, t.Label(), exact(t.Balance), exact(covered))}
 	}
 	return nil
 }
@@ -279,10 +288,10 @@ var combinedLabel = regexp.MustCompile(`\s*(?:&|\+|\band\b)\s*`)
 // a total combining sections ("Total Liabilities & Equity"), the first of what each section's own heading or total
 // covers; else the row after the total before it.
 func coveredFrom(lines []Line, i int) int {
-	label := strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(lines[i].Name, "")))
+	label := strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(lines[i].Label(), "")))
 	named := func(name string) int {
 		for j := i - 1; j >= 0; j-- {
-			if (lines[j].Kind == Heading || lines[j].Kind == Posting) && strings.EqualFold(strings.TrimSpace(lines[j].Name), name) {
+			if (lines[j].Kind == Heading || lines[j].Kind == Posting) && strings.EqualFold(strings.TrimSpace(lines[j].Label()), name) {
 				return j
 			}
 		}
@@ -298,7 +307,7 @@ func coveredFrom(lines []Line, i int) int {
 			if j < 0 {
 				// A section with no heading is known by its own total.
 				for k := i - 1; k >= 0 && j < 0; k-- {
-					if lines[k].Kind == Total && strings.EqualFold(strings.TrimSpace(totalLabel.ReplaceAllString(lines[k].Name, "")), part) {
+					if lines[k].Kind == Total && strings.EqualFold(strings.TrimSpace(totalLabel.ReplaceAllString(lines[k].Label(), "")), part) {
 						j = coveredFrom(lines, k)
 					}
 				}
@@ -325,7 +334,7 @@ func coveredFrom(lines []Line, i int) int {
 	}
 	from := since(i)
 	for from > 0 {
-		child := strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(lines[from-1].Name, "")))
+		child := strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(lines[from-1].Label(), "")))
 		if label == "" || !strings.HasSuffix(child, " "+label) {
 			break
 		}
@@ -366,7 +375,7 @@ func (l Layout) Read(t Table) Reading {
 	totalled := map[string]bool{}
 	for _, r := range t.Rows {
 		for _, c := range r.Cells {
-			if l.Columns[c.Column] == AccountName && totalName.MatchString(strings.TrimSpace(c.Value)) {
+			if (l.Columns[c.Column] == AccountName || l.Columns[c.Column] == AccountNumber) && totalName.MatchString(strings.TrimSpace(c.Value)) {
 				totalled[strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(strings.TrimSpace(c.Value), "")))] = true
 			}
 		}
@@ -493,20 +502,20 @@ func (l Layout) Read(t Table) Reading {
 		}
 		// A row with no amounts heads a section when a total names it or a person said it does; otherwise it is an
 		// account with a zero balance (an export leaves a zero blank), said so when it has no number to show it is one.
-		if line.Balance == nil && !totalName.MatchString(line.Name) && !slices.Contains(l.Totals, r.Number) && !totalled[strings.ToLower(line.Name)] && !slices.Contains(l.Headings, r.Number) {
+		if line.Balance == nil && !totalName.MatchString(line.Label()) && !slices.Contains(l.Totals, r.Number) && !totalled[strings.ToLower(line.Label())] && !slices.Contains(l.Headings, r.Number) {
 			line.Balance = new(big.Rat)
 			if line.Number == "" {
 				reading.Notes = append(reading.Notes, fmt.Sprintf("Row %d (%s) has no amounts: read as an account with a zero balance; mark it a heading if it is one", r.Number, line.Name))
 			}
 		}
 		switch {
-		case line.Balance == nil && (totalName.MatchString(line.Name) || slices.Contains(l.Totals, r.Number)):
+		case line.Balance == nil && (totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number)):
 			// A total with no amount says the export was cut short, or the layout misses its column.
 			line.Kind = Total
-			reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d (%s) is a total with no amount", r.Number, line.Name))
+			reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d (%s) is a total with no amount", r.Number, line.Label()))
 		case line.Balance == nil:
 			line.Kind = Heading
-		case totalName.MatchString(line.Name) || slices.Contains(l.Totals, r.Number):
+		case totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number):
 			line.Kind = Total
 		default:
 			line.Kind = Posting

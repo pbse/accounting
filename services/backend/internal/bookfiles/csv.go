@@ -23,6 +23,9 @@ var delimiters = []rune{',', ';', '\t', '|'}
 // encoding and delimiter.
 func ReadCSV(name string, body []byte) (File, error) {
 	text, encoding, sure := decode(body)
+	if strings.HasPrefix(encoding, "utf-16") && !utf16Whole(body, encoding == "utf-16be") {
+		return File{}, errUTF16
+	}
 	delimiter, clear := guessDelimiter(text)
 	file, err := parseCSV(name, text, delimiter)
 	file.Encoding, file.Delimiter = encoding, delimiterName(delimiter)
@@ -46,6 +49,9 @@ func ReadCSVAs(name string, body []byte, encoding, delimiter string) (File, erro
 		}
 		text = string(bytes.TrimPrefix(body, []byte("\xEF\xBB\xBF")))
 	case "utf-16le", "utf-16be":
+		if !utf16Whole(body, encoding == "utf-16be") {
+			return File{}, errUTF16
+		}
 		text = utf16Text(body, encoding == "utf-16be")
 	case "windows-1252":
 		decoded, err := charmap.Windows1252.NewDecoder().Bytes(body)
@@ -112,6 +118,36 @@ func nulsAt(body []byte, parity int) float64 {
 		return 0
 	}
 	return float64(nuls) / float64(n)
+}
+
+// errUTF16 is UTF-16 cut short or with a broken character: nothing is dropped to read it.
+var errUTF16 = errors.New("the file ends partway through a character, or has a broken one: it may be cut short; export it again")
+
+// utf16Whole says UTF-16 text is whole: an even number of bytes, each surrogate in its pair.
+func utf16Whole(body []byte, big bool) bool {
+	if len(body)%2 != 0 {
+		return false
+	}
+	units := make([]uint16, 0, len(body)/2)
+	for i := 0; i+1 < len(body); i += 2 {
+		if big {
+			units = append(units, uint16(body[i])<<8|uint16(body[i+1]))
+		} else {
+			units = append(units, uint16(body[i+1])<<8|uint16(body[i]))
+		}
+	}
+	for i := 0; i < len(units); i++ {
+		switch u := units[i]; {
+		case u >= 0xD800 && u < 0xDC00:
+			if i+1 >= len(units) || units[i+1] < 0xDC00 || units[i+1] >= 0xE000 {
+				return false
+			}
+			i++
+		case u >= 0xDC00 && u < 0xE000:
+			return false
+		}
+	}
+	return true
 }
 
 // utf16Text decodes UTF-16, dropping its byte-order mark.
