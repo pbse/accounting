@@ -68,17 +68,34 @@ const attentionQuery = `WITH scope AS (
  UNION ALL
  SELECT 'fix:'||x.id||':'||x.review_id,'fix',x.close_id,(SELECT created_at FROM workpaper_reviews WHERE id::text=x.review_id),'Changes were requested on draft #'||x.id,x.id::text FROM drafts x WHERE x.review_state='changes_requested'
  UNION ALL
- SELECT 'changed:'||x.id||':'||left(md5(COALESCE(c.sources,'')||'|'||COALESCE(c.parent,'')||'|'||COALESCE(c.later,'')),16),'changed',x.close_id,GREATEST(x.created_at,c.replaced_at,c.later_at),
+ -- Drafts of a close whose review reopened for the same cause (the same changed sources, the same later document, or
+ -- the same draft they carry forward) are one event naming the cause and every draft it reopened; each draft is still
+ -- its own decision. A draft alone keeps its own key and wording.
+ SELECT CASE WHEN count(*)=1 THEN 'changed:'||min(g.id)||':'||left(md5(min(g.sig)),16) ELSE 'changed:'||min(g.id)||':'||left(md5(string_agg(g.id||'='||g.sig,',' ORDER BY g.id)),16) END,
+  'changed',g.close_id,max(g.at),
+  CASE WHEN count(*)=1 THEN min(g.single) ELSE min(g.cause)||': drafts '||string_agg('#'||g.id,', ' ORDER BY g.id)||' need review again'||CASE WHEN bool_or(g.approved) THEN ', approved ones included' ELSE '' END END,
+  string_agg(g.id::text,',' ORDER BY g.id)
+ FROM (SELECT x.id,x.close_id,GREATEST(x.created_at,c.replaced_at,c.later_at) AS at,COALESCE(c.sources,'')||'|'||COALESCE(c.parent,'')||'|'||COALESCE(c.later,'') AS sig,c.approved,
   CASE WHEN c.later IS NOT NULL THEN 'A later document, '||c.later_name||', names the invoice of draft #'||x.id||' and speaks of a credit or change; check it before approving'
-   ELSE 'A source of draft #'||x.id||' changed' END||CASE WHEN (SELECT decision FROM workpaper_reviews WHERE workpaper_id=x.id ORDER BY workpaper_reviews.id DESC LIMIT 1)='approved' THEN ' after it was approved' ELSE '' END,x.id::text
+   ELSE 'A source of draft #'||x.id||' changed' END||CASE WHEN c.approved THEN ' after it was approved' ELSE '' END AS single,
+  CASE WHEN c.later IS NOT NULL THEN 'later:'||c.later WHEN c.changed IS NOT NULL THEN 'sources:'||c.changed WHEN c.parent IS NOT NULL THEN 'parent:'||COALESCE(x.paper->'carry_forward'->>'paper_id',x.paper->'recurring_accrual'->>'paper_id') ELSE 'draft:'||x.id END AS cause_key,
+  CASE WHEN c.later IS NOT NULL THEN 'A later document, '||c.later_name||', speaks of a credit or change to their invoice'
+   WHEN c.changed_count=1 THEN c.changed_name||' changed' WHEN c.changed_count>1 THEN c.changed_count||' of their sources changed'
+   WHEN c.parent IS NOT NULL THEN 'The draft they carry forward changed' ELSE 'A source changed' END AS cause
   FROM drafts x CROSS JOIN LATERAL (SELECT
    (SELECT string_agg(e.id||'/'||e.digest||'/'||COALESCE(e.superseded_by::text,''),',' ORDER BY e.id) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src JOIN evidence e ON e.id::text=src->>'id') AS sources,
    (SELECT max(e.replaced_at) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src JOIN evidence e ON e.id::text=src->>'id') AS replaced_at,
    (SELECT p.review_id||'/'||p.digest FROM workpaper_source_review_state p WHERE p.id::text=COALESCE(x.paper->'carry_forward'->>'paper_id',x.paper->'recurring_accrual'->>'paper_id')) AS parent,
    (SELECT string_agg(l.evidence_id::text,',' ORDER BY l.evidence_id) FROM workpaper_later_evidence l JOIN evidence e ON e.id=l.evidence_id WHERE l.workpaper_id=x.id AND e.superseded_by IS NULL) AS later,
    (SELECT max(e.created_at) FROM workpaper_later_evidence l JOIN evidence e ON e.id=l.evidence_id WHERE l.workpaper_id=x.id AND e.superseded_by IS NULL) AS later_at,
-   (SELECT e.name FROM workpaper_later_evidence l JOIN evidence e ON e.id=l.evidence_id WHERE l.workpaper_id=x.id AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1) AS later_name) c
-  WHERE x.review_state='source_changed'
+   (SELECT e.name FROM workpaper_later_evidence l JOIN evidence e ON e.id=l.evidence_id WHERE l.workpaper_id=x.id AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1) AS later_name,
+   -- The cited sources that changed: missing, changed or replaced since the draft cited them.
+   (SELECT string_agg(src->>'id',',' ORDER BY src->>'id') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src LEFT JOIN evidence e ON e.id::text=src->>'id' AND e.close_id=x.close_id WHERE e.id IS NULL OR e.digest IS DISTINCT FROM src->>'digest' OR e.superseded_by IS NOT NULL) AS changed,
+   (SELECT count(*) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src LEFT JOIN evidence e ON e.id::text=src->>'id' AND e.close_id=x.close_id WHERE e.id IS NULL OR e.digest IS DISTINCT FROM src->>'digest' OR e.superseded_by IS NOT NULL) AS changed_count,
+   (SELECT min(COALESCE(e.name,src->>'name','A source')) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src LEFT JOIN evidence e ON e.id::text=src->>'id' AND e.close_id=x.close_id WHERE e.id IS NULL OR e.digest IS DISTINCT FROM src->>'digest' OR e.superseded_by IS NOT NULL) AS changed_name,
+   COALESCE((SELECT decision FROM workpaper_reviews WHERE workpaper_id=x.id ORDER BY workpaper_reviews.id DESC LIMIT 1)='approved',false) AS approved) c
+  WHERE x.review_state='source_changed') g
+ GROUP BY g.close_id,g.cause_key
  UNION ALL
  SELECT 'release:'||a.id,'release',a.close_id,COALESCE(a.scanned_at,a.created_at),'Scanned client file '||a.name||' is waiting for release','' FROM client_attachments a WHERE a.close_id IN (SELECT id FROM scope) AND a.state='clean'
  UNION ALL
@@ -137,8 +154,10 @@ type attentionEvent struct {
 	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
 	// Info marks a notice that needs no decision: a client's complete reply (its work resumed on its own) or a goal
 	// reached (its drafts are decisions of their own). It is still a notice, never a decision in a count.
-	Info  bool `json:"info,omitempty"`
-	group attentionGroup
+	Info bool `json:"info,omitempty"`
+	// Decisions is how many decisions the notice stands for when more than one: the drafts one cause reopened.
+	Decisions int `json:"decisions,omitempty"`
+	group     attentionGroup
 }
 
 // attentionInfo says whether an event is a notice with no decision behind it, from the keys and texts attentionQuery
@@ -209,6 +228,10 @@ func attentionEvents(ctx context.Context, db reader, r *http.Request) ([]attenti
 		}
 		if snoozed.Valid && snoozed.Time.After(time.Now()) {
 			e.SnoozedUntil = &snoozed.Time
+		}
+		// A notice for one cause carries every draft it reopened; it opens the first, and each is its own decision.
+		if ids := strings.Split(e.WorkpaperID, ","); e.Kind == "changed" && len(ids) > 1 {
+			e.WorkpaperID, e.Decisions = ids[0], len(ids)
 		}
 		e.Yours = eventYours(r, e.Kind)
 		e.Info = attentionInfo(e)

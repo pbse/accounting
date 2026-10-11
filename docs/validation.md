@@ -4344,6 +4344,12 @@ Slice 4 (per-method automatic preparation). A reviewed recurring accrual's month
 
 Test: `TestRecurringAccrualRequiresCurrentMonthAndApprovedRule` queues the prefilled month by the sweep once, and a second pass queues nothing; the person's request then reaches the same job. The closest recurring-accrual, standing-approval and comparison tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — One cause, one notice (B02/B06)
+
+When a source changed (a capture refreshed, an invoice replaced, a later credit arrived, a carried predecessor revised), the attention inbox and Home listed one "A source of draft #N changed" notice per draft, so one cause looked like many separate problems. The attention query now groups a close's reopened drafts by cause (the same changed sources, the same later document, or the same predecessor): one notice names the cause and lists the drafts it reopened, opening the first; each draft remains its own review decision, and Home counts every draft behind the notice as a decision (`decisions` on the event). A draft alone keeps its exact key and wording, so existing read and snooze marks still apply.
+
+Test: `TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState` changes a source two drafts cite and gets one notice, "invoice.txt changed: drafts #a, #b need review again"; seen to fail (two notices) without the fix. The attention, Home and later-evidence tests passed on a fresh local PostgreSQL.
+
 ## 2026-10-11 — A rescanned invoice is not prepared twice (B03/B04)
 
 Slice 4 (duplicate and rescanned evidence). A byte-identical upload is one evidence row (deduplicated by digest), but a rescan of the same invoice (other bytes) got its own job and read with the same vendor and number, so each copy held the other: neither was prepared straight through, and a person clearing both could book the invoice twice. A later copy (the same vendor, invoice number, amount, currency and service dates, with no credit, cancellation, refund, adjustment, reversal, void or amendment wording) now neither holds the earlier invoice (`UnrelatedEvidence`) nor is prepared itself: its job waits for a person and says which document it copies and that it should be prepared only if it is a separate invoice (`EarlierCopy`). A copy that differs in any of those facts, or in who it is billed to, still holds the invoice, as before; an earlier copy whose own work failed or was cancelled does not hold a later one, which is then prepared normally.

@@ -283,6 +283,25 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 		t.Fatalf("an undelivered email is its own item, not an unanswered request: %+v", got)
 	}
 
+	// One cause, one event: a source that two drafts cite changes, and the event names it and both drafts, opening the
+	// first; each draft stays its own decision.
+	var sibling string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) SELECT close_id,kind,'attention-sibling',paper FROM workpapers WHERE id::text=$1 RETURNING id::text`, revision).Scan(&sibling))
+	_, err = db.Exec(`UPDATE evidence SET digest='changed-'||digest WHERE id::text=$1`, replacement)
+	must(err)
+	got, _ = mine("")
+	changed := []attentionEvent{}
+	for _, g := range got.Groups {
+		for _, e := range g.Events {
+			if e.Kind == "changed" {
+				changed = append(changed, e)
+			}
+		}
+	}
+	if len(changed) != 1 || changed[0].Text != "invoice.txt changed: drafts #"+revision+", #"+sibling+" need review again" || changed[0].WorkpaperID != revision || changed[0].Decisions != 2 {
+		t.Fatalf("drafts reopened by one cause are one event naming it: %+v", changed)
+	}
+
 	var previous string
 	must(db.QueryRow(`SELECT id::text FROM current_organization_members WHERE organization_id=$1 AND subject='user_a'`, org).Scan(&previous))
 	call("user_admin", []string{"clients:all", "members:manage"}, "POST", "/v1/closes/members", map[string]any{"subject": "user_a", "granted": false, "previous_id": previous, "reason": "Left the firm for another role", "confirmed": true}, 200)
