@@ -213,6 +213,26 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if kept["scope"]["state"] != "note" || kept["as_of"]["state"] != "holds" || out["holds"] != 2.0 {
 		t.Fatalf("the checks kept with the acceptance: %v", out)
 	}
+	// For a month whose books come from a live ledger, the accepted file is a supplement, reconciled to its books: not
+	// while checks it was accepted with hold its statements, nor with no capture yet.
+	var octoberClose string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme Co','2026-10') RETURNING id::text`, org).Scan(&octoberClose))
+	supplementOf := func() map[string]any {
+		t.Helper()
+		supplement, _ := call("user_a", partner, "GET", octoberPath, nil, 200)["supplement"].(map[string]any)
+		if supplement["state"] != "unavailable" || supplement["close_id"] != octoberClose {
+			t.Fatalf("October's file as a supplement: %v", supplement)
+		}
+		return supplement
+	}
+	if reason := fmt.Sprint(supplementOf()["reason"]); !strings.Contains(reason, "not compared") {
+		t.Fatalf("a held file is not compared: %s", reason)
+	}
+	_, err = db.Exec(`UPDATE books_import_acceptances SET checks=(SELECT jsonb_agg(CASE WHEN c->>'state'='holds' THEN jsonb_set(c,'{state}','"passes"') ELSE c END) FROM jsonb_array_elements(checks) c) WHERE import_id::text=$1`, october)
+	must(err)
+	if reason := fmt.Sprint(supplementOf()["reason"]); !strings.Contains(reason, "no captured books") {
+		t.Fatalf("a month with no capture: %s", reason)
+	}
 	// Reopened, the accepted file shows the checks it was accepted with, its explanation included.
 	if shown := checksOf(call("user_b", preparer, "GET", octoberPath, nil, 200)); shown["scope"]["state"] != "note" {
 		t.Fatalf("the accepted file's checks, reopened: %v", shown["scope"])
@@ -350,6 +370,10 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	must(err)
 	if h := holds(); slices.Contains(h, "the account map now classifies one of its accounts differently; accept the file again") {
 		t.Fatalf("the month's statements stand on their map again: %q", h)
+	}
+	// They are the month's books, not a supplement to them.
+	if supplement := call("user_a", partner, "GET", januaryPath, nil, 200)["supplement"]; supplement != nil {
+		t.Fatalf("a files month's file is no supplement: %v", supplement)
 	}
 	// The month's management pack reads them: its profit and loss from the file's activity, provisional.
 	packOf := func() map[string]any {
@@ -589,5 +613,24 @@ func TestAFilesMonthsBalancesAreReviewed(t *testing.T) {
 	}
 	if len(found) != 2 || found["n:1000"] != "abnormal_balance" || found["n:3900"] != "opening_balance_equity" {
 		t.Fatalf("a files month's balances to review: %v", found)
+	}
+}
+
+// An accepted file reconciles to a live month's books account by account, each matched by its name without its number,
+// or a parent's last part; a difference, or a balance on one side only, is named.
+func TestAFileReconcilesToTheMonthsBooks(t *testing.T) {
+	amount := func(s string) *big.Rat { r, _ := new(big.Rat).SetString(s); return r }
+	f := acceptedFile{accounts: map[string]booksAccount{"n:1000": {Name: "1000 Business Checking"}, "n:4000": {Name: "4000 Sales"}, "n:6000": {Name: "6000 Rent"}},
+		balances: map[string]string{"n:1000": "1500.25", "n:4000": "-700.25", "n:6000": "0"}}
+	captured := &books{Accounts: map[string]packAccount{"35": {Name: "Business Checking"}, "79": {Name: "Income:Sales"}, "12": {Name: "Undeposited Funds"}},
+		Balances: map[string]*big.Rat{"35": amount("1500.25"), "79": amount("-700.25"), "12": amount("0")}}
+	if matched, differences := reconcileFile(f, captured); matched != 2 || len(differences) != 0 {
+		t.Fatalf("a file that agrees: %d %v", matched, differences)
+	}
+	captured.Balances["35"] = amount("1400")
+	captured.Accounts["50"], captured.Balances["50"] = packAccount{Name: "Savings"}, amount("10")
+	matched, differences := reconcileFile(f, captured)
+	if matched != 2 || len(differences) != 2 || differences[0] != "1000 Business Checking: the file says 1500.25, the books 1400.00, a difference of 100.25." || differences[1] != "Savings: 10.00 in the books, not in the file." {
+		t.Fatalf("a file that differs: %d %q", matched, differences)
 	}
 }
