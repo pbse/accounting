@@ -47,41 +47,43 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 			t.Fatalf("%q was not rejected for %q: %q", text, reason, why)
 		}
 	}
-	cited := ok("facts", "Cash differs by (1,250.00). The premium is USD 1,200.00 a year.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}, {"t3", 1, "", "", "Annual premium USD 1,200.00"}})
-	if len(cited) != 2 || cited[0].Label != "Balance sheet tie-out › rows/0/ledger_balance" || cited[1].Href != "/dashboard/closes/7?tab=evidence" {
-		t.Fatalf("citations name the field and link the page: %v", cited)
+	cited := ok("facts", "The cash ledger balance is (1,250.00). The premium is USD 1,200.00 a year.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", "", "", nil}, {"t3", 1, "", "", "Annual premium USD 1,200.00", "", nil}})
+	if len(cited) != 2 || cited[0].Label != "Balance sheet tie-out › Cash · ledger balance" || cited[1].Href != "/dashboard/closes/7?tab=evidence" {
+		t.Fatalf("citations name the field from its typed facts and link the page: %v", cited)
 	}
-	ok("facts", "Two things need you: a snapshot and documents.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
-	ok("facts", "2 things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
-	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "1250", ""}}, "does not hold the cited value")
+	// A balance is never a stated difference, however equal the numbers.
+	rejected("facts", "Cash differs by (1,250.00).", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", "", "", nil}}, "as a change")
+	ok("facts", "Two things need you: a snapshot and documents.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", "", "", nil}})
+	ok("facts", "2 things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", "", "", nil}})
+	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "1250", "", "", nil}}, "does not hold the cited value")
 	listing2 := `{"closes":[{"id":"9","entity":"Delta Co","period":"2026-09"}],"has_more":false}`
 	reads["t5"] = agentRead{text: listing2, value: decode(listing2), link: chatCitation{"List client closes", "/dashboard"}, title: "List client closes", tool: "list_closes"}
-	if cited := ok("facts", "Delta Co has a September close.", []agentSupportEntry{{"t5", 0, "/closes/0/entity", "Delta Co", ""}}); len(cited) != 1 || cited[0].Href != "/dashboard/closes/9" {
+	if cited := ok("facts", "Delta Co has a September close.", []agentSupportEntry{{"t5", 0, "/closes/0/entity", "Delta Co", "", "", nil}}); len(cited) != 1 || cited[0].Href != "/dashboard/closes/9" {
 		t.Fatalf("a listed close links to itself: %v", cited)
 	}
 	hits := `{"results":[{"kind":"document","title":"Zurich invoice.pdf","href":"/dashboard/closes/7?tab=evidence#doc-4","close":"Alpha · 2026-09"}]}`
 	reads["t4"] = agentRead{text: hits, value: decode(hits), link: chatCitation{"Search", "/dashboard"}, title: "Search across your closes"}
-	if cited := ok("facts", "The invoice is named Zurich invoice.pdf.", []agentSupportEntry{{"t4", 0, "/results/0/title", "Zurich invoice.pdf", ""}}); len(cited) != 1 || cited[0].Href != "/dashboard/closes/7?tab=evidence#doc-4" {
+	if cited := ok("facts", "The invoice is named Zurich invoice.pdf.", []agentSupportEntry{{"t4", 0, "/results/0/title", "Zurich invoice.pdf", "", "", nil}}); len(cited) != 1 || cited[0].Href != "/dashboard/closes/7?tab=evidence#doc-4" {
 		t.Fatalf("a search hit links to the item that supplied the fact: %v", cited)
 	}
-	rejected("facts", "The cash ledger balance differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}}, "bound to no read")
-	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t9", 0, "/rows/1/ledger_balance", "8000", ""}}, "did not run")
-	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "bound to no read")
-	rejected("facts", "AR ties. Cash differs.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "sentence 1 has no support")
-	rejected("facts", "The premium is 1,200.00.", []agentSupportEntry{{"t3", 0, "", "", "premium"}}, "not in the read")
+	rejected("facts", "The cash ledger balance differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", "", "", nil}}, "bound to no read")
+	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t9", 0, "/rows/1/ledger_balance", "8000", "", "", nil}}, "did not run")
+	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", "", "", nil}}, "bound to no read")
+	rejected("facts", "AR ties. Cash differs.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", "", "", nil}}, "sentence 1 has no support")
+	rejected("facts", "The premium is 1,200.00.", []agentSupportEntry{{"t3", 0, "", "", "premium", "", nil}}, "not in the read")
 	rejected("facts", "AR ties.", nil, "no support")
-	rejected("facts", "Payroll is approved.", []agentSupportEntry{{"t2", 0, "/rows/1/account", "AR", ""}}, "does not bear on its sentence")
-	rejected("facts", "The cash ledger balance is reconciled at (1,250.00).", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}}, "state reconciled is not in a cited field")
-	ok("facts", "The cash ledger balance differs at (1,250.00).", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}, {"t2", 0, "/rows/0/status", "differs", ""}})
+	rejected("facts", "Payroll is approved.", []agentSupportEntry{{"t2", 0, "/rows/1/account", "AR", "", "", nil}}, "does not bear on its sentence")
+	rejected("facts", "The cash ledger balance is reconciled at (1,250.00).", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", "", "", nil}}, "state reconciled is not in a cited field")
+	ok("facts", "The cash ledger balance differs at (1,250.00).", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", "", "", nil}, {"t2", 0, "/rows/0/status", "differs", "", "", nil}})
 	rejected("card", "I sent the client request.", nil, "claimed an action ran")
 	rejected("help", "I have posted it already.", nil, "claimed an action ran")
 	ok("card", "Here is the client request to confirm; nothing is sent until you do.", nil)
-	ok("facts", "AR ties.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}})
+	ok("facts", "AR ties.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", "", "", nil}})
 	if figures := agentFigures("Up .5% on the month."); len(figures) != 1 || figures[0] != "0.5%" {
 		t.Fatalf("a leading-decimal figure keeps its decimal: %v", figures)
 	}
-	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t2", 0, "", "", "\"ledger_balance\":\"8000.00\""}}, "not a document")
-	rejected("facts", "See https://example.com/report for AR.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "no read supplied")
+	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t2", 0, "", "", "\"ledger_balance\":\"8000.00\"", "", nil}}, "not a document")
+	rejected("facts", "See https://example.com/report for AR.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", "", "", nil}}, "no read supplied")
 	ok("help", "I can read this close's status, tie-out and documents, or search it.", nil)
 	rejected("help", "I can see this close is ready for sign-off.", nil, "about the books")
 	rejected("help", "I only read this close; it is blocked.", nil, "stated a close's state")
@@ -94,7 +96,7 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	ok("help", "I can read approved procedures and the review queue.", nil)
 	rejected("card", "See https://example.com for the card.", nil, "no read supplied")
 	ok("card", "Here is what preparing this close would coordinate. Confirm the card to start.", nil)
-	rejected("facts", "AR ties at 8,000.00. Cash differs by 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/ledger_balance", "8000", ""}, {"t2", 1, "/rows/0/status", "differs", ""}}, "no read in its sentence")
+	rejected("facts", "AR ties at 8,000.00. Cash differs by 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/ledger_balance", "8000", "", "", nil}, {"t2", 1, "/rows/0/status", "differs", "", "", nil}}, "no read in its sentence")
 	rejected("help", "I can look at Alpha for you.", nil, "named a client")
 	var listing any
 	json.Unmarshal([]byte(`{"closes":[{"id":"1","entity":"Gamma Ltd","period":"2026-09","owner":{"name":"Pat"}}],"results":[{"kind":"document","title":"Zurich invoice.pdf","close":"Gamma Ltd · 2026-09"}],"has_more":false}`), &listing)
@@ -105,7 +107,7 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	if figures := agentFigures("Coverage runs 2026-09-01 to 2027-08-31 at 1,200.00."); len(figures) != 3 || figures[0] != "2026-09-01" || figures[1] != "2027-08-31" || figures[2] != "1200" {
 		t.Fatalf("a calendar day is one figure: %v", figures)
 	}
-	ok("facts", "Coverage starts 2026-09-01.", []agentSupportEntry{{"t3", 0, "", "", "coverage 2026-09-01 to"}})
+	ok("facts", "Coverage starts 2026-09-01.", []agentSupportEntry{{"t3", 0, "", "", "coverage 2026-09-01 to", "", nil}})
 	if figures := agentFigures("September 2026-09 ran at 50% of 50."); len(figures) != 3 || figures[0] != "2026-09" || figures[1] != "50%" || figures[2] != "50" {
 		t.Fatalf("a close month is one figure and a percentage keeps its unit: %v", figures)
 	}
