@@ -29,8 +29,8 @@ func ReadingConnection(close string) string {
 // ReadingConnectionBefore and ReadingConnectionAfter enclose SQL for a close's ID to give ReadingConnection's SQL, for
 // SQL that must stay a constant.
 const (
-	ReadingConnectionBefore = `(SELECT r.id FROM quickbooks_connections r JOIN client_closes rc ON rc.organization_id=r.organization_id AND lower(r.client_entity)=lower(rc.entity) WHERE rc.id=`
-	ReadingConnectionAfter  = ` AND r.state<>'disconnected' ORDER BY r.environment='production' DESC,r.id DESC LIMIT 1)`
+	ReadingConnectionBefore = `(SELECT r.id FROM quickbooks_connections r JOIN client_closes rc ON rc.organization_id=r.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(rc.organization_id,rc.entity) WHERE rc.id=`
+	ReadingConnectionAfter  = ` AND r.state<>'disconnected' ORDER BY lower(r.client_entity)=lower(rc.entity) DESC,r.environment='production' DESC,r.id DESC LIMIT 1)`
 )
 
 func scheduleSync(ctx context.Context, db *sql.DB) error {
@@ -148,7 +148,7 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	}
 	var valid bool
 	err = tx.QueryRowContext(ctx, `SELECT s.state='running' AND s.claim=$2 AND c.period=s.period AND x.state='active' AND x.id=`+ReadingConnection("c.id")+` AND x.realm=$3 AND o.enabled
- FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) JOIN organizations o ON o.id=c.organization_id WHERE s.id=$1 FOR UPDATE OF s,c,x`, job.id, job.token, job.realm).Scan(&valid)
+ FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) JOIN organizations o ON o.id=c.organization_id WHERE s.id=$1 FOR UPDATE OF s,c,x`, job.id, job.token, job.realm).Scan(&valid)
 	if err != nil || !valid {
 		return errors.New("Connection, close, or job changed during transaction capture")
 	}
@@ -308,7 +308,7 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 // (UTC-12) before the first one, so a US afternoon on the last day is never taken for the month's end.
 var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_closes c
  JOIN organizations o ON o.id=c.organization_id AND o.enabled
- JOIN quickbooks_connections x ON x.id=$2 AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.id=` + ReadingConnection("c.id") + `
+ JOIN quickbooks_connections x ON x.id=$2 AND x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active' AND x.id=` + ReadingConnection("c.id") + `
  WHERE c.id=$1 AND c.period=$3 AND c.period<to_char((now() AT TIME ZONE 'UTC')-interval '12 hours','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
  AND NOT EXISTS (SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND (s.actor<>'scheduled-quickbooks-refresh' OR s.captured_at>now()-interval '20 hours'))

@@ -54,7 +54,8 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 		var connection, snapshots json.RawMessage
 		var latest []byte
 		err := db.QueryRowContext(ctx, `SELECT
- COALESCE((SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'confirmed_at',x.confirmed_at,'error',x.error) FROM xero_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'),'null'::jsonb),
+ COALESCE((SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'confirmed_at',x.confirmed_at,'error',x.error) FROM xero_connections x WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state<>'disconnected'
+  ORDER BY lower(x.client_entity)=lower(c.entity) DESC,x.id DESC LIMIT 1),'null'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'period',s.period,'captured_at',s.captured_at,'digest',s.digest,'tenant_id',s.tenant_id) ORDER BY s.id DESC) FROM xero_snapshots s WHERE s.close_id=c.id),'[]'::jsonb),
  (SELECT s.payload FROM xero_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1)
  FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&connection, &snapshots, &latest)
@@ -195,7 +196,10 @@ func xeroAct(ctx context.Context, w http.ResponseWriter, db *sql.DB, a *auth.Cla
 	}
 	var id, state string
 	var tenants json.RawMessage
-	if err := db.QueryRowContext(ctx, `SELECT id::text,state,tenants FROM xero_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND state<>'disconnected'`, in.ID, a.Organization, entity).Scan(&id, &state, &tenants); err != nil {
+	// A month reads its books through any of its client's connections, whichever name it is held under; managing a
+	// connection (signing in, choosing the organisation, disconnecting) takes the name it is held under.
+	if err := db.QueryRowContext(ctx, `SELECT id::text,state,tenants FROM xero_connections WHERE id::text=$1 AND organization_id=$2
+ AND (lower(client_entity)=lower($3) OR $4 AND client_identity(organization_id,client_entity)=client_identity($2,$3)) AND state<>'disconnected'`, in.ID, a.Organization, entity, in.Action == "snapshot").Scan(&id, &state, &tenants); err != nil {
 		problem(w, 404, "Xero connection not found for this client.")
 		return false
 	}
@@ -447,7 +451,7 @@ func latestXeroBooks(ctx context.Context, db *sql.DB, closeID string) (*xeroBook
 	var captured time.Time
 	var payload []byte
 	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period
- JOIN xero_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'
+ JOIN xero_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state<>'disconnected'
  WHERE s.close_id::text=$1 AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs q JOIN evidence e ON e.id=q.evidence_id AND e.close_id=q.close_id AND e.superseded_by IS NULL WHERE q.close_id=s.close_id AND q.state IN ('completed','unchanged') AND q.finished_at>s.captured_at AND q.connection_id=`+quickbooks.ReadingConnection("s.close_id")+`)
  ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&b.ID, &b.Tenant, &captured, &payload)
 	if err == sql.ErrNoRows {
@@ -484,7 +488,7 @@ const xeroDue = `EXISTS(SELECT 1 FROM organizations o WHERE o.id=c.organization_
  AND (((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '24 hours')
    AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id AND s.captured_at>now()-interval '24 hours'))
   OR ((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '30 minutes')
-   AND EXISTS(SELECT 1 FROM xero_connections h WHERE h.organization_id=c.organization_id AND lower(h.client_entity)=lower(c.entity) AND h.state='active'
+   AND EXISTS(SELECT 1 FROM xero_connections h WHERE h.organization_id=c.organization_id AND client_identity(h.organization_id,h.client_entity)=client_identity(c.organization_id,c.entity) AND h.state='active'
     AND h.changed_at>GREATEST(c.xero_refresh_at,(SELECT max(captured_at) FROM xero_snapshots s WHERE s.close_id=c.id)))))`
 
 // sweepXeroRefresh captures, for up to 10 due closes with an active Xero connection, the month-end Trial Balance.
@@ -494,7 +498,8 @@ func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 		return nil
 	}
 	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.organization_id,c.period,x.id::text FROM client_closes c
- JOIN xero_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.credential IS NOT NULL
+ JOIN LATERAL (SELECT x.id FROM xero_connections x WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active' AND x.credential IS NOT NULL
+  ORDER BY lower(x.client_entity)=lower(c.entity) DESC,x.id DESC LIMIT 1) x ON true
  WHERE `+xeroDue+` ORDER BY c.id LIMIT 10`)
 	if err != nil {
 		return err

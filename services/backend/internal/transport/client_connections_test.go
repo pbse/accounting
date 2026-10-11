@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/quickbooks"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -92,5 +93,13 @@ func TestTheClientPageManagesConnectionsHeldUnderAnAlias(t *testing.T) {
 	call("/v1/closes/client/xero"+acme, map[string]any{"action": "disconnect", "confirmed": true, "connection_id": xeroID}, 200)
 	if state("quickbooks_connections", qbo) != "disconnected" || state("xero_connections", xeroID) != "disconnected" {
 		t.Fatal("the alias' connections are managed from the client's page")
+	}
+	// Connected again from the client's page, under its own name, the connection serves the month opened under the
+	// alias: the month reads through the client's connection.
+	var fresh, reading string
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) VALUES($1,'Acme Co','fixture','active',$2,now(),'903') RETURNING id::text`, org, rand.Text()).Scan(&fresh))
+	must(db.QueryRow(`SELECT COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`::text,'')`, september).Scan(&reading))
+	if reading != fresh {
+		t.Fatalf("the alias month reads through the client's connection: %q, not %q", reading, fresh)
 	}
 }

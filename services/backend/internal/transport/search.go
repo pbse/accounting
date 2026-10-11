@@ -104,7 +104,7 @@ func searchWork(ctx context.Context, db *sql.DB, r *http.Request, closeID, query
 			case "transaction":
 				hit.Href = base + "?tab=books#quickbooks-ledger"
 			case "xero":
-				hit.Kind, hit.Href = "transaction", base+"?tab=evidence#xero"
+				hit.Kind, hit.Href = "transaction", base+"?tab=books#xero"
 			case "procedure":
 				hit.Href = base + "?tab=settings"
 			case "decision":

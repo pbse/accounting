@@ -238,7 +238,7 @@ func TestSearchFindsTheNewestXeroCaptureRows(t *testing.T) {
 		return out.Results
 	}
 	hits := search("harbor printing")
-	if len(hits) != 1 || hits[0].Kind != "transaction" || hits[0].Title != "Xero Bill B-9 · 2026-09-12 · captured 40.00 NZD" || hits[0].Href != "/dashboard/closes/"+alpha+"?tab=evidence#xero" || hits[0].Close != "Alpha · 2026-09" || !strings.Contains(hits[0].Snippet, "Harbor Printing") || strings.Contains(hits[0].Snippet, "older") {
+	if len(hits) != 1 || hits[0].Kind != "transaction" || hits[0].Title != "Xero Bill B-9 · 2026-09-12 · captured 40.00 NZD" || hits[0].Href != "/dashboard/closes/"+alpha+"?tab=books#xero" || hits[0].Close != "Alpha · 2026-09" || !strings.Contains(hits[0].Snippet, "Harbor Printing") || strings.Contains(hits[0].Snippet, "older") {
 		t.Fatalf("only the newest capture of an accessible client is found, linked to its Xero evidence: %+v", hits)
 	}
 	if hits := search("xero bill"); len(hits) != 1 {

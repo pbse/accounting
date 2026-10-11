@@ -5,7 +5,9 @@ import { useBrowserHash } from "../../data/browser";
 import { useDates } from "../../data/time";
 import { money, workspaceRequest } from "../closes/workspace";
 
-export type QuickBooksConnection = { id: string; environment: "sandbox" | "production"; state: string; realm: string; company_name: string; error: string };
+// A connection is held under the name of the month it was made from (client_entity), which may be the client's alias; a
+// production company's name must match that name.
+export type QuickBooksConnection = { id: string; client_entity: string; environment: "sandbox" | "production"; state: string; realm: string; company_name: string; error: string };
 export type ProductionGrant = { id: string; realm: string; company: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string };
 type Client = {
   entity: string;
@@ -35,6 +37,8 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
   const [error, setError] = useState("");
   const [agreed, setAgreed] = useState(false);
   const setup = client.quickbooks_setup ?? { sandbox: false, production: false };
+  // The environments this server can connect that the client has no connection in yet: each can be added beside the other.
+  const missing = (["production", "sandbox"] as const).filter((env) => setup[env] && !client.quickbooks.some((c) => c.environment === env));
   const [environment, setEnvironment] = useState<"production" | "sandbox">(setup.production || !setup.sandbox ? "production" : "sandbox");
   // Intuit's answer opens the step that finishes it.
   useEffect(() => {
@@ -148,10 +152,10 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
           description={`Intuit connected ${pending.company_name || "a company"} (company ${pending.realm}). Its books are read for ${name} only once you confirm it is theirs.`}
         >
           {error && <p role="alert">{error}</p>}
-          {pending.environment === "production" && pending.company_name !== name && (
+          {pending.environment === "production" && pending.company_name !== pending.client_entity && (
             <p className="note">
-              The company is named “{pending.company_name}”, not “{name}”. A production company’s name must match the client’s exactly before its books are read; rename one of them, or disconnect and
-              choose another company.
+              The company is named “{pending.company_name}”, not “{pending.client_entity}”. A production company’s name must match the client’s exactly before its books are read; rename one of them,
+              or disconnect and choose another company.
             </p>
           )}
           {agree(
@@ -167,7 +171,7 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
               <button
                 type="button"
                 className="primary"
-                disabled={busy || !agreed || (pending.environment === "production" && pending.company_name !== name)}
+                disabled={busy || !agreed || (pending.environment === "production" && pending.company_name !== pending.client_entity)}
                 onClick={() => void act("confirm", pending)}
               >
                 {busy ? "Confirming…" : "Confirm"}
@@ -199,6 +203,23 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
             </div>
           </div>
         ))}
+        {missing.length > 0 && (
+          <div className="setting-actions">
+            {missing.map((env) => (
+              <button
+                key={env}
+                type="button"
+                onClick={() => {
+                  setEnvironment(env);
+                  setAgreed(false);
+                  setOpen("connect");
+                }}
+              >
+                Connect {environments[env]}
+              </button>
+            ))}
+          </div>
+        )}
         <p className="note">Disconnecting stops reading and removes the stored sign-in. Remove the app in Intuit as well to withdraw its access there.</p>
         {agree(<>I act for {name} on its QuickBooks connection.</>)}
         <DialogActions>
@@ -254,7 +275,7 @@ export function PostingCard({ client, onChanged }: { client: Client; onChanged: 
   const [reason, setReason] = useState("");
   const [phrase, setPhrase] = useState("");
   if (!production && !grant) return null;
-  const ready = production?.state === "active" && production.company_name === name;
+  const ready = production?.state === "active" && production.company_name === production.client_entity;
   const close = () => {
     setOpen("");
     setError("");
