@@ -456,6 +456,51 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if prior, _ := pack["prior"].(map[string]any); prior["status"] != "comparative" || prior["file"] != "Acme 2026-12.csv" || prior["as_of"] != "2026-12-31" || !strings.Contains(pack["note"].(string), "2026-12 is a reviewed comparative") || pack["overall"] != "provisional" {
 		t.Fatalf("December as a reviewed comparative: %v %v", pack["prior"], pack["note"])
 	}
+	// February's ledger detail: its balances are January's accepted closing balances moved by its lines, January's
+	// accounts without lines carried, and its activity its lines.
+	february := send1("2027-02", "Date,Number,Account,Description,Debit,Credit\n02/20/2027,6000,Rent,February rent,200.00,\n02/20/2027,1000,Business Checking,February rent,,200.00\n")
+	confirmColumns(february, "2027-02-28", map[string]string{"0": "date", "1": "account_number", "2": "account_name", "3": "memo", "4": "debit", "5": "credit"})
+	attest(february)
+	mapAll(february)
+	februaryRead := call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+february, nil, 200)
+	if februaryRead["can_accept"] != true || checksOf(februaryRead)["derived"]["state"] != "passes" {
+		t.Fatalf("February's ledger rolls from January's books: %v", februaryRead)
+	}
+	februaryState, found, err := readFileState(t.Context(), db, org, "Acme Co", february)
+	must(err)
+	derived := map[string]string{}
+	for _, a := range februaryState.reading.Accounts {
+		derived[a.Key] = a.Balance
+	}
+	if activity, from, _ := monthActivity(februaryState); !found || derived["n:1000"] != "1300.25" || derived["n:6000"] != "400" || derived["n:3000"] != "-1000" || derived["n:4000"] != "-700.25" ||
+		from != "movement" || activity["n:6000"].FloatString(2) != "200.00" || activity["n:4000"].Sign() != 0 {
+		t.Fatalf("February's derived balances and activity: %v %v", derived, activity)
+	}
+	// Accepted for a February whose books are its files, it is the month's books version, its balances the derived ones.
+	var februaryClose, sourceRev string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme Co','2027-02') RETURNING id::text`, org).Scan(&februaryClose))
+	must(db.QueryRow(`SELECT COALESCE(max(id)::text,'') FROM books_sources WHERE organization_id=$1`, org).Scan(&sourceRev))
+	call("user_a", []string{"integrations:manage", "clients:all"}, "POST", "/v1/closes/client/books-source", map[string]any{"client": "Acme Co", "period": "2027-02", "source": "files", "reason": "The client sends its ledger", "rev": sourceRev}, 200)
+	call("user_a", partner, "POST", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+february, with(februaryRead, map[string]any{"exported_on": "2026-10-05"}), 200)
+	februaryBooks, februaryMonth, err := fileMonthBooks(t.Context(), db, februaryClose)
+	must(err)
+	if februaryBooks == nil || februaryBooks.Balances["n:1000"].FloatString(2) != "1300.25" || februaryBooks.Balances["n:4000"].FloatString(2) != "-700.25" || len(februaryMonth.Holds) != 0 {
+		t.Fatalf("February's books from its ledger: %v %v", februaryBooks, februaryMonth)
+	}
+	// March's ledger opens at February's derived balances, never at February's lines.
+	march := send1("2027-03", "Date,Number,Account,Description,Debit,Credit\n03/15/2027,1000,Business Checking,Cash sale,50.00,\n03/15/2027,4000,Sales,Cash sale,,50.00\n")
+	confirmColumns(march, "2027-03-31", map[string]string{"0": "date", "1": "account_number", "2": "account_name", "3": "memo", "4": "debit", "5": "credit"})
+	attest(march)
+	mapAll(march)
+	marchState, _, err := readFileState(t.Context(), db, org, "Acme Co", march)
+	must(err)
+	marchBalances := map[string]string{}
+	for _, a := range marchState.reading.Accounts {
+		marchBalances[a.Key] = a.Balance
+	}
+	if !marchState.derived || marchBalances["n:1000"] != "1350.25" || marchBalances["n:4000"] != "-750.25" || marchBalances["n:6000"] != "400" {
+		t.Fatalf("March rolls from February's derived balances: %v %s", marchBalances, marchState.underived)
+	}
 	// Published, its export names the file and the date its books are as of.
 	frozen, _ := json.Marshal(pack)
 	if rows, err := publicationRows(publication{Pack: frozen}); err != nil || !strings.Contains(fmt.Sprint(rows), "from the accepted file Acme 2027-01.csv, as of 2027-01-31") {
@@ -565,7 +610,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		t.Fatalf("a statement request on the file's books: current %v, waiting %v", current, waiting)
 	}
 	// Accepted again, the month's new books version keeps the exclusion, carried from the earlier one.
-	januaryAccepted = call("user_a", partner, "POST", januaryPath, with(januaryRead, map[string]any{"exported_on": "2026-10-05"}), 200)["id"].(string)
+	januaryAccepted = call("user_a", partner, "POST", januaryPath, with(call("user_a", partner, "GET", januaryPath, nil, 200), map[string]any{"exported_on": "2026-10-05"}), 200)["id"].(string)
 	again := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/coverage", nil, 200)["coverage"].(map[string]any)
 	for _, raw := range again["items"].([]any) {
 		if item := raw.(map[string]any); item["account_id"] == "n:3000" && (again["snapshot_id"] == coverage["snapshot_id"] || item["state"] != "excluded" || !strings.HasPrefix(item["reason"].(string), "Carried from an earlier capture")) {
