@@ -376,6 +376,53 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if supplement := call("user_a", partner, "GET", januaryPath, nil, 200)["supplement"]; supplement != nil {
 		t.Fatalf("a files month's file is no supplement: %v", supplement)
 	}
+	// A replacement of January's accepted file that can stand as its books is the evidence that January changed; a file
+	// sent beside it, or one not yet attested, is not.
+	replace := func(content string) string {
+		t.Helper()
+		var b bytes.Buffer
+		m := multipart.NewWriter(&b)
+		must(m.WriteField("period", "2027-01"))
+		must(m.WriteField("one_client", "true"))
+		must(m.WriteField("replaces", january))
+		must(m.WriteField("replaces_reason", "Re-exported after a late correction"))
+		f, e := m.CreateFormFile("file", "Acme 2027-01 corrected.csv")
+		must(e)
+		_, e = f.Write([]byte(content))
+		must(e)
+		must(m.Close())
+		return send("user_b", preparer, "POST", "/v1/closes/client/imports?name=Acme%20Co", m.FormDataContentType(), b.Bytes(), 201)["id"].(string)
+	}
+	evidence := func() *priorReexport {
+		t.Helper()
+		found, err := priorReexportOf(t.Context(), db, org, "Acme Co", "2027-01", january)
+		must(err)
+		return found
+	}
+	beside := send1("2027-01", "Number,Account,Debit,Credit\n1000,Business Checking,1550.25,\n3000,Owner's Equity,,1000.00\n4000,Sales,,750.25\n6000,Rent,200.00,\n")
+	confirmLayout(beside, "2027-01-31")
+	attest(beside)
+	if found := evidence(); found != nil {
+		t.Fatalf("a file sent beside the accepted one is no re-export: %v", found)
+	}
+	corrected := replace("Number,Account,Debit,Credit\n1000,Business Checking,1600.25,\n3000,Owner's Equity,,1000.00\n4000,Sales,,800.25\n6000,Rent,200.00,\n")
+	confirmLayout(corrected, "2027-01-31")
+	if found := evidence(); found != nil {
+		t.Fatalf("a replacement not yet attested is no evidence: %v", found)
+	}
+	attest(corrected)
+	if found := evidence(); found == nil || found.name != "Acme 2027-01 corrected.csv" || found.balances["n:1000"] != "1600.25" {
+		t.Fatalf("an attested replacement is the evidence of a change: %v", found)
+	}
+	// A newer replacement not yet attested leaves the earlier one the evidence.
+	draft := replace("Number,Account,Debit,Credit\n1000,Business Checking,1700.25,\n3000,Owner's Equity,,1000.00\n4000,Sales,,900.25\n6000,Rent,200.00,\n")
+	confirmLayout(draft, "2027-01-31")
+	if found := evidence(); found == nil || found.balances["n:1000"] != "1600.25" {
+		t.Fatalf("the newest replacement that can stand as the books: %v", found)
+	}
+	for _, id := range []string{draft, corrected, beside} {
+		call("user_a", []string{"workpapers:review", "clients:all", "data:manage"}, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+id, map[string]any{"reason": "Checked"}, 200)
+	}
 	// The month's management pack reads them: its profit and loss from the file's activity, provisional.
 	packOf := func() map[string]any {
 		t.Helper()
@@ -677,6 +724,12 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	if c := rollForward(s); c.State != "holds" || c.Detail != "1 account does not roll from November 2026's accepted books, unexplained: 1000 Business Checking opens at 1050.00, closed at 1000.00 (50.00)." {
 		t.Fatalf("a month that does not roll: %+v", c)
 	}
+	// A re-export of November closing where December opens is the evidence that November changed after it was accepted.
+	s.reexport = &priorReexport{"Acme 2026-11 again.csv", map[string]string{"n:1000": "1050", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"}}
+	if c := rollForward(s); c.State != "holds" || c.Detail != "1 account does not roll from November 2026's accepted books, November 2026 changed after it was accepted, as its re-export Acme 2026-11 again.csv shows: 1000 Business Checking opens at 1050.00, closed at 1000.00 (50.00)." || !strings.Contains(c.Holds, "re-export is accepted") {
+		t.Fatalf("a difference the prior month's re-export explains: %+v", c)
+	}
+	s.reexport = nil
 	// A movement the file does not give exactly is never taken as zero.
 	s.reading.Accounts[0].Movement, s.reading.Accounts[0].MovementHeld = "", "unreadable"
 	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking: unreadable") {
