@@ -340,6 +340,24 @@ func shiftFormula(formula string, rows, columns int) string {
 	var out strings.Builder
 	for i := 0; i < len(formula); {
 		switch formula[i] {
+		case '[':
+			// A structured reference (Table1[Jan24], Table1[[#This Row],[Q1]]) names a table's columns, not cells: it runs
+			// to its matching bracket and is left as it is.
+			depth, j := 0, i
+			for ; j < len(formula); j++ {
+				if formula[j] == '[' {
+					depth++
+				} else if formula[j] == ']' {
+					depth--
+					if depth == 0 {
+						break
+					}
+				}
+			}
+			end := min(j+1, len(formula))
+			out.WriteString(formula[i:end])
+			i = end
+			continue
 		case '"', '\'':
 			// A quoted string or sheet name runs to its closing quote; a doubled quote inside is one quote.
 			quote, j := formula[i], i+1
@@ -360,7 +378,7 @@ func shiftFormula(formula string, rows, columns int) string {
 		}
 		loc := cellReference.FindStringSubmatchIndex(formula[i:])
 		next := len(formula)
-		for _, q := range []byte{'"', '\''} {
+		for _, q := range []byte{'"', '\'', '['} {
 			if k := strings.IndexByte(formula[i:], q); k >= 0 && i+k < next {
 				next = i + k
 			}

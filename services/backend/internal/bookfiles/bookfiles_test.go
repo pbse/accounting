@@ -623,3 +623,13 @@ func TestHugeNumbersAreRefused(t *testing.T) {
 		t.Fatalf("an ordinary exponent: %v %v", a, err)
 	}
 }
+
+// A file claiming UTF-8 that is not is refused; a table's column names are not cells to shift.
+func TestDeclaredUTF8AndTableReferences(t *testing.T) {
+	if _, err := Read("tb.csv", []byte("\xEF\xBB\xBFAccount,Balance\nBank\xff,100\n")); err == nil {
+		t.Fatal("invalid UTF-8 behind a UTF-8 mark is refused")
+	}
+	if got := shiftFormula("SUM(Table1[Jan24])+A1+Table1[[#This Row],[Q1]]", 1, 1); got != "SUM(Table1[Jan24])+B2+Table1[[#This Row],[Q1]]" {
+		t.Fatalf("table references stay: %s", got)
+	}
+}

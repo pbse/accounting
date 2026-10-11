@@ -23,6 +23,10 @@ var delimiters = []rune{',', ';', '\t', '|'}
 // not a certain one. So is a delimiter two candidates would both split the file by. ReadCSVAs reads with a confirmed
 // encoding and delimiter.
 func ReadCSV(name string, body []byte) (File, error) {
+	// A file that declares UTF-8 and is not would read with replacement characters: it is refused, not altered.
+	if bytes.HasPrefix(body, []byte("\xEF\xBB\xBF")) && !utf8.Valid(body[3:]) {
+		return File{}, errors.New("the file says it is UTF-8 but has bytes UTF-8 does not allow: export it again")
+	}
 	text, encoding, sure := decode(body)
 	if encoding == "windows-1252" && undefined1252(body) {
 		return File{}, errUndefined1252
