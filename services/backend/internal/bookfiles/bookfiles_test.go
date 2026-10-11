@@ -737,3 +737,15 @@ func TestTheDigitLimitCountsDigits(t *testing.T) {
 		t.Fatalf("30 grouped digits: %v %v", a, err)
 	}
 }
+
+// A mark the reader knows agrees with its currencies; one it does not know agrees with none.
+func TestCurrencyMarksAgreeOnlyWhenKnown(t *testing.T) {
+	for _, c := range []struct {
+		mark, currency string
+		agrees         bool
+	}{{"₩", "KRW", true}, {"₩", "USD", false}, {"US$", "USD", true}, {"US$", "SGD", false}, {"C$", "CAD", true}, {"kr", "SEK", true}, {"kr", "USD", false}, {"Ƀ", "USD", false}, {"¢", "USD", false}, {"USD $", "USD", true}} {
+		if MarkAgrees(c.mark, c.currency) != c.agrees {
+			t.Fatalf("%s in %s: want %v", c.mark, c.currency, c.agrees)
+		}
+	}
+}

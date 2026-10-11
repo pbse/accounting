@@ -477,7 +477,7 @@ func (l Layout) Read(t Table) Reading {
 						reading.Notes = append(reading.Notes, fmt.Sprintf("%s and others are formatted in the workbook's local currency, which the file does not name: confirm it is %s", c.Ref, cmp.Or(l.Currency, "the Trial Balance's currency")))
 					}
 				} else if l.Currency != "" && a.Mark != "" && !MarkAgrees(a.Mark, l.Currency) {
-					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is marked in another currency than %s", c.Ref, c.Value, l.Currency))
+					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is marked in another currency than %s, or one the reader cannot match to it (%s)", c.Ref, c.Value, l.Currency, a.Mark))
 				}
 				// A Dr or Cr marker says the side itself, whichever column the amount sits in: its value is then already
 				// signed as balances are, a credit negative.

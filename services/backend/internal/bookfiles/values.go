@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // NumberStyle is how a file writes its amounts (docs/books-sources.md, Values): which mark separates the decimals, and
@@ -171,26 +172,62 @@ func cellAmount(c Cell, style NumberStyle) (Amount, error) {
 // symbolCurrencies are the currencies each mark can stand for.
 var symbolCurrencies = map[rune][]string{
 	'$': {"USD", "CAD", "AUD", "NZD", "SGD", "HKD", "MXN", "TWD", "ARS", "CLP", "COP", "UYU", "BSD", "BBD", "BZD", "BMD", "BND", "KYD", "FJD", "GYD", "JMD", "LRD", "NAD", "SBD", "SRD", "TTD", "XCD"},
-	'€': {"EUR"}, '£': {"GBP", "EGP", "GIP", "FKP", "SHP"}, '¥': {"JPY", "CNY"}, '₹': {"INR"},
+	'€': {"EUR"}, '£': {"GBP", "EGP", "GIP", "FKP", "SHP"}, '¥': {"JPY", "CNY"}, '₹': {"INR"}, '₩': {"KRW"}, '₽': {"RUB"},
+	'₺': {"TRY"}, '₫': {"VND"}, '₱': {"PHP"}, '฿': {"THB"}, '₪': {"ILS"}, '₦': {"NGN"}, '₴': {"UAH"}, '₸': {"KZT"}, '₡': {"CRC"},
 }
 
 var currencyCode = regexp.MustCompile(`[A-Z]{3}`)
 
-// MarkAgrees says whether an amount's currency mark can be currency: every code it writes is currency, and every symbol
-// is one currency's symbol. An amount with no mark agrees with any.
+// MarkAgrees says whether an amount's currency mark can be currency: every code it writes is currency, every mark it
+// writes is one currency's (a prefixed dollar such as C$, a symbol, a word such as kr), and nothing else is written. An
+// amount with no mark agrees with any; a mark the reader does not know agrees with none, so it is held, not assumed.
 func MarkAgrees(mark, currency string) bool {
 	currency = strings.ToUpper(strings.TrimSpace(currency))
-	for _, code := range currencyCode.FindAllString(mark, -1) {
+	rest := mark
+	for _, p := range prefixedDollars {
+		if strings.Contains(rest, p.mark) {
+			if p.code != currency {
+				return false
+			}
+			rest = strings.ReplaceAll(rest, p.mark, " ")
+		}
+	}
+	for _, code := range currencyCode.FindAllString(rest, -1) {
 		if code != currency {
 			return false
 		}
 	}
-	for _, r := range mark {
-		if names, ok := symbolCurrencies[r]; ok && !slices.Contains(names, currency) {
-			return false
+	rest = currencyCode.ReplaceAllString(rest, " ")
+	for _, word := range strings.FieldsFunc(rest, func(r rune) bool { return unicode.IsSpace(r) || r == '.' }) {
+		if names, ok := wordCurrencies[word]; ok {
+			if !slices.Contains(names, currency) {
+				return false
+			}
+			continue
+		}
+		for _, r := range word {
+			names, ok := symbolCurrencies[r]
+			switch {
+			case ok && !slices.Contains(names, currency):
+				return false
+			case !ok && (unicode.IsLetter(r) || unicode.Is(unicode.Sc, r)):
+				return false
+			}
 		}
 	}
 	return true
+}
+
+// prefixedDollars are dollar marks that name their country, longest first so US$ is not read as S$.
+var prefixedDollars = []struct{ mark, code string }{
+	{"NZ$", "NZD"}, {"US$", "USD"}, {"CA$", "CAD"}, {"AU$", "AUD"}, {"HK$", "HKD"}, {"MX$", "MXN"}, {"NT$", "TWD"},
+	{"C$", "CAD"}, {"A$", "AUD"}, {"S$", "SGD"}, {"R$", "BRL"},
+}
+
+// wordCurrencies are the currencies a mark written as letters can stand for.
+var wordCurrencies = map[string][]string{
+	"kr": {"SEK", "NOK", "DKK", "ISK"}, "Kr": {"SEK", "NOK", "DKK", "ISK"}, "zł": {"PLN"}, "Fr": {"CHF"}, "R": {"ZAR"}, "Rp": {"IDR"},
+	"RM": {"MYR"}, "Rs": {"INR", "PKR", "LKR", "NPR"}, "Kč": {"CZK"}, "Ft": {"HUF"}, "lei": {"RON"}, "лв": {"BGN"},
 }
 
 // pointGrouped and commaGrouped are a number with a decimal point or a decimal comma: its whole part, either plain or
