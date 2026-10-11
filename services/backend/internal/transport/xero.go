@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
-	"close.local/backend/internal/ledgers"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/secrets"
@@ -144,7 +143,7 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client close not found.")
 			return
 		}
-		if in.Action != "disconnect" && connectorOff(ctx, w, db, a.Organization, "xero", "Xero") {
+		if in.Action == "connect" && connectorOff(ctx, w, db, a.Organization, "xero", "Xero") {
 			return
 		}
 		if in.Action == "connect" {
@@ -355,13 +354,8 @@ func xeroAccess(ctx context.Context, db *sql.DB, org, id string) (string, string
 	var state, tenant string
 	var encrypted []byte
 	var expires sql.NullTime
-	var switched bool
-	if err := db.QueryRowContext(ctx, `SELECT state,tenant_id,credential,access_expires_at,`+ledgers.SwitchedSQL("$2", "xero")+` FROM xero_connections WHERE id::text=$1 AND organization_id=$2`, id, org).Scan(&state, &tenant, &encrypted, &expires, &switched); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT state,tenant_id,credential,access_expires_at FROM xero_connections WHERE id::text=$1 AND organization_id=$2`, id, org).Scan(&state, &tenant, &encrypted, &expires); err != nil {
 		return "", "", refusal{404, "Xero connection not found for this client."}
-	}
-	// A connector switched off reads and writes nothing, work queued before the switch included.
-	if !switched {
-		return "", "", refusal{409, "Xero is switched off for your firm."}
 	}
 	if state != "active" {
 		return "", "", refusal{409, "Confirm the client's Xero organisation first."}
@@ -475,7 +469,7 @@ func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 	}
 	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.organization_id,c.period,x.id::text FROM client_closes c
  JOIN xero_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.credential IS NOT NULL
- WHERE `+xeroDue+` AND `+ledgers.SwitchedSQL("c.organization_id", "xero")+` ORDER BY c.id LIMIT 10`)
+ WHERE `+xeroDue+` ORDER BY c.id LIMIT 10`)
 	if err != nil {
 		return err
 	}

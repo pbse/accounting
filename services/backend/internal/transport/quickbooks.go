@@ -294,7 +294,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client close not found.")
 			return
 		}
-		if in.Action != "disconnect" && connectorOff(ctx, w, db, a.Organization, "quickbooks", "QuickBooks") {
+		if in.Action == "connect" && connectorOff(ctx, w, db, a.Organization, "quickbooks", "QuickBooks") {
 			return
 		}
 		if in.Action == "connect" {

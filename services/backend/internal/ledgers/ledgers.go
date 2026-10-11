@@ -123,8 +123,7 @@ func environment(connector string) bool {
 
 // SwitchedSQL is SQL saying whether connector is switched on for the firm whose ID is the SQL expression org (a
 // parameter or a column qualified by its table, never a bare column, which would resolve inside the lookup): its
-// latest pilot, else this environment's switch. Background reads and connection routes check it, so a connector
-// switched off reads nothing and connects nothing.
+// latest pilot, else this environment's switch. Connecting checks it.
 func SwitchedSQL(org, connector string) string {
 	if !slices.Contains(connectors, connector) {
 		return "false"

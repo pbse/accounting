@@ -113,26 +113,19 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 	if err := db.QueryRow(`SELECT `+ledgers.SwitchedSQL("$1", "quickbooks")+`,`+ledgers.SwitchedSQL("$2", "quickbooks"), firm, other).Scan(&on, &elsewhere); err != nil || on || !elsewhere {
 		t.Fatalf("the routes' switch: %v %v %v", on, elsewhere, err)
 	}
-	// Xero access asks the connection's own firm: another firm's pilot, however recent, decides nothing for it.
-	var closeID, connection string
-	if err := db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Xero Secret Co','2026-09') RETURNING id::text`, other).Scan(&closeID); err != nil {
+	// A connector switched off cannot be connected for the firm; connections already made keep reading.
+	var closeID string
+	if err := db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'QBO Secret Co','2026-09') RETURNING id::text`, firm).Scan(&closeID); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at) VALUES($1,$2,'Xero Secret Co','fixture','active',$3,now()) RETURNING id::text`, closeID, other, rand.Text()).Scan(&connection); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		db.Exec(`DELETE FROM xero_connections WHERE organization_id=$1`, other)
-		db.Exec(`DELETE FROM client_closes WHERE organization_id=$1`, other)
-	})
-	t.Setenv("LEDGER_CONNECTORS", "quickbooks,xero")
-	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/connector-pilot", `{"connector":"xero","enabled":false,"reason":"Another firm's switch"}`, 200)
-	if _, _, err := xeroAccess(t.Context(), db, other, connection); err != nil && strings.Contains(err.Error(), "switched off") {
-		t.Fatalf("another firm's pilot switched this firm off: %v", err)
-	}
-	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+other+"/connector-pilot", `{"connector":"xero","enabled":false,"reason":"This firm's own switch"}`, 200)
-	if _, _, err := xeroAccess(t.Context(), db, other, connection); err == nil || !strings.Contains(err.Error(), "switched off") {
-		t.Fatalf("this firm's own pilot: %v", err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM client_closes WHERE organization_id=$1`, firm) })
+	asFirm(t, map[string]string{"user_a": "partner"}, firm)
+	r := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/quickbooks", strings.NewReader(`{"action":"connect","confirmed":true,"environment":"sandbox"}`)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: firm, Permissions: []string{"clients:all", "integrations:manage"}}))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	store.ServeHTTP(w, r)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "cannot be connected") {
+		t.Fatalf("connecting a switched-off connector: %d %s", w.Code, w.Body.String())
 	}
 }
 

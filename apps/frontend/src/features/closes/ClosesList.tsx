@@ -20,7 +20,7 @@ export function isEnrollmentError(message: string) {
 type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean; owner?: string }[] };
 // connections are the states of each client's QuickBooks and Xero connections, of its newest labeled exports (labeled, or stale once one is replaced), and the ledger it keeps, as recorded,
 // by client identity (its own name in lower case).
-type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string; exports?: string; ledger?: string }>; connectors?: Record<string, boolean>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
+type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string; exports?: string; ledger?: string }>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
 type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean; owner?: string };
 // key is the client's own name in lower case (a confirmed alias resolves to it), as its connections are kept.
 type ClientRow = { key: string; entity: string; active?: boolean; since?: string; owner?: string | null; closes: ListedClose[]; owed: string[] };
@@ -139,9 +139,7 @@ export default function ClosesList() {
       ] as [string, string | undefined][]
     )
       .filter(([, state]) => state)
-      .map(([ledger, state]) =>
-        roster?.connectors?.[ledger.toLowerCase()] === false ? `${ledger} · switched off` : state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`,
-      );
+      .map(([ledger, state]) => (state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`));
     if (states?.exports) ledgers.push(states.exports === "stale" ? "Exports · one replaced" : "Exports");
     // With nothing connected, the ledger the client keeps, as recorded.
     if (!ledgers.length && states?.ledger) return `${states.ledger} · not connected`;

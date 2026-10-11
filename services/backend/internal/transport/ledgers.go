@@ -95,8 +95,9 @@ func readClientLedger(ctx context.Context, q interface {
 	return &l, nil
 }
 
-// connectorOff answers 409 and says so when connector is switched off for firm org (or the switch cannot be read):
-// a connector switched off connects and reads nothing; disconnecting stays open.
+// connectorOff answers 409 and says so when connector is switched off for firm org (or the switch cannot be read). A
+// switch decides whether a connector can be connected for the firm: it is how a connector reaches firms once it passes
+// its acceptance, or is held from one. Connections already made keep reading until they are disconnected.
 func connectorOff(ctx context.Context, w http.ResponseWriter, db *sql.DB, org, connector, name string) bool {
 	var on bool
 	if err := db.QueryRowContext(ctx, `SELECT `+ledgers.SwitchedSQL("$1", connector), org).Scan(&on); err != nil {
@@ -104,7 +105,7 @@ func connectorOff(ctx context.Context, w http.ResponseWriter, db *sql.DB, org, c
 		return true
 	}
 	if !on {
-		problem(w, 409, name+" is switched off for your firm. Disconnecting still works; ask Krith support to switch it on.")
+		problem(w, 409, name+" cannot be connected for your firm yet; ask Krith support. Its files can be sent instead.")
 		return true
 	}
 	return false

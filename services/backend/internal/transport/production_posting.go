@@ -3,7 +3,6 @@ package transport
 import (
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/ledger"
-	"close.local/backend/internal/ledgers"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
 	"close.local/backend/internal/payroll"
@@ -127,11 +126,6 @@ func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedG
 	var expires time.Time
 	var currency sql.NullString
 	connectionID := g.ConnectionID
-	// A connector switched off writes nothing.
-	var switched bool
-	if err = db.QueryRowContext(ctx, `SELECT `+ledgers.SwitchedSQL("$1", "quickbooks"), org).Scan(&switched); err != nil || !switched {
-		return quickbooks.Sandbox{}, g, "", refusal{409, "QuickBooks is switched off for your firm."}
-	}
 	if kind == "" {
 		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND environment='production' AND state='active' AND realm=$3 AND company_name=$2`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency)
 	} else {

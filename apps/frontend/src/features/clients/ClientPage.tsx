@@ -66,8 +66,6 @@ type ClientRead = {
   xero: XeroConnection[];
   // The ledger the client keeps, as recorded: not how its books arrive.
   ledger: KeptLedger | null;
-  // Whether each native connector is switched on for the firm; a connection to one switched off reads nothing.
-  connectors?: Record<string, boolean>;
   profile: Profile | null;
   basis: {
     method: "accrual" | "cash" | "modified_cash";
@@ -595,11 +593,11 @@ function books(client: ClientRead, day: (value: string) => string) {
       source: "quickbooks",
       short: q.environment === "production" ? "QuickBooks Online" : "QuickBooks sandbox",
       name: `QuickBooks${q.environment === "production" ? "" : " sandbox"}${q.company_name ? ` (${q.company_name})` : ""}`,
-      line: `${client.connectors?.quickbooks === false ? "QuickBooks is switched off for your firm, so nothing is read from" : "Read from"} QuickBooks${q.environment === "production" ? "" : " (sandbox)"}${q.company_name ? `, ${q.company_name}` : ""}.${q.error ? ` ${q.error}` : ""}${heldUnder(q)}`,
+      line: `Read from QuickBooks${q.environment === "production" ? "" : " (sandbox)"}${q.company_name ? `, ${q.company_name}` : ""}.${q.error ? ` ${q.error}` : ""}${heldUnder(q)}`,
       held: q.client_entity,
-      chip: client.connectors?.quickbooks === false ? (["Switched off", "pill danger"] as [string, string]) : state(q.state, "Confirm the company"),
-      status: client.connectors?.quickbooks === false ? "switched off for your firm" : status(q.state),
-      ok: client.connectors?.quickbooks !== false && live(q.state),
+      chip: state(q.state, "Confirm the company"),
+      status: status(q.state),
+      ok: live(q.state),
       tab: q.environment === "production" ? "settings" : "evidence",
       anchor: q.environment === "production" ? "quickbooks-production" : "quickbooks-ledger",
     })),
@@ -607,11 +605,11 @@ function books(client: ClientRead, day: (value: string) => string) {
       source: "xero",
       short: "Xero",
       name: `Xero${x.tenant_name ? ` (${x.tenant_name})` : ""}`,
-      line: `${client.connectors?.xero === false ? "Xero is switched off for your firm, so nothing is read from" : "Read from"} Xero${x.tenant_name ? `, ${x.tenant_name}` : ""}.${x.error ? ` ${x.error}` : ""}${heldUnder(x)}`,
+      line: `Read from Xero${x.tenant_name ? `, ${x.tenant_name}` : ""}.${x.error ? ` ${x.error}` : ""}${heldUnder(x)}`,
       held: x.client_entity,
-      chip: client.connectors?.xero === false ? (["Switched off", "pill danger"] as [string, string]) : state(x.state, "Choose the organisation"),
-      status: client.connectors?.xero === false ? "switched off for your firm" : status(x.state),
-      ok: client.connectors?.xero !== false && live(x.state),
+      chip: state(x.state, "Choose the organisation"),
+      status: status(x.state),
+      ok: live(x.state),
       tab: "evidence",
       anchor: "xero",
     })),

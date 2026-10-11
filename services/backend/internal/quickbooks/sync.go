@@ -12,7 +12,6 @@ import (
 	"log"
 	"time"
 
-	"close.local/backend/internal/ledgers"
 	"close.local/backend/internal/secrets"
 )
 
@@ -44,7 +43,7 @@ func scheduleSync(ctx context.Context, db *sql.DB) error {
  JOIN quickbooks_connections x ON x.id=`+ReadingConnection("c.id")+`
  -- A change hint after the newest capture started makes the close due before its daily refresh.
  LEFT JOIN LATERAL (SELECT s.started_at FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period ORDER BY s.id DESC LIMIT 1) latest ON true
- WHERE x.state='active' AND x.credential IS NOT NULL AND `+ledgers.SwitchedSQL("c.organization_id", "quickbooks")+`
+ WHERE x.state='active' AND x.credential IS NOT NULL
  -- A close an agent works on is read whatever its month.
  AND (c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM') OR EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.state='active'))
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
@@ -73,16 +72,12 @@ func syncCredentials(ctx context.Context, db *sql.DB, job syncClaim) (string, st
 	var organization, realm, environment, state string
 	var encrypted []byte
 	var expires sql.NullTime
-	var reading, switched bool
-	err := db.QueryRowContext(ctx, `SELECT x.organization_id,x.realm,x.environment,x.state,x.credential,x.access_expires_at,x.id=`+ReadingConnection("c.id")+`,`+ledgers.SwitchedSQL("x.organization_id", "quickbooks")+`
+	var reading bool
+	err := db.QueryRowContext(ctx, `SELECT x.organization_id,x.realm,x.environment,x.state,x.credential,x.access_expires_at,x.id=`+ReadingConnection("c.id")+`
  FROM quickbooks_connections x JOIN client_closes c ON c.id=$1 AND c.organization_id=x.organization_id AND lower(c.entity)=lower(x.client_entity) JOIN organizations o ON o.id=x.organization_id AND o.enabled
- WHERE x.id=$2 AND c.period=$3`, job.closeID, job.connectionID, job.period).Scan(&organization, &realm, &environment, &state, &encrypted, &expires, &reading, &switched)
+ WHERE x.id=$2 AND c.period=$3`, job.closeID, job.connectionID, job.period).Scan(&organization, &realm, &environment, &state, &encrypted, &expires, &reading)
 	if err != nil || state != "active" || len(encrypted) == 0 {
 		return "", "", "", errors.New("Connected QuickBooks company or firm is no longer active")
-	}
-	// A connector switched off reads nothing, work queued before the switch included.
-	if !switched {
-		return "", "", "", errors.New("QuickBooks is switched off for this firm")
 	}
 	if !reading {
 		return "", "", "", errors.New("This client's books are now read from its production QuickBooks connection")
@@ -312,7 +307,7 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 // is the scheduler's own: none yet, or a scheduled one at least 20 hours old. The month has ended everywhere
 // (UTC-12) before the first one, so a US afternoon on the last day is never taken for the month's end.
 var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_closes c
- JOIN organizations o ON o.id=c.organization_id AND o.enabled AND ` + ledgers.SwitchedSQL("o.id", "quickbooks") + `
+ JOIN organizations o ON o.id=c.organization_id AND o.enabled
  JOIN quickbooks_connections x ON x.id=$2 AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.id=` + ReadingConnection("c.id") + `
  WHERE c.id=$1 AND c.period=$3 AND c.period<to_char((now() AT TIME ZONE 'UTC')-interval '12 hours','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
@@ -324,16 +319,14 @@ var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_
 
 // RefreshStopped is a SQL condition: the close's newest period snapshot on its reading connection is the scheduler's,
 // and the scheduler no longer refreshes it: six are taken, only the close's last free snapshot is left, it is past the
-// months scheduleSync reads, QuickBooks is switched off for the firm, or the connection's latest finished capture failed
-// or could not refresh the month-end.
+// months scheduleSync reads, or the connection's latest finished capture failed or could not refresh the month-end.
 // Later entries may then be missing, so sign-off waits for a successful read or a person's capture. A close already
 // at its twenty snapshots cannot be captured again, so it is not asked to be.
 func RefreshStopped(close string) string {
 	return `COALESCE((SELECT s.actor='scheduled-quickbooks-refresh' AND ((SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id AND z.actor='scheduled-quickbooks-refresh' AND z.payload ? 'period')>=6
  OR (SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id)=19
  OR COALESCE((SELECT y.error<>'' FROM quickbooks_entity_syncs y WHERE y.close_id=s.close_id AND y.connection_id=s.connection_id AND y.period=sc.period AND y.state IN ('completed','unchanged','failed') ORDER BY y.id DESC LIMIT 1),false)
- OR sc.period<to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=sc.id AND g.state='active')
- OR NOT ` + ledgers.SwitchedSQL("sc.organization_id", "quickbooks") + `)
+ OR sc.period<to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=sc.id AND g.state='active'))
  FROM quickbooks_snapshots s JOIN client_closes sc ON sc.id=s.close_id WHERE s.close_id=` + close + ` AND s.payload ? 'period' AND s.connection_id=` + ReadingConnection(close) + `
  ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),false)`
 }
