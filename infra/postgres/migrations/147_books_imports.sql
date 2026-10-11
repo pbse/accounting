@@ -63,6 +63,9 @@ CREATE TABLE books_import_pages (
  chunk int NOT NULL,
  first_row int NOT NULL,
  rows jsonb NOT NULL,
+ -- meta is what the file was read as: its encoding, delimiter and what was unsure, its linked workbooks, whether it
+ -- recalculates on open and how many formulas it holds.
+ meta jsonb NOT NULL DEFAULT '{}'::jsonb,
  PRIMARY KEY (import_id,parse,position,chunk)
 );
 ALTER TABLE books_import_pages ENABLE ROW LEVEL SECURITY;

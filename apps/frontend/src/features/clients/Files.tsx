@@ -121,7 +121,7 @@ export function FilesCard({ client }: { client: string }) {
         icon="file"
         tone={latest && !(latest.confirmed && clean(latest.confirmed)) ? "wait" : "done"}
         title="Files"
-        chip={<span className="pill neutral">{imports.length ? `${imports.length} sent` : "None sent"}</span>}
+        chip={<span className="pill neutral">{imports.length ? `${imports.length}${more ? "+" : ""} sent` : "None sent"}</span>}
         action={
           files.data?.on === false ? undefined : (
             <button type="button" onClick={() => setSending(true)}>

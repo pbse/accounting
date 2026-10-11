@@ -156,6 +156,17 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	}
 	call("user_b", preparer, "GET", path+"&encoding=latin-9&delimiter=comma", nil, 422)
 	call("user_a", partner, "POST", path, map[string]any{"action": "confirm", "layout": layout, "reason": "Matches the export"}, 200)
+	// Reopened, a confirmed file is read from what was kept the first time it was read so: its rows, what it was read
+	// as and its confirmed reading, without reading the file again.
+	call("user_a", partner, "GET", path, nil, 200)
+	_, err = db.Exec(`UPDATE books_imports SET content='not the file' WHERE id::text=$1`, id)
+	must(err)
+	reopened := call("user_a", partner, "GET", path, nil, 200)
+	if rows := reopened["tables"].([]any)[0].(map[string]any)["rows"].([]any); len(rows) != 5 || reopened["import"].(map[string]any)["confirmed"] == nil || reopened["encoding"] != "utf-8" {
+		t.Fatalf("a confirmed file reopened from what was kept: %v", reopened)
+	}
+	_, err = db.Exec(`UPDATE books_imports SET content=$2 WHERE id::text=$1`, id, september)
+	must(err)
 	listed := call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co", nil, 200)["imports"].([]any)
 	if len(listed) != 1 || listed[0].(map[string]any)["confirmed"].(map[string]any)["balanced"] != true {
 		t.Fatalf("the list: %v", listed)

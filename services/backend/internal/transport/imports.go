@@ -163,12 +163,14 @@ func storeImportPages(ctx context.Context, db *sql.DB, org, id, key string, file
 		Chunk         int             `json:"chunk"`
 		First         int             `json:"first_row"`
 		Rows          []bookfiles.Row `json:"rows"`
+		Meta          map[string]any  `json:"meta"`
 	}
 	var kept bool
 	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM books_import_pages WHERE import_id::text=$1 AND parse=$2)`, id, key).Scan(&kept); err != nil || kept {
 		return err
 	}
 	var chunks []chunk
+	meta := fileFacts(file)
 	for position, t := range file.Tables {
 		hidden := t.HiddenColumns
 		if hidden == nil {
@@ -180,42 +182,50 @@ func storeImportPages(ctx context.Context, db *sql.DB, org, id, key string, file
 			if len(rows) > 0 {
 				first = rows[0].Number
 			}
-			chunks = append(chunks, chunk{position, t.Name, t.Hidden, hidden, len(t.Rows), start / previewRows, first, rows})
+			chunks = append(chunks, chunk{position, t.Name, t.Hidden, hidden, len(t.Rows), start / previewRows, first, rows, meta})
 		}
 	}
 	raw, err := json.Marshal(chunks)
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, `INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows)
- SELECT $1,$2::bigint,$3,c.position,c.table_name,c.hidden,c.hidden_columns,c.total,c.chunk,c.first_row,c.rows FROM jsonb_to_recordset($4::jsonb)
-  AS c(position int,table_name text,hidden boolean,hidden_columns jsonb,total int,chunk int,first_row int,rows jsonb)
+	_, err = db.ExecContext(ctx, `INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows,meta)
+ SELECT $1,$2::bigint,$3,c.position,c.table_name,c.hidden,c.hidden_columns,c.total,c.chunk,c.first_row,c.rows,c.meta FROM jsonb_to_recordset($4::jsonb)
+  AS c(position int,table_name text,hidden boolean,hidden_columns jsonb,total int,chunk int,first_row int,rows jsonb,meta jsonb)
  WHERE NOT EXISTS(SELECT 1 FROM books_import_pages p WHERE p.import_id=$2::bigint AND p.parse=$3) ON CONFLICT DO NOTHING`, org, id, key, string(raw))
 	return err
 }
 
+// fileFacts is what a file was read as, beside its rows: as the import's reply names them.
+func fileFacts(file bookfiles.File) map[string]any {
+	return map[string]any{"encoding": file.Encoding, "delimiter": file.Delimiter, "unsure": file.Unsure,
+		"linked_workbooks": file.LinkedWorkbooks, "recalculate_on_open": file.RecalculateOnOpen, "formulas": file.Formulas}
+}
+
 // storedImportPage is each table's rows from row number from, up to two hundred, read under key from the chunks kept
-// for import id of client name in firm org, and false when none are kept.
-func storedImportPage(ctx context.Context, db *sql.DB, org, name, id, key string, from int) ([]previewTable, bool, error) {
-	rows, err := db.QueryContext(ctx, `SELECT p.position,p.table_name,p.hidden,p.hidden_columns,p.total,p.chunk,p.rows FROM books_import_pages p
+// for import id of client name in firm org, with what the file was read as, and false when none are kept.
+func storedImportPage(ctx context.Context, db *sql.DB, org, name, id, key string, from int) ([]previewTable, map[string]any, bool, error) {
+	rows, err := db.QueryContext(ctx, `SELECT p.position,p.table_name,p.hidden,p.hidden_columns,p.total,p.chunk,p.rows,p.meta FROM books_import_pages p
  JOIN books_imports i ON i.id=p.import_id AND i.organization_id=$4 AND client_identity(i.organization_id,i.client_entity)=client_identity($4,$5)
  WHERE p.import_id::text=$1 AND p.parse=$2 AND p.chunk BETWEEN COALESCE((SELECT max(q.chunk) FROM books_import_pages q WHERE q.import_id=p.import_id AND q.parse=p.parse AND q.position=p.position AND q.first_row<=$3),0)
   AND COALESCE((SELECT max(q.chunk) FROM books_import_pages q WHERE q.import_id=p.import_id AND q.parse=p.parse AND q.position=p.position AND q.first_row<=$3),0)+1
  ORDER BY p.position,p.chunk`, id, key, from, org, name)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	defer rows.Close()
 	var tables []previewTable
+	meta := map[string]any{}
 	position := -1
 	for rows.Next() {
 		var at, total, chunk int
 		var name string
 		var hidden bool
-		var hiddenColumns, raw []byte
-		if err = rows.Scan(&at, &name, &hidden, &hiddenColumns, &total, &chunk, &raw); err != nil {
-			return nil, false, err
+		var hiddenColumns, raw, facts []byte
+		if err = rows.Scan(&at, &name, &hidden, &hiddenColumns, &total, &chunk, &raw, &facts); err != nil {
+			return nil, nil, false, err
 		}
+		json.Unmarshal(facts, &meta)
 		if at != position {
 			position = at
 			t := previewTable{Name: name, Hidden: hidden, Rows: []bookfiles.Row{}}
@@ -233,7 +243,7 @@ func storedImportPage(ctx context.Context, db *sql.DB, org, name, id, key string
 			t.More = total - (chunk*previewRows + i + 1)
 		}
 	}
-	return tables, len(tables) > 0, rows.Err()
+	return tables, meta, len(tables) > 0, rows.Err()
 }
 
 // readImportAs reads import id the way a person sees it: a CSV as asked, else as its own layout was confirmed, else as
@@ -283,6 +293,39 @@ func readImport(ctx context.Context, q rowReader, org, name, id string, as csvCh
 	}
 	file, err := bookfiles.Read(s.Name, content)
 	return s, file, err
+}
+
+// importSummaryOf is import id of client name in firm org as the list shows it, without its file.
+func importSummaryOf(ctx context.Context, q rowReader, org, name, id string) (importSummary, error) {
+	var s importSummary
+	var replaces sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT id::text,period,name,format,replaces::text,actor,created_at FROM books_imports
+ WHERE id::text=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)`, id, org, name).
+		Scan(&s.ID, &s.Period, &s.Name, &s.Format, &replaces, &s.Actor, &s.At)
+	s.Replaces = replaces.String
+	return s, err
+}
+
+// confirmedBrief is import id's confirmed layout with its reading's totals, problems and notes, and how many lines and
+// accounts it read, the lines themselves left in the database (/client/import/lines).
+func confirmedBrief(ctx context.Context, q rowReader, org, name, id string) (*confirmedRead, error) {
+	var c confirmedRead
+	var layout, reading []byte
+	err := q.QueryRowContext(ctx, `SELECT id::text,layout,reading-'lines',reason,actor,created_at,encoding,delimiter,COALESCE(jsonb_array_length(reading->'lines'),0),
+ (SELECT count(*) FROM jsonb_array_elements(COALESCE(reading->'lines','[]'::jsonb)) e WHERE e->>'kind'='posting')
+ FROM books_layouts WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND import_id::text=$3 ORDER BY id DESC LIMIT 1`, org, name, id).
+		Scan(&c.ID, &layout, &reading, &c.Reason, &c.Actor, &c.At, &c.CSV.Encoding, &c.CSV.Delimiter, &c.LineCount, &c.Accounts)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal(layout, &c.Layout)
+	json.Unmarshal(reading, &c.Reading)
+	c.Reading.Lines = []bookfiles.Line{}
+	c.Balanced, c.Problems = c.Reading.Balanced, len(c.Reading.Problems)
+	return &c, nil
 }
 
 // layoutRef is the layout confirmed last for client name (for import id when id is not ""), or nil, with only its id
@@ -615,14 +658,40 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		if from > 1 {
-			tables, kept, err := storedImportPage(r.Context(), db, org, name, id, key, from)
+		// A later page, and a confirmed file reopened, are read from what was kept the first time the file was read
+		// this way: its rows and what it was read as, with the import and its confirmed reading, without reading the
+		// file again.
+		if from > 1 || ownRef != nil {
+			tables, facts, kept, err := storedImportPage(r.Context(), db, org, name, id, key, from)
 			if err != nil {
 				problem(w, 503, "The file's rows are unavailable.")
 				return
 			}
-			if kept {
+			if kept && from > 1 {
 				jsonReply(w, 200, map[string]any{"tables": tables})
+				return
+			}
+			if kept {
+				summary, err := importSummaryOf(r.Context(), db, org, name, id)
+				var brief *confirmedRead
+				if err == nil {
+					brief, err = confirmedBrief(r.Context(), db, org, name, id)
+				}
+				on, onErr := fileImportsOn(r.Context(), db, org)
+				if errors.Is(err, sql.ErrNoRows) {
+					problem(w, 404, "File not found.")
+					return
+				}
+				if err != nil || onErr != nil {
+					problem(w, 503, "The file is unavailable.")
+					return
+				}
+				summary.Confirmed = brief
+				out := map[string]any{"import": summary, "tables": tables, "on": on, "can_confirm": canReview(r) && on, "can_delete": canManageData(r)}
+				for k, v := range facts {
+					out[k] = v
+				}
+				jsonReply(w, 200, out)
 				return
 			}
 		}
@@ -676,8 +745,8 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			}
 			tables = append(tables, p)
 		}
-		out := map[string]any{"import": summary, "tables": tables, "encoding": file.Encoding, "delimiter": file.Delimiter, "unsure": file.Unsure,
-			"linked_workbooks": file.LinkedWorkbooks, "recalculate_on_open": file.RecalculateOnOpen, "formulas": file.Formulas}
+		out := fileFacts(file)
+		out["import"], out["tables"] = summary, tables
 		on, err := fileImportsOn(r.Context(), db, org)
 		if err != nil {
 			problem(w, 503, "File imports are unavailable.")
