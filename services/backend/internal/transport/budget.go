@@ -349,6 +349,24 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 			out["state"], out["reason"] = "waiting", reason
 			jsonReply(w, 200, out)
 		}
+		// The firm's unpublished work is not an executive's to see: a month's books count only once its management pack
+		// is published and still stands, so the actuals are the published ones.
+		published := func(closeID string) bool {
+			var newest string
+			if db.QueryRowContext(ctx, `SELECT COALESCE((SELECT id::text FROM management_publications WHERE close_id::text=$1 ORDER BY version DESC LIMIT 1),'')`, closeID).Scan(&newest) != nil || newest == "" {
+				return false
+			}
+			tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+			if err != nil {
+				return false
+			}
+			defer tx.Rollback()
+			return publicationState(r, tx, closeID, newest) == "current"
+		}
+		if executive(r) && !published(r.PathValue("id")) {
+			wait("The comparison with the budget is shown with this month's published management pack, once it is published and still stands.")
+			return
+		}
 		if this == nil && company == "files" {
 			// An accepted file whose checks hold its statements names them; otherwise a reading is still to be accepted.
 			if _, month, err := fileMonthBooks(ctx, db, r.PathValue("id")); err == nil && month != nil && len(month.Holds) > 0 {
@@ -408,7 +426,7 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 				continue
 			}
 			var closeID string
-			if err := db.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, m).Scan(&closeID); err != nil {
+			if err := db.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, m).Scan(&closeID); err != nil || executive(r) && !published(closeID) {
 				continue
 			}
 			if b, c, err := chart(r, closeID, m); err == nil && b != nil && c == company && b.Currency == this.Currency && b.ActivityUnavailable == "" {
