@@ -77,12 +77,16 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 		return send(subject, permissions, method, path, "application/json", raw, want)
 	}
 	oneClient := "true"
+	replaces := ""
 	upload := func(subject string, permissions []string, name, period, content string, want int) map[string]any {
 		t.Helper()
 		var b bytes.Buffer
 		m := multipart.NewWriter(&b)
 		must(m.WriteField("period", period))
 		must(m.WriteField("one_client", oneClient))
+		if replaces != "" {
+			must(m.WriteField("replaces", replaces))
+		}
 		f, e := m.CreateFormFile("file", name)
 		must(e)
 		_, e = f.Write([]byte(content))
@@ -241,4 +245,11 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	if p := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+changed, nil, 200)["proposal"].(map[string]any); p["reused"] != false {
 		t.Fatalf("a left-out column now headed otherwise is asked about: %v", p)
 	}
+
+	// A replacement names one of the client's files; one that names none is refused.
+	replaces = "999999999"
+	upload("user_b", preparer, "Acme TB September again.csv", "2026-09", september, 422)
+	replaces = id
+	upload("user_b", preparer, "Acme TB September again.csv", "2026-09", september, 201)
+	replaces = ""
 }

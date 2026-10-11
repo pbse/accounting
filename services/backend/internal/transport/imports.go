@@ -352,7 +352,8 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, bookfiles.MaxFile+1<<20)
+		// The file's 50 MiB, and a mebibyte for the form around it.
+		r.Body = http.MaxBytesReader(w, r.Body, bookfiles.MaxFile+(1<<20))
 		if err := r.ParseMultipartForm(8 << 20); err != nil {
 			problem(w, 413, "Send one file of 50 MiB or less, with its month.")
 			return
@@ -392,7 +393,19 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			format = "xlsx"
 		}
 		sum := sha256.Sum256(body)
+		// A replacement names a file of this client's: one that names no such file is refused, never kept unlinked.
 		replaces := strings.TrimSpace(r.FormValue("replaces"))
+		if replaces != "" {
+			var found bool
+			if err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM books_imports p WHERE p.id::text=$1 AND p.organization_id=$2 AND client_identity(p.organization_id,p.client_entity)=client_identity($2,$3))`, replaces, organization(r), name).Scan(&found); err != nil {
+				problem(w, 503, "The file could not be kept.")
+				return
+			}
+			if !found {
+				problem(w, 422, "The file it replaces is not one of "+name+"'s.")
+				return
+			}
+		}
 		var id string
 		err = db.QueryRowContext(r.Context(), `INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,replaces,actor)
  SELECT $1,$2,$3,$4,$5,$6,$7,(SELECT p.id FROM books_imports p WHERE p.id::text=$8 AND p.organization_id=$1 AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)),$9 RETURNING id::text`,
