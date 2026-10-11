@@ -225,23 +225,25 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 		}
 		// A notice with no decision behind it (a complete reply, a goal reached) is news for the notices, not a decision;
 		// snoozed decisions are still unresolved, so they are counted apart rather than dropped.
+		// A notice for one cause that reopened several drafts counts each draft's decision.
 		for _, e := range events {
+			weight := max(e.Decisions, 1)
 			if !e.Yours {
 				if e.SnoozedUntil == nil && !e.Info {
-					team++
+					team += weight
 				}
 				continue
 			}
 			if e.SnoozedUntil != nil {
 				if !e.Info {
-					snoozed++
+					snoozed += weight
 				}
 				continue
 			}
 			if e.Info {
 				continue
 			}
-			decisions++
+			decisions += weight
 			if !e.Read && contains(kinds, e.Kind) {
 				unread++
 			}
