@@ -141,6 +141,67 @@ type Connection = { provider: string; organization: string; firm_name: string; c
 const providers = ["", "quickbooks", "xero", "stripe", "email"];
 const tone: Record<string, string> = { active: "ok", reconnect_required: "danger", disconnected: "", unconfirmed: "warn" };
 
+// The month-books record (docs/books-sources.md, Migration): how many month-end captures have their books version, and
+// whether the readers still agree with every version written. A reader moves to the record only while this agrees.
+type BooksRecord = {
+  captures: number;
+  versions: number;
+  pending: number;
+  unreadable: number;
+  build: string;
+  parity: { checked: number; pending: number; since: number; waiting: number; mismatched: string[]; finished_at: string; build: string; later: { started_at: string; stalled: boolean } | null } | null;
+};
+
+function MonthBooks() {
+  const books = useResource<BooksRecord>("/v1/admin/books");
+  // A clean run is current only for the readers that ran it, and while no later run is unfinished.
+  const stale = !!books.data?.parity && (books.data.parity.build !== books.data.build || !!books.data.parity.later);
+  return (
+    <section>
+      <h2>Month-books record</h2>
+      {books.error && <p role="alert">{books.error}</p>}
+      {!books.data && !books.error && <p role="status">Loading…</p>}
+      {books.data && (
+        <>
+          <p>
+            {books.data.versions} of {books.data.captures} month-end captures have their books version{books.data.pending ? `; ${books.data.pending} have none yet` : ""}. {books.data.unreadable} are kept as unreadable, as the readers find
+            them.
+          </p>
+          {!books.data.parity ? (
+            <p>The parity check has not run yet; the worker runs it hourly once every capture has its version.</p>
+          ) : (
+            <>
+              <p>
+                <span className={`status ${books.data.parity.mismatched.length ? "danger" : books.data.parity.pending || books.data.parity.since || books.data.parity.waiting || stale ? "warn" : "ok"}`}>
+                  {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : books.data.parity.pending || books.data.parity.since || books.data.parity.waiting || stale ? "The readers agreed, so far" : "The readers agree"}
+                </span>{" "}
+                with the {books.data.parity.checked} versions checked {when(books.data.parity.finished_at)}.
+              </p>
+              {(books.data.parity.pending > 0 || books.data.parity.since > 0 || books.data.parity.waiting > 0 || stale) && (
+                <p className="note">
+                  {books.data.parity.build !== books.data.build && `It checked an earlier build of the readers (${books.data.parity.build || "unknown"}); the build running now (${books.data.build}) is checked at the next run. `}
+                  {books.data.parity.later && (books.data.parity.later.stalled ? `A later run, started ${when(books.data.parity.later.started_at)}, did not finish. ` : `A later run started ${when(books.data.parity.later.started_at)} and is still going. `)}
+                  {books.data.parity.pending > 0 && `${books.data.parity.pending} captures were still waiting for their version when it ran. `}
+                  {books.data.parity.since > 0 && `${books.data.parity.since} versions have been written since, and are checked at the next run. `}
+                  {books.data.parity.waiting > 0 && `${books.data.parity.waiting} captures have no version now. `}
+                  It gates a reader’s switch only while every capture has its version, none has been written since, and it checked the readers running now.
+                </p>
+              )}
+              {books.data.parity.mismatched.length > 0 && (
+                <ul>
+                  {books.data.parity.mismatched.map((m) => (
+                    <li key={m}>{m}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 export function Connections() {
   const f = useFilters(["provider", "state", "firm"]);
   const connections = useResource<{ counts: Count[]; connections: Connection[]; has_more: boolean; next_offset: number }>(`/v1/admin/connections${f.query}`);
@@ -206,6 +267,7 @@ export function Connections() {
           </section>
         </>
       )}
+      <MonthBooks />
     </>
   );
 }

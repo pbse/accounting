@@ -4,6 +4,8 @@ Current setup: [onboarding](onboarding.md) and [deployment gaps](deployment.md#p
 
 This document records implementation progress. The [agent-first product completion plan](agent-first-build-plan.md), merged in [PR #223](https://github.com/pbse/accounting/pull/223), governs the remaining B01–B12 build packages, connected experience and mandatory launch gates, extending the PRD for accounting firms and business users. Code, local validation, deployed operation and accountant acceptance are separate states. No release is certified enterprise-ready yet.
 
+**October 10 handoff:** the [product fixes and accuracy instructions](agent-first-implementation-handoff.md) give the current review's implementation slices, close-page refinements and acceptance cases. They are pending work/evidence checks, not completed features. Record their delivery here under the existing B01–B12 packages, with links to PRs and dated validation; optional extensions retain their separate scope status.
+
 ## Working agreement
 
 Build one coherent feature at a time. Preserve exact arithmetic, immutable evidence and explicit human authority. Agents propose and resume work; they do not grant themselves permissions or sign off a close. Each slice must include its user flow, setup, failure/recovery instructions and focused checks. Reuse existing modules and native database constraints before adding abstractions or dependencies (Ponytail ladder rungs 2–4).

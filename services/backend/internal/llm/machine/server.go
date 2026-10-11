@@ -278,6 +278,9 @@ func (s *server) execute(ctx context.Context, in runRequest) (result llm.Respons
 		settings.model, settings.effort = in.CompletionModel, in.CompletionEffort
 	}
 	proxy := &modelProxy{images: in.CompletionImages, completion: completion, schema: in.CompletionSchema, ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: settings.credential, model: settings.model, effort: settings.effort, authMode: settings.mode}
+	if !completion && in.Model == "codex" {
+		proxy.researchTools = codexRecordTools()
+	}
 	if settings.mode == "chatgpt" {
 		auth, err := restoreCodexAuth(ctx, s.cfg, dir)
 		if err != nil {
