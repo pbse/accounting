@@ -59,8 +59,13 @@ type Profile = {
 // One confirmed profile in the client's history: the currency and fiscal year from a month on.
 type ConfirmedProfile = { id: string; effective_from: string; currency: string; fiscal_year_start: number; reason: string; actor: string; at: string };
 // A source chosen for the client's months' books: its default (period "") or one month's.
-type BooksSource = { id: string; period: string; source: "newest" | "quickbooks" | "xero"; reason: string; actor: string; at: string };
-const sourceNames: Record<BooksSource["source"], string> = { newest: "the newest capture, QuickBooks or Xero", quickbooks: "QuickBooks alone", xero: "Xero alone" };
+type BooksSource = { id: string; period: string; source: "newest" | "quickbooks" | "xero" | "files"; reason: string; actor: string; at: string };
+const sourceNames: Record<BooksSource["source"], string> = {
+  newest: "the newest capture, QuickBooks or Xero",
+  quickbooks: "QuickBooks alone",
+  xero: "Xero alone",
+  files: "the client's files, as accepted",
+};
 type ClientRead = {
   entity: string;
   // whole says the reader may see the client as a whole; without it they see only the months they can open, opened

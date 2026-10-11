@@ -78,6 +78,8 @@ func readFrom(source string, quickbooksAt, xeroAt sql.NullTime) string {
 		return "quickbooks"
 	case source == "xero" && xeroAt.Valid, source == "newest" && xeroAt.Valid:
 		return "xero"
+	case source == "files":
+		return "files"
 	}
 	return ""
 }
@@ -104,8 +106,8 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Name the client.")
 			return
 		}
-		if in.Source != "newest" && in.Source != "quickbooks" && in.Source != "xero" {
-			problem(w, 422, "Choose the newest capture, QuickBooks or Xero.")
+		if in.Source != "newest" && in.Source != "quickbooks" && in.Source != "xero" && in.Source != "files" {
+			problem(w, 422, "Choose the newest capture, QuickBooks, Xero or the client's files.")
 			return
 		}
 		if in.Period != "" {
@@ -208,7 +210,7 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 			if _, err = tx.ExecContext(ctx, `INSERT INTO workpaper_reviews(workpaper_id,decision,note,actor,paper_digest)
  SELECT w.id::bigint,'changes_requested',$2,$3,w.digest FROM workpaper_review_state w WHERE w.close_id=ANY($1::bigint[]) AND w.review_state='pending'
   AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`,
-				changed, "The month's books now come from "+map[string]string{"newest": "the newest capture", "quickbooks": "QuickBooks alone", "xero": "Xero alone"}[in.Source]+": prepare this from those books.", reviewerName(r)); err != nil {
+				changed, "The month's books now come from "+map[string]string{"newest": "the newest capture", "quickbooks": "QuickBooks alone", "xero": "Xero alone", "files": "the client's files"}[in.Source]+": prepare this from those books.", reviewerName(r)); err != nil {
 				problem(w, 503, "The client's books source could not be saved.")
 				return
 			}
@@ -225,6 +227,10 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The client's books source could not be saved.")
 			return
+		}
+		// A month that now reads its files has its books written at once.
+		if in.Source == "files" {
+			writeFileVersionsNow(ctx, db, org, name, in.Period)
 		}
 		jsonReply(w, 200, map[string]any{"books_sources": sources})
 	})

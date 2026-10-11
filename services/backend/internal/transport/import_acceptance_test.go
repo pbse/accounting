@@ -46,7 +46,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM books_versions WHERE organization_id=$1`, `DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM books_sources WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
 			`DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
 			`DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
 			`DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`,
@@ -303,6 +303,35 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	mapAll(november)
 	if c := checksOf(call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+november, nil, 200))["activity"]; c["state"] != "holds" || !strings.Contains(c["detail"].(string), "6000 Rent") {
 		t.Fatalf("an unreadable movement holds: %v", c)
+	}
+	// Months on files: January accepted, its month open and its source its files, reads the books of its acceptance.
+	januaryRead := call("user_a", partner, "GET", januaryPath, nil, 200)
+	januaryAccepted := call("user_a", partner, "POST", januaryPath, with(januaryRead, map[string]any{"exported_on": "2026-10-05"}), 200)["id"].(string)
+	var januaryClose string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme Co','2027-01') RETURNING id::text`, org).Scan(&januaryClose))
+	call("user_a", []string{"integrations:manage", "clients:all"}, "POST", "/v1/closes/client/books-source", map[string]any{"client": "Acme Co", "period": "2027-01", "source": "files", "reason": "The client sends its books as files", "rev": ""}, 200)
+	var bank, sales, class, unavailable, source string
+	must(db.QueryRow(`SELECT balances->>'n:1000',activity->>'n:4000',accounts->'n:4000'->>'class',activity_unavailable,source_id FROM books_versions WHERE organization_id=$1 AND source='files' AND close_id::text=$2`, org, januaryClose).
+		Scan(&bank, &sales, &class, &unavailable, &source))
+	if bank != "1500.25" || sales != "700.25" || class != "Revenue" || unavailable != "" || source != januaryAccepted {
+		t.Fatalf("January's books from its file: bank %s, sales %s (%s), unavailable %q, from %s", bank, sales, class, unavailable, source)
+	}
+	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
+	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
+		t.Fatalf("parity leaves a file's books alone: %v %v", mismatched, err)
+	}
+	// A month signed off on the file's books holds the file; reopened, deleting the file takes its books with it.
+	manager := []string{"workpapers:review", "clients:all", "data:manage"}
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1::bigint,'signed_off',repeat('a',64),'{}','Signed off','fixture')`, januaryClose)
+	must(err)
+	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+january, map[string]any{"reason": "Sent in error"}, 409)
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1::bigint,'reopened',repeat('a',64),'{}','Reopened','fixture')`, januaryClose)
+	must(err)
+	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+january, map[string]any{"reason": "Sent in error"}, 200)
+	var left int
+	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1 AND source='files'`, org).Scan(&left))
+	if left != 0 {
+		t.Fatalf("a deleted file's books go with it: %d", left)
 	}
 	// With file imports switched off, the checks are read, and nothing is accepted.
 	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)

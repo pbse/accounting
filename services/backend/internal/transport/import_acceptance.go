@@ -577,6 +577,8 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The acceptance could not be saved.")
 			return
 		}
+		// A month that reads its files has the books of this acceptance written at once.
+		writeFileVersionsNow(r.Context(), db, org, name, state.reading.Period)
 		jsonReply(w, 200, map[string]any{"id": accepted, "checks": checks, "holds": holding(checks)})
 	})
 }

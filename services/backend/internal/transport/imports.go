@@ -865,12 +865,16 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var period, filename, digest string
-		var replaced, retained bool
-		// A file of a month whose close is under legal hold, or kept until a date still to come, is kept with it.
+		var replaced, retained, signed bool
+		// A file of a month whose close is under legal hold, or kept until a date still to come, is kept with it; so is
+		// one whose books a signed-off month stands on.
 		err = tx.QueryRowContext(r.Context(), `SELECT period,name,digest,EXISTS(SELECT 1 FROM books_imports n WHERE n.replaces=i.id),
  EXISTS(SELECT 1 FROM client_closes c WHERE c.organization_id=i.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(i.organization_id,i.client_entity) AND c.period=i.period
-  AND (c.legal_hold OR c.retain_until>CURRENT_DATE)) FROM books_imports i
- WHERE i.id::text=$1 AND i.organization_id=$2 AND client_identity(i.organization_id,i.client_entity)=client_identity($2,$3) FOR UPDATE`, id, org, name).Scan(&period, &filename, &digest, &replaced, &retained)
+  AND (c.legal_hold OR c.retain_until>CURRENT_DATE)),
+ EXISTS(SELECT 1 FROM books_versions v JOIN books_import_acceptances a ON v.source='files' AND v.source_id=a.id::text
+  WHERE a.import_id=i.id AND COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=v.close_id ORDER BY s.id DESC LIMIT 1),'')='signed_off')
+ FROM books_imports i
+ WHERE i.id::text=$1 AND i.organization_id=$2 AND client_identity(i.organization_id,i.client_entity)=client_identity($2,$3) FOR UPDATE`, id, org, name).Scan(&period, &filename, &digest, &replaced, &retained, &signed)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
 			return
@@ -887,12 +891,18 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "This month's close is under legal hold or kept until a date still to come: its files are kept with it.")
 			return
 		}
+		if signed {
+			problem(w, 409, "A month signed off on this file's books stands on it: reopen that month first.")
+			return
+		}
 		// What only this file's readings named leaves the client's account maps with it.
 		if _, err = tx.ExecContext(r.Context(), `SELECT books_forget_readings($1,$2,ARRAY(SELECT l.id::text FROM books_layouts l WHERE l.import_id::text=$3))`, org, name, id); err != nil {
 			problem(w, 503, "The file could not be deleted.")
 			return
 		}
-		for _, q := range []string{`DELETE FROM books_layouts WHERE import_id::text=$1`, `DELETE FROM books_imports WHERE id::text=$1`} {
+		// The books written from this file go with it: its readings, then the file.
+		for _, q := range []string{`DELETE FROM books_versions WHERE source='files' AND source_id IN (SELECT a.id::text FROM books_import_acceptances a WHERE a.import_id::text=$1)`,
+			`DELETE FROM books_layouts WHERE import_id::text=$1`, `DELETE FROM books_imports WHERE id::text=$1`} {
 			if _, err = tx.ExecContext(r.Context(), q, id); err != nil {
 				problem(w, 503, "The file could not be deleted.")
 				return
