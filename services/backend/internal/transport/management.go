@@ -465,7 +465,7 @@ func parseCashFlow(text string) ([]quickbooks.CashSection, map[string]*big.Rat, 
 	return sections, totals, nil
 }
 
-// importCashFlow saves the firm's statement of cash flows for a close whose books are read from Xero, with the importer's
+// importCashFlow saves the firm's statement of cash flows for a close whose books are read from Xero or its files, with the importer's
 // attestation of what it is. The sign-off covers it, so it needs sign-off authority and an open close. The reply is the
 // pack, with the statement checked against the books.
 func importCashFlow(db *sql.DB) http.HandlerFunc {
@@ -516,26 +516,48 @@ func importCashFlow(db *sql.DB) http.HandlerFunc {
 			problem(w, 409, "The close is signed off, and its sign-off covers the statement: reopen it before importing another.")
 			return
 		}
-		m, err := periodBooks(ctx, tx, closeID, period)
+		// A month whose books are its files has no statement of its own either: the import is checked against the
+		// accepted file's books, kept under the company "files".
+		source, err := closeBooksSource(ctx, tx, closeID)
 		if err != nil {
 			problem(w, 503, "Period snapshot unavailable.")
 			return
 		}
-		if m == nil || m.Source != "xero" || m.Stale {
-			problem(w, 409, "Capture this month's Xero Trial Balance first, from a current connection.")
-			return
-		}
-		b, err := recordBooks(ctx, tx, m)
-		if err != nil {
-			problem(w, 409, "This month's capture could not be read: "+err.Error()+".")
-			return
+		var b *books
+		var company string
+		if source == "files" {
+			var month *fileMonth
+			if b, month, err = fileMonthBooks(ctx, tx, closeID); err != nil {
+				problem(w, 503, "Period snapshot unavailable.")
+				return
+			}
+			if b == nil || len(month.Holds) > 0 {
+				problem(w, 409, "Accept a reading of this month's file first, with no check holding its statements.")
+				return
+			}
+			company = "files"
+		} else {
+			m, err := periodBooks(ctx, tx, closeID, period)
+			if err != nil {
+				problem(w, 503, "Period snapshot unavailable.")
+				return
+			}
+			if m == nil || m.Source != "xero" || m.Stale {
+				problem(w, 409, "Capture this month's Xero Trial Balance first, from a current connection.")
+				return
+			}
+			if b, err = recordBooks(ctx, tx, m); err != nil {
+				problem(w, 409, "This month's capture could not be read: "+err.Error()+".")
+				return
+			}
+			company = m.realm
 		}
 		attestation := fmt.Sprintf("I reviewed this statement's classification and cash scope; it is for %s, %s, in %s, with amounts in whole %s units, not thousands.", entity, period, b.Currency, b.Currency)
 		if !in.Confirmed {
 			problem(w, 422, "Confirm: "+attestation)
 			return
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO cash_flow_imports(close_id,company,currency,csv,source,attestation,actor) VALUES($1,$2,$3,$4,$5,$6,$7)`, closeID, m.realm, b.Currency, in.CSV, in.Source, attestation, who); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO cash_flow_imports(close_id,company,currency,csv,source,attestation,actor) VALUES($1,$2,$3,$4,$5,$6,$7)`, closeID, company, b.Currency, in.CSV, in.Source, attestation, who); err != nil {
 			problem(w, 503, "The statement could not be saved.")
 			return
 		}
@@ -688,9 +710,9 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	}
 	if this.Source == "xero" {
 		var i cashFlowImport
-		var company, currency string
-		switch err = tx.QueryRowContext(ctx, `SELECT csv,source,attestation,actor,created_at,company,currency FROM cash_flow_imports WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&i.CSV, &i.Source, &i.Attestation, &i.Actor, &i.At, &company, &currency); {
-		case err == nil && company == this.realm && currency == thisBooks.Currency:
+		var currency string
+		switch err = tx.QueryRowContext(ctx, `SELECT csv,source,attestation,actor,created_at,currency FROM cash_flow_imports WHERE close_id::text=$1 AND company=$2 ORDER BY id DESC LIMIT 1`, closeID, this.realm).Scan(&i.CSV, &i.Source, &i.Attestation, &i.Actor, &i.At, &currency); {
+		case err == nil && currency == thisBooks.Currency:
 			thisBooks.Imported = &i
 		case err != nil && err != sql.ErrNoRows:
 			return nil, tieRefusal{503, "The imported cash-flow statement is unavailable."}

@@ -218,7 +218,7 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
           )}
         </>
       )}
-      {onPack && pack.source === "xero" && (pack.open ? <ImportCashFlow closeId={closeId} pack={pack} onPack={onPack} /> : <p className="note">The close's sign-off covers its cash-flow statement: reopen the sign-off to import or replace it.</p>)}
+      {onPack && (pack.source === "xero" || pack.source === "files") && (pack.open ? <ImportCashFlow closeId={closeId} pack={pack} onPack={onPack} /> : <p className="note">The close's sign-off covers its cash-flow statement: reopen the sign-off to import or replace it.</p>)}
       {staff && <Publication closeId={closeId} pack={pack} />}
       {drill && account && (
         <>
@@ -236,7 +236,7 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
   );
 }
 
-// Xero has no Statement of Cash Flows to capture, so the firm imports its own; the sign-off covers it.
+// Xero and a client's files have no Statement of Cash Flows to capture, so the firm imports its own; the sign-off covers it.
 function ImportCashFlow({ closeId, pack, onPack }: { closeId: string; pack: Extract<Pack, { state: "ready" }>; onPack: (pack: Pack) => void }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
