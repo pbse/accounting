@@ -84,8 +84,19 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
  FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&stranded); err != nil {
 		return out, err
 	}
+	// Files sent for the client's other months would be reachable only through this, its last month, too.
+	var strandedFiles bool
+	if err = tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM client_closes d WHERE d.organization_id=c.organization_id AND d.id<>c.id AND client_identity(d.organization_id,d.entity)=client_identity(c.organization_id,c.entity))
+ AND NOT EXISTS(SELECT 1 FROM current_client_roster r WHERE r.organization_id=c.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(c.organization_id,c.entity))
+ AND EXISTS(SELECT 1 FROM books_imports i WHERE i.organization_id=c.organization_id AND client_identity(i.organization_id,i.client_entity)=client_identity(c.organization_id,c.entity) AND i.period<>c.period)
+ FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&strandedFiles); err != nil {
+		return out, err
+	}
 	if stranded {
 		out.Blockers = append(out.Blockers, "This is the client's last month and it is not on the roster: disconnect its ledgers and revoke their posting grants on the client's page before deleting it.")
+	}
+	if strandedFiles {
+		out.Blockers = append(out.Blockers, "This is the client's last month and it is not on the roster: delete the files it sent for other months on the client's page before deleting it.")
 	}
 	if out.RetainUntil == "" {
 		out.Blockers = append(out.Blockers, "Set an approved retention date for this close.")

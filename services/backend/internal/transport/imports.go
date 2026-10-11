@@ -563,18 +563,22 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Say where the lines continue from, as a number.")
 			return
 		}
-		confirmed, err := latestLayout(r.Context(), db, organization(r), name, r.URL.Query().Get("id"))
+		// The page is cut from the stored reading in the database: a reading's thousands of lines are not sent, or
+		// decoded, for each page.
+		var page []byte
+		var total int
+		err = db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT jsonb_agg(e ORDER BY n) FROM jsonb_array_elements(l.reading->'lines') WITH ORDINALITY t(e,n) WHERE n>$4 AND n<=$4+200),'[]'::jsonb),jsonb_array_length(l.reading->'lines')
+ FROM books_layouts l JOIN books_imports i ON i.id=l.import_id WHERE i.id::text=$1 AND i.organization_id=$2 AND client_identity(i.organization_id,i.client_entity)=client_identity($2,$3) ORDER BY l.id DESC LIMIT 1`,
+			r.URL.Query().Get("id"), organization(r), name, min(offset, 1<<30)).Scan(&page, &total)
+		if errors.Is(err, sql.ErrNoRows) {
+			problem(w, 404, "The file has no confirmed reading.")
+			return
+		}
 		if err != nil {
 			problem(w, 503, "The file's reading is unavailable.")
 			return
 		}
-		if confirmed == nil {
-			problem(w, 404, "The file has no confirmed reading.")
-			return
-		}
-		lines := confirmed.Reading.Lines
-		page := lines[min(offset, len(lines)):min(offset+200, len(lines))]
-		jsonReply(w, 200, map[string]any{"lines": page, "total": len(lines)})
+		jsonReply(w, 200, map[string]any{"lines": json.RawMessage(page), "total": total})
 	})
 	// A file is deleted by a member who manages the firm's data, with a reason: sent in error, or at the client's
 	// request, whether or not its month has a close. A receipt says what it was, never what it held.
