@@ -24,7 +24,7 @@ type Scan = {
   scanned?: number;
   items: Found[];
   schedule_scan?: { state: "checked" | "incomplete" | "no_directory"; unknown_accounts: string[]; item_lines: number };
-  balances: { snapshot: { id: string; captured_at: string; stale: boolean; source: "quickbooks" | "xero" } | null; items: Balance[]; error?: string };
+  balances: { snapshot: { id: string; captured_at: string; stale: boolean; source: "quickbooks" | "xero" | "files"; file?: string } | null; items: Balance[]; error?: string };
 };
 
 const labels: Record<Found["type"], [string, string]> = {
@@ -152,7 +152,9 @@ export function Exceptions({ closeId }: { closeId: string }) {
       ) : (
         <>
           <p>
-            From the {balances.snapshot.source === "xero" ? "Xero" : "QuickBooks"} Trial Balance in snapshot #{balances.snapshot.id}, captured {dates.dateTime(balances.snapshot.captured_at)}.
+            {balances.snapshot.source === "files"
+              ? `From the Trial Balance of the accepted file ${balances.snapshot.file}, exported ${dates.calendarDate(balances.snapshot.captured_at)}.`
+              : `From the ${balances.snapshot.source === "xero" ? "Xero" : "QuickBooks"} Trial Balance in snapshot #${balances.snapshot.id}, captured ${dates.dateTime(balances.snapshot.captured_at)}.`}
             Contra accounts, retained earnings and owner draws are skipped because they normally sit on the opposite side.
           </p>
           {balances.snapshot.stale && (

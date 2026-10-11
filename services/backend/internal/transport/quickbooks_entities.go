@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -167,6 +168,21 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		var items any
 		var checkErr error
 		switch {
+		case source == "files":
+			// A month whose books are its files checks its accepted file's balances.
+			b, month, err := fileMonthBooks(r.Context(), db, r.PathValue("id"))
+			if err != nil {
+				problem(w, 503, "The month's books are unavailable.")
+				return
+			}
+			if b != nil {
+				balances["snapshot"] = map[string]any{"id": fileCapture + month.Version, "captured_at": month.ExportedAt, "stale": false, "source": "files", "file": month.File}
+				if len(month.Holds) > 0 {
+					checkErr = errors.New("the accepted file " + month.File + " has checks that hold its statements: " + strings.Join(month.Holds, "; "))
+				} else {
+					items = fileBalanceExceptions(b)
+				}
+			}
 		case xeroErr == nil && (err == sql.ErrNoRows || xeroAt.After(capturedAt)):
 			balances["snapshot"] = map[string]any{"id": xeroID, "captured_at": xeroAt, "stale": xeroStale, "source": "xero"}
 			_, items, checkErr = xero.WrongSide(xeroPayload)

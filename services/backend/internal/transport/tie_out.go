@@ -152,12 +152,8 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 			return tieOutcome{Rows: []tieRow{}, Unmatched: []map[string]string{}, Unclassified: []map[string]string{}}, nil
 		}
 		// Its books were taken when the file was exported: a draft approved since is not expected in them.
-		var at time.Time
-		if err = tx.QueryRowContext(ctx, `SELECT exported_on::timestamp AT TIME ZONE 'UTC' FROM books_import_acceptances WHERE id::text=$1`, month.Acceptance).Scan(&at); err != nil {
-			return tieOutcome{}, tieRefusal{503, "The month's books are unavailable."}
-		}
 		realm, tenant, started = "", "", time.Time{}
-		snapshot = map[string]any{"id": fileCapture + month.Version, "captured_at": at, "stale": false, "source": "files"}
+		snapshot = map[string]any{"id": fileCapture + month.Version, "captured_at": month.ExportedAt, "stale": false, "source": "files", "file": month.File}
 		currency = b.Currency
 		if len(month.Holds) > 0 {
 			readErr = errors.New("the accepted file " + month.File + " has checks that hold its statements: " + strings.Join(month.Holds, "; "))
