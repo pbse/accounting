@@ -47,6 +47,8 @@ type savedClose struct {
 	Priority  string `json:"priority,omitempty"`
 	Assigned  bool   `json:"assigned,omitempty"`
 	OwnedByMe bool   `json:"owned_by_me,omitempty"`
+	// Owner is who holds the close (a subject), on the list of closes; a firm administrator sees whom it names.
+	Owner string `json:"owner,omitempty"`
 	// CanAssign says the reader may hand the close to a teammate: they hold it, nobody does, or they are a firm administrator.
 	CanAssign bool `json:"can_assign,omitempty"`
 	// CanTakeOver says the reader may take the close from the colleague who holds it: a firm administrator who reviews work.
@@ -226,6 +228,7 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 	registerReadiness(mux, db)
 	registerPlanning(mux, db)
 	registerRoster(mux, db)
+	registerClients(mux, db)
 	registerEffort(mux, db)
 	registerIndependence(mux, db)
 	registerAgentAccess(mux, db)
@@ -307,7 +310,7 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 			return
 		}
 		defer tx.Rollback()
-		rows, err := tx.QueryContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$3,client_identity(organization_id,entity),COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=client_closes.id ORDER BY s.id DESC LIMIT 1),'')='signed_off' FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted))
+		rows, err := tx.QueryContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$3,client_identity(organization_id,entity),COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=client_closes.id ORDER BY s.id DESC LIMIT 1),'')='signed_off',owner FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted))
  AND ($4='' OR entity ILIKE '%'||$4||'%' OR period=$4 OR client_identity(organization_id,entity) ILIKE '%'||$4||'%' OR client_identity(organization_id,entity)=client_identity(organization_id,$4)) ORDER BY period DESC,client_closes.id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
 		if err != nil {
 			problem(w, 503, "Saved closes are unavailable.")
@@ -316,7 +319,7 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 		items := []savedClose{}
 		for rows.Next() {
 			var item savedClose
-			if rows.Scan(&item.ID, &item.Entity, &item.Period, &item.DueOn, &item.Priority, &item.Assigned, &item.OwnedByMe, &item.Client, &item.SignedOff) != nil {
+			if rows.Scan(&item.ID, &item.Entity, &item.Period, &item.DueOn, &item.Priority, &item.Assigned, &item.OwnedByMe, &item.Client, &item.SignedOff, &item.Owner) != nil {
 				rows.Close()
 				problem(w, 503, "Could not read saved closes.")
 				return

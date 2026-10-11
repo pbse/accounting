@@ -70,7 +70,7 @@ const apps = [
     // Matched against the end of Vite's data-vite-dev-id, which is the stylesheet's absolute file path.
     stylesheet: "/apps/frontend/src/styles.css",
     routes: [
-      "/dashboard", "/dashboard/work", "/dashboard/clients", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, `/dashboard/closes/${close}?tab=reports`, "/dashboard/measure", `/dashboard/closes/${close}?tab=books`, "/dashboard/executive", `/dashboard/closes/${close}?tab=cash`,
+      "/dashboard", "/dashboard/work", "/dashboard/clients", "/dashboard/clients/Harbor%20Dental%20Group", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, `/dashboard/closes/${close}?tab=reports`, "/dashboard/measure", `/dashboard/closes/${close}?tab=books`, "/dashboard/executive", `/dashboard/closes/${close}?tab=cash`,
       "/dashboard/settings", "/dashboard/settings?tab=notifications", "/dashboard/settings?tab=connections", "/dashboard/settings?tab=firm", "/dashboard/settings?tab=people", "/dashboard/settings?tab=clients", "/dashboard/settings?tab=policies", "/dashboard/settings?tab=security", "/dashboard/close", "/dashboard/review",
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],
