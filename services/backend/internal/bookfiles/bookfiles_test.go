@@ -633,3 +633,17 @@ func TestDeclaredUTF8AndTableReferences(t *testing.T) {
 		t.Fatalf("table references stay: %s", got)
 	}
 }
+
+// A confirmed UTF-16 byte order against the file's own mark is refused.
+func TestAByteOrderAgainstTheMark(t *testing.T) {
+	big := []byte{0xFE, 0xFF}
+	for _, r := range "Account,Balance\n" {
+		big = append(big, 0, byte(r))
+	}
+	if _, err := ReadCSVAs("tb.csv", big, "utf-16le", "comma"); err == nil {
+		t.Fatal("little-endian against a big-endian mark is refused")
+	}
+	if _, err := ReadCSVAs("tb.csv", big, "utf-16be", "comma"); err != nil {
+		t.Fatalf("the marked order reads: %v", err)
+	}
+}

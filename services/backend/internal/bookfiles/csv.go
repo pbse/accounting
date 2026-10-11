@@ -57,6 +57,10 @@ func ReadCSVAs(name string, body []byte, encoding, delimiter string) (File, erro
 		}
 		text = string(bytes.TrimPrefix(body, []byte("\xEF\xBB\xBF")))
 	case "utf-16le", "utf-16be":
+		// A byte-order mark says the order: a confirmed order against it would misread every character.
+		if (encoding == "utf-16le" && bytes.HasPrefix(body, []byte("\xFE\xFF"))) || (encoding == "utf-16be" && bytes.HasPrefix(body, []byte("\xFF\xFE"))) {
+			return File{}, errors.New("the file's byte-order mark says the other UTF-16 byte order: choose that one")
+		}
 		if !utf16Whole(body, encoding == "utf-16be") {
 			return File{}, errUTF16
 		}
