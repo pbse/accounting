@@ -20,7 +20,7 @@ type Row = {
   entries: { paper_id: string; kind: string; amount: string; posting: "proposed" | "posted_after_capture" | "unknown" }[];
 };
 type Board = {
-  snapshot: { id: string; captured_at: string; stale: boolean; source: "quickbooks" | "xero" } | null;
+  snapshot: { id: string; captured_at: string; stale: boolean; source: "quickbooks" | "xero" | "files"; file?: string } | null;
   currency?: string;
   error?: string;
   rows: Row[];
@@ -67,8 +67,10 @@ export function TieOut({ closeId }: { closeId: string }) {
       ) : (
         <>
           <p>
-            {board.snapshot.source === "xero" ? "Xero" : "QuickBooks"} Trial Balance from snapshot #{board.snapshot.id}, captured{" "}
-            {dates.dateTime(board.snapshot.captured_at)}, against the latest version of each workpaper in this close
+            {board.snapshot.source === "files"
+              ? `Trial Balance from the accepted file ${board.snapshot.file}, exported ${dates.calendarDate(board.snapshot.captured_at)}`
+              : `${board.snapshot.source === "xero" ? "Xero" : "QuickBooks"} Trial Balance from snapshot #${board.snapshot.id}, captured ${dates.dateTime(board.snapshot.captured_at)}`}
+            , against the latest version of each workpaper in this close
             {board.currency ? ` (${board.currency})` : ""}. Nothing is changed in the ledger.
           </p>
           {board.snapshot.stale && <p role="status">This snapshot's source was replaced or the connection is no longer active. Capture a new snapshot before relying on it.</p>}

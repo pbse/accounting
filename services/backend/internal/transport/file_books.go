@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/quickbooks"
 	"context"
 	"crypto/sha256"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"log"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -150,6 +152,8 @@ func writeFileVersionsNow(ctx context.Context, db *sql.DB, org, name, period str
 type fileMonth struct {
 	Version, Acceptance, File, AsOf, Basis string
 	Holds                                  []string
+	// ExportedAt is when the file's books were taken from the client's ledger: the day it was exported, from midnight UTC.
+	ExportedAt time.Time
 }
 
 // fileMonthBooks is close id's books from its files: the version of the month's newest current acceptance (on its
@@ -160,12 +164,12 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 	var accounts, balances, activity, cashFlow, uncounted []byte
 	var unavailable string
 	var checks []byte
-	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,i.name,v.as_of::text,v.basis,v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable,a.checks
+	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,i.name,v.as_of::text,v.basis,a.exported_on::timestamp AT TIME ZONE 'UTC',v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable,a.checks
  FROM client_closes c JOIN books_import_acceptances a ON a.organization_id=c.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(c.organization_id,c.entity) AND a.period=c.period
  JOIN books_imports i ON i.id=a.import_id JOIN books_versions v ON v.source='files' AND v.source_id=a.id::text AND v.close_id=c.id
  WHERE c.id::text=$1 AND a.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=c.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(c.organization_id,c.entity) AND b.period=c.period
    AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id))`, closeID).
-		Scan(&m.Version, &m.Acceptance, &m.File, &m.AsOf, &m.Basis, &v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &unavailable, &checks)
+		Scan(&m.Version, &m.Acceptance, &m.File, &m.AsOf, &m.Basis, &m.ExportedAt, &v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &unavailable, &checks)
 	if err == sql.ErrNoRows {
 		return nil, nil, nil
 	}
@@ -324,4 +328,34 @@ func fileCoverage(ctx context.Context, q rowReader, closeID string) (json.RawMes
 	}
 	return json.Marshal(map[string]any{"source": "files", "snapshot_id": fileCapture + month.Version, "digest": digest, "source_id": month.Acceptance, "period": period,
 		"captured_at": at.UTC(), "items": items, "stale": false})
+}
+
+// contraName is an account whose balance normally sits opposite its class's side, which QuickBooks marks by subtype and a
+// file only by name: accumulated depreciation, amortisation or depletion, and retained earnings.
+var contraName = regexp.MustCompile(`(?i)\baccumulated\s+(depreciation|amorti[sz]ation|depletion)\b|\bretained\s+earnings\b`)
+
+// fileBalanceExceptions are a month on files' balances to review, as quickbooks.AbnormalBalances finds a capture's: opening
+// balance equity still held, holding or clearing accounts with a balance, and balances opposite their normal side,
+// skipping contra accounts and owner draws. An account is recognised by its name without its number.
+func fileBalanceExceptions(b *books) []ledger.BalanceException {
+	out := []ledger.BalanceException{}
+	for _, key := range slices.Sorted(maps.Keys(b.Balances)) {
+		a, net := b.Accounts[key], b.Balances[key]
+		name := fileAccountName(key, a.Name)
+		lower := strings.ToLower(name)
+		if item := ledger.OpeningEquity(key, name, "", net, b.Currency, "balance"); item != nil {
+			out = append(out, *item)
+			continue
+		}
+		if a.Class == "" || contraName.MatchString(name) || a.Class == "Equity" && (strings.Contains(lower, "draw") || strings.Contains(lower, "distribution")) {
+			continue
+		}
+		if item := ledger.Holding(key, a.Name, a.Class, net, b.Currency, "balance"); item != nil {
+			out = append(out, *item)
+		} else if item := ledger.WrongSide(key, a.Name, a.Class, net, b.Currency, "balance"); item != nil {
+			out = append(out, *item)
+		}
+	}
+	slices.SortFunc(out, func(a, b ledger.BalanceException) int { return strings.Compare(a.Account, b.Account) })
+	return out
 }
