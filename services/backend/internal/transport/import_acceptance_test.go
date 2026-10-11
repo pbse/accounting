@@ -896,11 +896,15 @@ func TestBooksAreRelinkedThroughTheMappedAccounts(t *testing.T) {
 	if out.Typed || out.group("n:1000", nil) != "Assets" {
 		t.Fatalf("relinked books group as an untyped pack does: %v", out.group("n:1000", nil))
 	}
-	// Into typed books, an account the other side describes takes its description; one it does not, its class's
-	// general type: revenue is Income.
+	// Into typed books, an account with no type takes the one the other side describes it with, else its class's general
+	// type (revenue is Income); one with its own type keeps it, which last month's checks read.
 	out, _ = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, map[string]packAccount{"n:1000": {Name: "1000 Business Checking", Class: "Asset", Type: "Bank"}}, true)
 	if out.Accounts["n:1000"].Type != "Bank" || out.Accounts["n:4000"].Type != "Income" {
 		t.Fatalf("relinked into typed books: %v", out.Accounts)
+	}
+	b.Accounts["1"] = packAccount{Name: "Checking", Class: "Asset", Type: "Other Current Asset"}
+	if out, _ = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, map[string]packAccount{"n:1000": {Type: "Bank"}}, true); out.Accounts["n:1000"].Type != "Other Current Asset" {
+		t.Fatalf("an account keeps its own type: %v", out.Accounts["n:1000"])
 	}
 	b.Balances["9"] = amount("10")
 	if out, missing = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, nil, true); out != nil || missing != "Old" {

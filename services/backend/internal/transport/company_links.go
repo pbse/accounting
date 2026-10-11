@@ -256,10 +256,11 @@ func currentLink(ctx context.Context, q rowReader, org, name, ledger, company st
 	return l, nil
 }
 
-// relinked is books b re-keyed through a confirmed company link, from b's account ids to the other side's, each
-// account described as that side describes it (target), so an account only last month has is shown under a section
-// this month's pack has; one the other side does not describe keeps its class, with the class's general type when that
-// side's books are typed (Revenue is Income, never Other Income). An account carrying a balance or activity that the
+// relinked is books b re-keyed through a confirmed company link, from b's account ids to the other side's, grouped as
+// that side groups its accounts (typed, or by class), so an account only last month has is shown under a section this
+// month's pack has. Each account keeps its own type, which last month's own checks read (its bank, for the cash-flow
+// statement); one with none, going into typed books, takes the type the other side describes it with (target), else its
+// class's general type (Revenue is Income, never Other Income). An account carrying a balance or activity that the
 // mapping leaves out keeps the months apart: its name is returned, with no books.
 func relinked(b *books, mapping map[string]string, target map[string]packAccount, typed bool) (*books, string) {
 	general := map[string]string{"Asset": "Other Current Asset", "Liability": "Other Current Liability", "Equity": "Equity", "Revenue": "Income", "Expense": "Expense"}
@@ -285,16 +286,11 @@ func relinked(b *books, mapping map[string]string, target map[string]packAccount
 			}
 			continue
 		}
-		switch a, ok := target[to]; {
-		case ok:
-			out.Accounts[to] = a
-		default:
-			a := b.Accounts[id]
-			if typed && a.Type == "" {
-				a.Type = general[a.Class]
-			}
-			out.Accounts[to] = a
+		a := b.Accounts[id]
+		if typed && a.Type == "" {
+			a.Type = cmp.Or(target[to].Type, general[a.Class])
 		}
+		out.Accounts[to] = a
 		if v := b.Balances[id]; v != nil {
 			out.Balances[to] = v
 		}
