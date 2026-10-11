@@ -376,6 +376,8 @@ var (
 	claimHedge     = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
 	// The remainder named: words that state what is left unexplained, not qualifiers ("including", "mostly").
 	claimRemainder = regexp.MustCompile(`\b(remainder|rest|other|others|unexplained|unattributed|remaining|not explained|unaccounted)\b`)
+	// Words that say a computed figure is a difference.
+	claimDifferenceSaid = regexp.MustCompile(`\b(difference|differ|differs|gap|less|leave|leaves|leaving|left|net of|minus|exceed|exceeds|short|more than|less than|over|under|after|change|changed|up|down|higher|lower|ahead|behind)\b`)
 	// Words that attribute a total to drivers, which must then add up or name the rest.
 	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|reflecting)\b`)
 	claimIncompleteSaid = regexp.MustCompile(`\b(incomplete|missing|partial|not complete|provisional|not yet captured|not all)\b`)
@@ -1024,6 +1026,13 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		}
 		values = append(values, got)
 		c := claimOf(read, in.path)
+		// Money is computed with money and counts with counts; a ratio may compare two counts, never a count and money.
+		if len(claims) > 0 && c.money != claims[0].money {
+			return "a derived figure combines money with a count"
+		}
+		if !c.money && s.derive != "ratio" {
+			return "a derived money figure names a count (" + c.describe() + ")"
+		}
 		claims = append(claims, c)
 		cite(read.title+" › "+c.describe(), read.link.Href)
 	}
@@ -1220,6 +1229,10 @@ func derivedResult(op string, o occurrence, claims []claim, computed *big.Rat) s
 			return "the sentence states the " + op + " " + o.normalized + " as a change"
 		}
 	case "difference":
+		// A difference is said to be one: a movement, a gap or a remainder, never a plain balance.
+		if direction == "" && !claimDifferenceSaid.MatchString(strings.ToLower(o.clause)) {
+			return "the sentence states the difference " + o.normalized + " as an amount; say it is a difference, a change or what is left"
+		}
 		if moved && !sameLine {
 			return "the sentence states the difference " + o.normalized + " between different lines as a movement"
 		}

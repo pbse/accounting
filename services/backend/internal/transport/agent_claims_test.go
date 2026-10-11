@@ -242,6 +242,11 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Net income fell to 21,780.00 from 19,940.00.", "nothing cited shows it fell", e("t2", 0, ni+"/amount", "21780.00"), e("t2", 0, ni+"/prior", "19940.00"))
 	rejected("Net income totals 43,560.00.", "same field twice", derived(0, "sum", "43560.00", "t2", ni+"/amount", "t2", ni+"/amount"))
 
+	// Round six: a difference is said to be one; money is not added to a count.
+	rejected("Across September and October, net income is 1,840.00.", "as an amount", derived(0, "difference", "1840.00", "t2", ni+"/amount", "t9", "/profit_and_loss/measures/0/amount"))
+	reads["t19"] = read(`{"state":"ready","currency":"USD","unapproved_schedules":2,"weeks":[{"start":"2026-12-20","receipts":"14200.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Forecast receipts and unapproved schedules total 14,202.00.", "combines money with a count", derived(0, "sum", "14202.00", "t19", "/weeks/0/receipts", "t19", "/unapproved_schedules"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

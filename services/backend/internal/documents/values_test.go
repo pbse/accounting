@@ -76,6 +76,8 @@ func TestMoneyIn(t *testing.T) {
 		{"Fee (5.00)", "-5.00", true},
 		{"40 hours at 25.00", "40", false},
 		{"40 hours at 25.00", "25", true},
+		{"Term: 12-month policy", "12", false},
+		{"Refund 120.00-", "-120.00", true},
 	} {
 		if MoneyIn(c.text, c.amount) != c.want {
 			t.Errorf("MoneyIn(%q, %q) = %v", c.text, c.amount, !c.want)

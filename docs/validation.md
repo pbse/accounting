@@ -4092,7 +4092,10 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - a remainder must be named ("the rest is unexplained"), not merely qualified ("including", "mostly");
   - "rose to 21,780.00" states a level after a rise, so a cited change or prior month of the same line must show the rise;
   - a derived total may not count one field twice;
-  - a firm-wide or executive read of one close takes that close's client and month, looked up under the member.
+  - a firm-wide or executive read of one close takes that close's client and month, looked up under the member;
+  - a derived difference is said to be a difference, change or what is left, never a plain balance;
+  - money is never combined with a count;
+  - `MoneyIn` also refuses a hyphenated term ("12-month policy") while keeping the trailing-minus refund.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.
