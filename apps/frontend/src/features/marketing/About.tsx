@@ -1,10 +1,8 @@
 import { Link } from "react-router";
 
 // Krith first: why it exists and the commitments the Security page states in full. The company file comes last,
-// with when and where it was founded and who leads it, and is repeated as structured data so search engines and
-// anyone verifying the company can read it (docs/marketing-site.md).
-const FOUNDER_SITE = "https://prashantb.com";
-
+// with when and where it was founded, and is repeated as structured data so search engines and anyone verifying
+// the company can read it (docs/marketing-site.md).
 const ORGANIZATION = {
   "@context": "https://schema.org",
   "@type": "Organization",
@@ -13,7 +11,6 @@ const ORGANIZATION = {
   foundingDate: "2026",
   foundingLocation: { "@type": "Place", name: "New York, NY" },
   address: { "@type": "PostalAddress", addressLocality: "New York", addressRegion: "NY", addressCountry: "US" },
-  founder: { "@type": "Person", name: "Prashant Bansal", jobTitle: "Founder and CEO", url: FOUNDER_SITE },
 };
 
 // Each follows a control on the Security page; change both together.
@@ -72,12 +69,6 @@ export function About() {
           <div className="k-file-row">
             <dt>Headquarters</dt>
             <dd>New York City</dd>
-          </div>
-          <div className="k-file-row">
-            <dt>Leadership</dt>
-            <dd>
-              <a href={FOUNDER_SITE}>Prashant Bansal</a>, Founder and CEO
-            </dd>
           </div>
         </dl>
       </figure>
