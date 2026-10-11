@@ -93,17 +93,19 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if currency != "USD" || !typed || problem != "" || company != "123" || asOf != "2026-09-30" || b["1"] != "1500.25" || b["3"] != "-1000" || b["4"] != "-800.25" || a["4"] != "800.25" || a["5"] != "300" || kept["1"] != (booksAccount{Name: "Checking", Class: "Asset", Type: "Bank"}) {
 		t.Fatalf("the readers' books of the capture, exactly: %s %v %s %s %s %s %s", currency, typed, balances, activity, accountsKept, problem, asOf)
 	}
-	if lines != 3 {
+	// Every row the ledger search can show is kept, with its account and location: the two account sections and their
+	// three data rows.
+	if lines != 5 {
 		t.Fatalf("each General Ledger row is kept with its account and location: %d", lines)
 	}
 	var location string
-	must(db.QueryRow(`SELECT location FROM books_lines l JOIN books_versions v ON v.id=l.version_id WHERE v.source_id=$1 AND v.source='quickbooks' AND l.account_id='4' ORDER BY l.position LIMIT 1`, readable).Scan(&location))
+	must(db.QueryRow(`SELECT location FROM books_lines l JOIN books_versions v ON v.id=l.version_id WHERE v.source_id=$1 AND v.source='quickbooks' AND l.account_id='4' ORDER BY l.position OFFSET 1 LIMIT 1`, readable).Scan(&location))
 	if location != "reports.GeneralLedger.Rows.Row[1].Rows.Row[0]" {
 		t.Fatalf("a line's report location: %s", location)
 	}
 	// The unreadable capture's General Ledger is kept all the same.
 	must(db.QueryRow(`SELECT count(*) FROM books_lines l JOIN books_versions v ON v.id=l.version_id WHERE v.source='quickbooks' AND v.source_id=$1`, unreadable).Scan(&lines))
-	if lines != 3 {
+	if lines != 5 {
 		t.Fatalf("a capture whose reports cannot be read keeps its ledger lines: %d", lines)
 	}
 	for _, c := range [][2]string{{"quickbooks", unreadable}, {"xero", xeroCapture}} {
@@ -165,7 +167,7 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	_, err = db.Exec(`UPDATE quickbooks_snapshots SET payload=jsonb_set(payload,'{reports,TrialBalance,Rows,Row,0,ColData,1,value}','"1500.25"') WHERE id=$1`, readable)
 	must(err)
 	// So is a stored version whose content no longer matches its capture: its figures, or its ledger lines.
-	_, err = db.Exec(`UPDATE books_lines SET cells=jsonb_set(cells,'{ColData,2,value}','"999.00"') WHERE position=1 AND version_id=(SELECT id FROM books_versions WHERE source='quickbooks' AND source_id=$1)`, readable)
+	_, err = db.Exec(`UPDATE books_lines SET cells=jsonb_set(cells,'{ColData,2,value}','"999.00"') WHERE position=2 AND version_id=(SELECT id FROM books_versions WHERE source='quickbooks' AND source_id=$1)`, readable)
 	must(err)
 	_, mismatched, err = booksParity(t.Context(), db, org, 0)
 	must(err)
@@ -247,7 +249,16 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	// A parity run's gate stays uncleared while a capture has no version, queued or not.
 	must(runBooksParity(t.Context(), db))
 	read = adminJSON(t, apiWithStore(db, token), token, "GET", "/v1/admin/books", "", 200)
-	if parity := read["parity"].(map[string]any); parity["waiting"].(float64) < 1 {
-		t.Fatalf("the gate counts captures without a version: %v", parity)
+	if parity := read["parity"].(map[string]any); parity["waiting"].(float64) < 1 || parity["build"] != read["build"] || parity["later"] != nil {
+		t.Fatalf("the gate counts captures without a version, for the build that ran it: %v", parity)
 	}
+	// A later run that never finished (it failed) leaves the gate uncleared, said so.
+	_, err = db.Exec(`INSERT INTO books_parity(started_at,build) VALUES(now()-interval '3 hours','dev')`)
+	must(err)
+	read = adminJSON(t, apiWithStore(db, token), token, "GET", "/v1/admin/books", "", 200)
+	if later := read["parity"].(map[string]any)["later"].(map[string]any); later["stalled"] != true {
+		t.Fatalf("a later run that did not finish: %v", read["parity"])
+	}
+	_, err = db.Exec(`DELETE FROM books_parity WHERE finished_at IS NULL`)
+	must(err)
 }

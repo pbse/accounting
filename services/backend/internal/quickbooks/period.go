@@ -462,8 +462,9 @@ type LedgerLine struct {
 	Cells     json.RawMessage `json:"cells"`
 }
 
-// LedgerLinesOf is every data row of a captured General Ledger report, in report order, each with its account. A row
-// under no account is not a ledger line.
+// LedgerLinesOf is every row of a captured General Ledger report that sits under an account, in report order, as the
+// ledger search (SelectLedger) reads them: data rows, and a section's rows, each with its own type among its cells, so
+// nothing the search can show is missing from the record. A row under no account is not a ledger line.
 func LedgerLinesOf(report json.RawMessage) ([]LedgerLine, error) {
 	var root struct {
 		Columns struct{ Column []struct{ ColTitle string } }
@@ -475,7 +476,7 @@ func LedgerLinesOf(report json.RawMessage) ([]LedgerLine, error) {
 	accountColumn := len(root.Columns.Column) > 0 && strings.Contains(strings.ToLower(root.Columns.Column[0].ColTitle), "account")
 	lines := []LedgerLine{}
 	err := walkLedger(root.Rows.Row, "reports.GeneralLedger.Rows", "", accountColumn, func(location, account string, raw json.RawMessage, row ledgerRow) error {
-		if row.Type != "Data" || account == "" {
+		if account == "" {
 			return nil
 		}
 		var cells map[string]json.RawMessage

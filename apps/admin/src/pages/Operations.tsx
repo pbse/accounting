@@ -143,10 +143,19 @@ const tone: Record<string, string> = { active: "ok", reconnect_required: "danger
 
 // The month-books record (docs/books-sources.md, Migration): how many month-end captures have their books version, and
 // whether the readers still agree with every version written. A reader moves to the record only while this agrees.
-type BooksRecord = { captures: number; versions: number; pending: number; unreadable: number; parity: { checked: number; pending: number; since: number; waiting: number; mismatched: string[]; finished_at: string } | null };
+type BooksRecord = {
+  captures: number;
+  versions: number;
+  pending: number;
+  unreadable: number;
+  build: string;
+  parity: { checked: number; pending: number; since: number; waiting: number; mismatched: string[]; finished_at: string; build: string; later: { started_at: string; stalled: boolean } | null } | null;
+};
 
 function MonthBooks() {
   const books = useResource<BooksRecord>("/v1/admin/books");
+  // A clean run is current only for the readers that ran it, and while no later run is unfinished.
+  const stale = !!books.data?.parity && (books.data.parity.build !== books.data.build || !!books.data.parity.later);
   return (
     <section>
       <h2>Month-books record</h2>
@@ -163,17 +172,19 @@ function MonthBooks() {
           ) : (
             <>
               <p>
-                <span className={`status ${books.data.parity.mismatched.length ? "danger" : books.data.parity.pending || books.data.parity.since || books.data.parity.waiting ? "warn" : "ok"}`}>
-                  {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : books.data.parity.pending || books.data.parity.since || books.data.parity.waiting ? "The readers agreed, so far" : "The readers agree"}
+                <span className={`status ${books.data.parity.mismatched.length ? "danger" : books.data.parity.pending || books.data.parity.since || books.data.parity.waiting || stale ? "warn" : "ok"}`}>
+                  {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : books.data.parity.pending || books.data.parity.since || books.data.parity.waiting || stale ? "The readers agreed, so far" : "The readers agree"}
                 </span>{" "}
                 with the {books.data.parity.checked} versions checked {when(books.data.parity.finished_at)}.
               </p>
-              {(books.data.parity.pending > 0 || books.data.parity.since > 0 || books.data.parity.waiting > 0) && (
+              {(books.data.parity.pending > 0 || books.data.parity.since > 0 || books.data.parity.waiting > 0 || stale) && (
                 <p className="note">
+                  {books.data.parity.build !== books.data.build && `It checked an earlier build of the readers (${books.data.parity.build || "unknown"}); the build running now (${books.data.build}) is checked at the next run. `}
+                  {books.data.parity.later && (books.data.parity.later.stalled ? `A later run, started ${when(books.data.parity.later.started_at)}, did not finish. ` : `A later run started ${when(books.data.parity.later.started_at)} and is still going. `)}
                   {books.data.parity.pending > 0 && `${books.data.parity.pending} captures were still waiting for their version when it ran. `}
                   {books.data.parity.since > 0 && `${books.data.parity.since} versions have been written since, and are checked at the next run. `}
                   {books.data.parity.waiting > 0 && `${books.data.parity.waiting} captures have no version now. `}
-                  It gates a reader’s switch only while every capture has its version and none has been written since.
+                  It gates a reader’s switch only while every capture has its version, none has been written since, and it checked the readers running now.
                 </p>
               )}
               {books.data.parity.mismatched.length > 0 && (

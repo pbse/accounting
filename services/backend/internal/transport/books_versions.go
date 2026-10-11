@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/wf"
 )
 
 // The month-books record (docs/books-sources.md, One month-books record, and Migration; delivery step 3): one stored
@@ -464,20 +465,23 @@ func storedBooks(ctx context.Context, q interface {
 // (delivery step 5): how many month-end captures there are, how many have a version and how many are unreadable, and
 // the worker's latest finished parity run, with the captures where it disagrees (identifiers only), how many captures
 // were still waiting when it began, how many versions were written since and how many captures have no version now,
-// whether queued or not: it is the gate only when all three are none.
+// whether queued or not, the reader build it checked, and a later run still going or stalled (one that failed never
+// finishes): it is the gate only when all three counts are none, it checked the build now running, and no later run
+// is unfinished.
 func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var captures, pending, unreadable int
 	var parity json.RawMessage
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM quickbooks_snapshots WHERE payload ? 'period')+(SELECT count(*) FROM xero_snapshots),
  (SELECT count(*) FROM (`+unversionedCaptures+`) x),(SELECT count(*) FROM books_versions WHERE unreadable<>''),
- COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through),'waiting',(SELECT count(*) FROM (`+unversionedCaptures+`) w)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &pending, &unreadable, &parity)
+ COALESCE((SELECT jsonb_build_object('checked',p.checked,'pending',p.pending,'mismatched',p.mismatched,'finished_at',p.finished_at,'build',p.build,
+  'later',(SELECT jsonb_build_object('started_at',l.started_at,'stalled',l.started_at<now()-interval '2 hours') FROM books_parity l WHERE l.id>p.id ORDER BY l.id DESC LIMIT 1),'since',(SELECT count(*) FROM books_versions v WHERE v.id>p.through),'waiting',(SELECT count(*) FROM (`+unversionedCaptures+`) w)) FROM books_parity p WHERE p.finished_at IS NOT NULL ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`).Scan(&captures, &pending, &unreadable, &parity)
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "books read")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity})
+	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity, "build": wf.CodeVersion})
 }
 
 // runBooksParity checks every version against its capture and records the run, so staff read its outcome.
@@ -485,7 +489,7 @@ func runBooksParity(ctx context.Context, db *sql.DB) error {
 	// The captures still waiting when the run begins, and the last version it covers: a clean run is the gate only while
 	// none was waiting and no version has been written since.
 	var run, through int64
-	if err := db.QueryRowContext(ctx, `INSERT INTO books_parity(pending,through) SELECT (SELECT count(*) FROM books_pending),COALESCE((SELECT max(id) FROM books_versions),0) RETURNING id,through`).Scan(&run, &through); err != nil {
+	if err := db.QueryRowContext(ctx, `INSERT INTO books_parity(pending,through,build) SELECT (SELECT count(*) FROM books_pending),COALESCE((SELECT max(id) FROM books_versions),0),$1 RETURNING id,through`, wf.CodeVersion).Scan(&run, &through); err != nil {
 		return err
 	}
 	checked, mismatched, err := booksParity(ctx, db, "", through)

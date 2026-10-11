@@ -92,6 +92,8 @@ CREATE TABLE books_parity (
  -- covers: a run is the gate only while none was pending and no version has been written since.
  pending integer NOT NULL DEFAULT 0,
  through bigint NOT NULL DEFAULT 0,
+ -- build is the reader build that ran it (the deployed commit): a clean run clears the gate only for that build.
+ build text NOT NULL DEFAULT '',
  mismatched jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 ALTER TABLE books_versions ENABLE ROW LEVEL SECURITY;
