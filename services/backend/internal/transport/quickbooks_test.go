@@ -50,6 +50,7 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 				t.Error(e)
 			}
 		}
+		db.Exec(`DELETE FROM quickbooks_connections WHERE organization_id=$1`, org)
 		db.Exec(`DELETE FROM organization_member_access WHERE organization_id IN ($1,$2)`, org, other)
 		db.Exec(`DELETE FROM organizations WHERE id IN ($1,$2)`, org, other)
 	}()
@@ -61,9 +62,12 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_accountant"}, Organization: org, Permissions: []string{"clients:all", "integrations:manage"}}
 	mux := http.NewServeMux()
 	registerQuickBooks(mux, db)
+	registerClientConnections(mux, db)
 	registerCoordinator(mux, db)
 	h := organizationBoundary(db, mux)
 	base := "/v1/closes/" + closeID + "/quickbooks"
+	// The client's page connects the company; the month reads it.
+	client := "/v1/closes/client/quickbooks?name=" + url.QueryEscape("QBO synthetic client")
 	call := func(method, path string, body any, want int) []byte {
 		t.Helper()
 		raw, _ := json.Marshal(body)
@@ -174,26 +178,30 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw)), Header: make(http.Header)}, nil
 	})
 	var start struct{ ID, URL string }
-	json.Unmarshal(call("POST", base, map[string]any{"action": "connect", "confirmed": true}, 200), &start)
+	json.Unmarshal(call("POST", client, map[string]any{"action": "connect", "confirmed": true}, 200), &start)
+	var month sql.NullString
+	if err = db.QueryRow(`SELECT close_id::text FROM quickbooks_connections WHERE id=$1`, start.ID).Scan(&month); err != nil || month.Valid {
+		t.Fatalf("a connection made from the client's page names no month: %v %v", month, err)
+	}
 	u, _ := url.Parse(start.URL)
 	state := u.Query().Get("state")
 	callback := map[string]any{"action": "callback", "connection_id": start.ID, "confirmed": true, "code": "synthetic-code", "state": state, "realm": "123"}
 	bad := map[string]any{"action": "callback", "connection_id": start.ID, "confirmed": true, "code": "synthetic-code", "state": "wrong", "realm": "123"}
-	call("POST", base, bad, 409)
+	call("POST", client, bad, 409)
 	if exchanges != 0 {
 		t.Fatal("invalid state reached provider")
 	}
 	actor.Subject = "user_other"
-	call("POST", base, callback, 409)
+	call("POST", client, callback, 409)
 	actor.Subject = "user_accountant"
 	r := httptest.NewRequest("GET", "/v1/quickbooks/callback?state="+url.QueryEscape(state)+"&code=synthetic-code&realmId=123", nil)
 	w := httptest.NewRecorder()
 	quickbooksReturn(w, r, db)
-	if w.Code != 303 || !strings.HasPrefix(w.Header().Get("Location"), "https://app.example.test/dashboard/closes/"+closeID+"?tab=evidence#") || w.Header().Get("Referrer-Policy") != "no-referrer" {
-		t.Fatal("unsafe callback routing, or not returned to the Evidence tab where the sandbox panel lives")
+	if w.Code != 303 || !strings.HasPrefix(w.Header().Get("Location"), "https://app.example.test/dashboard/clients/QBO%20synthetic%20client#") || w.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("unsafe callback routing, or not returned to the client's page, which holds its connections: %s", w.Header().Get("Location"))
 	}
-	call("POST", base, callback, 200)
-	call("POST", base, callback, 409)
+	call("POST", client, callback, 200)
+	call("POST", client, callback, 409)
 	if exchanges != 1 {
 		t.Fatal("authorization code replayed")
 	}
@@ -203,8 +211,8 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	}
 	w = httptest.NewRecorder()
 	quickbooksReturn(w, httptest.NewRequest("GET", "/v1/quickbooks/callback?state="+url.QueryEscape(productionState)+"&code=synthetic-code&realmId=123", nil), db)
-	if w.Code != 303 || !strings.HasPrefix(w.Header().Get("Location"), "https://app.example.test/dashboard/closes/"+closeID+"?tab=settings#") {
-		t.Fatalf("production authorization returns to Settings, where its panel lives: %s", w.Header().Get("Location"))
+	if w.Code != 303 || !strings.HasPrefix(w.Header().Get("Location"), "https://app.example.test/dashboard/clients/QBO%20synthetic%20client#") || !strings.Contains(w.Header().Get("Location"), "qbo_env=production") {
+		t.Fatalf("a production authorization started from a month also returns to the client's page: %s", w.Header().Get("Location"))
 	}
 	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE oauth_digest=$1`, preparation.Digest([]byte(productionState))); err != nil {
 		t.Fatal(err)
@@ -213,7 +221,7 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	if err = db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment,realm,company_name) VALUES($1,$2,'QBO synthetic client','user_accountant','pending_confirmation',$3,now(),'production','999','Synthetic company') RETURNING id::text`, closeID, org, rand.Text()).Scan(&production); err != nil {
 		t.Fatal(err)
 	}
-	call("POST", base, map[string]any{"action": "confirm", "connection_id": production, "confirmed": true, "realm": "999"}, 409)
+	call("POST", client, map[string]any{"action": "confirm", "connection_id": production, "confirmed": true, "realm": "999"}, 409)
 	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, production); err != nil {
 		t.Fatal(err)
 	}
@@ -221,11 +229,13 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 		return call("POST", base, map[string]any{"action": name, "connection_id": start.ID, "confirmed": true, "realm": "123"}, want)
 	}
 	action("snapshot", 409)
+	// The client's page connects and confirms; it reads no month's books.
+	call("POST", client, map[string]any{"action": "snapshot", "connection_id": start.ID, "confirmed": true, "realm": "123"}, 422)
 	status := call("GET", base, nil, 200)
 	if bytes.Contains(status, []byte("access-synthetic")) {
 		t.Fatal("token exposed")
 	}
-	action("confirm", 200)
+	call("POST", client, map[string]any{"action": "confirm", "connection_id": start.ID, "confirmed": true, "realm": "123"}, 200)
 	if p, err := preparation.ClientProfile(context.Background(), db, closeID); err != nil || p != (preparation.Profile{Currency: "CAD", FiscalStart: 7, State: "detected"}) {
 		t.Fatalf("connecting reads the company's home currency and fiscal year: %+v %v", p, err)
 	}
@@ -423,7 +433,9 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	if refreshes != 2 {
 		t.Fatal("uncertain refresh repeated")
 	}
-	action("disconnect", 200)
+	// A month only captures: the connection is disconnected on the client's page.
+	action("disconnect", 409)
+	call("POST", client, map[string]any{"action": "disconnect", "connection_id": start.ID, "confirmed": true}, 200)
 	action("snapshot", 404)
 	if e = db.QueryRowContext(context.Background(), `SELECT credential FROM quickbooks_connections WHERE id=$1`, start.ID).Scan(&encrypted); e != nil || len(encrypted) != 0 {
 		t.Fatal("disconnect retained credentials")

@@ -1,3 +1,4 @@
+import { clientPage } from "../../data/clients";
 import { useDates } from "../../data/time";
 import { workspaceQuery } from "../../data/queries";
 import { useQuery } from "@tanstack/react-query";
@@ -52,7 +53,8 @@ type Operation = {
   limitation: string;
 };
 
-const settings = (closeId: string) => `/dashboard/closes/${closeId}?tab=settings`;
+// Where a connection or a grant is managed: a ledger's on the client's page, Stripe's from the month it was made in.
+const manage = (provider: string, client: string, closeId?: string) => (provider === "Stripe" ? (closeId ? `/dashboard/closes/${closeId}?tab=evidence` : "") : clientPage(client));
 
 function OperationRecord({ operation, stage, onSaved }: { operation: Operation; stage: "sandbox_checked" | "accountant_accepted"; onSaved: () => void }) {
   const day = useDates().date;
@@ -204,7 +206,7 @@ export function SecurityTab() {
       {failed}
       <section aria-label="Connected services">
         <h2>Connected services</h2>
-        <p>Each client's books and payouts, and who connected them. A connection is managed from the client's close.</p>
+        <p>Each client's books and payouts, and who connected them. QuickBooks and Xero are managed on the client's page; Stripe from the client's month.</p>
         {security.services.length === 0 ? (
           <p className="empty">No ledger or payout connections yet.</p>
         ) : (
@@ -223,9 +225,13 @@ export function SecurityTab() {
                 </span>
                 <span className={`pill ${s.state === "connected" || s.state === "active" ? "" : "muted"}`}>{state(s.state)}</span>
                 <span />
-                <Link className="button" to={settings(s.close_id)}>
-                  Manage
-                </Link>
+                {manage(s.provider, s.client, s.close_id) ? (
+                  <Link className="button" to={manage(s.provider, s.client, s.close_id)}>
+                    Manage
+                  </Link>
+                ) : (
+                  <span />
+                )}
               </div>
             ))}
           </RowList>
@@ -264,8 +270,8 @@ export function SecurityTab() {
                 </span>
                 <span />
                 <span />
-                {g.close_id ? (
-                  <Link className="button" to={settings(g.close_id)}>
+                {manage(g.provider, g.client, g.close_id) ? (
+                  <Link className="button" to={manage(g.provider, g.client, g.close_id)}>
                     Revoke
                   </Link>
                 ) : (

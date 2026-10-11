@@ -46,6 +46,17 @@ type Sandbox struct {
 	Production bool
 	// Currency is the client's home currency; empty means USD.
 	Currency string
+	// Company is the QuickBooks company's name the connection was confirmed for, when it is not Entity: a month opened
+	// under a confirmed alias posts through the client's connection, held under its own name. "" means Entity.
+	Company string
+}
+
+// companyName is the name the QuickBooks company must have.
+func (s Sandbox) companyName() string {
+	if s.Company != "" {
+		return s.Company
+	}
+	return s.Entity
 }
 
 func (s Sandbox) currency() string {
@@ -238,7 +249,7 @@ func (s Sandbox) company(ctx context.Context) error {
 	if err := s.request(ctx, "GET", "/companyinfo/"+s.Realm, nil, &company); err != nil {
 		return err
 	}
-	if company.CompanyInfo.CompanyName != s.Entity {
+	if company.CompanyInfo.CompanyName != s.companyName() {
 		return errors.New("QuickBooks company name does not match the configured client")
 	}
 	return nil
@@ -247,7 +258,7 @@ func (s Sandbox) company(ctx context.Context) error {
 // PrepareEntries builds one journal for same-date approved entries. Each account name must match exactly
 // one allowed account; the observation holds the touched accounts' versioned balances.
 func (s Sandbox) PrepareEntries(ctx context.Context, entries []prepaids.Adjustment, reference string) (Journal, LedgerObservation, error) {
-	observation := LedgerObservation{Company: s.Entity, Accounts: []LedgerAccount{}}
+	observation := LedgerObservation{Company: s.companyName(), Accounts: []LedgerAccount{}}
 	if !s.Ready() || len(entries) == 0 {
 		return Journal{}, observation, errors.New("QuickBooks is not configured or there is nothing to post")
 	}
@@ -313,7 +324,7 @@ func (s Sandbox) PrepareEntries(ctx context.Context, entries []prepaids.Adjustme
 
 // ObserveAfterWrite rereads the observed accounts for readback; period eligibility only gates new writes.
 func (s Sandbox) ObserveAfterWrite(ctx context.Context, before LedgerObservation) (LedgerObservation, error) {
-	after := LedgerObservation{Company: s.Entity, Accounts: []LedgerAccount{}}
+	after := LedgerObservation{Company: s.companyName(), Accounts: []LedgerAccount{}}
 	if err := s.company(ctx); err != nil {
 		return after, err
 	}

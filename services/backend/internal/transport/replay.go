@@ -31,12 +31,8 @@ type replayItem struct {
 
 // runReplay reads up to three of a close's confirmed documents again with the current model, counted against the firm's daily limit, and compares each with what was confirmed.
 func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayItem, error) {
-	profiles := llm.CompletionProfiles(ctx)
-	if llm.HasIdentity(ctx) {
-		profiles = nil // Manual replay uses the authenticated caller.
-	}
-	eligible, _ := json.Marshal(profiles)
-	rows, err := db.QueryContext(ctx, `SELECT i.job_id::text,e.name,j.plans,j.created_by FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND ($2::jsonb='null'::jsonb OR EXISTS(SELECT 1 FROM jsonb_to_recordset(NULLIF($2::jsonb,'null'::jsonb)) p(organization text,subject text) WHERE p.organization=$3 AND (p.subject=j.created_by OR p.subject='*' AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=$3 AND m.subject=j.created_by AND m.granted) AND EXISTS(SELECT 1 FROM current_client_access a WHERE a.organization_id=$3 AND a.subject=j.created_by AND lower(a.client_entity)=lower(c.entity) AND a.granted)))) ORDER BY i.confirmed_at DESC,i.job_id DESC LIMIT 3`, closeID, string(eligible), org)
+	// Apply current creator grants before LIMIT so unauthorized jobs cannot crowd out eligible work.
+	rows, err := db.QueryContext(ctx, `SELECT i.job_id::text,e.name,j.plans,j.created_by FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND (NOT $2::boolean OR $3='local-development' OR EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=$3 AND m.subject=j.created_by AND m.granted) AND EXISTS(SELECT 1 FROM current_client_access a WHERE a.organization_id=$3 AND a.subject=j.created_by AND lower(a.client_entity)=lower(c.entity) AND a.granted)) ORDER BY i.confirmed_at DESC,i.job_id DESC LIMIT 3`, closeID, llm.RequiresClientGrant(ctx) && !llm.HasIdentity(ctx), org)
 	if err != nil {
 		return nil, err
 	}
@@ -59,9 +55,8 @@ func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayI
 		}
 		if !llm.Allows(probe, org) {
 			it.Error = "The configured model route is not authorized for this reading's creator."
-		} else if llm.ViaWideProfile(probe, org) {
-			// Membership alone made the model's caller eligible: the creator on a scheduled replay (also filtered above),
-			// the member replaying by hand otherwise. Either must hold the client for its evidence to go to the model.
+		} else if llm.RequiresClientGrant(probe) {
+			// The scheduled creator or manual caller must retain current client access.
 			var granted bool
 			if err = db.QueryRowContext(ctx, `SELECT $2='local-development' OR (EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=$2 AND m.subject=$3 AND m.granted) AND EXISTS(SELECT 1 FROM current_client_access a JOIN client_closes c ON c.organization_id=a.organization_id AND lower(a.client_entity)=lower(c.entity) WHERE c.id::text=$1 AND a.organization_id=$2 AND a.subject=$3 AND a.granted))`, closeID, org, llm.Subject(probe)).Scan(&granted); err != nil {
 				break
@@ -201,9 +196,8 @@ func sweepReplays(ctx context.Context, db *sql.DB) error {
 	if model == "" {
 		return nil
 	}
-	eligible, _ := json.Marshal(llm.CompletionProfiles(ctx))
-	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND ($3::jsonb='null'::jsonb OR EXISTS(SELECT 1 FROM jsonb_to_recordset(NULLIF($3::jsonb,'null'::jsonb)) p(organization text,subject text) WHERE p.organization=o.id AND (p.subject=j.created_by OR p.subject='*' AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=o.id AND m.subject=j.created_by AND m.granted) AND EXISTS(SELECT 1 FROM current_client_access a WHERE a.organization_id=o.id AND a.subject=j.created_by AND lower(a.client_entity)=lower(c.entity) AND a.granted)))) ORDER BY i.confirmed_at DESC LIMIT 1) j
- WHERE o.enabled AND NOT EXISTS(SELECT 1 FROM replay_runs r WHERE r.organization_id=o.id AND r.model=$1 AND r.reasoning_effort=$2) ORDER BY o.id LIMIT 20`, model, llm.ReasoningEffort(ctx, "preparation"), string(eligible))
+	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND (NOT $3::boolean OR o.id='local-development' OR EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=o.id AND m.subject=j.created_by AND m.granted) AND EXISTS(SELECT 1 FROM current_client_access a WHERE a.organization_id=o.id AND a.subject=j.created_by AND lower(a.client_entity)=lower(c.entity) AND a.granted)) ORDER BY i.confirmed_at DESC LIMIT 1) j
+ WHERE o.enabled AND NOT EXISTS(SELECT 1 FROM replay_runs r WHERE r.organization_id=o.id AND r.model=$1 AND r.reasoning_effort=$2) ORDER BY o.id LIMIT 20`, model, llm.ReasoningEffort(ctx, "preparation"), llm.RequiresClientGrant(ctx))
 	if err != nil {
 		return err
 	}

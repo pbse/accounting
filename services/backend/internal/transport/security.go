@@ -26,10 +26,14 @@ const securityPeople = `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',m.id::
 const securityInvitations = `SELECT COALESCE(jsonb_agg(jsonb_build_object('email',email,'role',role_name,'invited_by',invited_by,'expires_at',expires_at,'created_at',created_at) ORDER BY id DESC),'[]'::jsonb)
  FROM member_invitations WHERE organization_id=$1 AND state IN ('sending','pending')`
 
+// securityClients is the firm's clients for assignments: every name a close was opened under, and every client on the
+// roster, which may not have opened its first month yet.
+const securityClients = `SELECT COALESCE(jsonb_agg(DISTINCT name),'[]'::jsonb) FROM (SELECT entity AS name FROM client_closes WHERE organization_id=$1 UNION SELECT client_entity FROM current_client_roster WHERE organization_id=$1) n`
+
 // securityServices lists connections that are not disconnected; credentials, OAuth digests and secrets are never selected.
 const securityServices = `SELECT COALESCE(jsonb_agg(x ORDER BY x.connected_at DESC),'[]'::jsonb) FROM (
- SELECT 'QuickBooks' AS provider,c.close_id::text AS close_id,c.client_entity AS client,COALESCE(c.company_name,'') AS account,c.environment AS mode,c.state,c.actor AS connected_by,c.created_at AS connected_at,c.confirmed_by,c.confirmed_at FROM quickbooks_connections c WHERE c.organization_id=$1 AND c.state<>'disconnected'
- UNION ALL SELECT 'Xero',c.close_id::text,c.client_entity,COALESCE(c.tenant_name,''),'',c.state,c.actor,c.created_at,c.confirmed_by,c.confirmed_at FROM xero_connections c WHERE c.organization_id=$1 AND c.state<>'disconnected'
+ SELECT 'QuickBooks' AS provider,COALESCE(c.close_id::text,'') AS close_id,c.client_entity AS client,COALESCE(c.company_name,'') AS account,c.environment AS mode,c.state,c.actor AS connected_by,c.created_at AS connected_at,c.confirmed_by,c.confirmed_at FROM quickbooks_connections c WHERE c.organization_id=$1 AND c.state<>'disconnected'
+ UNION ALL SELECT 'Xero',COALESCE(c.close_id::text,''),c.client_entity,COALESCE(c.tenant_name,''),'',c.state,c.actor,c.created_at,c.confirmed_by,c.confirmed_at FROM xero_connections c WHERE c.organization_id=$1 AND c.state<>'disconnected'
  UNION ALL SELECT 'Stripe',c.close_id::text,c.client_entity,COALESCE(c.account_name,''),CASE WHEN c.livemode THEN 'live' ELSE 'test' END,c.state,c.actor,c.created_at,c.confirmed_by,c.confirmed_at FROM stripe_connections c WHERE c.organization_id=$1 AND c.state<>'disconnected'
 ) x`
 
@@ -38,11 +42,11 @@ const securityEmail = `SELECT COALESCE((SELECT jsonb_build_object('provider',pro
 // securityGrants is posting authority posting would honour now: unrevoked, unexpired, granted by a current member, on an
 // active connection to the granted company, with where each is revoked (the close that holds that connection).
 const securityGrants = `SELECT COALESCE(jsonb_agg(x ORDER BY x.granted_at DESC),'[]'::jsonb) FROM (
- SELECT 'QuickBooks' AS provider,g.client_entity AS client,c.close_id::text AS close_id,g.realm AS company,g.account_ids,g.kinds,g.max_amount::text AS max_amount,g.expires_at,g.reason,g.granted_by,g.granted_at
+ SELECT 'QuickBooks' AS provider,g.client_entity AS client,COALESCE(c.close_id::text,'') AS close_id,g.realm AS company,g.account_ids,g.kinds,g.max_amount::text AS max_amount,g.expires_at,g.reason,g.granted_by,g.granted_at
   FROM production_posting_grants g JOIN LATERAL (SELECT close_id FROM quickbooks_connections c WHERE c.organization_id=g.organization_id AND lower(c.client_entity)=lower(g.client_entity) AND c.environment='production' AND c.state='active'
    AND c.realm=g.realm AND c.company_name=g.client_entity AND (g.connection_id IS NULL OR c.id=g.connection_id) ORDER BY c.id DESC LIMIT 1) c ON true
   WHERE g.organization_id=$1 AND g.revoked_at IS NULL AND g.expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=g.organization_id AND m.subject=g.granted_by AND m.granted)
- UNION ALL SELECT 'Xero',g.client_entity,c.close_id::text,g.tenant_id,g.account_ids,g.kinds,g.max_amount::text,g.expires_at,g.reason,g.granted_by,g.granted_at
+ UNION ALL SELECT 'Xero',g.client_entity,COALESCE(c.close_id::text,''),g.tenant_id,g.account_ids,g.kinds,g.max_amount::text,g.expires_at,g.reason,g.granted_by,g.granted_at
   FROM xero_posting_grants g JOIN xero_connections c ON c.id=g.connection_id AND c.state='active' AND c.tenant_id=g.tenant_id
   WHERE g.organization_id=$1 AND g.revoked_at IS NULL AND g.expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=g.organization_id AND m.subject=g.granted_by AND m.granted)
 ) x`
@@ -87,7 +91,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var raw []byte
-		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(DISTINCT entity),'[]'::jsonb) FROM client_closes WHERE organization_id=$1`, organization(r)).Scan(&raw); err != nil {
+		if err := db.QueryRowContext(r.Context(), securityClients, organization(r)).Scan(&raw); err != nil {
 			problem(w, 503, "The firm's clients could not be read.")
 			return
 		}
@@ -115,7 +119,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		org := organization(r)
 		out := map[string]any{"organization_id": org}
 		for key, query := range map[string]string{"people": securityPeople, "invitations": securityInvitations, "services": securityServices, "email": securityEmail, "posting_grants": securityGrants, "activity": securityActivity,
-			"clients": `SELECT COALESCE(jsonb_agg(DISTINCT entity),'[]'::jsonb) FROM client_closes WHERE organization_id=$1`} {
+			"clients": securityClients} {
 			var raw []byte
 			if err = tx.QueryRowContext(r.Context(), query, org).Scan(&raw); err != nil {
 				problem(w, 503, "Security is unavailable.")
@@ -234,7 +238,7 @@ func ocrDisclosure(provider, model string) (string, string) {
 	case "openai":
 		return "OpenAI API (PDF images)", "Worker image route; model " + model
 	case "context_machine":
-		return "Private context machine (PDF images)", "Worker image route; model " + model + "; restricted to configured members and current client grants"
+		return "Private context machine (PDF images)", "Worker image route; model " + model + "; authorized uploaders with current client grants"
 	case "tesseract":
 		return "PDF image reading", "Model route not set on the worker; PDFs are read locally"
 	case "held":

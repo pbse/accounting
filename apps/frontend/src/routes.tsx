@@ -7,6 +7,7 @@ import { EffortTracker } from "./features/closes/Effort";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { marketingRoutes } from "./features/marketing/routes";
 import { cashPlanQuery } from "./data/cashPlan";
+import { clientPath } from "./data/clients";
 import { closeTab, type CloseTab } from "./data/closeTabs";
 import { appData, effortPath, prefetch, prefetchLater, workPath, workspaceKey, workViews } from "./data/queries";
 
@@ -83,6 +84,12 @@ async function clientsLoader({ context, request }: LoaderFunctionArgs) {
   return null;
 }
 
+// A client's page reads the client, in one request.
+async function clientLoader({ context, params }: LoaderFunctionArgs) {
+  if (prefetching && params.client) await prefetch(context, clientPath(params.client));
+  return null;
+}
+
 // A close reads itself and its drafts; its Overview also reads the agent's goal (with the plan's checks), where the close
 // stands, the preparation coordinator and the work from its evidence. Other tabs read as they render.
 async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
@@ -92,8 +99,8 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   const tab = closeTab(url.searchParams.get("tab"));
   const reads: Partial<Record<CloseTab, string[]>> = {
     overview: [`/${id}/brief`, `/${id}/goal?verify=1`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")],
-    books: [`/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/coverage`, `/${id}/aging`, `/${id}/open-items`],
-    evidence: [`/${id}/evidence?checks=1`, `/${id}/preparations`, `/${id}/jobs`, `/${id}/quickbooks`, `/${id}/quickbooks/entities`, `/${id}/xero`, `/${id}/stripe`],
+    books: [`/${id}/quickbooks`, `/${id}/quickbooks/entities`, `/${id}/xero`, `/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/coverage`, `/${id}/aging`, `/${id}/open-items`],
+    evidence: [`/${id}/evidence?checks=1`, `/${id}/preparations`, `/${id}/jobs`, `/${id}/stripe`],
     requests: [`/${id}/requests`, `/${id}/email-replies`],
     reports: [`/${id}/management-pack`, `/${id}/management-pack/publications`, `/${id}/budget`],
     signoff: [`/${id}/takeover-setup`, `/${id}/opening-baseline`, `/${id}/readiness`, `/${id}/effort`],
@@ -181,6 +188,7 @@ export const routes: RouteObject[] = createRoutesFromElements(
       <Route path="close" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "close" as const })} />
       <Route path="review" lazy={page(() => import("./features/dashboard/Dashboard"), { view: "review" as const })} />
       <Route path="clients" loader={clientsLoader} lazy={page(() => import("./features/closes/ClosesList"))} />
+      <Route path="clients/:client" loader={clientLoader} lazy={page(() => import("./features/clients/ClientPage"))} />
       <Route path="closes" loader={closesLoader} lazy={page(() => import("./features/closes/Closes"))} />
       <Route path="closes/:id" loader={closeLoader} lazy={page(() => import("./features/closes/ClientClose"))} />
       <Route path="closes/:id/workpapers/:paperId" loader={workpaperLoader} lazy={page(() => import("./features/closes/WorkpaperView"))} />

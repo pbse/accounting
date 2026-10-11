@@ -221,6 +221,8 @@ The demonstration seed writes QuickBooks-shaped captures from generated reports.
 
 File imports stay behind a firm setting until every feature a month on files needs reads the record.
 
+The record landed first as step 3 of the delivery, with no visible change (migration 145): the worker's books-versions loop writes a version for every QuickBooks period capture and Xero capture that has none, the existing ones first, a batch at a time, then each new one within a minute. A version is the books `readLedgerMonth` makes of the capture (accounts with class, type and subtype; balances and activity as exact decimals; the ledger's cash-flow statement when it has one), with the capture it came from, the company, the month-end date and a digest of its figures; a QuickBooks capture's General Ledger rows are kept as its lines, each with its report location. A capture the readers cannot read is kept with the reason, once, so a reader that would refuse it agrees with the record. The parity check recomputes each stored version from its capture's payload and names any that disagree; the staff console's Connections page shows how many captures have their version and whether the readers agree. No reader reads the record yet.
+
 ## Connections
 
 ### Today
@@ -249,6 +251,10 @@ Each client gets a page at `/dashboard/clients/<client>`, on the Krith design sy
 
 It follows [design system](design-system.md#rollout) as any screen added during the rollout does: Krith's tokens, the Krith component from the artifact where one exists, and the rollout's stated fallback otherwise. It does not wait for the files work: on its own it moves today's QuickBooks and Xero connection panels out of the month. Until it ships, connections stay where they are today.
 
+The page landed first, reading everything above in one request (`GET /v1/closes/client?name=…`, which names the client in the query because a path segment would collide with a close's own routes) and opening from each row of Clients and from a month's breadcrumb. Clients' rows became links to it, as the design's records table has them, with the client's books, what is up next, its state and its owner; opening a month moved to the client's page, whose one action opens the oldest month in hand, else the earliest month owed. Until the connection actions move onto the Books card, the card shows the client's connections and its newest month's books, and links to the month where each connection is still managed.
+
+The connection actions then moved onto the Books card. QuickBooks and Xero are connected, their sign-ins finished, the company or organisation confirmed, and either disconnected from the client's page, each step in a dialog (`POST /v1/closes/client/quickbooks` and `/client/xero`, the client named in the query); Intuit and Xero return to the page. A connection is no longer tied to a month (`close_id` became optional), and a connection or a grant kept under the name of the month it was made from, since confirmed as the client's alias, is managed from the page too. The production authorization and the Xero posting grant became cards on the page beside Books, and every reconnect link (setup checklist, search, plan) leads there. A month keeps its own captures: its Books tab reads the month through the client's connection.
+
 ### Ledger catalog and onboarding
 
 The owner's direction (2026-10-10) on which connector comes first: "I think it should be a config maybe as part of onboarding?" What follows is this document's proposal for carrying that out; its details are for the owner to confirm as the work starts.
@@ -259,6 +265,8 @@ The owner's direction (2026-10-10) on which connector comes first: "I think it s
 - **Connectors are switched on by configuration**, per environment and, for a pilot, per firm. A connector reaches firms when it passes its own acceptance, with no other change.
 - **No dead ends.** Choosing a ledger whose connector is not switched on gives the files route with that ledger's export steps. Another ledger gives the files route with any layout, under the name given.
 - **Demand informs the next connector.** The admin console counts clients by ledger, including the names given for other ledgers, and by whether they have a connector. Those counts inform which native connector to build next, weighed against each ledger's access terms under [more ledgers](#more-ledgers).
+
+As built: the catalog is `internal/ledgers/catalog.json`, embedded in the build: twelve ledgers, each with its name, its native connector if one exists, and its Trial Balance, General Ledger and open-items export steps (the recognised layouts arrive with step 6). `LEDGER_CONNECTORS` lists the connectors switched on in an environment (QuickBooks and Xero when unset); staff pilot one for a single firm, or switch it off for one, with a reason, from the firm's page in the admin console (`connector_pilots`, audited). A switch decides whether the connector can be connected for the firm; connections already made keep reading until someone disconnects them, so no month is left half-read. A firm reads the catalog with each connector's switch for it (`GET /v1/closes/ledgers`). Add client asks for the ledger (not known yet by default) and records it with the client's roster entry; the client's page shows it on the Books card and corrects it in a dialog that shows the export steps (`POST /v1/closes/client/ledger`, by whoever manages the roster or connects ledgers, against the ledger they read). The record is a history (`client_ledgers`, the latest row per client identity current), in the firm's export. Clients shows a recorded ledger when nothing is connected; Operations in the admin console counts clients and firms by ledger, naming no client.
 
 ### Who does what
 

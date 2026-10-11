@@ -187,7 +187,7 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				saved, kind = prior.GrantID, ""
 			}
 			var err error
-			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entity, kind, saved); err != nil {
+			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entity, closeID, kind, saved); err != nil {
 				refuse(w, err)
 				return
 			}
