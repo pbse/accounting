@@ -35,7 +35,7 @@ type Status = { id: string; reason: string; actor: string; at: string; balanced:
 // CSV is how a person chose to read a CSV file; empty, as the reader read it.
 type CSV = { encoding: string; delimiter: string };
 type Confirmed = Status & { layout: Layout; reading: Reading; csv?: CSV };
-type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; confirmed?: Status };
+type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; replaces?: string; replaces_reason?: string; confirmed?: Status };
 type ImportRead = {
   import: Omit<ImportRow, "confirmed"> & { confirmed?: Confirmed };
   tables: Table[];
@@ -162,7 +162,7 @@ export function FilesCard({ client }: { client: string }) {
         )}
       </Card>
       <Dialog open={sending} onClose={() => setSending(false)} title="Send a file" description="The client's Trial Balance for one month, as a CSV or Excel workbook (.xlsx), up to 50 MiB.">
-        <SendForm client={client} onSent={(id) => (setSending(false), reread(), setOpen(id))} onCancel={() => setSending(false)} />
+        <SendForm client={client} imports={imports} onSent={(id) => (setSending(false), reread(), setOpen(id))} onCancel={() => setSending(false)} />
       </Dialog>
       {open && (
         <Dialog open onClose={() => (setOpen(""), reread())} title="Read the file" description="How the file is read: which row heads it, what each column holds, and how amounts are written.">
@@ -173,15 +173,20 @@ export function FilesCard({ client }: { client: string }) {
   );
 }
 
-function SendForm({ client, onSent, onCancel }: { client: string; onSent: (id: string) => void; onCancel: () => void }) {
+function SendForm({ client, imports, onSent, onCancel }: { client: string; imports: ImportRow[]; onSent: (id: string) => void; onCancel: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // A file sent for a month that has one already either replaces it, saying why, or is another file of the month.
+  const [period, setPeriod] = useState("");
+  const [replaces, setReplaces] = useState("");
+  const earlier = imports.filter((i) => i.period === period);
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
       const saved = await workspaceRequest(filesPath(client), new FormData(event.currentTarget));
+      // The same file sent again for the month is the one already kept: it opens.
       onSent(saved.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "The file could not be sent.");
@@ -194,12 +199,31 @@ function SendForm({ client, onSent, onCancel }: { client: string; onSent: (id: s
       <fieldset disabled={busy}>
         <label>
           Month
-          <input type="month" name="period" required />
+          <input type="month" name="period" required value={period} onChange={(e) => (setPeriod(e.target.value), setReplaces(""))} />
         </label>
         <label>
           File
           <input type="file" name="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
         </label>
+        {earlier.length > 0 && (
+          <label>
+            It replaces
+            <select name="replaces" value={replaces} onChange={(e) => setReplaces(e.target.value)}>
+              <option value="">Nothing: it is another file for the month</option>
+              {earlier.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {replaces && (
+          <label>
+            Why it replaces it
+            <input name="replaces_reason" maxLength={500} required />
+          </label>
+        )}
         <label className="checkbox-label">
           <input type="checkbox" name="one_client" value="true" required /> It holds only {client}’s books
         </label>
@@ -484,21 +508,7 @@ function LayoutForm({
               ))}
             </ul>
           )}
-          <details>
-            <summary>How each row was read</summary>
-            <table className="ks-preview">
-              <tbody>
-                {reading.lines.map((l) => (
-                  <tr key={l.row}>
-                    <th>{l.row}</th>
-                    <td>{lineKinds[l.kind]}</td>
-                    <td>{[l.number, l.name].filter(Boolean).join(" ")}</td>
-                    <td>{l.kind === "heading" ? "" : l.balance}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
+          <ReadingLines lines={reading.lines} />
         </div>
       )}
       {error && <p role="alert">{error}</p>}
@@ -525,5 +535,36 @@ function LayoutForm({
         )}
       </DialogActions>
     </div>
+  );
+}
+
+// ReadingLines shows how each row was read, once opened, two hundred rows at a time: a file can hold thousands.
+function ReadingLines({ lines }: { lines: Line[] }) {
+  const [shown, setShown] = useState(0);
+  return (
+    <details onToggle={(e) => setShown((e.currentTarget as HTMLDetailsElement).open ? Math.max(shown, 200) : shown)}>
+      <summary>How each of the {lines.length} rows was read</summary>
+      {shown > 0 && (
+        <>
+          <table className="ks-preview">
+            <tbody>
+              {lines.slice(0, shown).map((l) => (
+                <tr key={l.row}>
+                  <th>{l.row}</th>
+                  <td>{lineKinds[l.kind]}</td>
+                  <td>{[l.number, l.name].filter(Boolean).join(" ")}</td>
+                  <td>{l.kind === "heading" ? "" : l.balance}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {shown < lines.length && (
+            <button type="button" className="link" onClick={() => setShown(shown + 200)}>
+              Show {Math.min(200, lines.length - shown)} more
+            </button>
+          )}
+        </>
+      )}
+    </details>
   );
 }

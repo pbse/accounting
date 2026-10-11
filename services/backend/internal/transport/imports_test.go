@@ -77,7 +77,7 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 		return send(subject, permissions, method, path, "application/json", raw, want)
 	}
 	oneClient := "true"
-	replaces := ""
+	replaces, why := "", ""
 	upload := func(subject string, permissions []string, name, period, content string, want int) map[string]any {
 		t.Helper()
 		var b bytes.Buffer
@@ -86,6 +86,7 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 		must(m.WriteField("one_client", oneClient))
 		if replaces != "" {
 			must(m.WriteField("replaces", replaces))
+			must(m.WriteField("replaces_reason", why))
 		}
 		f, e := m.CreateFormFile("file", name)
 		must(e)
@@ -247,9 +248,16 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	}
 
 	// A replacement names one of the client's files; one that names none is refused.
-	replaces = "999999999"
+	replaces, why = "999999999", "A file that is not the client's"
 	upload("user_b", preparer, "Acme TB September again.csv", "2026-09", september, 422)
+	replaces, why = "", ""
+	// The same file again for the month is the one kept, not another import.
+	if again := upload("user_b", preparer, "Acme TB September.csv", "2026-09", september, 200); again["id"] != id || again["repeat"] != true {
+		t.Fatalf("a repeat upload: %v", again)
+	}
 	replaces = id
-	upload("user_b", preparer, "Acme TB September again.csv", "2026-09", september, 201)
-	replaces = ""
+	upload("user_b", preparer, "Acme TB September corrected.csv", "2026-09", september+"Suspense,0.00,\n", 422)
+	why = "The first export missed the suspense account"
+	upload("user_b", preparer, "Acme TB September corrected.csv", "2026-09", september+"Suspense,0.00,\n", 201)
+	replaces, why = "", ""
 }

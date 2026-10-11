@@ -16,6 +16,8 @@ CREATE TABLE books_imports (
  content bytea NOT NULL CHECK (octet_length(content) BETWEEN 1 AND 52428800),
  format text NOT NULL CHECK (format IN ('csv','xlsx')),
  replaces bigint REFERENCES books_imports(id),
+ -- Why the file replaces the one it names: a replacement always says.
+ replaces_reason text NOT NULL DEFAULT '' CHECK (length(replaces_reason)<=500 AND (replaces IS NULL OR length(replaces_reason)>=1)),
  -- holds is what the sender confirmed the file holds: one client's books. A file holding several clients' books waits for
  -- their split into one view per client, kept under access covering them all.
  holds text NOT NULL DEFAULT 'one_client' CHECK (holds IN ('one_client')),

@@ -53,6 +53,7 @@ type listedImport struct {
 	Name      string           `json:"name"`
 	Format    string           `json:"format"`
 	Replaces  string           `json:"replaces,omitempty"`
+	Why       string           `json:"replaces_reason,omitempty"`
 	Actor     string           `json:"actor"`
 	At        time.Time        `json:"at"`
 	Confirmed *confirmedStatus `json:"confirmed,omitempty"`
@@ -305,7 +306,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT i.id::text,i.period,i.name,i.format,COALESCE(i.replaces::text,''),i.actor,i.created_at,
+		rows, err := db.QueryContext(r.Context(), `SELECT i.id::text,i.period,i.name,i.format,COALESCE(i.replaces::text,''),i.replaces_reason,i.actor,i.created_at,
  l.id::text,COALESCE(l.reason,''),COALESCE(l.actor,''),l.created_at,COALESCE((l.reading->>'balanced')::boolean,false),COALESCE(jsonb_array_length(l.reading->'problems'),0)
  FROM books_imports i LEFT JOIN LATERAL (SELECT * FROM books_layouts b WHERE b.import_id=i.id ORDER BY b.id DESC LIMIT 1) l ON true
  WHERE i.organization_id=$1 AND client_identity(i.organization_id,i.client_entity)=client_identity($1,$2) ORDER BY i.period DESC,i.id DESC LIMIT 101 OFFSET $3`, organization(r), name, offset)
@@ -319,7 +320,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			var c confirmedStatus
 			var layoutID sql.NullString
 			var at sql.NullTime
-			if err = rows.Scan(&s.ID, &s.Period, &s.Name, &s.Format, &s.Replaces, &s.Actor, &s.At, &layoutID, &c.Reason, &c.Actor, &at, &c.Balanced, &c.Problems); err != nil {
+			if err = rows.Scan(&s.ID, &s.Period, &s.Name, &s.Format, &s.Replaces, &s.Why, &s.Actor, &s.At, &layoutID, &c.Reason, &c.Actor, &at, &c.Balanced, &c.Problems); err != nil {
 				break
 			}
 			if layoutID.Valid {
@@ -393,8 +394,13 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			format = "xlsx"
 		}
 		sum := sha256.Sum256(body)
-		// A replacement names a file of this client's: one that names no such file is refused, never kept unlinked.
-		replaces := strings.TrimSpace(r.FormValue("replaces"))
+		// A replacement names a file of this client's, and says why: one that names no such file is refused, never kept
+		// unlinked.
+		replaces, why := strings.TrimSpace(r.FormValue("replaces")), strings.TrimSpace(r.FormValue("replaces_reason"))
+		if replaces != "" && (why == "" || utf8.RuneCountInString(why) > 500) {
+			problem(w, 422, "Say why this file replaces the earlier one (1–500 characters).")
+			return
+		}
 		if replaces != "" {
 			var found bool
 			if err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM books_imports p WHERE p.id::text=$1 AND p.organization_id=$2 AND client_identity(p.organization_id,p.client_entity)=client_identity($2,$3))`, replaces, organization(r), name).Scan(&found); err != nil {
@@ -406,10 +412,22 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		// The same file sent again for the same month (a retry after a lost answer) is the import already kept.
+		var repeat string
+		switch err = db.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND period=$3 AND digest=$4 ORDER BY id DESC LIMIT 1`,
+			organization(r), name, period, hex.EncodeToString(sum[:])).Scan(&repeat); err {
+		case nil:
+			jsonReply(w, 200, map[string]any{"id": repeat, "repeat": true})
+			return
+		case sql.ErrNoRows:
+		default:
+			problem(w, 503, "The file could not be kept.")
+			return
+		}
 		var id string
-		err = db.QueryRowContext(r.Context(), `INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,replaces,actor)
- SELECT $1,$2,$3,$4,$5,$6,$7,(SELECT p.id FROM books_imports p WHERE p.id::text=$8 AND p.organization_id=$1 AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)),$9 RETURNING id::text`,
-			organization(r), name, period, filename, hex.EncodeToString(sum[:]), body, format, replaces, reviewerName(r)).Scan(&id)
+		err = db.QueryRowContext(r.Context(), `INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,replaces,replaces_reason,actor)
+ SELECT $1,$2,$3,$4,$5,$6,$7,(SELECT p.id FROM books_imports p WHERE p.id::text=$8 AND p.organization_id=$1 AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)),$10,$9 RETURNING id::text`,
+			organization(r), name, period, filename, hex.EncodeToString(sum[:]), body, format, replaces, reviewerName(r), why).Scan(&id)
 		if err != nil {
 			problem(w, 503, "The file could not be kept.")
 			return
@@ -477,6 +495,12 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["on"], out["can_confirm"] = on, canReview(r) && on
+		// A later page of rows is rows alone: the reading and the proposal came with the first.
+		if from > 1 {
+			delete(out, "import")
+			jsonReply(w, 200, out)
+			return
+		}
 		if confirmed == nil {
 			layout, questions, reused := proposal(file, saved)
 			out["proposal"] = map[string]any{"layout": layout, "questions": questions, "reused": reused}
