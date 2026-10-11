@@ -77,7 +77,8 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
   const show = (value: string | null) => (value === null ? "–" : amount(value, pack.currency));
   const compared = !!pack.prior;
   // Xero captures have no ledger-row reader yet, so their figures are not drillable.
-  const drill = staff && pack.source === "quickbooks";
+  // A figure opens its ledger rows: a QuickBooks capture's, or the lines of a month's ledger file.
+  const drill = staff && (pack.source === "quickbooks" || pack.source === "files");
   const row = (line: Line, key: string, strong = false) => (
     <tr key={key}>
       <th scope="row" style={{ textAlign: "left", fontWeight: strong ? 600 : 400 }}>
@@ -230,7 +231,11 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
       {drill && account && (
         <>
           <SectionHeader id="figure-ledger" title={`Ledger rows behind this figure, ${pack.period}`} />
-          <LedgerSelection key={`this-${account}`} closeId={closeId} snapshotId={pack.snapshot_id} accountId={account} stale={pack.stale} suggestions={[]} />
+          {pack.source === "files" ? (
+            <FileLines key={`this-${account}`} closeId={closeId} accountId={account} />
+          ) : (
+            <LedgerSelection key={`this-${account}`} closeId={closeId} snapshotId={pack.snapshot_id} accountId={account} stale={pack.stale} suggestions={[]} />
+          )}
           {/* Last month's rows are its own ledger's: drilled into only when they are QuickBooks', as this month's are. */}
           {prior && (prior.source ?? pack.source) === "quickbooks" && (
             <>
@@ -425,5 +430,64 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
         </details>
       )}
     </>
+  );
+}
+
+// A month on files' ledger lines for one account: the transactions behind a figure, twenty at a time, searchable. A month
+// whose file is a Trial Balance has none.
+type FileLine = { location: string; date?: string; reference?: string; party?: string; memo?: string; amount?: string };
+function FileLines({ closeId, accountId }: { closeId: string; accountId: string }) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState<{ offset: number; total: number; rows: FileLine[]; query: string; file: string } | null>(null);
+  const [error, setError] = useState("");
+  async function read(offset: number, search = query) {
+    setError("");
+    try {
+      setPage(await workspaceRequest(`/${closeId}/files/ledger?account_id=${encodeURIComponent(accountId)}&offset=${offset}&query=${encodeURIComponent(search)}`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The ledger lines could not be read.");
+    }
+  }
+  useEffect(() => {
+    void read(0, "");
+  }, [closeId, accountId]);
+  return (
+    <div>
+      <label>
+        Find a line by its date, number, payee or description
+        <input type="search" value={query} maxLength={100} onChange={(e) => setQuery(e.target.value)} />
+      </label>
+      <button type="button" onClick={() => void read(0)}>
+        Find
+      </button>
+      {error && <p role="alert">{error}</p>}
+      {page &&
+        (page.total === 0 ? (
+          <p>No lines{page.query ? " match" : ""} in this month's file for this account{page.query ? "" : ": its file is a Trial Balance, or the account had no transactions"}.</p>
+        ) : (
+          <>
+            <p>
+              {page.total} line{page.total === 1 ? "" : "s"} in {page.file}. Showing {page.offset + 1}–{page.offset + page.rows.length}.
+            </p>
+            <ul>
+              {page.rows.map((l) => (
+                <li key={l.location}>
+                  {[l.date, l.reference && `#${l.reference}`, l.party, l.memo].filter(Boolean).join(" · ")}: {l.amount} ({l.location})
+                </li>
+              ))}
+            </ul>
+            {page.offset + page.rows.length < page.total && (
+              <button type="button" onClick={() => void read(page.offset + 20, page.query)}>
+                Next lines
+              </button>
+            )}
+            {page.offset > 0 && (
+              <button type="button" onClick={() => void read(Math.max(0, page.offset - 20), page.query)}>
+                Previous lines
+              </button>
+            )}
+          </>
+        ))}
+    </div>
   );
 }

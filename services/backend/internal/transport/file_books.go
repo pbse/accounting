@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"close.local/backend/internal/bookfiles"
 	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/quickbooks"
 	"cmp"
@@ -13,8 +14,10 @@ import (
 	"log"
 	"maps"
 	"math/big"
+	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -96,11 +99,26 @@ func writeFileVersion(ctx context.Context, db *sql.DB, org, name, acceptance, fi
 	rawAccounts, _ := json.Marshal(f.accounts)
 	rawBalances, _ := json.Marshal(f.balances)
 	rawActivity, _ := json.Marshal(f.activity)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO books_versions(organization_id,close_id,period,source,source_id,company,as_of,captured_at,currency,basis,typed,accounts,balances,activity,digest,activity_unavailable)
- VALUES($1,$2,$3,'files',$4,$5,$6::date,$7,$8,$9,true,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14) ON CONFLICT (source,source_id) DO NOTHING`,
+	var versionID string
+	switch err = tx.QueryRowContext(ctx, `INSERT INTO books_versions(organization_id,close_id,period,source,source_id,company,as_of,captured_at,currency,basis,typed,accounts,balances,activity,digest,activity_unavailable)
+ VALUES($1,$2,$3,'files',$4,$5,$6::date,$7,$8,$9,true,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14) ON CONFLICT (source,source_id) DO NOTHING RETURNING id::text`,
 		org, closeID, f.period, acceptance, name, f.asOf, f.acceptedAt, strings.ToUpper(f.currency), f.basis,
-		string(rawAccounts), string(rawBalances), string(rawActivity), hex.EncodeToString(sum[:]), f.missing); err != nil {
+		string(rawAccounts), string(rawBalances), string(rawActivity), hex.EncodeToString(sum[:]), f.missing).Scan(&versionID); {
+	case err == sql.ErrNoRows:
+		return tx.Commit()
+	case err != nil:
 		return err
+	}
+	// A ledger's lines are kept with its version, each under its account's key, at the cell it came from: the
+	// transactions behind each figure.
+	if f.ledger {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO books_lines(version_id,position,account_id,location,cells)
+ SELECT $1::bigint,l.ordinality::integer,$3::jsonb->>(l.ordinality::integer-1),l.value->>'ref',jsonb_strip_nulls(jsonb_build_object('date',l.value->'date','reference',l.value->'reference',
+   'party',l.value->'party','memo',l.value->'memo','amount',l.value->'balance','account',trim(COALESCE(l.value->>'number','')||' '||COALESCE(l.value->>'name',''))))
+ FROM jsonb_array_elements((SELECT COALESCE(jsonb_agg(e ORDER BY n),'[]') FROM jsonb_array_elements((SELECT reading->'lines' FROM books_layouts WHERE id::text=$2)) WITH ORDINALITY x(e,n) WHERE e->>'kind'='posting')) WITH ORDINALITY l`,
+			versionID, f.layoutID, f.lineKeys); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -108,6 +126,10 @@ func writeFileVersion(ctx context.Context, db *sql.DB, org, name, acceptance, fi
 // acceptedFile is the books an acceptance gives its month: its file's reading as the map it was accepted on classifies
 // it, balances and the month's activity as exact decimals, with what the month's activity is missing, if anything.
 type acceptedFile struct {
+	// ledger says the accepted reading is a General Ledger's (layoutID, its confirmed reading), and lineKeys its posting
+	// lines' account keys, in order, as a JSON array.
+	ledger             bool
+	layoutID, lineKeys string
 	// underived says why a ledger's month-end balances could not be derived; its balances are then only its movements.
 	underived                              string
 	accounts                               map[string]booksAccount
@@ -148,7 +170,26 @@ func acceptedFileBooks(ctx context.Context, q rowReader, org, name, acceptance, 
 		}
 	}
 	f := acceptedFile{accounts: map[string]booksAccount{}, balances: map[string]string{}, activity: map[string]string{}, period: period,
-		currency: state.layout.Layout.Currency, asOf: state.layout.Layout.AsOf, basis: state.scope.Basis, acceptedAt: acceptedAt.Time}
+		currency: state.layout.Layout.Currency, asOf: state.layout.Layout.AsOf, basis: state.scope.Basis, acceptedAt: acceptedAt.Time,
+		ledger: state.layout.Layout.Ledger(), layoutID: layoutID}
+	if f.ledger {
+		var raw []byte
+		if err = q.QueryRowContext(ctx, `SELECT COALESCE(reading->'lines','[]'::jsonb) FROM books_layouts WHERE id::text=$1`, layoutID).Scan(&raw); err != nil {
+			return acceptedFile{}, false, err
+		}
+		var lines []bookfiles.Line
+		if err = json.Unmarshal(raw, &lines); err != nil {
+			return acceptedFile{}, false, err
+		}
+		keys := []string{}
+		for _, l := range lines {
+			if l.Kind == bookfiles.Posting {
+				keys = append(keys, bookfiles.AccountKey(l.Number, l.Name))
+			}
+		}
+		rawKeys, _ := json.Marshal(keys)
+		f.lineKeys = string(rawKeys)
+	}
 	for _, a := range state.reading.Accounts {
 		account := booksAccount{Name: strings.TrimSpace(a.Number + " " + a.Name)}
 		if m, ok := accepted[a.Key]; ok {
@@ -780,4 +821,35 @@ func reviewedComparative(ctx context.Context, q rowReader, org, entity, period s
 	}
 	m.Holds = append(m.Holds, live...)
 	return b, m, nil
+}
+
+// registerFileLedger serves a month on files' ledger lines for one account, twenty at a time from offset, those naming
+// query anywhere when it is given: the transactions behind a figure of its pack (docs/books-sources.md, delivery step 8).
+func registerFileLedger(mux *http.ServeMux, db *sql.DB) {
+	mux.HandleFunc("GET /v1/closes/{id}/files/ledger", func(w http.ResponseWriter, r *http.Request) {
+		accountID, query := r.URL.Query().Get("account_id"), strings.TrimSpace(r.URL.Query().Get("query"))
+		offset, err := strconv.Atoi(cmp.Or(r.URL.Query().Get("offset"), "0"))
+		if err != nil || offset < 0 || accountID == "" || len(accountID) > 300 || len(query) > 100 {
+			problem(w, 422, "Choose an account, a valid page offset and a search of at most 100 characters.")
+			return
+		}
+		_, month, err := fileMonthBooks(r.Context(), db, r.PathValue("id"))
+		if err != nil {
+			problem(w, 503, "The month's books are unavailable.")
+			return
+		}
+		if month == nil {
+			problem(w, 404, "This month has no books from its files.")
+			return
+		}
+		var rows json.RawMessage
+		var total int
+		if err = db.QueryRowContext(r.Context(), `SELECT (SELECT count(*) FROM books_lines WHERE version_id::text=$1 AND account_id=$2 AND ($3='' OR strpos(lower(cells::text),lower($3))>0)),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('location',location)||cells ORDER BY position) FROM (SELECT position,location,cells FROM books_lines
+  WHERE version_id::text=$1 AND account_id=$2 AND ($3='' OR strpos(lower(cells::text),lower($3))>0) ORDER BY position OFFSET $4 LIMIT 20) x),'[]')`, month.Version, accountID, query, offset).Scan(&total, &rows); err != nil {
+			problem(w, 503, "The month's ledger lines are unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"account_id": accountID, "query": query, "offset": offset, "total": total, "rows": rows, "file": month.File})
+	})
 }
