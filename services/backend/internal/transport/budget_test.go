@@ -197,4 +197,31 @@ func TestBudgetImportRemapApproveAndCompare(t *testing.T) {
 	if n := got.Totals["net_month"]; n.Actual != "9400.00" || n.Budget != "8400.00" || len(got.Missing) != 7 {
 		t.Fatalf("net income and the fiscal months without books (January to July): %+v %v", n, got.Missing)
 	}
+	// Approving a reforecast makes it the baseline; the original plan stays available beside it, by choice.
+	var reforecast struct{ ID string }
+	must(json.Unmarshal(call("POST", map[string]any{"action": "import", "name": "Reforecast", "csv": "Account,2026-09\nSales,12000"}, 200), &reforecast))
+	call("POST", map[string]any{"action": "approve", "id": reforecast.ID}, 200)
+	compare := func(baseline string, want int) (out struct {
+		Baseline  struct{ ID, Name string }
+		Baselines []struct{ ID string }
+		Rows      []budgetRow
+	}) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/"+closes["2026-09"]+"/budget?baseline="+baseline, nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("baseline %s: %d %s", baseline, w.Code, w.Body.String())
+		}
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	if newest := compare("", 200); newest.Baseline.ID != reforecast.ID || len(newest.Baselines) != 2 {
+		t.Fatalf("the newest approved budget is the default, and both September budgets are offered: %+v", newest)
+	}
+	if original := compare(remapped.ID, 200); original.Baseline.ID != remapped.ID {
+		t.Fatalf("the original plan can be compared beside the reforecast: %+v", original.Baseline)
+	}
+	compare(august.ID, 422)
 }

@@ -444,6 +444,92 @@ func goalEvent(ctx context.Context, tx *sql.Tx, id, actor, text string) error {
 	return err
 }
 
+// replyReceipts records, for a request with new client replies since the goal began (or since its last receipt), once
+// its work has settled and none of its files still waits for scanning or release, what the replies led to: how many
+// questions are answered and what each document became, so the person sees the result without opening Work. The latest
+// reply's time keys the receipt, so a later reply to the same request gets its own.
+func replyReceipts(ctx context.Context, tx *sql.Tx, g goalRow) error {
+	rows, err := tx.QueryContext(ctx, `SELECT q.id::text,'reply:'||q.id||':'||x.at::text,
+ (SELECT count(*) FROM work_request_answers a WHERE a.request_id=q.id AND a.state='answered'),(SELECT count(*) FROM work_request_answers a WHERE a.request_id=q.id),
+ (SELECT count(*) FROM work_request_answers a WHERE a.request_id=q.id AND a.state='awaiting_document'),
+ COALESCE((SELECT complete FROM request_submissions WHERE request_id=q.id ORDER BY id DESC LIMIT 1),true),
+ EXISTS(SELECT 1 FROM client_attachments ca WHERE ca.request_id=q.id AND ca.state IN ('queued','scanning','clean')),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('name',e.name,'state',j.state,'drafts',COALESCE(j.workpaper_ids,'[]'::jsonb)) ORDER BY j.id) FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE rj.request_id=q.id),'[]')
+ FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id
+ CROSS JOIN LATERAL (SELECT GREATEST((SELECT max(created_at) FROM request_submissions WHERE request_id=q.id),(SELECT max(recorded_at) FROM work_replies WHERE request_id=q.id)) AS at) x
+ WHERE d.close_id=$1 AND x.at>(SELECT created_at FROM close_goals WHERE id=$2)
+ AND NOT EXISTS(SELECT 1 FROM close_goals cg CROSS JOIN jsonb_array_elements(cg.events) ev WHERE cg.id=$2 AND ev->>'receipt'='reply:'||q.id||':'||x.at::text)
+ ORDER BY x.at`, g.close, g.id)
+	if err != nil {
+		return err
+	}
+	type receipt struct{ key, text string }
+	receipts := []receipt{}
+	for rows.Next() {
+		var request, key string
+		var answered, asked, awaiting int
+		var complete, filesPending bool
+		var raw []byte
+		if err = rows.Scan(&request, &key, &answered, &asked, &awaiting, &complete, &filesPending, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var jobs []struct {
+			Name   string   `json:"name"`
+			State  string   `json:"state"`
+			Drafts []string `json:"drafts"`
+		}
+		json.Unmarshal(raw, &jobs)
+		text := "Request #" + request + ": the client replied."
+		if !complete {
+			text = "Request #" + request + ": the client answered part of it."
+		}
+		if asked > 0 {
+			text = fmt.Sprintf("Request #%s: the client answered %d of %d questions", request, answered, asked)
+			if awaiting > 0 {
+				text += ", " + plural(awaiting, "document", "documents") + " to follow"
+			}
+			text += "."
+		}
+		settled := !filesPending
+		outcomes := []string{}
+		for _, j := range jobs {
+			switch j.State {
+			case "waiting_evidence", "interpreting", "queued":
+				settled = false
+			case "completed":
+				if len(j.Drafts) > 0 {
+					outcomes = append(outcomes, j.Name+": "+plural(len(j.Drafts), "draft", "drafts")+" #"+strings.Join(j.Drafts, ", #")+" ready for review")
+				} else {
+					outcomes = append(outcomes, j.Name+": done, nothing to draft")
+				}
+			case "needs_confirmation", "failed":
+				outcomes = append(outcomes, j.Name+": needs you")
+			case "waiting_client":
+				outcomes = append(outcomes, j.Name+": still waiting on the client")
+			}
+		}
+		if !settled {
+			continue
+		}
+		if len(outcomes) > 0 {
+			text += " " + strings.Join(outcomes, "; ") + "."
+		}
+		receipts = append(receipts, receipt{key, text})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, r := range receipts {
+		if _, err = tx.ExecContext(ctx, `UPDATE close_goals SET events=events||jsonb_build_array(jsonb_build_object('actor','agent','text',$2::text,'at',now(),'receipt',$3::text)) WHERE id=$1`, g.id, r.text, r.key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // handOver hands the close g.close, whose row the caller holds, to the agent as g.author, with text as the first line of
 // its history, unless the close is signed off or already handed over.
 func handOver(ctx context.Context, tx *sql.Tx, g *goalRow, due, text string) *closeActionError {
@@ -650,6 +736,9 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 		}
 	}
 	if err != nil {
+		return err
+	}
+	if err = replyReceipts(ctx, tx, g); err != nil {
 		return err
 	}
 	// Work lists every delegated close from this summary; what people owe is counted as the goal card counts it.
