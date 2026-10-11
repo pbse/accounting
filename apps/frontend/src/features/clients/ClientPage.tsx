@@ -160,22 +160,23 @@ export default function ClientPage() {
     }
   }
 
-  // The sentence, in the order the work comes: a former client; the oldest month in hand (its sign-off not rechecked,
-  // overdue, or open); the months it owes that nobody opened; or how far it is signed off.
+  // The sentence, in the order the work comes: the oldest month in hand (its sign-off not rechecked, overdue, or open),
+  // even for a former client, whose unfinished months stay to be finished; a former client; the months it owes that
+  // nobody opened; or how far it is signed off.
   const oldest = [...open].sort((a, b) => a.period.localeCompare(b.period))[0];
   const overdue = oldest?.due_on && oldest.due_on < today;
   const sentence = !client.whole
     ? `${name}: the months you can open.`
-    : !active
-      ? `${name} is no longer a client.`
-      : oldest
-        ? oldest.unchecked
-          ? `${name}’s ${monthName(oldest.period)} sign-off could not be rechecked.`
-          : overdue
-            ? `${name}’s ${monthName(oldest.period)} close is overdue.`
-            : open.length === 1
-              ? `${name}’s ${monthName(oldest.period)} close is open.`
-              : `${name} has ${open.length} months open, from ${monthName(oldest.period)}.`
+    : oldest
+      ? oldest.unchecked
+        ? `${name}’s ${monthName(oldest.period)} sign-off could not be rechecked.`
+        : overdue
+          ? `${name}’s ${monthName(oldest.period)} close is overdue.`
+          : open.length === 1
+            ? `${name}’s ${monthName(oldest.period)} close is open.`
+            : `${name} has ${open.length} months open, from ${monthName(oldest.period)}.`
+      : !active
+        ? `${name} is no longer a client.`
         : owed.length === 1
           ? `${name} owes ${monthName(owed[0].period)}.`
           : owed.length > 1
@@ -198,7 +199,7 @@ export default function ClientPage() {
   const contextLine = context.filter(Boolean).join(" · ");
 
   // The one action: the oldest month open, else the earliest month it owes.
-  const inHand = active ? oldest : undefined;
+  const inHand = oldest;
   const next = active && !inHand && owed[0] ? owed[0] : null;
   // Procedures are kept under the client's own name, so they are managed from its newest month opened under that name;
   // a connection from the newest month opened under the name it is held under (a month under another name shows

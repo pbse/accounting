@@ -146,10 +146,11 @@ export default function ClosesList() {
   // What is up next, in the order the work comes (as the client's page says it): the oldest month open with its due
   // date, the earliest month it owes, or nothing until this month ends.
   const upNext = (r: ClientRow) => {
-    if (r.active === false) return "Nothing: no longer a client";
+    // A former client's unfinished month still comes first; it owes no new one.
     const open = r.closes.filter((c) => !c.signed_off).sort((a, b) => a.period.localeCompare(b.period))[0];
     if (open?.unchecked) return `${monthName(open.period)}: recheck the sign-off`;
     if (open) return `${monthName(open.period)} close${open.due_on ? (open.due_on < today ? `, overdue since ${dates.calendarDay(open.due_on)}` : `, due ${dates.calendarDay(open.due_on)}`) : ""}`;
+    if (r.active === false) return "Nothing: no longer a client";
     const owed = [...r.owed].sort();
     if (owed.length) return `Open ${monthName(owed[0])}`;
     if (r.closes.length && r.active) return `Nothing until ${dates.calendarDay(monthEndOf(thisMonth))}`;
