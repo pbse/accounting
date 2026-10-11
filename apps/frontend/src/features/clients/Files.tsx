@@ -5,6 +5,7 @@ import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, useDates } from "../../data/time";
 import { workspaceRequest } from "../closes/workspace";
+import { AcceptFile } from "./AcceptFile";
 import { AccountMap } from "./AccountMap";
 import { ImportScope } from "./ImportScope";
 
@@ -37,7 +38,7 @@ type Status = { id: string; reason: string; actor: string; at: string; balanced:
 // CSV is how a person chose to read a CSV file; empty, as the reader read it.
 type CSV = { encoding: string; delimiter: string };
 type Confirmed = Status & { layout: Layout; reading: Reading; csv?: CSV; line_count?: number; accounts?: number };
-type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; replaces?: string; replaces_reason?: string; confirmed?: Status };
+type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; replaces?: string; replaces_reason?: string; confirmed?: Status; accepted?: boolean };
 type ImportRead = {
   import: Omit<ImportRow, "confirmed"> & { confirmed?: Confirmed };
   tables: Table[];
@@ -109,6 +110,7 @@ export function FilesCard({ client }: { client: string }) {
   const [sending, setSending] = useState(false);
   const [open, setOpen] = useState("");
   const [mapping, setMapping] = useState("");
+  const [accepting, setAccepting] = useState("");
   const [scoping, setScoping] = useState("");
   const [all, setAll] = useState(false);
   const reread = () => (setOlder(undefined), void queryClient.invalidateQueries({ queryKey: ["workspace"] }));
@@ -146,7 +148,7 @@ export function FilesCard({ client }: { client: string }) {
                 <button type="button" className="link" onClick={() => setOpen(i.id)}>
                   {monthName(i.period)} · {i.name}
                 </button>{" "}
-                {i.confirmed ? clean(i.confirmed) ? <span className="pill">Balanced</span> : <span className="pill danger">Problems</span> : <span className="pill muted">Layout to confirm</span>}
+                {i.accepted ? <span className="pill">Accepted</span> : i.confirmed ? clean(i.confirmed) ? <span className="pill">Balanced</span> : <span className="pill danger">Problems</span> : <span className="pill muted">Layout to confirm</span>}
               </li>
             ))}
             {imports.length > 6 && (
@@ -177,6 +179,7 @@ export function FilesCard({ client }: { client: string }) {
             onDone={() => (setOpen(""), reread())}
             onMap={() => (setOpen(""), setMapping(open))}
             onScope={() => (setOpen(""), setScoping(open))}
+            onAccept={() => (setOpen(""), setAccepting(open))}
           />
         </Dialog>
       )}
@@ -188,6 +191,11 @@ export function FilesCard({ client }: { client: string }) {
       {scoping && (
         <Dialog open onClose={() => setScoping("")} title="Scope and basis" description="What the file covers and what basis the export is on, attested of its confirmed reading.">
           <ImportScope client={client} id={scoping} onClose={() => setScoping("")} />
+        </Dialog>
+      )}
+      {accepting && (
+        <Dialog open onClose={() => (setAccepting(""), reread())} title="Checks and acceptance" description="What the checks find in the file's reading, and its acceptance as the client's books for the month.">
+          <AcceptFile client={client} id={accepting} onClose={() => (setAccepting(""), reread())} />
         </Dialog>
       )}
     </>
@@ -263,7 +271,21 @@ function SendForm({ client, imports, onSent, onCancel }: { client: string; impor
 
 // ImportReader shows a file's first rows, the layout to read it with (proposed, or the one confirmed), a preview of the
 // reading, and, for a reviewer, confirming the layout with a reason.
-function ImportReader({ client, id, onDone, onMap, onScope }: { client: string; id: string; onDone: () => void; onMap: () => void; onScope: () => void }) {
+function ImportReader({
+  client,
+  id,
+  onDone,
+  onMap,
+  onScope,
+  onAccept,
+}: {
+  client: string;
+  id: string;
+  onDone: () => void;
+  onMap: () => void;
+  onScope: () => void;
+  onAccept: () => void;
+}) {
   // A CSV is read as the reader reads it until a person chooses another encoding or delimiter.
   const [csv, setCsv] = useState<CSV | undefined>(undefined);
   const read = useQuery({ ...workspaceQuery<ImportRead>(importPath(client, id, csv)), placeholderData: keepPreviousData });
@@ -283,6 +305,7 @@ function ImportReader({ client, id, onDone, onMap, onScope }: { client: string; 
         onDone={onDone}
         onMap={onMap}
         onScope={onScope}
+        onAccept={onAccept}
       />
     </>
   );
@@ -298,6 +321,7 @@ function LayoutForm({
   onDone,
   onMap,
   onScope,
+  onAccept,
 }: {
   client: string;
   id: string;
@@ -308,6 +332,7 @@ function LayoutForm({
   onDone: () => void;
   onMap: () => void;
   onScope: () => void;
+  onAccept: () => void;
 }) {
   const [layout, setLayout] = useState<Layout>(
     start ?? { table: data.tables[0]?.name ?? "", header_row: 1, columns: {}, style: { decimal_comma: false, scale: 1 }, as_of: "", currency: "" },
@@ -610,6 +635,11 @@ function LayoutForm({
         {data.import.confirmed && (
           <button type="button" onClick={onScope}>
             Scope and basis
+          </button>
+        )}
+        {data.import.confirmed && (
+          <button type="button" onClick={onAccept}>
+            Checks and acceptance
           </button>
         )}
         {data.on !== false && (

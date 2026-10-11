@@ -76,6 +76,8 @@ type fileAccount struct {
 	Ref      string             `json:"ref"`
 	Proposal bookfiles.Proposal `json:"proposal"`
 	Mapped   *mappedAccount     `json:"mapped,omitempty"`
+	// Cents says every amount the account was read from is exact to the cent.
+	Cents bool `json:"-"`
 }
 
 // latestAccountMap is client name's map in force, or nil.
@@ -169,10 +171,11 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 			key := bookfiles.AccountKey(l.Number, l.Name)
 			if at, ok := seen[key]; ok {
 				accounts[at].Balance = addAmounts(accounts[at].Balance, l.Amount)
+				accounts[at].Cents = accounts[at].Cents && l.Cents
 				continue
 			}
 			seen[key] = len(accounts)
-			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number)}
+			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents}
 			if current != nil {
 				if m, ok := current.Accounts[key]; ok {
 					a.Mapped = &m
