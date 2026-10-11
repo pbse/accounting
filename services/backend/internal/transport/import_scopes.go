@@ -33,6 +33,14 @@ type importScope struct {
 // basisLabels are the bases as a person reads them.
 var basisLabels = map[string]string{"accrual": "accrual", "cash": "cash", "modified_cash": "modified cash"}
 
+// onBasis is "on an accrual basis", "on a cash basis" or "on a modified cash basis".
+func onBasis(basis string) string {
+	if basis == "accrual" {
+		return "on an accrual basis"
+	}
+	return "on a " + basisLabels[basis] + " basis"
+}
+
 // latestImportScope is import id's latest attestation, or nil.
 func latestImportScope(ctx context.Context, q rowReader, org, name, id string) (*importScope, error) {
 	var s importScope
@@ -63,7 +71,7 @@ func scopeNote(s *importScope, approved string) string {
 	case approved == "":
 		return "No basis is approved for the client yet: the file's " + basisLabels[s.Basis] + " basis is compared once one is."
 	case s.Basis != approved:
-		return "The file is on a " + basisLabels[s.Basis] + " basis, and the client's approved basis is " + basisLabels[approved] + ": statements, comparisons and sign-off built on it are held until the source data agrees, an approved conversion is evidenced, or the procedure changes."
+		return "The file is " + onBasis(s.Basis) + ", and the client's approved basis is " + basisLabels[approved] + ": statements, comparisons and sign-off built on it are held until the source data agrees, an approved conversion is evidenced, or the procedure changes."
 	}
 	return ""
 }

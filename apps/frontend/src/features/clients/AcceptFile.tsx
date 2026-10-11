@@ -97,9 +97,14 @@ function AcceptForm({ client, id, data, onClose }: { client: string; id: string;
             {data.checks.map((c) => (
               <li key={c.key}>
                 <span className={statePills[c.state][0]}>{statePills[c.state][1]}</span> <strong>{c.title}.</strong> {c.detail}
-                {c.holds && <span className="note"> Holds: {c.holds}</span>}
+                {c.holds && (
+                  <>
+                    {" "}
+                    <em>Holds:</em> {c.holds}
+                  </>
+                )}
                 {c.items && c.items.length > 0 && (
-                  <ul className="note">
+                  <ul>
                     {c.items.slice(0, 20).map((item) => (
                       <li key={item}>{item}</li>
                     ))}

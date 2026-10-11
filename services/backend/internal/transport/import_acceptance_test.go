@@ -195,6 +195,12 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if shown := checksOf(call("user_b", preparer, "GET", octoberPath, nil, 200)); shown["scope"]["state"] != "note" {
 		t.Fatalf("the accepted file's checks, reopened: %v", shown["scope"])
 	}
+	// September accepted again with an account October does not name: the explanation does not cover it, so it holds.
+	_, err = db.Exec(`UPDATE books_import_acceptances SET checks=jsonb_set(checks,'{0,items}','[]') WHERE import_id::text=$1`, october)
+	must(err)
+	if shown := checksOf(call("user_b", preparer, "GET", octoberPath, nil, 200)); shown["scope"]["state"] != "holds" {
+		t.Fatalf("an account the explanation never covered: %v", shown["scope"])
+	}
 	// A scope attested again leaves the acceptance on record, no longer current.
 	attest(october)
 	if a := call("user_b", preparer, "GET", octoberPath, nil, 200)["acceptance"].(map[string]any); a["current"] != false {

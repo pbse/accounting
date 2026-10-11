@@ -251,12 +251,12 @@ func fileChecks(s fileState, explained string) []importCheck {
 	case s.scope == nil:
 		add(importCheck{Key: "basis", Title: "On the client's approved basis", State: "holds", Detail: "Attest the basis the export is on.", Holds: "Comparisons, roll-forwards and the statements built on the file."})
 	case s.approved == "":
-		add(importCheck{Key: "basis", Title: "On the client's approved basis", State: "note", Detail: "The file is on a " + basisLabels[s.scope.Basis] + " basis; no basis is approved for the client yet."})
+		add(importCheck{Key: "basis", Title: "On the client's approved basis", State: "note", Detail: "The file is " + onBasis(s.scope.Basis) + "; no basis is approved for the client yet."})
 	case s.scope.Basis != s.approved:
-		add(importCheck{Key: "basis", Title: "On the client's approved basis", State: "holds", Detail: "The file is on a " + basisLabels[s.scope.Basis] + " basis; the client's approved basis is " + basisLabels[s.approved] + ".",
+		add(importCheck{Key: "basis", Title: "On the client's approved basis", State: "holds", Detail: "The file is " + onBasis(s.scope.Basis) + "; the client's approved basis is " + basisLabels[s.approved] + ".",
 			Holds: "Comparisons, derived activity and roll-forwards across the difference, the treatments the approved basis does not support, and the statements, sign-off and publication built on the file."})
 	default:
-		add(importCheck{Key: "basis", Title: "On the client's approved basis", State: "passes", Detail: "On a " + basisLabels[s.approved] + " basis, as approved."})
+		add(importCheck{Key: "basis", Title: "On the client's approved basis", State: "passes", Detail: strings.ToUpper(onBasis(s.approved)[:1]) + onBasis(s.approved)[1:] + ", as approved."})
 	}
 	return checks
 }
@@ -290,6 +290,27 @@ func monthTitle(period string) string {
 		return period
 	}
 	return t.Format("January 2006")
+}
+
+// explainedFor is a current acceptance's explanation, while it covers every account now missing since the prior
+// month's accepted books: the accounts its scope check listed when it was given. An account those books add later is
+// not covered, and holds again.
+func explainedFor(a *fileAcceptance, missing []string) string {
+	if a == nil || !a.Current || a.Explained == "" {
+		return ""
+	}
+	for _, c := range a.Checks {
+		if c.Key != "scope" {
+			continue
+		}
+		for _, m := range missing {
+			if !slices.Contains(c.Items, m) {
+				return ""
+			}
+		}
+		return a.Explained
+	}
+	return ""
 }
 
 // holding counts the checks that hold.
@@ -350,12 +371,7 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 		}
 		out := map[string]any{"confirmed": found, "acceptance": accepted, "on": on, "can_accept": false, "checks": []importCheck{}}
 		if found {
-			// Checks shown beside a current acceptance are the ones it was given, its explanation included.
-			explained := ""
-			if accepted != nil && accepted.Current {
-				explained = accepted.Explained
-			}
-			checks := fileChecks(state, explained)
+			checks := fileChecks(state, explainedFor(accepted, state.missing))
 			out["checks"], out["holds"], out["reading"], out["map_stamp"] = checks, holding(checks), state.reading.ID, state.mapStamp
 			out["period"], out["can_accept"] = state.reading.Period, canReview(r) && on && state.scope != nil
 			if state.scope != nil {
