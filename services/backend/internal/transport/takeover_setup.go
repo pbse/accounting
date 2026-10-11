@@ -94,6 +94,10 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 	case check.Companies[0].State != "active":
 		problems = append(problems, "Reconnect "+check.Companies[0].Provider+": its connection is "+strings.ReplaceAll(check.Companies[0].State, "_", " ")+".")
 	}
+	// A ledger that reports another currency or fiscal year than the confirmed profile is a question answered first.
+	if profile.State == "differs" {
+		problems = append(problems, profile.Question()+" on the client's page.")
+	}
 	if !slices.ContainsFunc(check.Procedures, func(p struct{ Kind, Method string }) bool { return p.Kind == "basis" && p.Method != "" }) {
 		problems = append(problems, "Record the client's accounting basis under Approved procedures and client overrides.")
 	}

@@ -216,4 +216,10 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	if len(setup["problems"].([]any)) != 0 || content["books"] != "files" || content["profile"].(map[string]any)["currency"] != "GBP" {
 		t.Fatalf("a file-only client is taken over with its profile: %v", setup)
 	}
+	// A ledger connected later that reports dollars is a question the takeover waits on.
+	_, err = db.Exec(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,home_currency,fiscal_year_start) VALUES($1,$2,'Birch Ltd','fixture','active',$3,now(),'88','USD',4)`, birch, org, rand.Text())
+	must(err)
+	if p := call("user_a", partner, "GET", takeover, nil, 200)["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "its connected ledger reports USD") {
+		t.Fatalf("a takeover waits on a ledger that differs: %v", p)
+	}
 }
