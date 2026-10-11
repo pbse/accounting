@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"close.local/backend/internal/wf"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -155,6 +156,12 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	must(db.QueryRow(`SELECT finished_at IS NOT NULL,checked,pending FROM books_parity ORDER BY id DESC LIMIT 1`).Scan(&finished, &recorded, &pending))
 	if !finished || recorded < 4 || pending != 0 {
 		t.Fatalf("a parity run is recorded, with every capture's version written: %v %d %d", finished, recorded, pending)
+	}
+	// The run decides the readers' gate for its build.
+	var gated bool
+	must(db.QueryRow(`SELECT EXISTS(SELECT 1 FROM books_record_gate g WHERE g.build=$1 AND g.run=(SELECT max(id) FROM books_parity))`, wf.CodeVersion).Scan(&gated))
+	if !gated {
+		t.Fatal("the latest run decides its build's gate")
 	}
 	// Once the readers would read a capture differently, the parity check names it.
 	_, err = db.Exec(`UPDATE quickbooks_snapshots SET payload=jsonb_set(payload,'{reports,TrialBalance,Rows,Row,0,ColData,1,value}','"1500.26"') WHERE id=$1`, readable)

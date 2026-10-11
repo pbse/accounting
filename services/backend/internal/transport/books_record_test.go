@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"close.local/backend/internal/wf"
 )
@@ -36,9 +35,8 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	must(err)
 	var closeID, connection, evidence string
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Record client','2026-09') RETURNING id::text`, org).Scan(&closeID))
-	var parity int64
 	defer func() {
-		db.Exec(`DELETE FROM books_parity WHERE id=$1`, parity)
+		db.Exec(`DELETE FROM books_record_gate WHERE build=$1`, wf.CodeVersion)
 		db.Exec(`DELETE FROM books_lines WHERE version_id IN (SELECT id FROM books_versions WHERE organization_id=$1)`, org)
 		db.Exec(`DELETE FROM books_versions WHERE organization_id=$1`, org)
 		db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1`, closeID)
@@ -66,10 +64,10 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	for _, id := range []string{readable, unreadable} {
 		must(writeBooksVersion(t.Context(), db, "quickbooks", id))
 	}
-	// A clean parity run of this build checked every version so far.
-	must(db.QueryRow(`INSERT INTO books_parity(finished_at,checked,pending,through,build,mismatched) VALUES(now(),2,0,(SELECT max(id) FROM books_versions),$1,'[]') RETURNING id`, wf.CodeVersion).Scan(&parity))
-	booksRecord.use(db)
-	fresh := func() { booksRecord.mu.Lock(); booksRecord.read = time.Time{}; booksRecord.mu.Unlock() }
+	// A parity run of this build checked every version so far and found them agreeing.
+	_, err = db.Exec(`INSERT INTO books_record_gate(build,run,through,clean,finished_at) VALUES($1,1,(SELECT max(id) FROM books_versions),true,now())
+ ON CONFLICT (build) DO UPDATE SET through=EXCLUDED.through,clean=true`, wf.CodeVersion)
+	must(err)
 	month := func(id string) *fluxMonth {
 		t.Helper()
 		m, _, _, err := captureMonth(t.Context(), db, "quickbooks", id)
@@ -86,7 +84,6 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	}
 
 	t.Setenv("BOOKS_RECORD_READERS", "month_books")
-	fresh()
 	fromCapture, err := readLedgerMonth(month(readable))
 	must(err)
 	fromRecord, err := recordBooks(t.Context(), db, month(readable))
@@ -112,9 +109,8 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	}
 	// Switched on, a parity run that found a disagreement verifies nothing: the capture is read.
 	t.Setenv("BOOKS_RECORD_READERS", "month_books")
-	_, err = db.Exec(`UPDATE books_parity SET mismatched='["quickbooks capture 1: the figures differ"]' WHERE id=$1`, parity)
+	_, err = db.Exec(`UPDATE books_record_gate SET clean=false WHERE build=$1`, wf.CodeVersion)
 	must(err)
-	fresh()
 	if b, err := recordBooks(t.Context(), db, month(readable)); err != nil || b.Balances["1"].FloatString(2) != "1500.25" {
 		t.Fatalf("an unclean run verifies nothing: %v %v", b, err)
 	}

@@ -489,7 +489,15 @@ func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			readers = append(readers, name)
 		}
 	}
-	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity, "build": wf.CodeVersion, "readers": readers})
+	// The gate the readers switched on read by: how far the record is verified for this build, while it agreed.
+	var gate json.RawMessage
+	if err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('through',through,'clean',clean,'finished_at',finished_at) FROM books_record_gate WHERE build=$1),'null'::jsonb)`, wf.CodeVersion).Scan(&gate)
+	}); err != nil {
+		adminFirmProblem(w, err, "books read")
+		return
+	}
+	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity, "build": wf.CodeVersion, "readers": readers, "gate": gate})
 }
 
 // runBooksParity checks every version against its capture and records the run, so staff read its outcome.
@@ -509,5 +517,10 @@ func runBooksParity(ctx context.Context, db *sql.DB) error {
 	}
 	raw, _ := json.Marshal(mismatched)
 	_, err = db.ExecContext(ctx, `UPDATE books_parity SET finished_at=now(),checked=$2,mismatched=$3::jsonb WHERE id=$1`, run, checked, string(raw))
+	// The run decides the readers' gate for its build: how far the record is verified, and whether it agreed throughout.
+	if err == nil {
+		_, err = db.ExecContext(ctx, `INSERT INTO books_record_gate(build,run,through,clean,finished_at) VALUES($1,$2,$3,$4,now())
+ ON CONFLICT (build) DO UPDATE SET run=EXCLUDED.run,through=EXCLUDED.through,clean=EXCLUDED.clean,finished_at=EXCLUDED.finished_at WHERE books_record_gate.run<EXCLUDED.run`, wf.CodeVersion, run, through, len(mismatched) == 0)
+	}
 	return err
 }

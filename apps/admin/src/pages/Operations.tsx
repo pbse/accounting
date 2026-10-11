@@ -149,8 +149,10 @@ type BooksRecord = {
   pending: number;
   unreadable: number;
   build: string;
-  // readers are those switched onto the record (BOOKS_RECORD_READERS), each reading only versions a clean run verified.
+  // readers are those switched onto the record (BOOKS_RECORD_READERS); gate, how far the record is verified for this
+  // build and whether its latest run agreed: a reader switched on reads the record only while it is clean.
   readers: string[];
+  gate: { through: number; clean: boolean; finished_at: string } | null;
   parity: { checked: number; pending: number; since: number; waiting: number; mismatched: string[]; finished_at: string; build: string; later: { started_at: string; stalled: boolean } | null } | null;
 };
 
@@ -199,9 +201,11 @@ function MonthBooks() {
             </>
           )}
           <p>
-            {books.data.readers.length
-              ? `Reading from the record: ${books.data.readers.join(", ")}, for the versions the latest clean run of this build checked; the rest from their captures.`
-              : "No reader reads from the record yet: every one reads the captures."}
+            {!books.data.readers.length
+              ? "No reader is switched onto the record: every one reads the captures."
+              : books.data.gate?.clean && books.data.gate.through > 0
+                ? `Reading from the record: ${books.data.readers.join(", ")}, for the versions this build's latest run checked (through #${books.data.gate.through}); later ones from their captures.`
+                : `Switched on: ${books.data.readers.join(", ")}. Still reading the captures: ${books.data.gate ? "this build's latest run found a disagreement" : "no run of this build has finished yet"}.`}
           </p>
         </>
       )}

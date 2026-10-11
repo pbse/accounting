@@ -205,8 +205,6 @@ func openClose(ctx context.Context, tx *sql.Tx, org, entity, period string, role
 // sessionStore, when given, is the pool that holds sign-in sessions (apiWithStores keeps it apart from the firm's);
 // the attention stream rechecks a session on it. Without one the firm's pool serves, as tests and tools do.
 func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler {
-	// The month-books readers read the record only as far as the parity runs verified it.
-	booksRecord.use(db)
 	verifier := workspaceVerifier()
 	sessionDB := db
 	if len(sessionStore) > 0 && sessionStore[0] != nil {
