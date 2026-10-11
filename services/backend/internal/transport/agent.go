@@ -410,21 +410,30 @@ func normalizeFigure(s string) string {
 	negative := strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") || strings.HasPrefix(s, "-") || strings.HasPrefix(s, "−") || strings.HasSuffix(s, "-")
 	s = strings.Trim(s, "()-−$,% ")
 	s = strings.ReplaceAll(s, ",", "")
-	if s == "" {
+	if s == "" || strings.ContainsAny(s, "eE/") {
 		return ""
 	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+	// Exact decimal, never through a float: 9,999,999,999,999,999.99 is not 10,000,000,000,000,000.
+	r, ok := new(big.Rat).SetString(s)
+	if !ok {
 		return ""
 	}
 	if negative {
-		f = -f
+		r.Neg(r)
+	}
+	decimals := 0
+	if i := strings.Index(s, "."); i >= 0 {
+		decimals = len(s) - i - 1
+	}
+	out := r.FloatString(decimals)
+	if strings.Contains(out, ".") {
+		out = strings.TrimRight(strings.TrimRight(out, "0"), ".")
 	}
 	// Zero has no sign: (0.00) is the same zero as 0.00.
-	if f == 0 {
-		f = 0
+	if out == "-0" {
+		out = "0"
 	}
-	return strconv.FormatFloat(f, 'f', -1, 64) + unit
+	return out + unit
 }
 
 // valueAt resolves a JSON pointer in a decoded result, as the text the model may cite.
@@ -683,6 +692,17 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			if why := deriveSupport(s, lines[s.sentence], reads, entities, bound[s.sentence], cite); why != "" {
 				return nil, why
 			}
+			// A difference of an account row's this month and last month is that row's change, a total its drivers explain.
+			if s.derive == "difference" && len(s.of) == 2 && s.of[0].step == s.of[1].step {
+				g0, g1 := rowGroup(s.of[0].step, s.of[0].path), rowGroup(s.of[1].step, s.of[1].path)
+				if g0 == g1 && !claimOf(reads[s.of[0].step], s.of[0].path).driver {
+					a, okA := new(big.Rat).SetString(normalizeFigure(valueOf(reads[s.of[0].step], s.of[0].path)))
+					b, okB := new(big.Rat).SetString(normalizeFigure(valueOf(reads[s.of[1].step], s.of[1].path)))
+					if okA && okB {
+						sentenceTotals[s.sentence][g0] = append(sentenceTotals[s.sentence][g0], new(big.Rat).Sub(a, b))
+					}
+				}
+			}
 			for _, in := range s.of {
 				driver(s.sentence, in.step, in.path)
 				c := claimOf(reads[in.step], in.path)
@@ -769,6 +789,14 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	// place and a variance in another, so each place needs a field that fits it, and each money field must fit one.
 	remainderAt := make([]map[string]int, len(lines))
 	for i, line := range lines {
+		// The rows the sentence cites, by name: a payee sharing a client's name is that row.
+		rows := map[string]bool{}
+		for _, m := range sentenceMoney[i] {
+			rows[strings.ToLower(m.claim.label)] = true
+		}
+		for _, c := range sentenceClaims[i] {
+			rows[strings.ToLower(c.label)] = true
+		}
 		var movedTo []movedLevel
 		totalAt := map[string]int{}
 		remainderAt[i] = totalAt
@@ -782,7 +810,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 					continue
 				}
 				candidates++
-				why := checkClaim(line, o, m.claim, m.got, entities)
+				why := checkClaim(line, o, m.claim, m.got, entities, rows)
 				if why == "" {
 					held, used[j] = true, true
 					if d := o.direction(); (d == "rise-to" || d == "fall-to") && m.claim.kind != "change" {
@@ -840,8 +868,13 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		// A client the sentence names must be one its cited fields are of: "Birch and Bluegrass each had 21,780.00"
 		// needs Birch's figure too.
 		if len(sentenceClients[i]) > 0 {
+			cited := map[string]bool{}
+			for _, c := range sentenceClaims[i] {
+				cited[strings.ToLower(c.label)] = true
+			}
 			for _, e := range clientsNamed(lines[i], entities) {
-				if !sentenceClients[i][strings.ToLower(e)] {
+				// A cited row's own name (a payee that shares a client's name) is the row, not that client.
+				if !sentenceClients[i][strings.ToLower(e)] && !cited[strings.ToLower(e)] {
 					return nil, "the sentence names " + e + ", but nothing it cites is " + e + "'s"
 				}
 			}
@@ -1499,4 +1532,10 @@ func fieldHref(read agentRead, path string) string {
 		}
 	}
 	return href
+}
+
+// valueOf is a read's value at a pointer, or "" when it has none.
+func valueOf(read agentRead, path string) string {
+	v, _ := valueAt(read.value, path)
+	return v
 }

@@ -382,6 +382,21 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Marketing may have raised revenue, which rose 4,940.00.", e("t6", 0, "/rows/0/change", "4940.00"))
 	ok("The plan has cash at 23,400.00 forecast for that week.", e("t30", 0, "/weeks/0/closing", "23400.00"))
 
+	// Round eighteen: a derived account change is a total; exact decimals; a payee sharing a client's name; May the month.
+	reads["t42"] = read(`{"state":"ready","changes":[{"account":"Revenue","this_month":"128400.00","last_month":"123460.00","change":"4940.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Revenue rose 4,940.00, driven by new patients at 3,000.00.", "account for 3000.00 of 4940.00",
+		derived(0, "difference", "4940.00", "t42", "/changes/0/this_month", "t42", "/changes/0/last_month"), e("t42", 0, "/changes/0/new/0/this_month", "3000.00"))
+	if normalizeFigure("9,999,999,999,999,999.99") == normalizeFigure("10,000,000,000,000,000") || normalizeFigure("(0.00)") != "0" || normalizeFigure("1,250.50") != "1250.5" {
+		t.Fatal("figures are normalized exactly, never through a float")
+	}
+	reads["t43"] = read(`{"currency":"USD","lines":[{"name":"Big","amount":"9999999999999999.99"},{"name":"Zero","amount":"0.00"}]}`, "Statement", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Big and zero total 10,000,000,000,000,000.00.", "not 10000000000000000.00", derived(0, "sum", "10000000000000000.00", "t43", "/lines/0/amount", "t43", "/lines/1/amount"))
+	reads["t44"] = read(`{"rows":[{"account":"Revenue","change":"3000.00","drivers":[{"payee":"Birch Dental","change":"3000.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	ok("Revenue rose 3,000.00, all of it from Birch Dental up 3,000.00.", e("t44", 0, "/rows/0/change", "3000.00"), e("t44", 0, "/rows/0/drivers/0/change", "3000.00"))
+	reads["t45"] = read(`{"rows":[{"account":"Revenue","change":"4940.00"}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-05")
+	rejected("May bookings drove revenue, which rose 4,940.00.", "cause the reads do not show", e("t45", 0, "/rows/0/change", "4940.00"))
+	ok("Bookings may have driven revenue, which rose 4,940.00 in May.", e("t45", 0, "/rows/0/change", "4940.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

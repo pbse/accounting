@@ -418,7 +418,9 @@ var (
 	// Words that assert a cause, which needs causal evidence or a hedge. "Driven by", "from" and "including" attribute
 	// a change to its drivers instead, which must add up or name the rest.
 	claimCausal = regexp.MustCompile(`\b(because|due to|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|on the back of)\b`)
-	claimHedge  = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
+	claimHedge  = regexp.MustCompile(`\b(might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
+	// "may" hedges only as the modal verb, never as the month May.
+	claimMayModal = regexp.MustCompile(`\bmay\b|^May\s+(?:be|have|reflect|also|well|not|indicate|suggest|explain)\b|[.;:]\s*May\s+(?:be|have|reflect|also|well|not|indicate|suggest|explain)\b`)
 	// The remainder named: words that state what is left unexplained, not qualifiers ("including", "mostly").
 	claimRemainder = regexp.MustCompile(`\b(the rest|remainder|remaining|unexplained|unattributed|not explained|unaccounted|other changes|other movements|everything else)\b`)
 	// Words that say a computed figure is a difference.
@@ -702,7 +704,7 @@ func introduced(line string, o occurrence, qualifier *regexp.Regexp) bool {
 
 // checkClaim holds one figure of a sentence to the field it cites. It returns why the sentence misstates the field,
 // or "" when the sentence says what the field measures. got is the field's value; o is where the sentence states it.
-func checkClaim(line string, o occurrence, c claim, got string, entities []string) string {
+func checkClaim(line string, o occurrence, c claim, got string, entities []string, rows map[string]bool) string {
 	lowerLine, lowerClause := strings.ToLower(line), strings.ToLower(o.clause)
 	// What it measures: the metric named nearest the figure in its clause (before it, else after), else in the
 	// sentence, must be the field's; "net income is 8,000 versus receivables at 8,000" names two.
@@ -825,7 +827,8 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			named = clientsNamed(line, entities)
 		}
 		for _, e := range named {
-			if !isSameClient(e, c.entity) {
+			// A payee or customer the sentence cites may share a client's name ("Birch Dental" paid Bluegrass).
+			if !isSameClient(e, c.entity) && !rows[strings.ToLower(e)] {
 				return "the sentence gives " + o.normalized + " to " + e + ", but the cited figure is " + c.entity + "'s"
 			}
 		}
@@ -905,7 +908,7 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 		}
 		// The hedge qualifies the cause itself: in the clause up to the connective ("may be due to", "possibly
 		// because of"), not after it ("because of a campaign which may end soon").
-		if claimHedge.MatchString(lower[clauseStart:at[1]]) {
+		if hedged(line[clauseStart:at[1]]) {
 			continue
 		}
 		// The cause is what follows the connective in its clause, or for a causal verb what precedes it, and the effect
@@ -1655,4 +1658,10 @@ func effectNamed(effect, passage string, claims map[int]claim) bool {
 		}
 	}
 	return false
+}
+
+// hedged says whether a text qualifies what it states as a possibility ("may be due to", "possibly because"); the
+// month May is not a hedge.
+func hedged(text string) bool {
+	return claimHedge.MatchString(strings.ToLower(text)) || claimMayModal.MatchString(text)
 }
