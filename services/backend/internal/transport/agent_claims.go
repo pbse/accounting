@@ -381,7 +381,7 @@ var (
 	claimCausal    = regexp.MustCompile(`\b(because|due to|driven by|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|led by|on the back of)\b`)
 	claimHedge     = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
 	// The remainder named: words that state what is left unexplained, not qualifiers ("including", "mostly").
-	claimRemainder = regexp.MustCompile(`\b(remainder|rest|other|others|unexplained|unattributed|remaining|not explained|unaccounted)\b`)
+	claimRemainder = regexp.MustCompile(`\b(the rest|remainder|remaining|unexplained|unattributed|not explained|unaccounted|other changes|other movements|everything else)\b`)
 	// Words that say a computed figure is a difference.
 	claimDifferenceSaid = regexp.MustCompile(`\b(difference|differ|differs|gap|less|leave|leaves|leaving|left|net of|minus|exceed|exceeds|short|more than|less than|over|under|after|change|changed|up|down|higher|lower|ahead|behind)\b`)
 	// Words that attribute a total to drivers, which must then add up or name the rest.
@@ -810,7 +810,9 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 				clauseEnd = b[0]
 			}
 		}
-		if claimHedge.MatchString(lower[clauseStart:clauseEnd]) {
+		// The hedge qualifies the cause itself: in the clause up to the connective ("may be due to", "possibly
+		// because of"), not after it ("because of a campaign which may end soon").
+		if claimHedge.MatchString(lower[clauseStart:at[1]]) {
 			continue
 		}
 		// The cause is what follows the connective in its clause; a cited passage or cause field must name it.
@@ -868,8 +870,13 @@ func driverMovement(read agentRead, path string) (string, *big.Rat, bool) {
 // drivers of the same row whose movements do not add up to it, it must say what remains. The total is the row's cited
 // change that is not a driver; drivers may offset (+500 and −400 explain a net 100). Each row is held on its own, so a
 // second total in the sentence ("while expenses rose 3,100") never excuses the first's missing remainder.
-func checkRemainder(line string, totals, drivers map[string][]*big.Rat, at map[string]int) string {
+func checkRemainder(line string, totals, drivers map[string][]*big.Rat, at map[string]int, labels []string) string {
 	lower := strings.ToLower(line)
+	for _, label := range labels {
+		if l := strings.ToLower(strings.TrimSpace(label)); len(l) >= 3 {
+			lower = strings.ReplaceAll(lower, l, strings.Repeat("#", len(l)))
+		}
+	}
 	if !claimCausal.MatchString(lower) && !claimAttribution.MatchString(lower) {
 		return ""
 	}

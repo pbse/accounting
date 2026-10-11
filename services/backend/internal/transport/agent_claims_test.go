@@ -306,6 +306,13 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	reads["t31"] = read(`{"publication":{"id":"6","state":"superseded"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"20100.00"},{"name":"Net income","amount":"1000.00"}]}}}`, "Published report", "read_publication", "", "")
 	ok("The report is stale; its net income figures total 21,100.00.", derived(0, "sum", "21100.00", "t31", "/pack/profit_and_loss/measures/0/amount", "t31", "/pack/profit_and_loss/measures/1/amount"))
 
+	// Round twelve: a driver's name is not the remainder; a hedge qualifies the cause, not something after it.
+	reads["t32"] = read(`{"rows":[{"account":"Revenue","change":"4940.00","drivers":[{"payee":"Other services","change":"3000.00"},{"payee":"Hygiene","change":"1000.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Revenue rose 4,940.00, including Other services up 3,000.00 and Hygiene up 1,000.00.", "account for 4000.00 of 4940.00",
+		e("t32", 0, "/rows/0/change", "4940.00"), e("t32", 0, "/rows/0/drivers/0/change", "3000.00"), e("t32", 0, "/rows/0/drivers/1/change", "1000.00"))
+	rejected("Revenue rose 4,940.00 because of a marketing campaign which may end soon.", "cause the reads do not show", e("t6", 0, "/rows/0/change", "4940.00"))
+	ok("Revenue rose 4,940.00, possibly because of a marketing campaign.", e("t6", 0, "/rows/0/change", "4940.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

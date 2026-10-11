@@ -855,7 +855,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				drivers[group] = append(drivers[group], rows[k])
 			}
 		}
-		if why := checkRemainder(lines[i], sentenceTotals[i], drivers, remainderAt[i]); why != "" {
+		labels := []string{}
+		for _, c := range sentenceClaims[i] {
+			labels = append(labels, c.label)
+		}
+		if why := checkRemainder(lines[i], sentenceTotals[i], drivers, remainderAt[i], labels); why != "" {
 			return nil, why
 		}
 	}
