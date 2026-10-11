@@ -286,33 +286,39 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	var prior bookfiles.Layout
 	json.Unmarshal(priorLayout, &prior)
 	if prior.Ledger() {
+		// Derived now, along the chain of ledger months before it, so a change further back holds each month after it.
+		f, ok, err := acceptedFileBooks(ctx, q, org, name, priorAcceptance, priorImport)
+		if err != nil {
+			return s, false, err
+		}
+		balances, names = f.balances, map[string]string{}
+		for key, a := range f.accounts {
+			names[key] = a.Name
+		}
+		switch {
+		case !ok:
+			s.priorUnavailable = "its accepted reading is no longer current"
+		case f.underived != "":
+			s.priorUnavailable = f.underived
+		}
 		var rawAccounts, rawBalances []byte
 		switch err := q.QueryRowContext(ctx, `SELECT accounts,balances FROM books_versions WHERE source='files' AND source_id=$1 ORDER BY books_versions.id DESC LIMIT 1`, priorAcceptance).Scan(&rawAccounts, &rawBalances); {
-		case err == nil:
-			var accounts map[string]booksAccount
-			balances, names = map[string]string{}, map[string]string{}
-			if json.Unmarshal(rawAccounts, &accounts) != nil || json.Unmarshal(rawBalances, &balances) != nil {
-				return s, false, fmt.Errorf("the prior month's books version is unreadable")
-			}
-			for key, a := range accounts {
-				names[key] = a.Name
-			}
-		case err != sql.ErrNoRows:
+		case err == sql.ErrNoRows:
+		case err != nil:
 			return s, false, err
 		default:
-			f, ok, err := acceptedFileBooks(ctx, q, org, name, priorAcceptance, priorImport)
-			if err != nil {
-				return s, false, err
+			var accounts map[string]booksAccount
+			stored := map[string]string{}
+			if json.Unmarshal(rawAccounts, &accounts) != nil || json.Unmarshal(rawBalances, &stored) != nil {
+				return s, false, fmt.Errorf("the prior month's books version is unreadable")
 			}
-			balances, names = f.balances, map[string]string{}
-			for key, a := range f.accounts {
+			// Its books as accepted are what it closed at; derived otherwise now, they are to be accepted again first.
+			if s.priorUnavailable == "" && !sameAmounts(stored, f.balances) {
+				s.priorUnavailable = "its balances changed since it was accepted, as the months before it changed: accept it again first"
+			}
+			balances, names = stored, map[string]string{}
+			for key, a := range accounts {
 				names[key] = a.Name
-			}
-			switch {
-			case !ok:
-				s.priorUnavailable = "its accepted reading is no longer current"
-			case f.underived != "":
-				s.priorUnavailable = f.underived
 			}
 		}
 		order = slices.Sorted(maps.Keys(balances))
@@ -565,12 +571,16 @@ func rollForward(s fileState) importCheck {
 	// comparison with the prior month.
 	// The openings roll only from the prior month's books: an accepted file that only supplements a ledger's is not.
 	compared := s.prior != "" && s.priorIsBooks
-	if compared && s.priorUnavailable != "" {
-		check.State, check.Detail = "holds", monthTitle(s.prior)+"'s accepted ledger has no balances to roll from: "+strings.TrimSuffix(s.priorUnavailable, ".")+"."
-		return check
-	}
 	if unread != "" && (movementColumn && openingColumn || compared) {
 		check.State, check.Detail = "holds", "An opening or movement cannot be read as exact, so the month's openings are not checked ("+unread+")."
+		return check
+	}
+	// Prior balances that cannot be had hold the comparison; the file's own arithmetic is still said.
+	if compared && s.priorUnavailable != "" {
+		check.State, check.Detail = "holds", monthTitle(s.prior)+"'s accepted ledger has no balances to roll from: "+strings.TrimSuffix(s.priorUnavailable, ".")+"."
+		if len(differences) > 0 {
+			check.Detail += " Besides, " + strings.Join(differences, "; ") + "."
+		}
 		return check
 	}
 	// With no accepted prior month the openings are not compared; the file's own arithmetic still is.
@@ -1048,4 +1058,23 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 		writeFileVersionsNow(r.Context(), db, org, name, state.reading.Period)
 		jsonReply(w, 200, map[string]any{"id": accepted, "checks": checks, "holds": holding(checks)})
 	})
+}
+
+// sameAmounts says whether two sets of balances by key hold the same keys at the same exact amounts.
+func sameAmounts(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, x := range a {
+		y, ok := b[key]
+		if !ok {
+			return false
+		}
+		u, okU := new(big.Rat).SetString(cmp.Or(x, "0"))
+		v, okV := new(big.Rat).SetString(cmp.Or(y, "0"))
+		if !okU || !okV || u.Cmp(v) != 0 {
+			return false
+		}
+	}
+	return true
 }
