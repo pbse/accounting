@@ -59,6 +59,16 @@ func movementHeld(l bookfiles.Line) string {
 	return ""
 }
 
+// graver is the graver of two reasons a movement is held: unreadable, then rounded, then a formula, which an
+// attestation can release; so an account split over rows is held for the worst of them.
+func graver(a, b string) string {
+	rank := map[string]int{"": 0, "formula": 1, "rounded": 2, "unreadable": 3}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
+}
+
 // sameMapping says whether two entries map an account alike, whichever readings they were confirmed on.
 func sameMapping(a, b mappedAccount) bool {
 	return a.Class == b.Class && a.Type == b.Type && a.Name == b.Name && a.Number == b.Number
@@ -206,7 +216,7 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 				if m, ok := l.Others[bookfiles.Movement]; ok {
 					accounts[at].Movement = addAmounts(cmp.Or(accounts[at].Movement, "0"), m)
 				}
-				accounts[at].MovementHeld = cmp.Or(accounts[at].MovementHeld, movementHeld(l))
+				accounts[at].MovementHeld = graver(accounts[at].MovementHeld, movementHeld(l))
 				continue
 			}
 			seen[key] = len(accounts)
