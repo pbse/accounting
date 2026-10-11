@@ -4438,3 +4438,12 @@ The user decided how payroll recording is approved: one explicit review action m
 
 Tests: `TestPayrollDraftsNeedTheFirmsPayrollProcedure` prepares a payroll draft through the worker (checks recorded, the ledger ones unavailable without a capture), refuses approval with one confirmation, approves with both and finds them recorded with the exact summary and ledger page, and blocks a second draft for the same pay dates as a duplicate; `TestClearingActivityFindsBookedPayrollAndTheClearingDebits` reads clearing debits (net of a credit purchase, other months ignored), finds a journal that already moved wages out of clearing, and makes an unreadable row unavailable. The payroll, review, standing, posting, independence, basis and seed tests passed on a fresh local PostgreSQL; the frontend type-checks.
 
+## 2026-10-11 — Slice 6 is prepared for execution (B12)
+
+The user decided Claude owns slice 6's commands, fixtures, runs, result capture, failure investigation and accounting-review package, and that slice 6 is marked prepared for execution, with named dependencies, until the runs complete. Added:
+- `cmd/provider-check`: read-only; one structured call per configured model route, the OCR route (Gemini, when configured) reading a rendered page of known text exactly, and Krith's sender verified through `delivery.VerifyKrithSender` without sending. Unconfigured providers are dependencies, never passes.
+- `scripts/evidence-run.sh`: fresh local databases; provider checks, the acceptance corpus with recorded answers and with the live model, and the chat golden-set replay, recorded with a manifest in a dated directory outside the repository.
+- [slice 6 evidence](slice6-evidence.md): the B12 evidence matrix and exactly what the user must provide.
+
+Run here (revision before this change's merge, local PostgreSQL, no credentials): providers all dependencies; acceptance with recorded answers passed; acceptance with the live model and the golden-set replay recorded as dependencies (models not configured). `TestTheOCRPageIsAPNGGeminiAccepts` checks the rendered page, and its image was inspected by eye as legible. No live model, provider or accountant result is claimed.
+

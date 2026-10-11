@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -125,6 +126,36 @@ func VerifySender(ctx context.Context, c Connection) error {
 		return fmt.Errorf("Disable domain click tracking before sending private request links.")
 	}
 	return nil
+}
+
+// VerifyKrithSender checks Krith's own sender (PLATFORM_EMAIL_KEY, CLIENT_EMAIL_ADDRESS) as VerifySender checks a firm's,
+// finding its domain in the account by name; it reads only and sends nothing.
+func VerifyKrithSender(ctx context.Context) error {
+	from, key := KrithAddress(), os.Getenv("PLATFORM_EMAIL_KEY")
+	address, err := mail.ParseAddress(from)
+	if err != nil {
+		return fmt.Errorf("CLIENT_EMAIL_ADDRESS is not an email address.")
+	}
+	_, domain, _ := strings.Cut(address.Address, "@")
+	raw, status, err := request(ctx, key, "GET", "/domains", nil, "")
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("Resend listing the domains returned HTTP %d. Check the key's domain access.", status)
+	}
+	var list struct {
+		Data []struct{ ID, Name string }
+	}
+	if json.Unmarshal(raw, &list) != nil {
+		return fmt.Errorf("Resend's domain list could not be read.")
+	}
+	for _, d := range list.Data {
+		if strings.EqualFold(d.Name, domain) {
+			return VerifySender(ctx, Connection{Key: key, From: from, DomainID: d.ID})
+		}
+	}
+	return fmt.Errorf("The sender's domain %s is not in this Resend account.", domain)
 }
 
 // send posts one email under an idempotency key, which Resend honours for 24 hours.
