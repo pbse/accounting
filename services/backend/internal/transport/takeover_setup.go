@@ -101,9 +101,9 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 	case len(check.Companies) == 0 && disconnected != "":
 		problems = append(problems, "The client's "+disconnected+" connection was disconnected: reconnect it on the client's page, as the takeover confirms where its books are read from.")
 	case len(check.Companies) == 0 && profile.State == "confirmed":
-		// Books that come as files are read from the month's file: the takeover waits until one is read.
+		// Books that come as files become a month's books with months on files: until then the takeover waits.
 		content["books"] = "files"
-		problems = append(problems, "Its books come as files: the takeover waits for this month's Trial Balance to be read from its file on the client's page.")
+		problems = append(problems, "Its books come as files. A month's books are not read from a file yet, so its takeover waits until they are.")
 	case len(check.Companies) == 0:
 		problems = append(problems, "Connect the client's QuickBooks or Xero company, or, if its books come as files, confirm its currency and fiscal year on the client's page: the takeover confirms where its books are read from.")
 	case len(check.Companies) > 1:

@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"close.local/backend/internal/bookfiles"
 	"close.local/backend/internal/llm"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
@@ -229,6 +230,7 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 	registerPlanning(mux, db)
 	registerRoster(mux, db)
 	registerClients(mux, db)
+	registerImports(mux, db)
 	registerClientProfiles(mux, db)
 	registerBooksSources(mux, db)
 	registerLedgers(mux, db)
@@ -661,7 +663,12 @@ func idempotent(db *sql.DB, next http.Handler) http.Handler {
 			problem(w, 422, "Use an Idempotency-Key of 1–255 visible ASCII characters.")
 			return
 		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<20))
+		// A client's books file may be up to 50 MiB, with its form around it; other requests are far smaller.
+		limit := int64(32 << 20)
+		if strings.HasSuffix(r.URL.Path, "/client/imports") {
+			limit = bookfiles.MaxFile + (1 << 20)
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 		if err != nil {
 			problem(w, 413, "The request body is too large.")
 			return

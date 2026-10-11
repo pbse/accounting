@@ -1027,3 +1027,54 @@ body {
     grid-template-columns: auto 1fr;
   }
 }
+
+/* A client's files (features/clients/Files.tsx): the list on the Files card, and the dialog that reads one. */
+.ks-filelist {
+  list-style: none;
+  margin: var(--space-8, 8px) 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.ks-filelist .pill {
+  margin-left: 4px;
+}
+.ks-import {
+  display: grid;
+  gap: 12px;
+  max-width: 100%;
+}
+.ks-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.ks-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  overflow: auto;
+  border-collapse: collapse;
+  font-size: 12px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  border-radius: var(--radius-sm);
+}
+.ks-preview th,
+.ks-preview td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  text-align: left;
+}
+.ks-preview select {
+  font-size: 12px;
+  padding: 1px 4px;
+}
+.ks-preview tr.header td {
+  background: var(--fill);
+  font-weight: 600;
+}
+.ks-reading ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}

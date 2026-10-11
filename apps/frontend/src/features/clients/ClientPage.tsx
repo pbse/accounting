@@ -10,6 +10,7 @@ import { monthName, monthShort, useDates, useToday } from "../../data/time";
 import { ClientForm, LedgerPicker, type CatalogLedger, type LedgerChoice, type Person, type RosterEntry } from "../closes/Roster";
 import { PostingCard, QuickBooksAction, type ProductionGrant } from "./QuickBooksBooks";
 import { XeroAction, XeroPostingCard, type XeroGrant } from "./XeroBooks";
+import { FilesCard } from "./Files";
 import { workspaceRequest } from "../closes/workspace";
 
 type Books = {
@@ -90,6 +91,10 @@ type ClientRead = {
   production_grants?: ProductionGrant[];
   xero_grants?: XeroGrant[];
   profile: Profile | null;
+  // file_imports says the firm takes the client's books as files.
+  file_imports?: boolean;
+  // files is how many files the client has sent: they stay readable with file imports switched off.
+  files?: number;
   profiles: ConfirmedProfile[];
   basis: {
     method: "accrual" | "cash" | "modified_cash";
@@ -365,6 +370,7 @@ export default function ClientPage() {
           {postingConnections(client.xero.map((x) => x.id), client.xero_grants).map((id) => (
             <XeroPostingCard key={id} client={client} connection={id} onChanged={reread} />
           ))}
+          {client.whole && (client.file_imports || (client.files ?? 0) > 0) && <FilesCard key={name} client={name} />}
           <Card
             icon="history"
             tone={!roster ? "wait" : "done"}

@@ -120,7 +120,34 @@ func TestCloseDeletionRequiresPolicyAndSettledWork(t *testing.T) {
 		}
 		return n
 	}
+	// The client's books sent as files for the month, and their readings, go with it; another month's stay.
+	var monthFile, otherFile string
+	for period, id := range map[string]*string{"2026-09": &monthFile, "2026-08": &otherFile} {
+		if err = db.QueryRow(`INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,actor) VALUES('local-development',$1,$2,'tb.csv',md5(random()::text)||md5(random()::text),'x','csv','fixture') RETURNING id::text`, entity, period).Scan(id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Exec(`INSERT INTO books_layouts(organization_id,client_entity,import_id,layout,reading,reason,actor) VALUES('local-development',$1,$2::bigint,'{}','{}','Synthetic','fixture')`, entity, *id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer db.Exec(`DELETE FROM books_layouts WHERE import_id::text=$1`, otherFile)
+	defer db.Exec(`DELETE FROM books_imports WHERE id::text=$1`, otherFile)
+	// As the client's last month, off the roster, it would leave August's file out of reach: it waits for that file.
+	json.Unmarshal(call(base+"/retention", nil, 200), &status)
+	if !strings.Contains(strings.Join(status.Blockers, " "), "delete the files it sent for other months") {
+		t.Fatalf("the last month waits for the client's other files: %v", status.Blockers)
+	}
+	var august string
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-08') RETURNING id::text`, entity).Scan(&august); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DELETE FROM client_closes WHERE id::text=$1`, august)
+	json.Unmarshal(call(base+"/retention", nil, 200), &status)
 	call(base+"/delete", map[string]any{"expected_version": status.Version, "entity": entity, "period": "2026-09", "reason_code": "retention_expired", "confirmed": true}, 200)
+	var files, readings int
+	if e := db.QueryRow(`SELECT (SELECT count(*) FROM books_imports WHERE id::text IN ($1,$2)),(SELECT count(*) FROM books_layouts WHERE import_id::text IN ($1,$2))`, monthFile, otherFile).Scan(&files, &readings); e != nil || files != 1 || readings != 1 {
+		t.Fatalf("the month's files go with it, another month's stay: %d %d %v", files, readings, e)
+	}
 	if aliases() != 2 {
 		t.Fatal("deleting a month whose retention expired keeps the client's other names")
 	}

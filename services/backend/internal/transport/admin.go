@@ -365,6 +365,7 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var suspension, runs, health, limits, pilots []byte
 	var owner string
 	var assistance int
+	var fileImports bool
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		var err error
 		if firm, err = scanFirm(tx.QueryRowContext(ctx, `SELECT `+adminFirmColumns+` FROM organizations o WHERE o.id=$1`, id)); err != nil {
@@ -378,7 +379,8 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
  (SELECT jsonb_build_object('max_closes',max_closes,'max_pending_jobs',max_pending_jobs,'max_model_calls_per_day',max_model_calls_per_day) FROM organizations WHERE id=$1),
  (SELECT support_owner FROM organizations WHERE id=$1),
  (SELECT COALESCE(sum(x.minutes),0) FROM close_effort_entries x LEFT JOIN client_closes c ON c.id=x.close_id WHERE x.activity='assistance' AND COALESCE(c.organization_id,x.organization_id)=$1),
- COALESCE((SELECT jsonb_object_agg(connector,enabled) FROM (SELECT DISTINCT ON (connector) connector,enabled FROM connector_pilots WHERE organization_id=$1 ORDER BY connector,id DESC) p),'{}'::jsonb)`, id).Scan(&suspension, &runs, &health, &limits, &owner, &assistance, &pilots)
+ (SELECT file_imports FROM organizations WHERE id=$1),
+ COALESCE((SELECT jsonb_object_agg(connector,enabled) FROM (SELECT DISTINCT ON (connector) connector,enabled FROM connector_pilots WHERE organization_id=$1 ORDER BY connector,id DESC) p),'{}'::jsonb)`, id).Scan(&suspension, &runs, &health, &limits, &owner, &assistance, &fileImports, &pilots)
 	})
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "local-development") {
 		problem(w, 404, "Firm not found.")
@@ -403,7 +405,7 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			connectors[l.Connector] = c
 		}
 	}
-	jsonReply(w, 200, map[string]any{"firm": firm, "last_suspension": json.RawMessage(suspension), "runs": json.RawMessage(runs), "health": json.RawMessage(health), "limits": json.RawMessage(limits), "support_owner": owner, "assistance_minutes": assistance, "connectors": connectors})
+	jsonReply(w, 200, map[string]any{"firm": firm, "last_suspension": json.RawMessage(suspension), "runs": json.RawMessage(runs), "health": json.RawMessage(health), "limits": json.RawMessage(limits), "support_owner": owner, "assistance_minutes": assistance, "connectors": connectors, "file_imports": fileImports})
 }
 
 // RunHeartbeat records every 30 seconds that loop is alive, for the admin overview, with detail about how it is set up
