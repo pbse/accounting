@@ -690,3 +690,13 @@ func TestRangesAndUnnumberedRows(t *testing.T) {
 		t.Fatalf("a row numbered by its cells: %+v %v", file.Tables, err)
 	}
 }
+
+// A total adds its columns as written, a negative amount included, while the reading counts it on its side.
+func TestATotalOfSignedColumns(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nContra,-10.00,\nCapital,,90.00\nTOTAL,90.00,90.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	reading := layout.Read(file.Tables[0])
+	if len(reading.Problems) != 0 || !reading.Balanced || reading.Debits != "100" || reading.Credits != "100" {
+		t.Fatalf("signed columns and their total: %+v", reading)
+	}
+}

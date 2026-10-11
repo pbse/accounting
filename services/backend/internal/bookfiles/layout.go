@@ -196,8 +196,10 @@ type Line struct {
 	// Cells is where each value of the row was read, by what the column holds; Ref is the cell the balance came from
 	// (the balance column's, else the debit's, else the credit's), or the row's first cell when it has no amount.
 	Cells map[Meaning]string `json:"cells"`
-	// Debit and Credit are the row's two columns as written, in a two-column layout, for checking totals by column.
-	Debit, Credit *big.Rat `json:"-"`
+	// Debit and Credit are the row's two sides, a negative amount in one column counted on the other; writtenDebit and
+	// writtenCredit are its two columns exactly as written, which a total row adds up.
+	Debit, Credit               *big.Rat `json:"-"`
+	writtenDebit, writtenCredit *big.Rat
 	// Amount is Balance as an exact decimal, for storing.
 	Amount string `json:"balance"`
 	// Other balances the file carries for the account, by meaning, and those of them not exact to the cent.
@@ -265,8 +267,8 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 			}
 		}
 		if debit != nil && credit != nil {
-			debits, credits := columnSums(lines[:i])
-			section, sectionCredits := columnSums(lines[since:i])
+			debits, credits := writtenSums(lines[:i])
+			section, sectionCredits := writtenSums(lines[since:i])
 			if (debit.Cmp(debits) == 0 && credit.Cmp(credits) == 0) || (debit.Cmp(section) == 0 && credit.Cmp(sectionCredits) == 0) {
 				return nil
 			}
@@ -280,7 +282,7 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 	from := coveredFrom(lines, i)
 	if debit != nil && credit != nil {
 		// Written as two columns, each column must equal its column's sum over the rows it totals.
-		debits, credits := columnSums(lines[from:i])
+		debits, credits := writtenSums(lines[from:i])
 		if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
 			return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows it totals come to %s and %s", t.Row, t.Label(), exact(debit), exact(credit), exact(debits), exact(credits))}
 		}
@@ -471,6 +473,11 @@ func (l Layout) Read(t Table) Reading {
 				}
 				// A Dr or Cr marker says the side itself, whichever column the amount sits in: its value is then already
 				// signed as balances are, a credit negative.
+				if meaning == Debit {
+					line.writtenDebit = a.Value
+				} else if meaning == Credit {
+					line.writtenCredit = a.Value
+				}
 				switch {
 				case a.Side != "" && (meaning == Debit || meaning == Credit):
 					if a.Value.Sign() >= 0 {
@@ -666,4 +673,27 @@ func rowList(rows []int) string {
 		shown = append(shown, strconv.Itoa(r))
 	}
 	return strings.Join(shown, ", ")
+}
+
+// writtenSums is the posting rows' debit and credit columns summed exactly as written, signs included, as a total row
+// adds them up (a row in a signed-balance layout counts on its balance's side).
+func writtenSums(lines []Line) (*big.Rat, *big.Rat) {
+	debits, credits := new(big.Rat), new(big.Rat)
+	for _, l := range lines {
+		switch {
+		case l.Kind != Posting:
+		case l.writtenDebit != nil || l.writtenCredit != nil:
+			if l.writtenDebit != nil {
+				debits.Add(debits, l.writtenDebit)
+			}
+			if l.writtenCredit != nil {
+				credits.Add(credits, l.writtenCredit)
+			}
+		case l.Balance.Sign() > 0:
+			debits.Add(debits, l.Balance)
+		default:
+			credits.Sub(credits, l.Balance)
+		}
+	}
+	return debits, credits
 }
