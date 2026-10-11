@@ -261,8 +261,8 @@ func (s *server) run(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) execute(ctx context.Context, in runRequest) (result llm.Response, runErr error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	dir, err := os.MkdirTemp("", "context-machine-")
 	if err != nil {
 		return llm.Response{}, err
@@ -341,15 +341,26 @@ func (s *server) execute(ctx context.Context, in runRequest) (result llm.Respons
 	if proxy.refused.Load() {
 		return llm.Response{}, llm.ErrRefused
 	}
-	if err != nil {
-		return llm.Response{}, errors.New("CLI failed")
+	if ctx.Err() != nil {
+		return llm.Response{}, context.Cause(ctx)
 	}
-	text, usage, err := parseOutput(in.Model, output.data)
+	text, usage := "", llm.Usage{}
 	if err != nil {
+		err = errors.New("CLI failed")
+	} else {
+		text, usage, err = parseOutput(in.Model, output.data)
+	}
+	if err != nil {
+		if status := proxy.upstreamStatus.Load(); status != 0 {
+			return llm.Response{}, &llm.ServiceError{Status: int(status)}
+		}
+		if proxy.invalidResponse.Load() {
+			return llm.Response{}, llm.ErrIncomplete
+		}
 		return llm.Response{}, err
 	}
 	if ctx.Err() != nil {
-		return llm.Response{}, ctx.Err()
+		return llm.Response{}, context.Cause(ctx)
 	}
 	calls := int(proxy.calls.Load())
 	if calls < 1 {
@@ -361,14 +372,14 @@ func (s *server) execute(ctx context.Context, in runRequest) (result llm.Respons
 type limitedOutput struct {
 	mu     sync.Mutex
 	data   []byte
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 }
 
 func (b *limitedOutput) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(b.data)+len(p) > 1<<20 {
-		b.cancel()
+		b.cancel(llm.ErrLimit)
 		return 0, llm.ErrLimit
 	}
 	b.data = append(b.data, p...)

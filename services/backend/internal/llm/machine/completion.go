@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -84,7 +85,7 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		http.Error(w, "completion failed", 502)
+		completionFailure(w, err)
 		return
 	}
 	if in.Request.Tools != nil {
@@ -95,19 +96,19 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 		d := json.NewDecoder(strings.NewReader(out.Text))
 		d.DisallowUnknownFields()
 		if d.Decode(&proposal) != nil || d.Decode(new(any)) != io.EOF {
-			http.Error(w, "invalid completion", 502)
+			completionFailure(w, llm.ErrIncomplete)
 			return
 		}
 		out.Text, out.ToolCalls = proposal.Text, proposal.Calls
 	}
 	out.ID = rand.Text()
 	if llm.ValidateCompletion(out, in.Request) != nil {
-		http.Error(w, "invalid completion", 502)
+		completionFailure(w, llm.ErrIncomplete)
 		return
 	}
 	raw, err := json.Marshal(llm.CompletionResponse{Version: 1, Status: "completed", Scope: in.Scope, Response: out})
 	if err != nil || int64(len(raw)) > in.Request.MaxResponseBytes {
-		http.Error(w, "completion exceeded response limit", 502)
+		completionFailure(w, llm.ErrLimit)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -199,4 +200,21 @@ func completionCommand(agent string, args []string, dir string, schema json.RawM
 		clean = append(clean[:len(clean)-1], "--output-schema", path, "-")
 	}
 	return clean, nil
+}
+
+// All post-execution errors cross the private gateway as a bounded code and
+// status. Provider/CLI text is never returned or logged.
+func completionFailure(w http.ResponseWriter, err error) {
+	code, status := llm.FailureCode(err)
+	log.Printf("context_machine_completion_failure code=%s status=%d", code, status)
+	w.Header().Set("X-Context-Machine-Failure", code)
+	if code == "timeout" {
+		status = 504
+	}
+	switch status {
+	case 400, 401, 403, 422, 429, 503, 504:
+	default:
+		status = 502
+	}
+	http.Error(w, "completion failed", status)
 }
