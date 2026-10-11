@@ -382,8 +382,11 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 				Input struct{ Currency string } `json:"input"`
 			}
 			json.Unmarshal(paperRaw, &draft)
+			// The organisation is the one the posting goes to: the connection the month's books were captured from, as
+			// its grant is chosen, else the client's newest working one.
 			var keeps sql.NullString
-			if err := db.QueryRowContext(r.Context(), `SELECT x.home_currency FROM xero_connections x JOIN client_closes c ON c.id::text=$1 WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active' ORDER BY x.id DESC LIMIT 1`, closeID).Scan(&keeps); err != nil && err != sql.ErrNoRows {
+			if err := db.QueryRowContext(r.Context(), `SELECT x.home_currency FROM xero_connections x WHERE x.id=COALESCE((SELECT s.connection_id FROM xero_snapshots s WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),
+ (SELECT x.id FROM xero_connections x JOIN client_closes c ON c.id::text=$1 WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active' ORDER BY x.id DESC LIMIT 1))`, closeID).Scan(&keeps); err != nil && err != sql.ErrNoRows {
 				problem(w, 503, "Posting status unavailable.")
 				return
 			}
