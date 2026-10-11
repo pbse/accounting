@@ -220,12 +220,7 @@ func compiledReply(entity, period string, update int, questions []requestQuestio
 // was approved for is unfinished, and a consolidated request's coverage has moved only by the request's own progress.
 // A request for accounts alone covers no job, so it stays open while its coverage does.
 func requestOpen(ctx context.Context, tx *sql.Tx, closeID, requestID string) (bool, error) {
-	var open bool
-	err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN work_requests q ON q.id=rj.request_id JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=$1 AND ((j.state IN ('completed','cancelled') AND NOT `+preparation.RequestReleased+`) OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))`, requestID).Scan(&open)
-	if err == nil && open {
-		open = preparation.RequestCoverageFollows(ctx, tx, closeID, requestID) == nil
-	}
-	return open, err
+	return preparation.RequestOpen(ctx, tx, closeID, requestID)
 }
 
 // requestReplied is whether request q has a reply: answers through any of its links, or an emailed reply that used one.

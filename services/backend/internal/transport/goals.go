@@ -220,6 +220,8 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 			switch {
 			case request == nil:
 				item.Status, item.Text = "client", "Waiting on the client."
+			case request.Partial && request.Follow == "due":
+				item.Text = "The client answered part of request #" + request.ID + ". Resume now from Work, or approve a reminder for the rest on the Requests tab."
 			case request.Partial:
 				item.Text = "The client answered part of request #" + request.ID + ". Resume now from Work, or wait for the rest."
 			case request.Follow == "held":
