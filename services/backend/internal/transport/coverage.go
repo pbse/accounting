@@ -118,6 +118,43 @@ func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageV
 	if err != nil {
 		return out, err
 	}
+	// Excluding an account is the engagement's scope, not a fact about one capture: an account with no decision on this
+	// capture keeps its latest decision from an earlier capture of this month, or else from the client's latest earlier
+	// month, when that decision was an exclusion. The person sees where it came from and can change it.
+	carried := map[string]string{}
+	// Only a decision on the same ledger company counts: another company (a sandbox, another file) may give the same
+	// account ID to a different account.
+	rows, err = tx.QueryContext(ctx, `WITH cur(q,x) AS (SELECT `+captureColumns("$2")+`)
+ SELECT DISTINCT ON (b.account_id) b.account_id,b.excluded,b.reason,CASE WHEN c.id=me.id THEN '' ELSE c.period END
+ FROM coverage_bindings b JOIN client_closes c ON c.id=b.close_id JOIN client_closes me ON me.id=$1 CROSS JOIN cur
+ WHERE c.organization_id=me.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(me.organization_id,me.entity)
+ AND (c.id=me.id AND `+bindingCapture("b")+`<>$2 OR c.period<me.period)
+ AND `+captureCompany("b.snapshot_id", "b.xero_snapshot_id")+`=`+captureCompany("cur.q", "cur.x")+`
+ ORDER BY b.account_id,c.period DESC,b.id DESC`, closeID, out.SnapshotID)
+	if err != nil {
+		return out, err
+	}
+	for rows.Next() {
+		var account, reason, period string
+		var excluded bool
+		if err = rows.Scan(&account, &excluded, &reason, &period); err != nil {
+			break
+		}
+		if excluded {
+			from := "an earlier capture of this month"
+			if period != "" {
+				from = period
+			}
+			carried[account] = "Carried from " + from + ": " + reason
+		}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return out, err
+	}
 	for n := range out.Items {
 		item := &out.Items[n]
 		item.JobIDs = []string{}
@@ -140,6 +177,9 @@ func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageV
 					break
 				}
 			}
+		}
+		if reason, ok := carried[item.AccountID]; ok && bindings[item.AccountID].ID == "" {
+			item.Excluded, item.Reason, item.State = true, reason, "excluded"
 		}
 		if binding, ok := bindings[item.AccountID]; ok {
 			item.BindingID, item.JobIDs, item.Excluded, item.Reason = binding.ID, binding.Jobs, binding.Excluded, binding.Reason
@@ -403,4 +443,10 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]bool{"saved": true})
 	})
+}
+
+// captureCompany is SQL for the ledger company of a capture, given its QuickBooks and Xero snapshot ID expressions.
+func captureCompany(quickbooksSnapshot, xeroSnapshot string) string {
+	return `COALESCE((SELECT 'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id=` + quickbooksSnapshot + `),
+ (SELECT 'xero:'||s.tenant_id FROM xero_snapshots s WHERE s.id=` + xeroSnapshot + `))`
 }

@@ -4302,3 +4302,9 @@ Durable follow-through gaps found by a code read of the handoff's B04/B05/B11 se
 
 Test: `TestApprovedEmailDurableRetryAndScope` refuses a reminder while a held reply exists, seen to fail without the fix; the closest email, inbound-reply and delivery tests passed against a fresh local PostgreSQL.
 
+## 2026-10-11 — Coverage exclusions carry across captures and months (B01/B04)
+
+Slice 4 (takeover and coverage). Coverage decisions were bound to one capture, so every recapture and every new month asked again about every account the firm had excluded (accounts with no supported preparation can only be excluded, one decision each). An account with no decision on the current capture now keeps its latest decision from an earlier capture of the month, or else from the client's latest earlier month, when that decision was an exclusion; the reason says "Carried from …" and the person can change it. Only a decision on the same ledger company counts (another company, such as a sandbox, may reuse account IDs). Mappings to jobs are not carried.
+
+Test: `TestCoverageRequestsQuarantineAndResolution` recaptures after excluding two accounts: both stay excluded with the carried reason, an account never excluded still asks, and another QuickBooks company's capture carries nothing; each seen to fail without its part of the fix. The closest coverage, Xero coverage, request and readiness tests passed on a fresh local PostgreSQL.
+
