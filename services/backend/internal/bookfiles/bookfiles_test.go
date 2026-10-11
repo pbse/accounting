@@ -945,4 +945,7 @@ func TestALedgerIsReadLineByLine(t *testing.T) {
 			t.Fatalf("%v read as %q (%v), not %s", c.cell, got, err, c.want)
 		}
 	}
+	if got, err := readDate(Cell{Kind: Date, Value: "2027-01-31garbage"}, ""); err == nil {
+		t.Fatalf("a malformed stored date is no date: %q", got)
+	}
 }
