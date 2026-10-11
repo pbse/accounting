@@ -34,7 +34,7 @@ type Reading = { lines: Line[]; debits: string; credits: string; balanced: boole
 type Status = { id: string; reason: string; actor: string; at: string; balanced: boolean; problems: number };
 // CSV is how a person chose to read a CSV file; empty, as the reader read it.
 type CSV = { encoding: string; delimiter: string };
-type Confirmed = Status & { layout: Layout; reading: Reading; csv?: CSV; line_count?: number };
+type Confirmed = Status & { layout: Layout; reading: Reading; csv?: CSV; line_count?: number; accounts?: number };
 type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; replaces?: string; replaces_reason?: string; confirmed?: Status };
 type ImportRead = {
   import: Omit<ImportRow, "confirmed"> & { confirmed?: Confirmed };
@@ -513,7 +513,7 @@ function LayoutForm({
               {!reading.balanced ? "Not balanced" : reading.problems.length ? "Balanced, with problems" : "Balanced"}
             </span>{" "}
             Debits {reading.debits}, credits {reading.credits},{" "}
-            {reading.lines.filter((l) => l.kind === "posting").length} accounts.
+            {previewed || !data.import.confirmed?.line_count ? reading.lines.filter((l) => l.kind === "posting").length : (data.import.confirmed.accounts ?? 0)} accounts.
           </p>
           {reading.problems.length > 0 && (
             <ul role="alert">

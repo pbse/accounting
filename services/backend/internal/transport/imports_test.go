@@ -264,7 +264,7 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	// A confirmed reading comes without its lines, which come in pages of their own.
 	opened := call("user_a", partner, "GET", path, nil, 200)["import"].(map[string]any)["confirmed"].(map[string]any)
 	count := opened["line_count"].(float64)
-	if len(opened["reading"].(map[string]any)["lines"].([]any)) != 0 || count == 0 {
+	if len(opened["reading"].(map[string]any)["lines"].([]any)) != 0 || count == 0 || opened["accounts"] != 3.0 {
 		t.Fatalf("the reading's lines come apart: %v", opened)
 	}
 	if lines := call("user_a", partner, "GET", "/v1/closes/client/import/lines?name=Acme%20Co&id="+id, nil, 200); float64(len(lines["lines"].([]any))) != count {
@@ -276,6 +276,12 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	call("user_b", preparer, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+changed, map[string]any{"reason": "Sent in error"}, 403)
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+changed, map[string]any{"reason": ""}, 422)
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+id, map[string]any{"reason": "Superseded"}, 409)
+	// A file of a month whose close is under legal hold is kept with it.
+	var june string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period,legal_hold) VALUES($1,'Acme Co','2026-06',true) RETURNING id::text`, org).Scan(&june))
+	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+changed, map[string]any{"reason": "Sent in error"}, 409)
+	_, err = db.Exec(`UPDATE client_closes SET legal_hold=false WHERE id::text=$1`, june)
+	must(err)
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+changed, map[string]any{"reason": "Sent in error"}, 200)
 	call("user_a", partner, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+changed, nil, 404)
 	var receipts int

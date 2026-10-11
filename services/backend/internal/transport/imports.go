@@ -81,8 +81,9 @@ type confirmedRead struct {
 	At       time.Time         `json:"at"`
 	CSV      csvChoice         `json:"csv"`
 	Balanced bool              `json:"balanced"`
-	// LineCount is how many lines the reading has, when they are sent apart from it.
+	// LineCount is how many lines the reading has, and Accounts how many are accounts, when they are sent apart from it.
 	LineCount int `json:"line_count,omitempty"`
+	Accounts  int `json:"accounts,omitempty"`
 	// Problems is how many problems the reading names: a balanced reading with problems still holds what depends on it.
 	Problems int `json:"problems"`
 }
@@ -414,9 +415,16 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Say why this file replaces the earlier one (1–500 characters).")
 			return
 		}
+		// The file it replaces is locked while this one is kept, so a deletion meanwhile either waits or is seen.
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The file could not be kept.")
+			return
+		}
+		defer tx.Rollback()
 		if replaces != "" {
 			var found bool
-			if err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM books_imports p WHERE p.id::text=$1 AND p.organization_id=$2 AND client_identity(p.organization_id,p.client_entity)=client_identity($2,$3) AND p.period=$4)`, replaces, organization(r), name, period).Scan(&found); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM books_imports p WHERE p.id::text=$1 AND p.organization_id=$2 AND client_identity(p.organization_id,p.client_entity)=client_identity($2,$3) AND p.period=$4 FOR UPDATE)`, replaces, organization(r), name, period).Scan(&found); err != nil {
 				problem(w, 503, "The file could not be kept.")
 				return
 			}
@@ -427,7 +435,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		// The same file sent again for the same month (a retry after a lost answer) is the import already kept.
 		var repeat string
-		switch err = db.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND period=$3 AND digest=$4 ORDER BY id DESC LIMIT 1`,
+		switch err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND period=$3 AND digest=$4 ORDER BY id DESC LIMIT 1`,
 			organization(r), name, period, hex.EncodeToString(sum[:])).Scan(&repeat); err {
 		case nil:
 			jsonReply(w, 200, map[string]any{"id": repeat, "repeat": true})
@@ -438,18 +446,22 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var id string
-		err = db.QueryRowContext(r.Context(), `INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,replaces,replaces_reason,actor)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,replaces,replaces_reason,actor)
  SELECT $1,$2,$3,$4,$5,$6,$7,(SELECT p.id FROM books_imports p WHERE p.id::text=$8 AND p.organization_id=$1 AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)),$10,$9
  ON CONFLICT DO NOTHING RETURNING id::text`,
 			organization(r), name, period, filename, hex.EncodeToString(sum[:]), body, format, replaces, reviewerName(r), why).Scan(&id)
 		// A retry that overlapped this one kept the file first: it is the import.
 		if err == sql.ErrNoRows {
-			if err = db.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND period=$3 AND digest=$4`, organization(r), name, period, hex.EncodeToString(sum[:])).Scan(&id); err == nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND period=$3 AND digest=$4`, organization(r), name, period, hex.EncodeToString(sum[:])).Scan(&id); err == nil {
 				jsonReply(w, 200, map[string]any{"id": id, "repeat": true})
 				return
 			}
 		}
 		if err != nil {
+			problem(w, 503, "The file could not be kept.")
+			return
+		}
+		if err = tx.Commit(); err != nil {
 			problem(w, 503, "The file could not be kept.")
 			return
 		}
@@ -488,6 +500,11 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if confirmed != nil {
 			brief := *confirmed
 			brief.LineCount, brief.Reading.Lines = len(confirmed.Reading.Lines), []bookfiles.Line{}
+			for _, l := range confirmed.Reading.Lines {
+				if l.Kind == bookfiles.Posting {
+					brief.Accounts++
+				}
+			}
 			confirmed = &brief
 		}
 		summary.Confirmed = confirmed
@@ -588,9 +605,12 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		defer tx.Rollback()
 		org, id := organization(r), r.URL.Query().Get("id")
 		var period, filename, digest string
-		var replaced bool
-		err = tx.QueryRowContext(r.Context(), `SELECT period,name,digest,EXISTS(SELECT 1 FROM books_imports n WHERE n.replaces=i.id) FROM books_imports i
- WHERE i.id::text=$1 AND i.organization_id=$2 AND client_identity(i.organization_id,i.client_entity)=client_identity($2,$3) FOR UPDATE`, id, org, name).Scan(&period, &filename, &digest, &replaced)
+		var replaced, retained bool
+		// A file of a month whose close is under legal hold, or kept until a date still to come, is kept with it.
+		err = tx.QueryRowContext(r.Context(), `SELECT period,name,digest,EXISTS(SELECT 1 FROM books_imports n WHERE n.replaces=i.id),
+ EXISTS(SELECT 1 FROM client_closes c WHERE c.organization_id=i.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(i.organization_id,i.client_entity) AND c.period=i.period
+  AND (c.legal_hold OR c.retain_until>CURRENT_DATE)) FROM books_imports i
+ WHERE i.id::text=$1 AND i.organization_id=$2 AND client_identity(i.organization_id,i.client_entity)=client_identity($2,$3) FOR UPDATE`, id, org, name).Scan(&period, &filename, &digest, &replaced, &retained)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
 			return
@@ -601,6 +621,10 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		if replaced {
 			problem(w, 409, "A later file replaces this one: delete that one first.")
+			return
+		}
+		if retained {
+			problem(w, 409, "This month's close is under legal hold or kept until a date still to come: its files are kept with it.")
 			return
 		}
 		for _, q := range []string{`DELETE FROM books_layouts WHERE import_id::text=$1`, `DELETE FROM books_imports WHERE id::text=$1`} {
