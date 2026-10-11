@@ -520,12 +520,28 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		t.Fatalf("the batch of journals: %v", batch)
 	}
 	call("user_a", partner, "POST", journalsPath, map[string]any{"action": "export", "confirmed": true}, 409)
+	// The batch downloads again as it was exported.
+	r := httptest.NewRequest("GET", journalsPath+"/batches/1", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_b"}, Organization: org, Permissions: preparer}))
+	w := httptest.NewRecorder()
+	store.ServeHTTP(w, r)
+	if w.Code != 200 || w.Body.String() != batch["csv"].(string) {
+		t.Fatalf("the batch again: %d %s", w.Code, w.Body.String())
+	}
+	// Another draft of the same source is held: the source is already in a journal.
+	var sameSource string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1::bigint,'accrual','feb-accrual-2','{"input":{"source_reference":"INV-55"},"proposal":{"date":"2027-02-28","debit_account":"6000 Rent","credit_account":"2100 Accrued expenses","amount":"150.00"},"blockers":[]}') RETURNING id::text`, februaryClose).Scan(&sameSource))
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,decision,note,actor,paper_digest) VALUES($1::bigint,'approved','Synthetic approval','fixture','feb-accrual-2')`, sameSource)
+	must(err)
 	exported := call("user_a", partner, "GET", journalsPath, nil, 200)
 	journal := exported["journals"].([]any)[0].(map[string]any)
-	if len(exported["pending"].([]any)) != 0 || journal["state"] != "exported" || journal["reference"] != reference {
+	if held := exported["pending"].([]any); len(held) != 1 || held[0].(map[string]any)["held"] != "Its source is already in journal "+reference+"." || journal["state"] != "exported" || journal["reference"] != reference {
 		t.Fatalf("the exported journal: %v", exported)
 	}
-	call("user_a", partner, "POST", journalsPath, map[string]any{"action": "entered", "journal": journal["id"], "ledger_reference": "JE-77", "confirmed": true}, 200)
+	call("user_a", partner, "POST", journalsPath, map[string]any{"action": "export", "confirmed": true}, 409)
+	// Recording a journal as entered takes posting:approve.
+	entering := map[string]any{"action": "entered", "journal": journal["id"], "ledger_reference": "JE-77", "confirmed": true}
+	call("user_a", partner, "POST", journalsPath, entering, 403)
+	call("user_a", append([]string{"posting:approve"}, partner...), "POST", journalsPath, entering, 200)
 	if entered := call("user_a", partner, "GET", journalsPath, nil, 200)["journals"].([]any)[0].(map[string]any); entered["state"] != "entered" || entered["ledger_reference"] != "JE-77" {
 		t.Fatalf("an entered journal: %v", entered)
 	}

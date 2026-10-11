@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/ledgers"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
@@ -40,6 +43,7 @@ type journalDraft struct {
 	Lines   []journalLine `json:"lines"`
 	Held    string        `json:"held,omitempty"`
 	digest  string
+	key     string
 }
 
 // fileJournal is an exported journal and where it stands.
@@ -57,8 +61,8 @@ type fileJournal struct {
 	EnteredAt       *time.Time      `json:"entered_at,omitempty"`
 }
 
-// draftEntries are an approved draft's month-end entries, as a posting would post them: a prepaid's proposal and any
-// disposal, else what postable gives; with the draft's source reference.
+// draftEntries are an approved draft's month-end entries, as a posting would post them: a prepaid's proposal (a
+// disposal is not posted, so not exported), else what postable gives; with the draft's source reference.
 func draftEntries(kind string, raw []byte, period string) ([]prepaids.Adjustment, string, error) {
 	if kind != "prepaid" {
 		return postable(kind, raw, period)
@@ -67,27 +71,22 @@ func draftEntries(kind string, raw []byte, period string) ([]prepaids.Adjustment
 	if json.Unmarshal(raw, &paper) != nil {
 		return nil, "", errors.New("This prepaid draft cannot be read")
 	}
-	entries := append([]prepaids.Adjustment{}, paper.Disposal...)
-	if paper.Proposal != nil {
-		entries = append([]prepaids.Adjustment{*paper.Proposal}, entries...)
-	}
-	if len(entries) == 0 {
+	if paper.Proposal == nil {
 		return nil, "", errors.New("This prepaid draft proposes no entry")
 	}
 	month, err := time.Parse("2006-01", period)
 	if err != nil {
 		return nil, "", err
 	}
-	for _, e := range entries {
-		if e.Date != month.AddDate(0, 1, -1).Format("2006-01-02") {
-			return nil, "", errors.New("Only entries dated at the close month-end are exported")
-		}
+	if paper.Proposal.Date != month.AddDate(0, 1, -1).Format("2006-01-02") {
+		return nil, "", errors.New("Only entries dated at the close month-end are exported")
 	}
-	return entries, paper.Input.SourceReference, nil
+	return []prepaids.Adjustment{*paper.Proposal}, paper.Input.SourceReference, nil
 }
 
 // pendingJournals are close id's current approved drafts whose entries are in no journal (but one found uncertain), each
-// with its lines, or held with why: a procedure since changed or revoked authorizes none.
+// with its lines, or held with why: a procedure since changed or revoked authorizes none, and, as for a posting, a
+// source is entered once, from its newest draft.
 func pendingJournals(ctx context.Context, tx *sql.Tx, closeID, period string) ([]journalDraft, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT w.id::text,w.kind,w.digest,w.paper FROM workpaper_review_state w WHERE w.close_id::text=$1 AND w.review_state='approved'
  AND (jsonb_typeof(w.paper->'blockers') IS DISTINCT FROM 'array' OR w.paper->'blockers'='[]'::jsonb) AND w.kind IN ('prepaid','accrual','loan','owner','payroll','settlement')
@@ -129,12 +128,30 @@ func pendingJournals(ctx context.Context, tx *sql.Tx, closeID, period string) ([
 			j.Held = err.Error()
 		}
 		j.Source = source
+		if j.Held == "" {
+			if j.key, err = postingSource(ctx, tx, closeID, d.id, d.kind, d.paper, source); err != nil {
+				j.Held = err.Error()
+			} else {
+				var in string
+				if err = tx.QueryRowContext(ctx, `SELECT reference FROM file_journals WHERE close_id::text=$1 AND source_key=$2 AND state<>'uncertain'`, closeID, j.key).Scan(&in); err == nil {
+					j.Held = "Its source is already in journal " + in + "."
+				} else if err != sql.ErrNoRows {
+					return nil, err
+				}
+			}
+		}
 		for _, e := range entries {
 			j.Lines = append(j.Lines, journalLine{Date: e.Date, Account: e.DebitAccount, Debit: e.Amount}, journalLine{Date: e.Date, Account: e.CreditAccount, Credit: e.Amount})
 		}
 		out = append(out, j)
 	}
 	return out, nil
+}
+
+// canEnterJournals reports whether the actor may record a journal as entered in the client's ledger.
+func canEnterJournals(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return a != nil && (a.Organization == "" || slices.Contains(a.Permissions, "posting:approve"))
 }
 
 // journalsOf are close id's exported journals, newest batch first.
@@ -149,7 +166,53 @@ func journalsOf(ctx context.Context, q rowReader, closeID string) ([]fileJournal
 	return out, json.Unmarshal(raw, &out)
 }
 
+// writeJournal writes a journal's lines as rows of a batch's CSV, each with the journal's reference.
+func writeJournal(out *csv.Writer, reference string, lines []journalLine) {
+	for _, l := range lines {
+		out.Write([]string{reference, l.Date, l.Account, l.Debit, l.Credit, l.Memo})
+	}
+}
+
+var batchHeader = []string{"Journal", "Date", "Account", "Debit", "Credit", "Memo"}
+
 func registerJournals(mux *http.ServeMux, db *sql.DB) {
+	// A batch already exported, again: the file it was, from the journals kept.
+	mux.HandleFunc("GET /v1/closes/{id}/journals/batches/{batch}", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.QueryContext(r.Context(), `SELECT j.reference,j.lines,c.entity,c.period FROM file_journals j JOIN client_closes c ON c.id=j.close_id WHERE j.close_id::text=$1 AND j.batch::text=$2 ORDER BY j.id`, r.PathValue("id"), r.PathValue("batch"))
+		if err != nil {
+			problem(w, 503, "The batch is unavailable.")
+			return
+		}
+		defer rows.Close()
+		var file bytes.Buffer
+		out := csv.NewWriter(&file)
+		out.Write(batchHeader)
+		var entity, period string
+		n := 0
+		for rows.Next() {
+			var reference string
+			var raw []byte
+			var lines []journalLine
+			if err = rows.Scan(&reference, &raw, &entity, &period); err != nil || json.Unmarshal(raw, &lines) != nil {
+				problem(w, 503, "The batch is unavailable.")
+				return
+			}
+			writeJournal(out, reference, lines)
+			n++
+		}
+		if rows.Err() != nil {
+			problem(w, 503, "The batch is unavailable.")
+			return
+		}
+		if n == 0 {
+			problem(w, 404, "Batch not found.")
+			return
+		}
+		out.Flush()
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fmt.Sprintf("%s %s journals, batch %s.csv", entity, period, r.PathValue("batch"))}))
+		w.Write(file.Bytes())
+	})
 	// The month's approved entries to export, the journals exported, and the client ledger's journal import.
 	mux.HandleFunc("GET /v1/closes/{id}/journals", func(w http.ResponseWriter, r *http.Request) {
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
@@ -189,15 +252,11 @@ func registerJournals(mux *http.ServeMux, db *sql.DB) {
 		if l, ok := ledgers.Find(ledger); ok {
 			named, journalImport = l.Name, l.JournalImport
 		}
-		jsonReply(w, 200, map[string]any{"pending": pending, "journals": journals, "ledger": named, "journal_import": journalImport, "can_export": canReview(r)})
+		jsonReply(w, 200, map[string]any{"pending": pending, "journals": journals, "ledger": named, "journal_import": journalImport, "can_export": canReview(r), "can_enter": canEnterJournals(r)})
 	})
 	// A reviewer exports the approved entries not yet exported as one batch, or records a journal as entered in the
 	// client's ledger with the ledger's own reference.
 	mux.HandleFunc("POST /v1/closes/{id}/journals", func(w http.ResponseWriter, r *http.Request) {
-		if !canReview(r) {
-			problem(w, 403, "Exporting or entering journals requires workpapers:review.")
-			return
-		}
 		var in struct {
 			Action          string `json:"action"`
 			Journal         string `json:"journal"`
@@ -205,6 +264,14 @@ func registerJournals(mux *http.ServeMux, db *sql.DB) {
 			Confirmed       bool   `json:"confirmed"`
 		}
 		if !decode(w, r, &in) {
+			return
+		}
+		if in.Action == "entered" && !canEnterJournals(r) {
+			problem(w, 403, "Recording a journal as entered requires posting:approve.")
+			return
+		}
+		if in.Action != "entered" && !canReview(r) {
+			problem(w, 403, "Exporting journals requires workpapers:review.")
 			return
 		}
 		if !in.Confirmed {
@@ -246,7 +313,7 @@ func registerJournals(mux *http.ServeMux, db *sql.DB) {
 			}
 			var file bytes.Buffer
 			out := csv.NewWriter(&file)
-			out.Write([]string{"Journal", "Date", "Account", "Debit", "Credit", "Memo"})
+			out.Write(batchHeader)
 			n := 0
 			for _, j := range pending {
 				if j.Held != "" {
@@ -256,12 +323,11 @@ func registerJournals(mux *http.ServeMux, db *sql.DB) {
 				reference := fmt.Sprintf("KR-%s-%d-%d", r.PathValue("id"), batch, n)
 				for i := range j.Lines {
 					j.Lines[i].Memo = strings.TrimSpace(reference + " " + j.Kind + " " + j.Source)
-					l := j.Lines[i]
-					out.Write([]string{reference, l.Date, l.Account, l.Debit, l.Credit, l.Memo})
 				}
+				writeJournal(out, reference, j.Lines)
 				lines, _ := json.Marshal(j.Lines)
-				if _, err = tx.ExecContext(r.Context(), `INSERT INTO file_journals(close_id,batch,reference,workpaper_id,paper_digest,lines,exported_by) VALUES($1::bigint,$2,$3,$4::bigint,$5,$6,$7)`,
-					r.PathValue("id"), batch, reference, j.PaperID, j.digest, string(lines), reviewerName(r)); err != nil {
+				if _, err = tx.ExecContext(r.Context(), `INSERT INTO file_journals(close_id,batch,reference,workpaper_id,paper_digest,source_key,lines,exported_by) VALUES($1::bigint,$2,$3,$4::bigint,$5,$6,$7,$8)`,
+					r.PathValue("id"), batch, reference, j.PaperID, j.digest, j.key, string(lines), reviewerName(r)); err != nil {
 					problem(w, 409, "The journals changed while they were exported: reopen them.")
 					return
 				}

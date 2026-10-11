@@ -10,8 +10,10 @@ CREATE TABLE file_journals (
  batch integer NOT NULL CHECK (batch >= 1),
  reference text NOT NULL CHECK (length(reference) BETWEEN 1 AND 60),
  workpaper_id bigint NOT NULL REFERENCES workpapers(id) ON DELETE CASCADE,
- -- paper_digest is the draft's digest when it was exported: a draft revised since is not this journal.
+ -- paper_digest is the draft's digest when it was exported: a draft revised since is not this journal. source_key is
+ -- the draft's source, keyed as a posting's is.
  paper_digest text NOT NULL,
+ source_key text NOT NULL,
  lines jsonb NOT NULL CHECK (jsonb_typeof(lines)='array'),
  state text NOT NULL DEFAULT 'exported' CHECK (state IN ('exported','entered','verified','uncertain')),
  ledger_reference text NOT NULL DEFAULT '' CHECK (length(ledger_reference) <= 120),
@@ -21,8 +23,8 @@ CREATE TABLE file_journals (
  entered_at timestamptz,
  UNIQUE (close_id, reference)
 );
--- A draft's entries are in one journal at a time, unless that one was found uncertain.
-CREATE UNIQUE INDEX file_journals_once ON file_journals(close_id, workpaper_id) WHERE state <> 'uncertain';
+-- A source is in one journal at a time, unless that one was found uncertain.
+CREATE UNIQUE INDEX file_journals_once ON file_journals(close_id, source_key) WHERE state <> 'uncertain';
 ALTER TABLE file_journals ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON file_journals USING (current_setting('app.organization',true)='*' OR close_id IN (SELECT id FROM client_closes));
 COMMIT;

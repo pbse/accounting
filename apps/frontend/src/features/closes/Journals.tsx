@@ -11,7 +11,7 @@ import { workspaceRequest } from "./workspace";
 type Line = { date: string; account: string; debit?: string; credit?: string; memo: string };
 type Pending = { paper_id: string; kind: string; source: string; lines: Line[]; held?: string };
 type Journal = { id: string; batch: number; reference: string; paper_id: string; state: "exported" | "entered" | "verified" | "uncertain"; ledger_reference: string; lines: Line[]; exported_by: string; exported_at: string; entered_by?: string; entered_at?: string };
-type JournalsRead = { pending: Pending[]; journals: Journal[]; ledger: string; journal_import: string; can_export: boolean };
+type JournalsRead = { pending: Pending[]; journals: Journal[]; ledger: string; journal_import: string; can_export: boolean; can_enter: boolean };
 
 const states = { exported: ["pill muted", "Exported"], entered: ["pill neutral", "Entered"], verified: ["pill", "Verified"], uncertain: ["pill danger", "Uncertain"] } as const;
 
@@ -37,17 +37,29 @@ export function Journals({ closeId }: { closeId: string }) {
     }
   }
   // The batch is downloaded as the server wrote it: the file the ledger's journal import reads.
-  function download(out: { csv?: string; name?: string }) {
-    if (!out.csv) return;
+  function save(blob: Blob, name: string) {
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([out.csv], { type: "text/csv" }));
-    link.download = out.name ?? "journals.csv";
+    link.href = URL.createObjectURL(blob);
+    link.download = name;
     link.click();
     URL.revokeObjectURL(link.href);
   }
+  function download(out: { csv?: string; name?: string }) {
+    if (out.csv) save(new Blob([out.csv], { type: "text/csv" }), out.name ?? "journals.csv");
+  }
+  // A batch already exported, again, if its file was lost.
+  async function again(batch: number) {
+    setError("");
+    try {
+      save(await workspaceRequest(`${path}/batches/${batch}`, undefined, true), `journals, batch ${batch}.csv`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The batch is unavailable.");
+    }
+  }
   if (!read.data) return read.error ? <p className="note">{read.error.message}</p> : <p role="status">Reading the journals…</p>;
-  const { pending, journals, ledger, journal_import, can_export } = read.data;
+  const { pending, journals, ledger, journal_import, can_export, can_enter } = read.data;
   const ready = pending.filter((p) => !p.held);
+  const batches = [...new Set(journals.map((j) => j.batch))];
   return (
     <section aria-label="Journals to enter in the ledger">
       <p>
@@ -84,7 +96,7 @@ export function Journals({ closeId }: { closeId: string }) {
             <li key={j.id}>
               <span className={states[j.state][0]}>{states[j.state][1]}</span> {j.reference} (batch {j.batch}, draft #{j.paper_id}), exported {dates.dayMonth(j.exported_at)} by {j.exported_by}
               {j.state !== "exported" && j.ledger_reference ? `; entered as ${j.ledger_reference}${j.entered_at ? ` ${dates.dayMonth(j.entered_at)}` : ""}${j.entered_by ? ` by ${j.entered_by}` : ""}` : ""}
-              {can_export && j.state === "exported" && (
+              {can_enter && j.state === "exported" && (
                 <span>
                   {" "}
                   <input
@@ -103,6 +115,11 @@ export function Journals({ closeId }: { closeId: string }) {
           ))}
         </ul>
       )}
+      {batches.map((batch) => (
+        <button key={batch} type="button" onClick={() => void again(batch)}>
+          Download batch {batch} again
+        </button>
+      ))}
     </section>
   );
 }
