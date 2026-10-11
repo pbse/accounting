@@ -499,6 +499,10 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	reads["t64"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","cash_flow":{"sections":[{"name":"Operating","lines":[{"name":"Customer receipts","amount":"9000.00"},{"name":"Other receipts","amount":"1000.00"}]}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
 	ok("Customer receipts and other receipts total 10,000.00.", derived(0, "sum", "10000.00", "t64", "/cash_flow/sections/0/lines/0/amount", "t64", "/cash_flow/sections/0/lines/1/amount"))
 
+	// Round thirty-six: a total cited but not printed is still the total.
+	rejected("Patient fees rose, driven entirely by new patients.", "account for 3000.00 of 4940.00",
+		e("t63", 0, "/changes/0/change", "4940.00"), e("t63", 0, "/changes/0/new/0/name", "New patients"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

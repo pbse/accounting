@@ -878,6 +878,18 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			if !used[j] && reasons[j] != "" {
 				return nil, reasons[j]
 			}
+			// A cited change the sentence does not print ("revenue rose, driven entirely by new patients") is still
+			// the total its drivers must tie to.
+			if !used[j] && m.claim.kind == "change" && !m.claim.driver && !m.claim.cause && !totalSeen[m.step+m.path] {
+				if r, ok := new(big.Rat).SetString(m.n); ok {
+					totalSeen[m.step+m.path] = true
+					group := rowGroup(m.step, m.path)
+					sentenceTotals[i][group] = append(sentenceTotals[i][group], r)
+					if at := strings.Index(strings.ToLower(line), strings.ToLower(m.claim.label)); at >= 0 {
+						totalAt[group] = at
+					}
+				}
+			}
 			// A field whose figure the sentence does not state still holds what the sentence says of it.
 			if !used[j] && reasons[j] == "" {
 				if why := figurelessClaim(line, m.claim, m.got, changes); why != "" {

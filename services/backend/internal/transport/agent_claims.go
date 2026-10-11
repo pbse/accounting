@@ -519,7 +519,7 @@ var (
 	// Words that say a computed figure is a difference.
 	claimDifferenceSaid = regexp.MustCompile(`\b(difference|differ|differs|gap|less|leave|leaves|leaving|left|net of|minus|exceed|exceeds|short|more than|less than|over|under|after|change|changed|up|down|higher|lower|ahead|behind)\b`)
 	// Words that attribute a total to drivers, which must then add up or name the rest.
-	claimAttribution = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|driven by|reflecting)\b`)
+	claimAttribution = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|driven|reflecting|entirely|solely|wholly|all of it)\b`)
 	// Words by which a passage attributes an effect to a cause; timing ("after") or a movement alone ("rose") does not.
 	claimCausalEvidence = regexp.MustCompile(`\b(because|due to|caused|causes|driven by|drove|drives|resulted in|result of|results from|led to|leads to|owing to|thanks to|attributable to|attributed to|as a result of|boosted|lifted|raised|reduced|lowered|cut)\b`)
 	// Words that name a change as such, beside its figure ("Rent's variance against budget is 500.00").

@@ -4167,6 +4167,7 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - "the cash plan" is the plan's name, not the cash measure;
   - a driver row counts toward a movement only when the sentence states it (its payee, its figure, or that it is unattributed);
   - two differently named lines with the same measure ("Customer receipts", "Other receipts") are two facts in a derived sum;
+  - a cited change the sentence does not print is still the total its drivers tie to ("revenue rose, driven entirely by new patients");
   - `TestFirmClientsFindsTheNamesAnAnswerUses` (new, database): the firm's clients named in an answer are found by the database across all clients with no cap (including a two-letter name), and never another firm's.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
