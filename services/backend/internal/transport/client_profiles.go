@@ -237,6 +237,12 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 			if p, err = preparation.ClientProfile(ctx, tx, m.id); err != nil {
 				return nil, err
 			}
+			// Signed off before profiles were kept, the month was closed under what its ledger reported: with no ledger
+			// reporting now, what it was signed off under cannot be established, and a change waits for it to reopen.
+			if p.State != "detected" {
+				held = append(held, m.period)
+				continue
+			}
 		}
 		if p.FiscalStart != start || p.Currency != currency {
 			held = append(held, m.period)

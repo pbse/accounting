@@ -2,6 +2,7 @@ package transport
 
 import (
 	"close.local/backend/internal/auth"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -373,6 +374,23 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 		if err := preparation.CurrencyIssue(r.Context(), db, closeID, paperRaw); err != nil {
 			problem(w, 409, err.Error())
 			return
+		}
+		// A write goes to the organisation as it is today: a draft in another currency than it keeps is never written
+		// there, whatever profile its month was closed under.
+		if in.Action != "verify" {
+			var draft struct {
+				Input struct{ Currency string } `json:"input"`
+			}
+			json.Unmarshal(paperRaw, &draft)
+			var keeps sql.NullString
+			if err := db.QueryRowContext(r.Context(), `SELECT x.home_currency FROM xero_connections x JOIN client_closes c ON c.id::text=$1 WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active' ORDER BY x.id DESC LIMIT 1`, closeID).Scan(&keeps); err != nil && err != sql.ErrNoRows {
+				problem(w, 503, "Posting status unavailable.")
+				return
+			}
+			if keeps.String != "" && !strings.EqualFold(keeps.String, cmp.Or(draft.Input.Currency, "USD")) {
+				problem(w, 409, "This draft is in "+cmp.Or(draft.Input.Currency, "USD")+", but the Xero organisation keeps its books in "+keeps.String+": it cannot be written there.")
+				return
+			}
 		}
 		plan, err := planXeroPosting(r.Context(), db, org, entity, closeID, paperID, kind, period, paperDigest, paperRaw)
 		if err != nil {
