@@ -1,6 +1,7 @@
 package bookfiles
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"math/big"
@@ -199,8 +200,10 @@ type Line struct {
 	// Cells is where each value of the row was read, by what the column holds; Ref is the cell the balance came from
 	// (the balance column's, else the debit's, else the credit's), or the row's first cell when it has no amount.
 	Cells map[Meaning]string `json:"cells"`
-	// Debit and Credit are the row's two columns as written, in a two-column layout, for checking totals by column.
-	Debit, Credit *big.Rat `json:"-"`
+	// Debit and Credit are the row's two sides, a negative amount in one column counted on the other; writtenDebit and
+	// writtenCredit are its two columns exactly as written, which a total row adds up.
+	Debit, Credit               *big.Rat `json:"-"`
+	writtenDebit, writtenCredit *big.Rat
 	// Amount is Balance as an exact decimal, for storing.
 	Amount string `json:"balance"`
 	// Other balances the file carries for the account, by meaning, and those of them not exact to the cent.
@@ -234,11 +237,14 @@ type Reading struct {
 	Notes []string `json:"notes"`
 }
 
-var totalName = regexp.MustCompile(`(?i)^(grand\s+)?total\b|\btotals?$`)
+var totalName = regexp.MustCompile(`(?i)^(grand\s+|sub[\s-]?)?totals?\b|\b(sub[\s-]?)?totals?$`)
 
 // totalLabel is what a total row totals: "Total Current Assets" and "Total for Current Assets" total "Current Assets";
-// "Total", "TOTAL" and "Grand total" total everything.
-var totalLabel = regexp.MustCompile(`(?i)^(grand\s+)?totals?\b(\s+for\b)?[\s:-]*|[\s:-]*\btotals?$`)
+// "Total", "TOTAL", "Subtotal" and "Grand total" total everything, or the section since the total before.
+var totalLabel = regexp.MustCompile(`(?i)^(grand\s+|sub[\s-]?)?totals?\b(\s+for\b)?[\s:-]*|[\s:-]*\b(sub[\s-]?)?totals?$`)
+
+// grandTotal is a total of the whole table, never of a section.
+var grandTotal = regexp.MustCompile(`(?i)^grand\s+totals?\b`)
 
 // checkTotal checks the total at lines[i] against what it covers, and says how it differs. A total named for a heading
 // or a parent account above it ("Total Current Assets" under "Current Assets") covers the posting rows from there,
@@ -258,30 +264,32 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 		return covered
 	}
 	if label == "" {
-		debits, credits := new(big.Rat), new(big.Rat)
-		for _, l := range lines[:i] {
-			if l.Kind == Posting && l.Balance.Sign() > 0 {
-				debits.Add(debits, l.Balance)
-			} else if l.Kind == Posting {
-				credits.Sub(credits, l.Balance)
+		// An unlabeled total ("Total", "TOTAL", "Subtotal") closes the whole file, or the section since the total before
+		// it: it checks when either holds. A grand total closes the whole file alone.
+		since := 0
+		for j := i - 1; j >= 0 && !grandTotal.MatchString(strings.TrimSpace(t.Label())); j-- {
+			if lines[j].Kind == Total {
+				since = j + 1
+				break
 			}
 		}
 		if debit != nil && credit != nil {
-			debits, credits = columnSums(lines[:i])
-			if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
-				return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows above come to %s and %s", t.Row, t.Label(), exact(debit), exact(credit), exact(debits), exact(credits))}
+			debits, credits := writtenSums(lines[:i])
+			section, sectionCredits := writtenSums(lines[since:i])
+			if (debit.Cmp(debits) == 0 && credit.Cmp(credits) == 0) || (debit.Cmp(section) == 0 && credit.Cmp(sectionCredits) == 0) {
+				return nil
 			}
+			return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows above come to %s and %s", t.Row, t.Label(), exact(debit), exact(credit), exact(debits), exact(credits))}
+		}
+		if all := sum(0); all.Cmp(t.Balance) == 0 || sum(since).Cmp(t.Balance) == 0 {
 			return nil
 		}
-		if net := new(big.Rat).Sub(debits, credits); net.Cmp(t.Balance) != 0 {
-			return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows above come to %s", t.Row, t.Label(), exact(t.Balance), exact(net))}
-		}
-		return nil
+		return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows above come to %s", t.Row, t.Label(), exact(t.Balance), exact(sum(0)))}
 	}
 	from := coveredFrom(lines, i)
 	if debit != nil && credit != nil {
 		// Written as two columns, each column must equal its column's sum over the rows it totals.
-		debits, credits := columnSums(lines[from:i])
+		debits, credits := writtenSums(lines[from:i])
 		if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
 			return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows it totals come to %s and %s", t.Row, t.Label(), exact(debit), exact(credit), exact(debits), exact(credits))}
 		}
@@ -361,6 +369,7 @@ func coveredFrom(lines []Line, i int) int {
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
 	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}}
+	localNoted := false
 	// The month-end balance is what a Trial Balance is read for: a layout naming no column for it reads nothing, rather
 	// than every account as zero.
 	meanings := map[Meaning]bool{}
@@ -467,11 +476,22 @@ func (l Layout) Read(t Table) Reading {
 					line.Rounded = append(line.Rounded, meaning)
 				}
 				// A currency written beside an amount must be the Trial Balance's: books in two currencies never add up.
-				if l.Currency != "" && a.Mark != "" && !MarkAgrees(a.Mark, l.Currency) {
-					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is marked in another currency than %s", c.Ref, c.Value, l.Currency))
+				// A workbook amount formatted in the local currency names none: it is said, to be confirmed, once.
+				if a.Mark == LocalCurrency {
+					if !localNoted {
+						localNoted = true
+						reading.Notes = append(reading.Notes, fmt.Sprintf("%s and others are formatted in the workbook's local currency, which the file does not name: confirm it is %s", c.Ref, cmp.Or(l.Currency, "the Trial Balance's currency")))
+					}
+				} else if l.Currency != "" && a.Mark != "" && !MarkAgrees(a.Mark, l.Currency) {
+					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is marked in another currency than %s, or one the reader cannot match to it (%s)", c.Ref, c.Value, l.Currency, a.Mark))
 				}
 				// A Dr or Cr marker says the side itself, whichever column the amount sits in: its value is then already
 				// signed as balances are, a credit negative.
+				if meaning == Debit {
+					line.writtenDebit = a.Value
+				} else if meaning == Credit {
+					line.writtenCredit = a.Value
+				}
 				switch {
 				case a.Side != "" && (meaning == Debit || meaning == Credit):
 					if a.Value.Sign() >= 0 {
@@ -479,6 +499,14 @@ func (l Layout) Read(t Table) Reading {
 					} else {
 						side(&credit, new(big.Rat).Neg(a.Value), "credit", c.Ref)
 					}
+				// A negative amount in a side's column is the other side's (a contra account's credit written as a negative
+				// debit), said in a note.
+				case meaning == Debit && a.Value.Sign() < 0:
+					side(&credit, new(big.Rat).Neg(a.Value), "credit", c.Ref)
+					reading.Notes = append(reading.Notes, fmt.Sprintf("%s: %s in the debit column is read as a credit of %s", c.Ref, c.Value, exact(new(big.Rat).Neg(a.Value))))
+				case meaning == Credit && a.Value.Sign() < 0:
+					side(&debit, new(big.Rat).Neg(a.Value), "debit", c.Ref)
+					reading.Notes = append(reading.Notes, fmt.Sprintf("%s: %s in the credit column is read as a debit of %s", c.Ref, c.Value, exact(new(big.Rat).Neg(a.Value))))
 				case meaning == Debit:
 					side(&debit, a.Value, "debit", c.Ref)
 				case meaning == Credit:
@@ -546,7 +574,7 @@ func (l Layout) Read(t Table) Reading {
 		// account with a zero balance (an export leaves a zero blank), said so when it has no number to show it is one.
 		// A total is named so ("Total …") or marked so, unless a person marked the row an account.
 		total := (totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number)) && !slices.Contains(l.Postings, r.Number)
-		if line.Balance == nil && !total && !totalled[strings.ToLower(line.Label())] && !slices.Contains(l.Headings, r.Number) {
+		if line.Balance == nil && !total && (!totalled[strings.ToLower(line.Label())] || slices.Contains(l.Postings, r.Number)) && !slices.Contains(l.Headings, r.Number) {
 			line.Balance = new(big.Rat)
 			if line.Number == "" {
 				reading.Notes = append(reading.Notes, fmt.Sprintf("Row %d (%s) has no amounts: read as an account with a zero balance; mark it a heading if it is one", r.Number, line.Name))
@@ -659,4 +687,27 @@ func rowList(rows []int) string {
 		shown = append(shown, strconv.Itoa(r))
 	}
 	return strings.Join(shown, ", ")
+}
+
+// writtenSums is the posting rows' debit and credit columns summed exactly as written, signs included, as a total row
+// adds them up (a row in a signed-balance layout counts on its balance's side).
+func writtenSums(lines []Line) (*big.Rat, *big.Rat) {
+	debits, credits := new(big.Rat), new(big.Rat)
+	for _, l := range lines {
+		switch {
+		case l.Kind != Posting:
+		case l.writtenDebit != nil || l.writtenCredit != nil:
+			if l.writtenDebit != nil {
+				debits.Add(debits, l.writtenDebit)
+			}
+			if l.writtenCredit != nil {
+				credits.Add(credits, l.writtenCredit)
+			}
+		case l.Balance.Sign() > 0:
+			debits.Add(debits, l.Balance)
+		default:
+			credits.Sub(credits, l.Balance)
+		}
+	}
+	return debits, credits
 }

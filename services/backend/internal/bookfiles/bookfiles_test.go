@@ -647,3 +647,133 @@ func TestAByteOrderAgainstTheMark(t *testing.T) {
 		t.Fatalf("the marked order reads: %v", err)
 	}
 }
+
+// A negative amount in a side's column counts on the other side, said in a note.
+func TestNegativeSides(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nContra,-100.00,\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	reading := layout.Read(file.Tables[0])
+	if reading.Debits != "100" || reading.Credits != "100" || !reading.Balanced || len(reading.Notes) != 1 || reading.Lines[1].Amount != "-100" {
+		t.Fatalf("a negative debit is a credit: %+v", reading)
+	}
+}
+
+// An unlabeled total can close a section; a confirmed account named by a later total stays an account.
+func TestSectionTotalsAndConfirmedParents(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00\nVan,50.00\nTotal,150.00\nLoan,-50.00\nCapital,-100.00\nTotal,-150.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	if reading := layout.Read(file.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {
+		t.Fatalf("section totals: %+v", reading.Problems)
+	}
+	parent, _ := Read("tb.csv", []byte("Number,Account,Balance\n1000,Bank,\n1010,Checking,100.00\n,Total Bank,100.00\n3000,Capital,-100.00\n"))
+	layout = Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountNumber, 1: AccountName, 2: Balance}, Style: NumberStyle{Scale: 1}, Postings: []int{2}}
+	reading := layout.Read(parent.Tables[0])
+	if reading.Lines[0].Kind != Posting || len(reading.Problems) != 0 {
+		t.Fatalf("a confirmed parent account stays an account: %+v", reading)
+	}
+}
+
+// Whole-column and whole-row references move with a copied formula; a row without its number takes its cells'.
+func TestRangesAndUnnumberedRows(t *testing.T) {
+	for formula, want := range map[string]string{"SUM(A:A)": "SUM(B:B)", "SUM($A:B)": "SUM($A:C)", "SUM(1:1)": "SUM(3:3)", "SUM(a:c)": "SUM(b:d)", "A1:B2": "B3:C4"} {
+		if got := shiftFormula(formula, 2, 1); got != want {
+			t.Fatalf("%s: %s, not %s", formula, got, want)
+		}
+	}
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	file, err := Read("tb.xlsx", workbook(t, map[string]string{
+		"xl/workbook.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml":   `<worksheet ` + main + `><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row><c r="A5"><v>5</v></c></row></sheetData></worksheet>`,
+	}))
+	if err != nil || file.Tables[0].Rows[1].Number != 5 || cells(file.Tables[0])["A5"].Value != "5" {
+		t.Fatalf("a row numbered by its cells: %+v %v", file.Tables, err)
+	}
+}
+
+// A total adds its columns as written, a negative amount included, while the reading counts it on its side.
+func TestATotalOfSignedColumns(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nContra,-10.00,\nCapital,,90.00\nTOTAL,90.00,90.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	reading := layout.Read(file.Tables[0])
+	if len(reading.Problems) != 0 || !reading.Balanced || reading.Debits != "100" || reading.Credits != "100" {
+		t.Fatalf("signed columns and their total: %+v", reading)
+	}
+}
+
+// A workbook amount's currency is the one its number format shows: a euro format in a dollar Trial Balance is a
+// problem, a local-currency format a note to confirm.
+func TestAWorkbookAmountsCurrencyIsItsFormats(t *testing.T) {
+	for code, want := range map[string]string{`[$€-407] #,##0.00`: "€", `"USD" #,##0`: "USD", `\£#,##0.00`: "£", `[Red]#,##0;[$-409]0`: "", `#,##0.00 "Dr"`: "", `_-$* #,##0.00_-`: "$"} {
+		if got := formatMark(code); got != want {
+			t.Fatalf("%s: %q, not %q", code, got, want)
+		}
+	}
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	file, err := Read("tb.xlsx", workbook(t, map[string]string{
+		"xl/workbook.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/styles.xml":              `<styleSheet ` + main + `><numFmts count="1"><numFmt numFmtId="164" formatCode="[$€-407] #,##0.00"/></numFmts><cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="164"/><xf numFmtId="7"/></cellXfs></styleSheet>`,
+		"xl/worksheets/sheet1.xml": `<worksheet ` + main + `><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Account</t></is></c><c r="B1" t="inlineStr"><is><t>Debit</t></is></c><c r="C1" t="inlineStr"><is><t>Credit</t></is></c></row>` +
+			`<row r="2"><c r="A2" t="inlineStr"><is><t>Cash</t></is></c><c r="B2" s="1"><v>100</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>Capital</t></is></c><c r="C3" s="2"><v>100</v></c></row></sheetData></worksheet>`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, _ := ProposeLayout(file.Tables[0])
+	layout.Currency = "USD"
+	reading := layout.Read(file.Tables[0])
+	if len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "B2") || len(reading.Notes) == 0 || !strings.Contains(strings.Join(reading.Notes, " "), "local currency") {
+		t.Fatalf("currencies by format: %+v", reading)
+	}
+}
+
+// The digit limit counts digits, not separators: 31 ungrouped digits are not an amount, 30 grouped ones are.
+func TestTheDigitLimitCountsDigits(t *testing.T) {
+	if _, err := ParseAmount(strings.Repeat("9", 31), NumberStyle{}); err != ErrNotAmount {
+		t.Fatalf("31 digits: %v", err)
+	}
+	if a, err := ParseAmount("999"+strings.Repeat(",999", 9), NumberStyle{}); err != nil || a.Value.Num().String() != strings.Repeat("9", 30) {
+		t.Fatalf("30 grouped digits: %v %v", a, err)
+	}
+}
+
+// A mark the reader knows agrees with its currencies; one it does not know agrees with none.
+func TestCurrencyMarksAgreeOnlyWhenKnown(t *testing.T) {
+	for _, c := range []struct {
+		mark, currency string
+		agrees         bool
+	}{{"₩", "KRW", true}, {"₩", "USD", false}, {"US$", "USD", true}, {"US$", "SGD", false}, {"C$", "CAD", true}, {"kr", "SEK", true}, {"kr", "USD", false}, {"Ƀ", "USD", false}, {"¢", "USD", false}, {"USD $", "USD", true}} {
+		if MarkAgrees(c.mark, c.currency) != c.agrees {
+			t.Fatalf("%s in %s: want %v", c.mark, c.currency, c.agrees)
+		}
+	}
+}
+
+// Subtotal rows are totals, not accounts; a grand total covers every posting row, never the last section alone; text
+// amounts take every symbol the reader knows.
+func TestSubtotalsGrandTotalsAndSymbols(t *testing.T) {
+	read := func(csv string) Reading {
+		t.Helper()
+		file, err := Read("tb.csv", []byte(csv))
+		if err != nil {
+			t.Fatal(err)
+		}
+		layout, _ := ProposeLayout(file.Tables[0])
+		return layout.Read(file.Tables[0])
+	}
+	sub := read("Account,Debit,Credit\nCash,100.00,\nSubtotal,100.00,\nCapital,,100.00\nSub-total,,100.00\n")
+	if !sub.Balanced || sub.Debits != "100" || len(sub.Problems) != 0 {
+		t.Fatalf("subtotals are not accounts: %+v", sub)
+	}
+	grand := read("Account,Balance\nCash,100.00\nTotal,100.00\nCapital,-100.00\nGrand Total,-100.00\n")
+	if len(grand.Problems) != 1 || !strings.Contains(grand.Problems[0], "Grand Total") {
+		t.Fatalf("a grand total covers everything: %+v", grand)
+	}
+	if a, err := ParseAmount("₩1,000", NumberStyle{}); err != nil || a.Mark != "₩" || a.Value.Cmp(big.NewRat(1000, 1)) != 0 {
+		t.Fatalf("a won amount: %+v %v", a, err)
+	}
+	if a, err := ParseAmount("US$12.50", NumberStyle{}); err != nil || a.Mark != "US$" || !MarkAgrees(a.Mark, "USD") {
+		t.Fatalf("a prefixed dollar: %+v %v", a, err)
+	}
+}

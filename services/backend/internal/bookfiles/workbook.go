@@ -10,6 +10,7 @@ import (
 	"math"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,6 +160,16 @@ func ReadWorkbook(body []byte) (File, error) {
 		custom[f.ID] = f.Code
 	}
 	dated := make([]bool, len(styles.Cells))
+	// The currency each cell style shows: the built-in currency and accounting formats show the local one, a custom
+	// format the one it writes.
+	marked := make([]string, len(styles.Cells))
+	for i, c := range styles.Cells {
+		if code, own := custom[c.Format]; own {
+			marked[i] = formatMark(code)
+		} else if (c.Format >= 5 && c.Format <= 8) || c.Format == 42 || c.Format == 44 {
+			marked[i] = LocalCurrency
+		}
+	}
 	for i, c := range styles.Cells {
 		// The built-in date formats: 14 to 17 and 22, and the localized ones East Asian versions use (27 to 36, 50 to 58).
 		builtIn := (c.Format >= 14 && c.Format <= 17) || c.Format == 22 || (c.Format >= 27 && c.Format <= 36) || (c.Format >= 50 && c.Format <= 58)
@@ -226,6 +237,12 @@ func ReadWorkbook(body []byte) (File, error) {
 		previous := 0
 		for _, r := range data.Rows {
 			number := r.Number
+			// A row without its number takes its cells' (A5 is row 5), else follows the row before.
+			for _, c := range r.Cells {
+				if number == 0 {
+					number = rowOf(c.Ref)
+				}
+			}
 			if number == 0 {
 				number = previous + 1
 			}
@@ -264,6 +281,9 @@ func ReadWorkbook(body []byte) (File, error) {
 					cell.Kind, cell.Value = Date, c.Value
 				default:
 					cell.Kind, cell.Value = Number, c.Value
+					if c.Style >= 0 && c.Style < len(marked) {
+						cell.Mark = marked[c.Style]
+					}
 					if c.Value != "" && c.Style >= 0 && c.Style < len(dated) && dated[c.Style] {
 						if serial, err := strconv.ParseFloat(c.Value, 64); err == nil {
 							if date, ok := serialDate(epoch, serial); ok {
@@ -330,6 +350,12 @@ func serialDate(epoch time.Time, serial float64) (string, bool) {
 	return at.Format("2006-01-02T15:04:05"), true
 }
 
+// columnRange and rowRange are whole-column (A:C) and whole-row (1:3) references, each end with the $ that fixes it.
+var (
+	columnRange = regexp.MustCompile(`(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})`)
+	rowRange    = regexp.MustCompile(`(\$?)([0-9]{1,7}):(\$?)([0-9]{1,7})`)
+)
+
 // cellReference is an A1 reference in a formula, in either case: its column and row, each with the $ that fixes it.
 var cellReference = regexp.MustCompile(`(\$?)([A-Za-z]{1,3})(\$?)([0-9]{1,7})`)
 
@@ -376,7 +402,13 @@ func shiftFormula(formula string, rows, columns int) string {
 			i = end
 			continue
 		}
-		loc := cellReference.FindStringSubmatchIndex(formula[i:])
+		// The earliest reference ahead: a cell (A1), a whole-column range (A:C) or a whole-row range (1:3).
+		kind, loc := 0, cellReference.FindStringSubmatchIndex(formula[i:])
+		for k, re := range []*regexp.Regexp{columnRange, rowRange} {
+			if l := re.FindStringSubmatchIndex(formula[i:]); l != nil && (loc == nil || l[0] < loc[0]) {
+				kind, loc = k+1, l
+			}
+		}
 		next := len(formula)
 		for _, q := range []byte{'"', '\'', '['} {
 			if k := strings.IndexByte(formula[i:], q); k >= 0 && i+k < next {
@@ -409,6 +441,49 @@ func shiftFormula(formula string, rows, columns int) string {
 			continue
 		}
 		m := formula[start:end]
+		// letters is a column's letters, in the case the reference was written in.
+		letters := func(column int, written string) string {
+			l := strings.TrimRight(cellRef(column, 1), "1")
+			if written != strings.ToUpper(written) {
+				l = strings.ToLower(l)
+			}
+			return l
+		}
+		switch kind {
+		case 1:
+			g := columnRange.FindStringSubmatch(m)
+			first, last := columnOf(strings.ToUpper(g[2])+"1"), columnOf(strings.ToUpper(g[4])+"1")
+			if g[1] == "" {
+				first += columns
+			}
+			if g[3] == "" {
+				last += columns
+			}
+			if first < 0 || last < 0 || first >= 16384 || last >= 16384 {
+				out.WriteString("#REF!")
+			} else {
+				out.WriteString(g[1] + letters(first, g[2]) + ":" + g[3] + letters(last, g[4]))
+			}
+			i = end
+			continue
+		case 2:
+			g := rowRange.FindStringSubmatch(m)
+			first, _ := strconv.Atoi(g[2])
+			last, _ := strconv.Atoi(g[4])
+			if g[1] == "" {
+				first += rows
+			}
+			if g[3] == "" {
+				last += rows
+			}
+			if first < 1 || last < 1 || first > 1048576 || last > 1048576 {
+				out.WriteString("#REF!")
+			} else {
+				out.WriteString(g[1] + strconv.Itoa(first) + ":" + g[3] + strconv.Itoa(last))
+			}
+			i = end
+			continue
+		}
 		groups := cellReference.FindStringSubmatch(m)
 		column, row := columnOf(strings.ToUpper(groups[2])+"1"), rowOf("A"+groups[4])
 		if groups[1] == "" {
@@ -431,3 +506,51 @@ func shiftFormula(formula string, rows, columns int) string {
 	}
 	return out.String()
 }
+
+// formatMark is the currency a custom number format writes beside its number: a currency tag's symbol or code
+// ([$€-407], [$USD]), a symbol written bare or escaped ($, \£), or a quoted code or symbol ("€", "USD"); "" for none.
+func formatMark(code string) string {
+	var marks []string
+	add := func(m string) {
+		if m = strings.TrimSpace(m); m != "" && !slices.Contains(marks, m) {
+			marks = append(marks, m)
+		}
+	}
+	symbol := func(r rune) bool { _, ok := symbolCurrencies[r]; return ok }
+	runes := []rune(code)
+	for i := 0; i < len(runes); i++ {
+		switch r := runes[i]; {
+		case r == '"':
+			j := i + 1
+			for j < len(runes) && runes[j] != '"' {
+				j++
+			}
+			literal := strings.TrimSpace(string(runes[i+1 : min(j, len(runes))]))
+			if wholeCode.MatchString(literal) || strings.ContainsFunc(literal, symbol) {
+				add(literal)
+			}
+			i = j
+		case r == '\\' && i+1 < len(runes):
+			if symbol(runes[i+1]) {
+				add(string(runes[i+1]))
+			}
+			i++
+		case r == '[':
+			j := i + 1
+			for j < len(runes) && runes[j] != ']' {
+				j++
+			}
+			// A currency tag is [$symbol-locale]; any other bracket is a colour or a condition.
+			if tag := string(runes[i+1 : min(j, len(runes))]); strings.HasPrefix(tag, "$") {
+				add(strings.SplitN(tag[1:], "-", 2)[0])
+			}
+			i = j
+		case symbol(r):
+			add(string(r))
+		}
+	}
+	return strings.Join(marks, " ")
+}
+
+// wholeCode is a currency code written alone.
+var wholeCode = regexp.MustCompile(`^[A-Z]{3}$`)
