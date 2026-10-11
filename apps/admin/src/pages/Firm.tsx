@@ -15,7 +15,7 @@ import { Stat } from "../components/Stat";
 type Run = { id: number; workflow: string; state: string; started_by: string; created_at: string; finished_at: string | null };
 type Health = { run_id: number; finished_at: string; report: Record<string, number> } | null;
 type Limits = { max_closes: number; max_pending_jobs: number; max_model_calls_per_day: number };
-type Detail = { firm: FirmRow; last_suspension: { at: string; by: string } | null; runs: Run[]; health: Health; limits: Limits; support_owner: string; assistance_minutes: number };
+type Detail = { firm: FirmRow; last_suspension: { at: string; by: string } | null; runs: Run[]; health: Health; limits: Limits; support_owner: string; assistance_minutes: number; file_imports?: boolean };
 
 const tabs = [["", "Overview"], ["people", "People"], ["activity", "Activity"], ["audit", "Staff audit"]] as const;
 
@@ -111,6 +111,7 @@ function Overview({ detail, reload }: { detail: Detail; reload: () => void }) {
       </section>
       <Onboarding key={detail.support_owner} firm={f} detail={detail} onDone={reload} />
       <FirmLimits key={JSON.stringify(detail.limits)} firm={f} limits={detail.limits} onDone={reload} />
+      <FileImports firm={f} on={!!detail.file_imports} onDone={reload} />
       <Suspension firm={f} onDone={reload} />
     </>
   );
@@ -164,6 +165,22 @@ function FirmLimits({ firm, limits, onDone }: { firm: FirmRow; limits: Limits; o
         {field("max_pending_jobs", "Active preparation jobs", 10000)}
         {field("max_model_calls_per_day", "Model calls per day", 100000)}
       </ActionForm>
+    </section>
+  );
+}
+
+// File imports take a client's books as files. They stay off for every firm until internal validation; the
+// demonstration firm and internal firms come first (docs/books-sources.md, Delivery).
+function FileImports({ firm, on, onDone }: { firm: FirmRow; on: boolean; onDone: () => void }) {
+  const operate = usePermissions().includes("platform:operate");
+  return (
+    <section>
+      <h2>File imports</h2>
+      <p>{on ? "On: members can send clients' books as files." : "Off: clients' books arrive only from connected ledgers and labeled exports."}</p>
+      <ActionForm label={on ? "Switch file imports off" : "Switch file imports on"} allowed={operate} minLength={10} onSubmit={async (reason) => {
+        await post(`/v1/admin/firms/${encodeURIComponent(firm.id)}/file-imports`, { enabled: !on, reason });
+        onDone();
+      }} />
     </section>
   );
 }
