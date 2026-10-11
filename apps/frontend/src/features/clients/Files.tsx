@@ -98,12 +98,19 @@ const delimiters = [
 export function FilesCard({ client }: { client: string }) {
   const queryClient = useQueryClient();
   const dates = useDates();
-  const files = useQuery(workspaceQuery<{ imports: ImportRow[]; can_confirm: boolean }>(filesPath(client)));
+  const files = useQuery(workspaceQuery<{ imports: ImportRow[]; more: boolean; can_confirm: boolean }>(filesPath(client)));
+  // Older files come a hundred at a time after the newest hundred.
+  const [older, setOlder] = useState<{ imports: ImportRow[]; more: boolean } | undefined>(undefined);
   const [sending, setSending] = useState(false);
   const [open, setOpen] = useState("");
   const [all, setAll] = useState(false);
-  const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
-  const imports = files.data?.imports ?? [];
+  const reread = () => (setOlder(undefined), void queryClient.invalidateQueries({ queryKey: ["workspace"] }));
+  const imports = [...(files.data?.imports ?? []), ...(older?.imports ?? [])];
+  const more = older ? older.more : !!files.data?.more;
+  async function loadOlder() {
+    const page = await workspaceRequest(`${filesPath(client)}&offset=${imports.length}`);
+    setOlder({ imports: [...(older?.imports ?? []), ...page.imports], more: page.more });
+  }
   const latest = imports[0];
   return (
     <>
@@ -136,7 +143,14 @@ export function FilesCard({ client }: { client: string }) {
             {imports.length > 6 && (
               <li>
                 <button type="button" className="link" onClick={() => setAll(!all)}>
-                  {all ? "Show the latest six" : `Show all ${imports.length} files`}
+                  {all ? "Show the latest six" : `Show all ${imports.length}${more ? "+" : ""} files`}
+                </button>
+              </li>
+            )}
+            {(all || imports.length <= 6) && more && (
+              <li>
+                <button type="button" className="link" onClick={() => void loadOlder().then(() => setAll(true))}>
+                  Show older files
                 </button>
               </li>
             )}
@@ -245,7 +259,8 @@ function LayoutForm({
   const first = data.tables.find((t) => t.name === layout.table) ?? data.tables[0];
   const table = from > 1 ? (later.data?.tables.find((t) => t.name === first?.name) ?? undefined) : first;
   const header = first?.rows.find((r) => r.number === layout.header_row);
-  const width = Math.max(0, ...(first?.rows.slice(0, 40).flatMap((r) => r.cells.map((c) => c.column + 1)) ?? [0]));
+  // The columns are every column the rows shown use, the header row's included, however far down it is.
+  const width = Math.max(0, ...[...(first?.rows ?? []), ...(table?.rows ?? [])].flatMap((r) => r.cells.map((c) => c.column + 1)));
   const columns = Array.from({ length: width }, (_, i) => i);
   async function act(action: "preview" | "confirm") {
     setBusy(true);
@@ -261,6 +276,19 @@ function LayoutForm({
     }
   }
   const set = (change: Partial<Layout>) => (setLayout({ ...layout, ...change }), setReading(undefined));
+  async function downloadFile() {
+    try {
+      const blob = await workspaceRequest(`/client/import/file?name=${encodeURIComponent(client)}&id=${encodeURIComponent(id)}`, undefined, true);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = data.import.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The file could not be downloaded.");
+    }
+  }
   const kindOf = (row: number): RowKind => (["postings", "totals", "headings", "ignored"] as const).find((k) => layout[k]?.includes(row)) ?? "";
   const mark = (row: number, kind: RowKind) => {
     const next: Partial<Layout> = {};
@@ -468,6 +496,9 @@ function LayoutForm({
         </label>
       )}
       <DialogActions>
+        <button type="button" onClick={() => void downloadFile()}>
+          Download the file
+        </button>
         <button type="button" disabled={busy} onClick={() => void act("preview")}>
           {busy ? "Reading…" : "Preview the reading"}
         </button>
