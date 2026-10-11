@@ -163,12 +163,14 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 
 // profileChangeHolds is the months of the client the profile (currency, start) from month from would govern, up to the
 // next later profile, whose reviewed work it would contradict: an approved workpaper or a confirmed bank statement in
-// another currency, or a signed-off month whose currency or fiscal year it would change.
+// another currency, or a month signed off, with approved work or with a confirmed takeover setup whose currency or
+// fiscal year it would change.
 func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, currency string, start int) ([]string, error) {
 	// The new profile governs months from its own up to the next later profile's, which keeps the months after it.
 	// The months are locked, so a decision on one (a statement confirmed, a sign-off) waits for this change or sees it.
 	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off',
  COALESCE((SELECT profile FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'null'::jsonb),
+ EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved') OR EXISTS(SELECT 1 FROM takeover_setups t WHERE t.close_id=c.id),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved' AND upper(COALESCE(NULLIF(w.paper->'input'->>'currency',''),'USD'))<>$4)
  OR EXISTS(SELECT 1 FROM statement_extractions s WHERE s.close_id=c.id AND s.confirmed IS NOT NULL AND COALESCE(s.confirmed->>'currency','')<>'' AND upper(s.confirmed->>'currency')<>$4)
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
@@ -181,11 +183,13 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 		id, period          string
 		signed, contradicts bool
 		signedUnder         []byte
+		// reviewed says the month has approved work or a confirmed takeover setup.
+		reviewed bool
 	}
 	var months []month
 	for rows.Next() {
 		var m month
-		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.signedUnder, &m.contradicts); err != nil {
+		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.signedUnder, &m.reviewed, &m.contradicts); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -201,7 +205,21 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 			held = append(held, m.period)
 			continue
 		}
+		if !m.signed && !m.reviewed {
+			continue
+		}
+		// Approved work and a confirmed takeover setup were prepared under the month's fiscal year (and the setup under
+		// its currency): a change to them waits for them to be reopened.
 		if !m.signed {
+			p, err := preparation.ClientProfile(ctx, tx, m.id)
+			if err != nil {
+				return nil, err
+			}
+			// Its currency is held only when known: approved work's own currency is checked above, and an assumed one
+			// was never what it was prepared in.
+			if p.FiscalStart != start || (p.State != "none" && p.State != "unknown" && p.Currency != currency) {
+				held = append(held, m.period)
+			}
 			continue
 		}
 		// A signed-off month was closed under the profile kept with its sign-off (or, for one signed off before profiles

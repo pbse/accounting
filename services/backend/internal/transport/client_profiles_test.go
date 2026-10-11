@@ -187,7 +187,9 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 		db.Exec(`DELETE FROM workpapers WHERE id=$1`, paper)
 	})
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Oak Ltd", "currency": "USD", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Dollars", "rev": ""}, 409)
-	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Oak Ltd", "currency": "GBP", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Pounds, as its work is", "rev": ""}, 200)
+	oakProfile := call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Oak Ltd", "currency": "GBP", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Pounds, as its work is", "rev": ""}, 200)["profiles"].([]any)[0].(map[string]any)["id"]
+	// Its approved August work was prepared under a calendar year: moving the year's start under it waits.
+	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Oak Ltd", "currency": "GBP", "fiscal_year_start": 4, "effective_from": "2026-01", "reason": "April year", "rev": oakProfile}, 409)
 	// A month signed off under Canadian dollars, as kept with its sign-off, holds a later change to dollars even once
 	// nothing it reads says CAD any more.
 	var pine string
