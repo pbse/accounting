@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -99,13 +100,7 @@ func fileImportsOn(ctx context.Context, q rowReader, org string) (bool, error) {
 // importClient is the client a file request names (?name=), seen whole by the reader, in a firm with file imports on;
 // otherwise it answers and ok is false.
 func importClient(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, bool) {
-	asked := strings.TrimSpace(r.URL.Query().Get("name"))
-	if asked == "" || utf8.RuneCountInString(asked) > 200 {
-		problem(w, 404, "Client not found.")
-		return "", false
-	}
-	org := organization(r)
-	on, err := fileImportsOn(r.Context(), db, org)
+	on, err := fileImportsOn(r.Context(), db, organization(r))
 	if err != nil {
 		problem(w, 503, "File imports are unavailable.")
 		return "", false
@@ -114,6 +109,18 @@ func importClient(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, b
 		problem(w, 403, "File imports are not switched on for your firm yet.")
 		return "", false
 	}
+	return importOwner(w, r, db)
+}
+
+// importOwner is the client a file request names (?name=), seen whole by the reader, whether or not the firm's file
+// imports are on: a file already sent stays the firm's to download.
+func importOwner(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, bool) {
+	asked := strings.TrimSpace(r.URL.Query().Get("name"))
+	if asked == "" || utf8.RuneCountInString(asked) > 200 {
+		problem(w, 404, "Client not found.")
+		return "", false
+	}
+	org := organization(r)
 	name, known, allowed, whole, err := clientNamed(r.Context(), db, org, asked, firmAccess(r), subject(r))
 	if err != nil {
 		problem(w, 503, "The client is unavailable.")
@@ -267,10 +274,19 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
+		// The list comes in pages of a hundred, newest first, from ?offset=, and says when there are more.
+		offset := 0
+		if o := r.URL.Query().Get("offset"); o != "" {
+			var err error
+			if offset, err = strconv.Atoi(o); err != nil || offset < 0 {
+				problem(w, 422, "Say where the list continues from, as a number.")
+				return
+			}
+		}
 		rows, err := db.QueryContext(r.Context(), `SELECT i.id::text,i.period,i.name,i.format,COALESCE(i.replaces::text,''),i.actor,i.created_at,
  l.id::text,COALESCE(l.reason,''),COALESCE(l.actor,''),l.created_at,COALESCE((l.reading->>'balanced')::boolean,false),COALESCE(jsonb_array_length(l.reading->'problems'),0)
  FROM books_imports i LEFT JOIN LATERAL (SELECT * FROM books_layouts b WHERE b.import_id=i.id ORDER BY b.id DESC LIMIT 1) l ON true
- WHERE i.organization_id=$1 AND client_identity(i.organization_id,i.client_entity)=client_identity($1,$2) ORDER BY i.period DESC,i.id DESC LIMIT 100`, organization(r), name)
+ WHERE i.organization_id=$1 AND client_identity(i.organization_id,i.client_entity)=client_identity($1,$2) ORDER BY i.period DESC,i.id DESC LIMIT 101 OFFSET $3`, organization(r), name, offset)
 		if err != nil {
 			problem(w, 503, "The client's files are unavailable.")
 			return
@@ -298,7 +314,11 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client's files are unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"imports": imports, "can_confirm": canReview(r)})
+		more := len(imports) > 100
+		if more {
+			imports = imports[:100]
+		}
+		jsonReply(w, 200, map[string]any{"imports": imports, "more": more, "can_confirm": canReview(r)})
 	})
 	mux.HandleFunc("POST /v1/closes/client/imports", func(w http.ResponseWriter, r *http.Request) {
 		name, ok := importClient(w, r, db)
@@ -423,6 +443,33 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, out)
 	})
+	// The file as it was sent, byte for byte: the firm's to download at any time, its exit included.
+	mux.HandleFunc("GET /v1/closes/client/import/file", func(w http.ResponseWriter, r *http.Request) {
+		name, ok := importOwner(w, r, db)
+		if !ok {
+			return
+		}
+		var filename, format string
+		var content []byte
+		err := db.QueryRowContext(r.Context(), `SELECT name,format,content FROM books_imports WHERE id::text=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)`,
+			r.URL.Query().Get("id"), organization(r), name).Scan(&filename, &format, &content)
+		if errors.Is(err, sql.ErrNoRows) {
+			problem(w, 404, "File not found.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The file is unavailable.")
+			return
+		}
+		contentType := "text/csv"
+		if format == "xlsx" {
+			contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+		w.Write(content)
+	})
 	mux.HandleFunc("POST /v1/closes/client/import", func(w http.ResponseWriter, r *http.Request) {
 		name, ok := importClient(w, r, db)
 		if !ok {
@@ -452,6 +499,17 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		org := organization(r)
+		// With no choice of its own, a CSV is read the way its confirmed layout read it, as the reader shows it.
+		if in.CSV.Encoding == "" || in.CSV.Delimiter == "" {
+			saved, err := latestLayout(r.Context(), db, org, name, r.URL.Query().Get("id"))
+			if err != nil {
+				problem(w, 503, "The file's layout is unavailable.")
+				return
+			}
+			if saved != nil {
+				in.CSV = saved.CSV
+			}
+		}
 		summary, file, err := readImport(r.Context(), db, org, name, r.URL.Query().Get("id"), in.CSV)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")

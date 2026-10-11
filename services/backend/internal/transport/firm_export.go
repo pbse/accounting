@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -15,7 +16,7 @@ var firmExportTables = []struct{ table, order string }{
 	{"takeover_setups", "id"}, {"opening_baselines", "id"}, {"opening_cleanup_resolutions", "id"},
 	{"budget_versions", "id"}, {"cash_scenarios", "id"}, {"cash_obligations", "id"}, {"standing_approvals", "id"}, {"open_item_actions", "id"},
 	{"customer_contact_authority", "id"}, {"collection_contact_preferences", "id"}, {"email_settlements", "id"},
-	{"production_posting_grants", "id"}, {"xero_posting_grants", "id"}, {"operation_acceptances", "id"},
+	{"production_posting_grants", "id"}, {"xero_posting_grants", "id"}, {"operation_acceptances", "id"}, {"books_layouts", "id"},
 }
 
 // firmExportLimit refuses an export rather than cutting it short.
@@ -53,6 +54,33 @@ func registerFirmExport(mux *http.ServeMux, db *sql.DB) {
  'package','/v1/closes/'||c.id||'/export','binder','/v1/closes/'||c.id||'/binder') ORDER BY c.entity,c.period,c.id),'[]') FROM client_closes c WHERE c.organization_id=$1`, org) {
 			return
 		}
+		// Each client's files are listed without their bytes, with where each downloads as it was sent.
+		files := []map[string]any{}
+		rows, err := tx.QueryContext(r.Context(), `SELECT to_jsonb(i)-'content',i.id::text,i.client_entity FROM books_imports i WHERE i.organization_id=$1 ORDER BY i.id`, org)
+		if err != nil {
+			problem(w, 503, "The firm export could not be read.")
+			return
+		}
+		for rows.Next() {
+			var raw []byte
+			var id, client string
+			if err = rows.Scan(&raw, &id, &client); err != nil {
+				break
+			}
+			row := map[string]any{}
+			json.Unmarshal(raw, &row)
+			row["download"] = "/v1/closes/client/import/file?name=" + url.QueryEscape(client) + "&id=" + id
+			files = append(files, row)
+		}
+		rows.Close()
+		if err == nil {
+			err = rows.Err()
+		}
+		if err != nil {
+			problem(w, 503, "The firm export could not be read.")
+			return
+		}
+		out["books_imports"], _ = json.Marshal(files)
 		for _, t := range firmExportTables {
 			if !read(t.table, `SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.`+t.order+`),'[]') FROM `+t.table+` t WHERE t.organization_id=$1`, org) {
 				return

@@ -195,4 +195,23 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 		t.Fatalf("rows from 240: %v", later)
 	}
 	call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+big+"&from=0", nil, 422)
+
+	// A file downloads as it was sent, and the firm's export lists each with where it downloads.
+	r := httptest.NewRequest("GET", "/v1/closes/client/import/file?name=Acme%20Co&id="+id, nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: partner}))
+	w := httptest.NewRecorder()
+	store.ServeHTTP(w, r)
+	if w.Code != 200 || w.Body.String() != september || !strings.Contains(w.Header().Get("Content-Disposition"), "Acme TB September.csv") {
+		t.Fatalf("the file as sent: %d %q %s", w.Code, w.Body.String(), w.Header())
+	}
+	exported := call("user_a", []string{"clients:all", "data:manage", "workpapers:review"}, "GET", "/v1/closes/firm-export", nil, 200)["records"].(map[string]any)
+	files := exported["books_imports"].([]any)
+	if len(files) == 0 || files[0].(map[string]any)["download"] == nil || files[0].(map[string]any)["content"] != nil || len(exported["books_layouts"].([]any)) == 0 {
+		t.Fatalf("the export's files: %v", files)
+	}
+	// The list comes in pages, saying when there are more.
+	all := call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co", nil, 200)
+	rest := call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co&offset=1", nil, 200)
+	if all["more"] != false || len(rest["imports"].([]any)) != len(all["imports"].([]any))-1 {
+		t.Fatalf("the list's pages: %v %v", all["more"], len(rest["imports"].([]any)))
+	}
 }
