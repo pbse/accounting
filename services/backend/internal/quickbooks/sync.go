@@ -312,7 +312,7 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 // is the scheduler's own: none yet, or a scheduled one at least 20 hours old. The month has ended everywhere
 // (UTC-12) before the first one, so a US afternoon on the last day is never taken for the month's end.
 var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_closes c
- JOIN organizations o ON o.id=c.organization_id AND o.enabled
+ JOIN organizations o ON o.id=c.organization_id AND o.enabled AND ` + ledgers.SwitchedSQL("o.id", "quickbooks") + `
  JOIN quickbooks_connections x ON x.id=$2 AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.id=` + ReadingConnection("c.id") + `
  WHERE c.id=$1 AND c.period=$3 AND c.period<to_char((now() AT TIME ZONE 'UTC')-interval '12 hours','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
@@ -324,14 +324,16 @@ var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_
 
 // RefreshStopped is a SQL condition: the close's newest period snapshot on its reading connection is the scheduler's,
 // and the scheduler no longer refreshes it: six are taken, only the close's last free snapshot is left, it is past the
-// months scheduleSync reads, or the connection's latest finished capture failed or could not refresh the month-end.
+// months scheduleSync reads, QuickBooks is switched off for the firm, or the connection's latest finished capture failed
+// or could not refresh the month-end.
 // Later entries may then be missing, so sign-off waits for a successful read or a person's capture. A close already
 // at its twenty snapshots cannot be captured again, so it is not asked to be.
 func RefreshStopped(close string) string {
 	return `COALESCE((SELECT s.actor='scheduled-quickbooks-refresh' AND ((SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id AND z.actor='scheduled-quickbooks-refresh' AND z.payload ? 'period')>=6
  OR (SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id)=19
  OR COALESCE((SELECT y.error<>'' FROM quickbooks_entity_syncs y WHERE y.close_id=s.close_id AND y.connection_id=s.connection_id AND y.period=sc.period AND y.state IN ('completed','unchanged','failed') ORDER BY y.id DESC LIMIT 1),false)
- OR sc.period<to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=sc.id AND g.state='active'))
+ OR sc.period<to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=sc.id AND g.state='active')
+ OR NOT ` + ledgers.SwitchedSQL("sc.organization_id", "quickbooks") + `)
  FROM quickbooks_snapshots s JOIN client_closes sc ON sc.id=s.close_id WHERE s.close_id=` + close + ` AND s.payload ? 'period' AND s.connection_id=` + ReadingConnection(close) + `
  ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),false)`
 }
