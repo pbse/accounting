@@ -423,6 +423,10 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Rent and payroll total 9,040.00.", derived(0, "sum", "9040.00", "t50", "/lines/0/amount", "t50", "/lines/1/amount"))
 	rejected("Payroll including rent totals 9,040.00.", "do not all measure", derived(0, "sum", "9040.00", "t50", "/lines/1/amount", "t50", "/lines/0/amount"))
 
+	// Round twenty-two: a whole number is a count, whatever its key.
+	reads["t51"] = read(`{"coverage":{"total":3,"resolved":1}}`, "The hand-over", "get_goal", "Bluegrass Dental PLLC", "2026-10")
+	ok("Coverage has 3 accounts.", e("t51", 0, "/coverage/total", "3"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

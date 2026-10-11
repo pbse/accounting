@@ -392,6 +392,10 @@ func claimOf(read agentRead, path string) claim {
 	}
 	got, _ := valueAt(read.value, path)
 	c.money = claimMoneyKeys[last] || claimChangeKeys[last] || claimPriorKeys[last] || claimMoneyValue.MatchString(strings.TrimSpace(got)) || len(c.keys) > 0 && c.kind != "percent"
+	// The product writes money as decimal strings; a whole JSON number ("total": 3 accounts) is a count, whatever its key.
+	if n, isNumber := value.(json.Number); isNumber && !strings.Contains(n.String(), ".") {
+		c.money = false
+	}
 	return c
 }
 
