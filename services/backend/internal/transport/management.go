@@ -710,9 +710,9 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	}
 	if this.Source == "xero" {
 		var i cashFlowImport
-		var company, currency string
-		switch err = tx.QueryRowContext(ctx, `SELECT csv,source,attestation,actor,created_at,company,currency FROM cash_flow_imports WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&i.CSV, &i.Source, &i.Attestation, &i.Actor, &i.At, &company, &currency); {
-		case err == nil && company == this.realm && currency == thisBooks.Currency:
+		var currency string
+		switch err = tx.QueryRowContext(ctx, `SELECT csv,source,attestation,actor,created_at,currency FROM cash_flow_imports WHERE close_id::text=$1 AND company=$2 ORDER BY id DESC LIMIT 1`, closeID, this.realm).Scan(&i.CSV, &i.Source, &i.Attestation, &i.Actor, &i.At, &currency); {
+		case err == nil && currency == thisBooks.Currency:
 			thisBooks.Imported = &i
 		case err != nil && err != sql.ErrNoRows:
 			return nil, tieRefusal{503, "The imported cash-flow statement is unavailable."}
