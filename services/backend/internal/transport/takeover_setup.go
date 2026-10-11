@@ -16,7 +16,7 @@ import (
 )
 
 // takeoverContent is what a reviewer confirms when taking a client over: the close, the ledger company its books are read
-// from, the firm procedures in force for it (client overrides are its exceptions, the basis among them), who is assigned to
+// from (or, for books that come as files, none, with the confirmed profile), the firm procedures in force for it (client overrides are its exceptions, the basis among them), who is assigned to
 // it, the account scope proposed from this month's capture, and the monthly hand-over. It holds no times.
 func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[string]any, string, []string, error) {
 	var raw []byte
@@ -74,10 +74,21 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 		scope["digest"], scope["items"] = view.Digest, items
 	}
 	content["scope"] = scope
+	// A confirmed profile is part of what is confirmed (kept out of setups without one, so their digests stand), and
+	// lets a client whose books come as files be taken over with no connection.
+	profile, err := preparation.ClientProfile(ctx, tx, closeID)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if profile.State == "confirmed" || profile.State == "differs" {
+		content["profile"] = map[string]any{"currency": profile.Currency, "fiscal_year_start": profile.FiscalStart, "state": profile.State}
+	}
 	problems := []string{}
 	switch {
+	case len(check.Companies) == 0 && profile.State == "confirmed":
+		content["books"] = "files"
 	case len(check.Companies) == 0:
-		problems = append(problems, "Connect the client's QuickBooks or Xero company: the takeover confirms the company its books are read from.")
+		problems = append(problems, "Connect the client's QuickBooks or Xero company, or, if its books come as files, confirm its currency and fiscal year on the client's page: the takeover confirms where its books are read from.")
 	case len(check.Companies) > 1:
 		problems = append(problems, "More than one ledger company is connected for this client; disconnect the one its books are not kept in.")
 	case check.Companies[0].State != "active":

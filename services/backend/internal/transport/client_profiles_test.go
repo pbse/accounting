@@ -199,4 +199,21 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	t.Cleanup(func() { db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, pine) })
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Pine Ltd", "currency": "USD", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Dollars", "rev": ""}, 409)
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Pine Ltd", "currency": "CAD", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Canadian dollars, as signed off", "rev": ""}, 200)
+
+	// A client whose books come as files is taken over with its confirmed profile, and no connection.
+	var birch string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period,takeover) VALUES($1,'Birch Ltd','2026-08',true) RETURNING id::text`, org).Scan(&birch))
+	_, err = db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor,method) VALUES($1,'Birch Ltd','basis','Synthetic',true,'Synthetic basis','fixture','accrual')`, org)
+	must(err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM procedure_versions WHERE organization_id=$1`, org) })
+	takeover := "/v1/closes/" + birch + "/takeover-setup"
+	if p := call("user_a", partner, "GET", takeover, nil, 200)["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "confirm its currency and fiscal year") {
+		t.Fatalf("a client with neither a connection nor a profile: %v", p)
+	}
+	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Birch Ltd", "currency": "GBP", "fiscal_year_start": 4, "effective_from": "2026-08", "reason": "Books as files, in pounds", "rev": ""}, 200)
+	setup := call("user_a", partner, "GET", takeover, nil, 200)
+	content := setup["content"].(map[string]any)
+	if len(setup["problems"].([]any)) != 0 || content["books"] != "files" || content["profile"].(map[string]any)["currency"] != "GBP" {
+		t.Fatalf("a file-only client is taken over with its profile: %v", setup)
+	}
 }
