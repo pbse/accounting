@@ -8,14 +8,14 @@ import { money, workspaceRequest } from "../closes/workspace";
 // A connection is held under the name of the month it was made from (client_entity), which may be the client's alias; a
 // production company's name must match that name.
 export type QuickBooksConnection = { id: string; client_entity: string; environment: "sandbox" | "production"; state: string; realm: string; company_name: string; error: string };
-export type ProductionGrant = { id: string; realm: string; company: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string };
+export type ProductionGrant = { id: string; realm: string; company: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string; connection_id: string };
 type Client = {
   entity: string;
   can_connect: boolean;
   can_grant: boolean;
   quickbooks: QuickBooksConnection[];
   quickbooks_setup?: { sandbox: boolean; production: boolean };
-  production_grant?: ProductionGrant | null;
+  production_grants?: ProductionGrant[];
   profile: { currency: string } | null;
 };
 
@@ -30,7 +30,8 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
   const name = client.entity;
   const hash = useBrowserHash();
   const answer = useMemo(() => new URLSearchParams(hash.slice(1)), [hash]);
-  const returned = answer.has("qbo_code") ? client.quickbooks.find((c) => c.state === "authorizing" && c.environment === (answer.get("qbo_env") || "sandbox")) : undefined;
+  // The attempt Intuit returned for, named in the answer.
+  const returned = answer.has("qbo_code") ? client.quickbooks.find((c) => c.state === "authorizing" && c.id === answer.get("qbo_connection")) : undefined;
   const pending = client.quickbooks.find((c) => c.state === "pending_confirmation");
   const [open, setOpen] = useState<"" | "connect" | "finish" | "confirm" | "manage">("");
   const [busy, setBusy] = useState(false);
@@ -259,13 +260,13 @@ const kinds: [string, string][] = [
 // What may post to the client's production QuickBooks company (docs/design-system.md, Card): the bounded grant a
 // member with posting approval gives (the accounts, the kinds of draft, a limit and an expiry), or none. Posting itself
 // stays a separate decision on each draft.
-export function PostingCard({ client, onChanged }: { client: Client; onChanged: () => void }) {
+export function PostingCard({ client, connection, onChanged }: { client: Client; connection: string; onChanged: () => void }) {
   const dates = useDates();
   const name = client.entity;
-  // The production connection grants are made on: the working one, under any of the client's names, else the first.
-  const production =
-    client.quickbooks.find((c) => c.environment === "production" && (c.state === "active" || c.state === "refreshing")) ?? client.quickbooks.find((c) => c.environment === "production");
-  const grant = client.production_grant;
+  // One production connection and its grant: a month posts only through the grant on the connection it reads its
+  // books from, so a client with two companies connected has a card for each.
+  const production = client.quickbooks.find((c) => c.id === connection && c.environment === "production");
+  const grant = client.production_grants?.find((g) => g.connection_id === connection);
   const currency = client.profile?.currency ?? "USD";
   const [open, setOpen] = useState<"" | "grant" | "revoke">("");
   const [busy, setBusy] = useState(false);

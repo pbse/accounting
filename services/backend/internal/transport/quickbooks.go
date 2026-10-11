@@ -32,8 +32,8 @@ func quickbooksReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 422, "QuickBooks authorization was cancelled or invalid. Return to the client's page and connect again.")
 		return
 	}
-	var entity, environment string
-	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity,x.environment FROM quickbooks_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity, &environment)
+	var entity, environment, id string
+	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity,x.environment,x.id::text FROM quickbooks_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity, &environment, &id)
 	if err != nil {
 		problem(w, 410, "Connection attempt expired or unavailable. Start again from the client's page.")
 		return
@@ -45,7 +45,8 @@ func quickbooksReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	// The client's page holds its connections, whichever page the attempt was started from, and finishes it.
 	origin.Path, origin.RawPath = "/dashboard/clients/"+entity, "/dashboard/clients/"+url.PathEscape(entity)
-	origin.Fragment = url.Values{"qbo_code": {q.Get("code")}, "qbo_state": {q.Get("state")}, "qbo_realm": {q.Get("realmId")}, "qbo_env": {environment}}.Encode()
+	// The attempt is named, so the page finishes this one whatever others are under way.
+	origin.Fragment = url.Values{"qbo_code": {q.Get("code")}, "qbo_state": {q.Get("state")}, "qbo_realm": {q.Get("realmId")}, "qbo_env": {environment}, "qbo_connection": {id}}.Encode()
 	http.Redirect(w, r, origin.String(), http.StatusSeeOther)
 }
 

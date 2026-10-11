@@ -169,7 +169,7 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	}
 	back := httptest.NewRecorder()
 	xeroReturn(back, httptest.NewRequest("GET", "/v1/xero/callback?code=c1&state="+url.QueryEscape(state), nil), db)
-	if back.Code != 303 || !strings.HasPrefix(back.Header().Get("Location"), "https://app.example.test/dashboard/clients/Xero%20client#") {
+	if back.Code != 303 || !strings.HasPrefix(back.Header().Get("Location"), "https://app.example.test/dashboard/clients/Xero%20client#") || !strings.Contains(back.Header().Get("Location"), "xero_connection="+id) {
 		t.Fatalf("the sign-in returns to the client's page: %d %s", back.Code, back.Header().Get("Location"))
 	}
 	// The sign-in is finished on the client's page, by whoever started it; a month cannot finish or start one.

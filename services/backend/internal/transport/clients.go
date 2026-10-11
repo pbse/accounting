@@ -328,26 +328,36 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		// its names (its own first).
 		out["quickbooks_setup"] = map[string]bool{"sandbox": quickbooks.OAuthConfigured(), "production": quickbooks.OAuthConfiguredFor("production")}
 		out["xero_configured"] = xero.Configured()
-		switch grant, e := scanXeroGrant(tx.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL
- ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, name)); e {
-		case nil:
-			out["xero_grant"] = grant
-		case sql.ErrNoRows:
-			out["xero_grant"] = nil
-		default:
+		// Every posting grant of the client still in force, under any of its names, each on its own connection.
+		productionGrants, xeroGrants := []productionGrant{}, []xeroGrant{}
+		var grants []string
+		if grants, err = grantIDs(ctx, tx, `SELECT g.id::text FROM production_posting_grants g WHERE g.organization_id=$1 AND client_identity(g.organization_id,g.client_entity)=client_identity($1,$2) AND g.revoked_at IS NULL ORDER BY g.id DESC`, org, name); err == nil {
+			for _, id := range grants {
+				g, e := scanGrant(tx.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.id=$1::bigint`, id))
+				if e != nil {
+					err = e
+					break
+				}
+				productionGrants = append(productionGrants, g)
+			}
+		}
+		if err == nil {
+			if grants, err = grantIDs(ctx, tx, `SELECT id::text FROM xero_posting_grants WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY id DESC`, org, name); err == nil {
+				for _, id := range grants {
+					g, e := scanXeroGrant(tx.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE id=$1::bigint`, id))
+					if e != nil {
+						err = e
+						break
+					}
+					xeroGrants = append(xeroGrants, g)
+				}
+			}
+		}
+		if err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
-		switch grant, e := scanGrant(tx.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND client_identity(g.organization_id,g.client_entity)=client_identity($1,$2) AND g.revoked_at IS NULL
- ORDER BY lower(g.client_entity)=lower($2) DESC,g.id DESC LIMIT 1`, org, name)); e {
-		case nil:
-			out["production_grant"] = grant
-		case sql.ErrNoRows:
-			out["production_grant"] = nil
-		default:
-			problem(w, 503, "The client is unavailable.")
-			return
-		}
+		out["production_grants"], out["xero_grants"] = productionGrants, xeroGrants
 
 		// The client's currency and fiscal year as its connected ledgers report them, under any of its names, and its
 		// approved basis (a client override first, then the firm's), as a close reads it.
@@ -481,4 +491,22 @@ func wholeClient(w http.ResponseWriter, r *http.Request, db *sql.DB) (name strin
 		return "", false
 	}
 	return name, true
+}
+
+// grantIDs is the ids query returns.
+func grantIDs(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

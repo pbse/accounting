@@ -6,13 +6,13 @@ import { useDates } from "../../data/time";
 import { money, workspaceRequest } from "../closes/workspace";
 
 export type XeroConnection = { id: string; state: string; tenant_name: string; tenants: { tenantId: string; tenantName: string }[]; error: string };
-export type XeroGrant = { id: string; tenant_id: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string };
-type Client = { entity: string; can_connect: boolean; can_grant: boolean; xero: XeroConnection[]; xero_configured?: boolean; xero_grant?: XeroGrant | null; profile: { currency: string } | null };
+export type XeroGrant = { id: string; connection_id: string; tenant_id: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string };
+type Client = { entity: string; can_connect: boolean; can_grant: boolean; xero: XeroConnection[]; xero_configured?: boolean; xero_grants?: XeroGrant[]; profile: { currency: string } | null };
 
 // The connection a step acts on: the one Xero just returned for, else the one waiting for its organisation, else the
 // first (under the client's own name first, as the read lists them).
-const current = (client: Client, returning: boolean) =>
-  (returning ? client.xero.find((x) => x.state === "authorizing") : undefined) ?? client.xero.find((x) => x.state === "choose_tenant") ?? client.xero[0];
+const current = (client: Client, returning?: string | null) =>
+  (returning ? client.xero.find((x) => x.state === "authorizing" && x.id === returning) : undefined) ?? client.xero.find((x) => x.state === "choose_tenant") ?? client.xero[0];
 
 const path = (name: string, what = "xero") => `/client/${what}?name=${encodeURIComponent(name)}`;
 
@@ -24,7 +24,7 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
   const name = client.entity;
   const hash = useBrowserHash();
   const answer = useMemo(() => new URLSearchParams(hash.slice(1)), [hash]);
-  const c = current(client, answer.has("xero_code"));
+  const c = current(client, answer.has("xero_code") ? answer.get("xero_connection") : undefined);
   const returned = answer.has("xero_code") && c?.state === "authorizing";
   const [open, setOpen] = useState<"" | "connect" | "finish" | "choose" | "manage">("");
   const [busy, setBusy] = useState(false);
@@ -211,12 +211,13 @@ const kinds: [string, string][] = [
 
 // What may post to the client's Xero organisation: the bounded grant a member with posting approval gives (the Xero
 // accounts, the kinds of draft, a limit and an expiry), or none. Posting itself stays a separate decision on each draft.
-export function XeroPostingCard({ client, onChanged }: { client: Client; onChanged: () => void }) {
+export function XeroPostingCard({ client, connection, onChanged }: { client: Client; connection: string; onChanged: () => void }) {
   const dates = useDates();
   const name = client.entity;
-  // Grants are made on the working connection, under any of the client's names.
-  const c = client.xero.find((x) => x.state === "active") ?? client.xero[0];
-  const grant = client.xero_grant;
+  // One Xero connection and its grant: a month posts only through the grant on the organisation it reads its books
+  // from, so a client with two organisations connected has a card for each.
+  const c = client.xero.find((x) => x.id === connection);
+  const grant = client.xero_grants?.find((g) => g.connection_id === connection);
   const currency = client.profile?.currency ?? "USD";
   const [open, setOpen] = useState<"" | "grant" | "revoke">("");
   const [busy, setBusy] = useState(false);

@@ -31,8 +31,8 @@ func xeroReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 422, "Xero sign-in was cancelled or invalid. Return to the client's page and connect again.")
 		return
 	}
-	var entity string
-	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity FROM xero_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity)
+	var entity, id string
+	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity,x.id::text FROM xero_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity, &id)
 	if err != nil {
 		problem(w, 410, "Connection attempt expired or unavailable. Start again from the client's page.")
 		return
@@ -44,7 +44,8 @@ func xeroReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	// The client's page holds its connections, whichever page the sign-in was started from, and finishes it.
 	origin.Path, origin.RawPath = "/dashboard/clients/"+entity, "/dashboard/clients/"+url.PathEscape(entity)
-	origin.Fragment = url.Values{"xero_code": {q.Get("code")}, "xero_state": {q.Get("state")}}.Encode()
+	// The attempt is named, so the page finishes this one whatever others are under way.
+	origin.Fragment = url.Values{"xero_code": {q.Get("code")}, "xero_state": {q.Get("state")}, "xero_connection": {id}}.Encode()
 	http.Redirect(w, r, origin.String(), http.StatusSeeOther)
 }
 

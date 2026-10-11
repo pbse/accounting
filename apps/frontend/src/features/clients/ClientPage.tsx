@@ -72,8 +72,8 @@ type ClientRead = {
   // Which ledgers this server can connect, and the client's posting grants.
   quickbooks_setup?: { sandbox: boolean; production: boolean };
   xero_configured?: boolean;
-  production_grant?: ProductionGrant | null;
-  xero_grant?: XeroGrant | null;
+  production_grants?: ProductionGrant[];
+  xero_grants?: XeroGrant[];
   profile: Profile | null;
   basis: {
     method: "accrual" | "cash" | "modified_cash";
@@ -312,8 +312,12 @@ export default function ClientPage() {
           >
             {ledger.line}
           </Card>
-          <PostingCard client={client} onChanged={reread} />
-          <XeroPostingCard client={client} onChanged={reread} />
+          {postingConnections(client.quickbooks.filter((c) => c.environment === "production").map((c) => c.id), client.production_grants).map((id) => (
+            <PostingCard key={id} client={client} connection={id} onChanged={reread} />
+          ))}
+          {postingConnections(client.xero.map((x) => x.id), client.xero_grants).map((id) => (
+            <XeroPostingCard key={id} client={client} connection={id} onChanged={reread} />
+          ))}
           <Card
             icon="history"
             tone={!roster ? "wait" : "done"}
@@ -615,4 +619,9 @@ type Ledger = { source: string; short: string; name: string; line: string; held:
 // Names joined as a sentence lists them: "Ann", "Ann and Cy", "Ann, Bea and Cy".
 function listed(names: string[]) {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+// postingConnections is each connection a posting card is for: every listed connection, and any a grant is still on.
+function postingConnections(connections: string[], grants?: { connection_id: string }[]) {
+  return [...new Set([...connections, ...(grants ?? []).map((g) => g.connection_id)])];
 }
