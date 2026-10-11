@@ -10,10 +10,10 @@ import { workspaceRequest } from "./workspace";
 
 type Line = { date: string; account: string; debit?: string; credit?: string; memo: string };
 type Pending = { paper_id: string; kind: string; source: string; lines: Line[]; held?: string };
-type Journal = { id: string; batch: number; reference: string; paper_id: string; state: "exported" | "entered" | "verified" | "uncertain"; ledger_reference: string; lines: Line[]; exported_by: string; exported_at: string; entered_by?: string; entered_at?: string; note?: string };
+type Journal = { id: string; batch: number; reference: string; paper_id: string; state: "exported" | "entered" | "verified" | "uncertain" | "withdrawn"; ledger_reference: string; lines: Line[]; exported_by: string; exported_at: string; entered_by?: string; entered_at?: string; withdrawn_by?: string; withdrawn_reason?: string; note?: string };
 type JournalsRead = { pending: Pending[]; journals: Journal[]; ledger: string; journal_import: string; can_export: boolean; can_enter: boolean };
 
-const states = { exported: ["pill muted", "Exported"], entered: ["pill neutral", "Entered"], verified: ["pill", "Verified"], uncertain: ["pill danger", "Uncertain"] } as const;
+const states = { exported: ["pill muted", "Exported"], entered: ["pill neutral", "Entered"], verified: ["pill", "Verified"], uncertain: ["pill danger", "Uncertain"], withdrawn: ["pill muted", "Withdrawn"] } as const;
 
 export function Journals({ closeId }: { closeId: string }) {
   const queryClient = useQueryClient();
@@ -21,6 +21,7 @@ export function Journals({ closeId }: { closeId: string }) {
   const path = `/${closeId}/journals`;
   const read = useQuery(workspaceQuery<JournalsRead>(path));
   const [references, setReferences] = useState<Record<string, string>>({});
+  const [reasons, setReasons] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   async function act(key: string, body: object, then?: (out: { csv?: string; name?: string }) => void) {
@@ -66,7 +67,8 @@ export function Journals({ closeId }: { closeId: string }) {
         This month's books are its files, so its approved entries are entered in the client's ledger by a journal import
         {ledger ? ` into ${ledger}${journal_import ? `, through its ${journal_import}` : ""}` : ""}. Each journal's reference is in its memo, so a duplicate or
         partial import can be seen. An entered journal is verified once the month's General Ledger, exported after it was
-        entered, is accepted and holds it; until then the month is not signed off.
+        entered, is accepted and holds it; until then, or until a journal never imported is withdrawn, the month is not
+        signed off.
       </p>
       {error && <p role="alert">{error}</p>}
       <h3>Approved, not yet exported</h3>
@@ -98,6 +100,7 @@ export function Journals({ closeId }: { closeId: string }) {
               <span className={states[j.state][0]}>{states[j.state][1]}</span> {j.reference} (batch {j.batch}, draft #{j.paper_id}), exported {dates.dayMonth(j.exported_at)} by {j.exported_by}
               {j.state !== "exported" && j.ledger_reference ? `; entered as ${j.ledger_reference}${j.entered_at ? ` ${dates.dayMonth(j.entered_at)}` : ""}${j.entered_by ? ` by ${j.entered_by}` : ""}` : ""}
               {j.note && <small> {j.note}</small>}
+              {j.state === "withdrawn" && <small> Withdrawn by {j.withdrawn_by}: {j.withdrawn_reason}</small>}
               {can_enter && j.state === "exported" && (
                 <span>
                   {" "}
@@ -110,6 +113,22 @@ export function Journals({ closeId }: { closeId: string }) {
                   />
                   <button type="button" disabled={!!busy || !(references[j.id] ?? "").trim()} onClick={() => void act(j.id, { action: "entered", journal: j.id, ledger_reference: references[j.id] })}>
                     Recorded as entered
+                  </button>
+                </span>
+              )}
+              {/* A journal never imported is withdrawn, with why, so its source can be exported again. */}
+              {can_enter && j.state !== "verified" && j.state !== "withdrawn" && (
+                <span>
+                  {" "}
+                  <input
+                    aria-label={`Why ${j.reference} was not imported`}
+                    placeholder="Why it was not imported"
+                    maxLength={500}
+                    value={reasons[j.id] ?? ""}
+                    onChange={(e) => setReasons({ ...reasons, [j.id]: e.target.value })}
+                  />
+                  <button type="button" disabled={!!busy || !(reasons[j.id] ?? "").trim()} onClick={() => void act(j.id, { action: "withdraw", journal: j.id, reason: reasons[j.id] })}>
+                    Withdraw
                   </button>
                 </span>
               )}

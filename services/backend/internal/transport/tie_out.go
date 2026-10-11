@@ -208,7 +208,8 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 		return tieOutcome{}, tieRefusal{503, "Could not read posting records."}
 	}
 	// A journal written back to the client's ledger is in the file's balances once verified in them; entered, it was
-	// posted after the file was exported; uncertain, its outcome is unknown. The newest journal of a draft decides.
+	// posted after the file was exported; uncertain, its outcome is unknown; withdrawn, it was never posted. The newest
+	// journal of a draft decides.
 	if filesMonth != nil {
 		journals, err := journalsOf(ctx, tx, id, filesMonth)
 		if err != nil {
@@ -216,7 +217,7 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 		}
 		as := map[string]string{"exported": "proposed", "entered": "posted_after_capture", "verified": "in_balance", "uncertain": "unknown"}
 		for _, j := range journals {
-			if _, seen := postings[j.PaperID]; !seen {
+			if _, seen := postings[j.PaperID]; !seen && j.State != "withdrawn" {
 				postings[j.PaperID] = as[j.State]
 			}
 		}

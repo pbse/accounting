@@ -538,15 +538,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		t.Fatalf("the exported journal: %v", exported)
 	}
 	call("user_a", partner, "POST", journalsPath, map[string]any{"action": "export", "confirmed": true}, 409)
-	// Recording a journal as entered takes posting:approve.
-	entering := map[string]any{"action": "entered", "journal": journal["id"], "ledger_reference": "JE-77", "confirmed": true}
-	call("user_a", partner, "POST", journalsPath, entering, 403)
-	call("user_a", append([]string{"posting:approve"}, partner...), "POST", journalsPath, entering, 200)
-	if entered := call("user_a", partner, "GET", journalsPath, nil, 200)["journals"].([]any)[0].(map[string]any); entered["state"] != "entered" || entered["ledger_reference"] != "JE-77" {
-		t.Fatalf("an entered journal: %v", entered)
-	}
-	// Entered, it waits for a ledger that holds it: February's, exported before it was entered, neither verifies it nor
-	// misses it, and the month's sign-off waits.
+	// Exported, it holds the month's sign-off until it is verified in the month's books.
 	journalBlockers := func() []string {
 		t.Helper()
 		tx, err := db.BeginTx(t.Context(), nil)
@@ -556,6 +548,18 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		must(err)
 		return slices.DeleteFunc(slices.Clone(r.Blockers), func(b string) bool { return !strings.Contains(b, "journal "+reference) })
 	}
+	if held := journalBlockers(); len(held) != 1 || !strings.Contains(held[0], "exported but not recorded as entered") {
+		t.Fatalf("an exported journal holds the sign-off: %v", held)
+	}
+	// Recording a journal as entered takes posting:approve.
+	entering := map[string]any{"action": "entered", "journal": journal["id"], "ledger_reference": "JE-77", "confirmed": true}
+	call("user_a", partner, "POST", journalsPath, entering, 403)
+	call("user_a", append([]string{"posting:approve"}, partner...), "POST", journalsPath, entering, 200)
+	if entered := call("user_a", partner, "GET", journalsPath, nil, 200)["journals"].([]any)[0].(map[string]any); entered["state"] != "entered" || entered["ledger_reference"] != "JE-77" {
+		t.Fatalf("an entered journal: %v", entered)
+	}
+	// Entered, it waits for a ledger that holds it: February's, exported before it was entered, neither verifies it nor
+	// misses it, and the month's sign-off waits.
 	if held := journalBlockers(); len(held) != 1 || !strings.Contains(held[0], "entered but not yet verified") {
 		t.Fatalf("an entered journal holds the sign-off: %v", held)
 	}
@@ -577,8 +581,17 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if held := journalBlockers(); len(held) != 1 || !strings.Contains(held[0], "is uncertain. Found in Acme 2027-02.csv more than once: 3 lines carry its reference, for its 2.") {
 		t.Fatalf("a journal found twice: %v", held)
 	}
+	// A journal the month's ledger holds any line of cannot be withdrawn; one it holds none of can, with why, and then
+	// holds the sign-off no more.
+	poster := append([]string{"posting:approve"}, partner...)
+	withdrawing := map[string]any{"action": "withdraw", "journal": journal["id"], "reason": "Not imported: the client keyed it by hand", "confirmed": true}
+	call("user_a", poster, "POST", journalsPath, withdrawing, 409)
 	_, err = db.Exec(`DELETE FROM books_lines WHERE version_id=$1::bigint AND position>1000`, februaryMonth.Version)
 	must(err)
+	call("user_a", poster, "POST", journalsPath, withdrawing, 200)
+	if held := journalBlockers(); len(held) != 0 {
+		t.Fatalf("a withdrawn journal holds no sign-off: %v", held)
+	}
 	// A month whose books are a ledger's posts its entries instead.
 	call("user_a", partner, "GET", "/v1/closes/"+octoberClose+"/journals", nil, 409)
 	// March's ledger opens at February's derived balances, never at February's lines.
