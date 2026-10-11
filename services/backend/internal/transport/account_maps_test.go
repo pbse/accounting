@@ -75,12 +75,17 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		return send(subject, permissions, method, path, "application/json", raw, want)
 	}
 	// A month's file, its layout confirmed: number, name, type, debit and credit.
-	confirmLayout := func(id string, table any, period string) {
+	confirmLayoutWith := func(id string, table any, period string, marks map[string]any) {
 		t.Helper()
-		call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+id, map[string]any{"action": "confirm", "reason": "Layout checked", "layout": map[string]any{"table": table, "header_row": 1,
+		layout := map[string]any{"table": table, "header_row": 1,
 			"columns": map[string]string{"0": "account_number", "1": "account_name", "2": "account_type", "3": "debit", "4": "credit"}, "style": map[string]any{"decimal_comma": false, "scale": 1},
-			"as_of": period + "-30", "currency": "USD"}}, 200)
+			"as_of": period + "-30", "currency": "USD"}
+		for k, v := range marks {
+			layout[k] = v
+		}
+		call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+id, map[string]any{"action": "confirm", "reason": "Layout checked", "layout": layout}, 200)
 	}
+	confirmLayout := func(id string, table any, period string) { t.Helper(); confirmLayoutWith(id, table, period, nil) }
 	month := func(period, content string) string {
 		t.Helper()
 		var b bytes.Buffer
@@ -233,17 +238,25 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	if versions != 4 {
 		t.Fatalf("each confirmation a version holding the whole map: %d", versions)
 	}
-	// A section's total closes its heading: an account after "Total Current Assets" is proposed from its name, not as
-	// a current asset.
-	december := month("2026-12", "Number,Account,Type,Debit,Credit\n,Current Assets,,,\n1000,Business Checking,Bank,1500.25,\n,Total Current Assets,,1500.25,\n7000,Consulting income,,,1500.25\n")
+	// A section's total closes the heading it names and those inside it: accounts after "Total Assets" are proposed
+	// from their names and numbers, not as assets.
+	december := month("2026-12", "Number,Account,Type,Debit,Credit\n,Assets,,,\n,Current Assets,,,\n1000,Business Checking,Bank,1500.25,\n,Fixed Assets,,,\n1500,Equipment,,500.00,\n,Total Assets,,2000.25,\n2000,Suspense,,,500.00\n7000,Consulting income,,,1500.25\n")
+	// The rows naming sections without amounts are marked as headings, as a reviewer marks them.
+	confirmLayoutWith(december, call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+december, nil, 200)["import"].(map[string]any)["confirmed"].(map[string]any)["layout"].(map[string]any)["table"],
+		"2026-12", map[string]any{"headings": []int{2, 3, 5}})
 	var headings, totals int
-	must(db.QueryRow(`SELECT count(*) FILTER (WHERE e->>'kind'='heading'),count(*) FILTER (WHERE e->>'kind'='total') FROM books_layouts l,jsonb_array_elements(l.reading->'lines') e WHERE l.import_id::text=$1`, december).Scan(&headings, &totals))
-	if headings != 1 || totals != 1 {
-		t.Fatalf("December's reading has its heading and its total: %d %d", headings, totals)
+	must(db.QueryRow(`SELECT count(*) FILTER (WHERE e->>'kind'='heading'),count(*) FILTER (WHERE e->>'kind'='total') FROM books_layouts l,jsonb_array_elements(l.reading->'lines') e WHERE l.id=(SELECT max(id) FROM books_layouts WHERE import_id::text=$1)`, december).Scan(&headings, &totals))
+	if headings != 3 || totals != 1 {
+		var kinds string
+		db.QueryRow(`SELECT string_agg((e->>'kind')||':'||(e->>'name'),' | ') FROM books_layouts l,jsonb_array_elements(l.reading->'lines') e WHERE l.id=(SELECT max(id) FROM books_layouts WHERE import_id::text=$1)`, december).Scan(&kinds)
+		t.Fatalf("December's reading has its headings and its total: %d %d (%s)", headings, totals, kinds)
 	}
 	for _, raw := range call("user_b", preparer, "GET", "/v1/closes/client/import/accounts?name=Acme%20Co&id="+december, nil, 200)["accounts"].([]any) {
-		if a := raw.(map[string]any); a["key"] == "n:7000" && (a["proposal"].(map[string]any)["class"] != "Revenue" || a["proposal"].(map[string]any)["from"] != "name") {
-			t.Fatalf("an account after a section's total: %v", a)
+		a := raw.(map[string]any)
+		p := a["proposal"].(map[string]any)
+		if a["key"] == "n:7000" && (p["class"] != "Revenue" || p["from"] != "name") || a["key"] == "n:2000" && (p["class"] != "Liability" || p["from"] != "number") ||
+			a["key"] == "n:1500" && (p["type"] != "Fixed Asset" || p["from"] != "heading") {
+			t.Fatalf("an account after a section's total, or inside a nested one: %v", a)
 		}
 	}
 	// A deletion that changes the map in place refuses choices made on it before.

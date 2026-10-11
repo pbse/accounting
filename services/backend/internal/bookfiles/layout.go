@@ -243,6 +243,15 @@ var totalName = regexp.MustCompile(`(?i)^(grand\s+|sub[\s-]?)?totals?\b|\b(sub[\
 // "Total", "TOTAL", "Subtotal" and "Grand total" total everything, or the section since the total before.
 var totalLabel = regexp.MustCompile(`(?i)^(grand\s+|sub[\s-]?)?totals?\b(\s+for\b)?[\s:-]*|[\s:-]*\b(sub[\s-]?)?totals?$`)
 
+// TotalOf is what a total row's label totals ("Current Assets" for "Total Current Assets"), or "" for a total of
+// everything ("Total", "Grand total").
+func TotalOf(label string) string {
+	if grandTotal.MatchString(label) {
+		return ""
+	}
+	return strings.TrimSpace(totalLabel.ReplaceAllString(label, ""))
+}
+
 // grandTotal is a total of the whole table, never of a section.
 var grandTotal = regexp.MustCompile(`(?i)^grand\s+totals?\b`)
 

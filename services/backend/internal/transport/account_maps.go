@@ -143,7 +143,18 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 		case bookfiles.Heading:
 			headings = append(headings, l.Name)
 		case bookfiles.Total:
-			if len(headings) > 0 {
+			// A total closes the heading it names and every heading inside it ("Total Assets" closes "Assets" and
+			// "Fixed Assets" under it); one that names none closes the innermost.
+			closed := false
+			if of := bookfiles.TotalOf(l.Name); of != "" {
+				for i := len(headings) - 1; i >= 0; i-- {
+					if strings.EqualFold(strings.TrimSpace(headings[i]), of) {
+						headings, closed = headings[:i], true
+						break
+					}
+				}
+			}
+			if !closed && len(headings) > 0 {
 				headings = headings[:len(headings)-1]
 			}
 		case bookfiles.Posting:
