@@ -932,10 +932,10 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	if _, err = finish.ExecContext(persist, `UPDATE preparation_jobs SET state=$2,error=$3 WHERE id=$1`, id, state, message); err != nil {
 		return true, err
 	}
-	// Read as a prepaid invoice, this document may have been the last thing another invoice's job was left for a person
-	// over: a job not yet confirmed, whose every other unused document now proves to be another invoice, is read again.
+	// Read as a prepaid invoice or a statement, this document may have been the last thing another invoice's job was left
+	// for a person over: a job not yet confirmed, whose every other unused document now proves to be another invoice, is read again.
 	// Siblings someone holds are skipped; a sibling still waiting on a document not yet read stays as it is.
-	if (state == "needs_confirmation" || state == "queued") && proposal.Kind == "prepaid" && proposal.Engine == "openai" {
+	if (state == "needs_confirmation" || state == "queued") && llm.IsModelEngine(proposal.Engine) && slices.Contains([]string{"prepaid", "reconciliation", "payroll", "loan", "unsupported"}, proposal.Kind) {
 		if err = rereadSiblings(persist, finish, closeID, id, primary); err != nil {
 			return true, err
 		}
