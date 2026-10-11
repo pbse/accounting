@@ -349,6 +349,11 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if accounts := budget["accounts"].([]any); len(accounts) != 2 || budget["reason"] == "Capture this month's QuickBooks period snapshot or Xero Trial Balance first." {
 		t.Fatalf("January's budget from its file: %v", budget)
 	}
+	// The tie-out compares the file's balance-sheet accounts with their support: the bank, to be reconciled.
+	tie := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200)
+	if rows := tie["rows"].([]any); tie["snapshot"].(map[string]any)["source"] != "files" || len(rows) != 1 || rows[0].(map[string]any)["account_id"] != "n:1000" || rows[0].(map[string]any)["hint"] != "Reconcile it to the bank statement." {
+		t.Fatalf("January's tie-out from its file: %v", tie)
+	}
 	// Its coverage is the file's accounts: the bank to reconcile, the rest for review, decided on the file's books.
 	coverage := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/coverage", nil, 200)["coverage"].(map[string]any)
 	kinds := map[string]string{}
@@ -401,6 +406,9 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	must(err)
 	if pack = packOf(); pack["state"] != "waiting" || !strings.Contains(pack["reason"].(string), "Debits equal credits") {
 		t.Fatalf("a held file's pack waits: %v", pack)
+	}
+	if tie = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200); !strings.Contains(fmt.Sprint(tie["error"]), "Debits equal credits") || len(tie["rows"].([]any)) != 0 {
+		t.Fatalf("a held file's tie-out names its checks: %v", tie)
 	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"maps"
 	"math/big"
 	"net/http"
 	"slices"
@@ -140,6 +142,30 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 	var balances []ledger.AccountBalance
 	var readErr error
 	switch {
+	case source == "files":
+		// A month whose books are its files ties out its accepted file's balances; nothing is posted to a file.
+		b, month, err := fileMonthBooks(ctx, tx, id)
+		if err != nil {
+			return tieOutcome{}, tieRefusal{503, "The month's books are unavailable."}
+		}
+		if b == nil {
+			return tieOutcome{Rows: []tieRow{}, Unmatched: []map[string]string{}, Unclassified: []map[string]string{}}, nil
+		}
+		// Its books were taken when the file was exported: a draft approved since is not expected in them.
+		var at time.Time
+		if err = tx.QueryRowContext(ctx, `SELECT exported_on::timestamp AT TIME ZONE 'UTC' FROM books_import_acceptances WHERE id::text=$1`, month.Acceptance).Scan(&at); err != nil {
+			return tieOutcome{}, tieRefusal{503, "The month's books are unavailable."}
+		}
+		realm, tenant, started = "", "", time.Time{}
+		snapshot = map[string]any{"id": fileCapture + month.Version, "captured_at": at, "stale": false, "source": "files"}
+		currency = b.Currency
+		if len(month.Holds) > 0 {
+			readErr = errors.New("the accepted file " + month.File + " has checks that hold its statements: " + strings.Join(month.Holds, "; "))
+		}
+		for _, key := range slices.Sorted(maps.Keys(b.Balances)) {
+			a := b.Accounts[key]
+			balances = append(balances, ledger.AccountBalance{ID: key, Name: a.Name, Class: a.Class, AccountType: a.Type, Subtype: a.Subtype, Net: b.Balances[key]})
+		}
 	case xeroErr == nil && (err == sql.ErrNoRows || xeroAt.After(capturedAt)):
 		snapshot = map[string]any{"id": xeroID, "captured_at": xeroAt, "stale": xeroStale, "source": "xero"}
 		// Without the time the Trial Balance was requested, no journal is taken to be in it.
