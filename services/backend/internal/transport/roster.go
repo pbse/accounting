@@ -551,6 +551,11 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
 			organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r))
 		// The ledger the new client keeps, unless one is recorded for it already (a client added again after leaving).
+		// The client's ledgers are locked as its page locks them, so a correction made there meanwhile is seen, not
+		// replaced.
+		if err == nil && in.Ledger != "" {
+			_, err = tx.ExecContext(r.Context(), clientLedgersLock, organization(r), in.Entity)
+		}
 		if err == nil && in.Ledger != "" {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_ledgers(organization_id,client_entity,ledger,other_name,reason,actor) SELECT $1,$2,$3,$4,'Recorded when the client was added',$5
  WHERE NOT EXISTS(SELECT 1 FROM current_client_ledgers WHERE organization_id=$1 AND client=client_identity($1,$2))`, organization(r), in.Entity, in.Ledger, strings.TrimSpace(in.OtherName), subject(r))

@@ -120,6 +120,10 @@ func connectorOn(ctx context.Context, q interface {
 	return on, err
 }
 
+// clientLedgersLock serializes the writes of one client's ledger, under any of its names ($1 the firm, $2 a name): its
+// page's corrections and the ledger recorded when it is added.
+const clientLedgersLock = `SELECT pg_advisory_xact_lock(hashtext('client_ledgers:'||$1||':'||client_identity($1,$2)))`
+
 // canRecordLedger is a member who may record or correct a client's ledger: one who manages the roster (who adds
 // clients), or one who may connect its ledgers.
 func canRecordLedger(r *http.Request) bool { return canManageRoster(r) || canConnect(r) }
@@ -185,7 +189,7 @@ func registerLedgers(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		// One change at a time, against the ledger the person read.
-		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('client_ledgers:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
+		if _, err = tx.ExecContext(ctx, clientLedgersLock, org, name); err != nil {
 			problem(w, 503, "The client's ledger is unavailable.")
 			return
 		}
