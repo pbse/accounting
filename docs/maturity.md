@@ -1,5 +1,11 @@
 # Product maturity and design-partner readiness
 
+**Latest review:** [October 10 product maturity and differentiation](#product-maturity-and-differentiation-review-2026-10-10), checked against PR #349. Start there for current findings; older sections retain their dated baseline. The [agent-first build plan](agent-first-build-plan.md) continues to govern launch scope.
+
+**Build handoff:** [Product fixes and accuracy improvements](agent-first-implementation-handoff.md) translates that review, the founder's supervision requirements and the inspected close-page prototype into concrete work, tests and acceptance evidence. Use it alongside the governing plan; the fixes are not claimed implemented.
+
+**Home/navigation decision:** the founder approved the demo's main Home composition, with the existing Clients page retained for company/month browsing. The [detailed handoff and screenshot](agent-first-implementation-handoff.md#b02--approved-home-and-scalable-client-navigation) explicitly exclude the demo's expanded company/month sidebar tree. Home/chat/notices still open precise decisions directly, preserving simple supervision at portfolio scale.
+
 **Status:** supporting evidence and implementation handoff, aligned on 2026-10-02 with the [agent-first product completion plan](agent-first-build-plan.md), merged in [PR #223](https://github.com/pbse/accounting/pull/223). **That plan governs remaining scope, sequencing and launch gates.** This document supplies dated audit findings, buyer analysis and implementation detail; it does not certify accounting accuracy or create a competing backlog. Recheck current code, [delivery progress](implementation-backlog.md), [validation history](validation.md) and [deployment guide](deployment.md) before acting.
 
 ## Alignment with the governing build plan
@@ -420,3 +426,155 @@ Use the following working model:
 Engineering owns building and testing now. The founder owns the offer and priorities. The firm's authorized accountant remains responsible for its policies, consequential approvals and sign-off when the product is used. External review strengthens the release evidence; it should be commissioned against concrete work rather than made a prerequisite to starting that work.
 
 Build through canonical phases A–E: truthful takeover/portfolio foundations; safe complete accounting, replies and continuity; management accounts and budgets; maintained cash planning and AR/AP actions; then independent accounting, security, usability and hosted acceptance of all B01–B12. No engineering work needs to wait for recruiting an accounting lead. Independent professional acceptance remains a release requirement and can be commissioned as a bounded paid engagement.
+
+## Product maturity and differentiation review (2026-10-10)
+
+### Verdict and review boundary
+
+**Krith now has a credible agent-first product surface and substantial accounting infrastructure. Keep this UI and build on it. It is not yet evidenced as a mature, repeatable customer service.** The largest remaining gap is reliable completion of ordinary mixed accounting work with low human effort, followed by independent proof of the complete hosted journey. More chat capability alone will not close that gap.
+
+Reviewed a pinned archive of `bcb5c17157598e8ee4d791324176d42b10a2235e` (PR #349). The working checkout advanced from PR #348 during inspection, so execution checks and the browser preview used the pinned copy. This is a targeted product, source and local-behavior review, not a comprehensive security audit, an accountant's acceptance or a production inspection.
+
+The [agent-first build plan](agent-first-build-plan.md) continues to govern B01–B12 and phases A–E. Recommendations below distinguish completion of that scope from proposed differentiation experiments. They do not silently add launch gates. The October 10 [books-sources track](books-sources.md) remains adopted, optional to launch and subject to its recorded decisions. Krith supersedes the older Tray UI recommendations in this document; do not restore the former four-card Home.
+
+### What has materially improved
+
+| Area | Evidence in the current build | Judgment |
+| --- | --- | --- |
+| Agent-first interface | Krith Home stage, page-scoped composer, recent chats, live Needs you notices, separate Clients/Closes, task-led close overview. Inspected locally with the shipped synthetic seed. | A coherent foundation. Preserve progressive disclosure and precise controls beside chat. |
+| Chat | `transport/agent.go`: model-chosen permission-checked reads, bounded rounds/calls, proposal cards, confirmation paths, session history and access pruning; executives get their own restricted read tools. | Real tool use now exists. The old keyword-router-only assessment is obsolete for enabled firms. Natural-language quality and live reliability still require evaluation. |
+| Workflow infrastructure | `internal/wf/engine.go`, `workflows/close_goal/workflow.go`: durable runs, leases, crash/replay behavior, periodic jobs and close-goal progression. Existing intake/delivery queues retain their own durable execution. | Reusable execution foundation. Its value depends on the supported accounting jobs it can complete. A new engine is unnecessary. |
+| Financial deliverables | Management statements and publication history, budget import/mapping/approval/comparison, 13-week cash schedules/scenarios/reviews and executive access. See [reports](management-reports.md) and [cash plan](cash-plan.md). | Substantial B07–B10 implementation now exists. These should no longer be recommended as entirely new features. Complete and validate the joined journeys. |
+| Onboarding and demonstration | Takeover confirmation/baseline paths and a resettable ten-client, four-month seed through real product routes. | Much better sales preparation and reproducibility; synthetic prepared results are not evidence of autonomous preparation or real-book acceptance. |
+| Quality tooling | Local database tests, acceptance runner, seven sample cases and a 40-question/20-refusal chat evaluation set. | The harness now exists. The release corpus, actual-model outcome record and independent acceptance remain separate work. |
+
+### Concrete maturity gaps
+
+#### 1. A correct cited number can still support the wrong claim — reproduced
+
+In `services/backend/internal/transport/agent.go`, `substantiates` (line 469 at this revision) accepts a shared numeric value as evidence that a cited field supports a sentence. `agentSupport` (line 569) validates field/value presence, sentence support and selected state words, but does not establish the metric's meaning.
+
+A local adversarial probe supplied a tool result `{"receivables":"8000.00"}` and the answer **“Net income is 8,000.00.”**, citing `/receivables` with value `8000.00`. The support gate accepted it. This reproduces a validator gap; it does not establish how often a live model produces the wrong claim. It affects the trustworthiness of financial answers, not a demonstrated ledger-write bypass.
+
+**Required response:** bind critical financial claims to metric identity, entity, period, basis/currency and source revision. Begin with existing report fields and deterministic rendering of their labels/amounts; permit narrative around those facts without allowing the model to relabel them. Add negative cases for same number/wrong account, wrong period, balance versus movement, forecast versus actual and asserted business cause without evidence. Avoid another general reasoning framework. Typed fact references and narrowly scoped server calculations can reuse existing financial reads.
+
+#### 2. Automatic accounting preparation remains narrower than the interface
+
+`preparation/straight.go:46` still restricts the document-to-draft straight-through path to an agent-read prepaid invoice with the approved equal-full-month method and matching current QBO evidence. At lines 82–87, other non-machine supporting or unselected documents return the item to a person. This was rechecked in code and in the existing tests. It is not a claim that every recurring schedule or delegated job is manual: other carry-forward and standing-approval paths exist.
+
+**Required response (B03/B04/B11):** identify source relationships per work item, including credits and amendments, so unrelated documents do not halt ordinary preparation and relevant contradictions cannot disappear. Extend approved-method eligibility to the required bank/card, accrual, asset, debt, deferred-revenue and payroll-summary jobs. Measure the full required population, not only easy invoices. Keep uncertainty visible; deleting the protective guard is not an acceptable shortcut.
+
+#### 3. The engine needs complete customer jobs above it
+
+A delegated close can persist and resume. Many chat actions still begin with a proposal card, and a turn can carry only one proposal. Those are explicit controls, not inherently defects. However, repeated human instructions to start each already-delegated internal step would still make the accountant the coordinator.
+
+**Required response (B04–B06/B11):** complete a bounded recurring mandate such as “prepare this client's month under these methods; bring me treatment decisions and external approvals.” Keep proposed, queued, running, blocked, ready, approved, externally verified and signed-off distinct. Test closed browser, duplicate events, interruption, revoked authority, partial reply and next month. Extend the existing goal and operation records rather than introduce a second plan store. External messages, posting and publication retain human approval.
+
+#### 4. Passing tests and populated demos are not the release evidence
+
+The [acceptance corpus guide](acceptance-corpus.md) explicitly says the independent release corpus is not yet assembled. Its sample is seven synthetic cases; its first case model is centered on prepaid intake and does not cover all client replies, late changes, external-write timeouts and recovery as complete corpus journeys. The October 8 validation record says the chat golden set had not been replayed against a live provider. No later recorded passing replay was located in this review.
+
+The provider inventory is dated October 6, with some later additions; it records synthetic verification for core integrations and pending real-provider work. Later sign-in/performance work shows that “nothing has ever worked live” would be too broad. I did not inspect current hosted configuration or verify ledger/model/mail/scanner operation remotely. **The defensible finding is that a dated, complete provider-to-customer acceptance record was not found, not that every hosted service is currently broken.**
+
+**Required response (phase E/B12):** assemble independent expected results, run the selected model on held-out cases, exercise each offered provider operation and complete three varied eligible clients across two periods plus the broader corpus. A 90% chat aggregate score must never waive a critical incorrect financial assertion or unauthorized effect. Record accuracy by task, abstention, correction effort, model/version, latency, cost and denominators. No full-time accounting-lead hire is needed to develop this; bounded independent professional review remains necessary before claiming accepted treatments.
+
+#### 5. Financial planning needs complete, dated inputs and precise matching
+
+The cash plan already has exact arithmetic, daily lows, assumptions and preserved reviews. These are real strengths. Its usefulness still depends on fresh book cash, complete open items and confirmed future obligations; an accurate forecast calculation on missing commitments is not decision-ready.
+
+One code-review risk deserves targeted acceptance: `cash_plan.go:368–428` suppresses an outgoing recurring obligation when a counted open bill matches its vendor and due week. That is broader than matching the specific obligation. Exercise a landlord's rent and unrelated maintenance bill, multiple commitments to the same vendor and a partially invoiced commitment. Determine whether a whole obligation can disappear or the residual be understated; this review did not reproduce that scenario through the API. Use explicit bill-to-obligation links or amount/period residual handling before claiming the estimate has been fully replaced.
+
+#### 6. Operational maturity must be visible in the product and evidence
+
+Finish B12 with a dated hosted restore, external alert delivery, reconnect and rate-limit handling, capacity/latency measurement, revocation tests, staffed incident ownership and independent security acceptance. Reconcile restored state with uncertain external effects before workers resume. Keep numeric RTO/RPO and workload targets fixed before acceptance.
+
+Make current capability and degraded state visible without exposing implementation jargon. Preserve a useful read-only view and portable current work when a model or connector is unavailable. Record recurring operator assistance and inference cost per completed client period. A model outage should suspend dependent work with a clear recovery route rather than make the workspace appear empty or successful.
+
+### The interface should stay simple as the work becomes more capable
+
+The synthetic browser inspection showed the intended calm Home, a scoped composer and a real reopened payroll close. That close surfaced five areas needing attention, including preparation, review, balance-sheet support and sign-off. The task count is an area count, not an estimate of five equal actions or proof that everything else is complete. The seed also deliberately excludes substantial account scope; it demonstrates behavior, not full-account acceptance.
+
+Improve the decision unit before adding more dashboard modules:
+
+- Group notifications that arise from one cause. “The payroll provider reissued September: compare the additional employer tax, then review the affected liability and report” is more useful than separate generic alerts requiring the accountant to discover their relationship.
+- Give each actionable item a recommendation, evidence, proposed financial effect, outstanding uncertainty, owner and next step. Materiality helps rank attention; it never waives mandatory correctness or authority checks.
+- Keep global scope, client and period visible. Offer context-specific next actions using current state; retain direct controls for frequent work and model outages.
+- Distinguish unread notices, unresolved accounting decisions and blocked customer jobs. Do not label these three different populations with an interchangeable number.
+- Hide technical detail progressively, but never hide missing obligations, excluded accounts, stale reports or proposed-versus-posted status.
+
+| Person | The few numbers and decisions worth leading with | Required qualification |
+| --- | --- | --- |
+| Firm partner | Due/overdue client deliverables; clients blocked by a person or evidence; completed comparable scopes; measured recurring human effort and rework | Include undelegated/reopened work and assistance. Margin/capacity only when fees, cost and staffing inputs exist. |
+| Accountant/reviewer | Decisions actually requiring judgment; changed amounts and affected accounts; unresolved differences; missing answers | Explain the cause and exact proposed effect. Do not sum overlapping exposure into a misleading portfolio dollar figure. |
+| CEO/CFO | Published revenue/profit versus plan; dated book cash; minimum projected daily cash/date; overdue receivables and near-term commitments; the few decisions needed | State actual/forecast, period/basis, freshness, incomplete inputs and assumptions. Working forecasts and approved publications remain distinguishable. |
+
+This respects the new Krith Home. Put detail in Closes, Reports and Cash plan, and bring a concise answer or decision into the conversation when useful.
+
+### What the market makes ordinary
+
+Primary product pages were checked on October 10, 2026. These are vendor claims, not hands-on comparative validation:
+
+- [Basis small firms](https://www.getbasis.ai/solutions/small-firms) advertises GL cleanup, source-linked entries, reconciliations, statements, cash forecasts and reusable firm procedures.
+- [Double AI Transactions](https://doublehq.com/ai-transactions/) advertises document/chat-to-transaction preparation, historical references, saved skills and review/posting. Its page identifies availability for Scale clients; older generic “coming soon” language should not be used to claim that this capability is absent.
+- [Numeric variance analysis](https://www.numeric.io/product/variance-analysis) advertises transaction/external-data explanations, configurable reports and reviewed variance commentary.
+- [Float](https://floatapp.com/) advertises maintained cash views, scenarios, open-item timing and recurring-cost suggestions.
+
+Consequently, powerful chat, an agent label, citations, recurring schedules, a workflow engine and a 13-week cash chart are not sufficient differentiation on their own. The opportunity is to prove that Krith completes the connected service with less supervision, preserves correctness through change and makes the next business action easier. Competitor silence about a mechanism is not evidence that they lack it.
+
+### Ranked additions and completion work
+
+**Founder experience clarification (2026-10-10):** every recommendation below must follow the build plan's [supervision experience contract](agent-first-build-plan.md#supervision-experience-contract) and the current [Krith design system](design-system.md). Preserve the chat-first Home and sidebar access to clients/months. Implement capability through the existing agent, decision controls and contextual views. The system prepares and coordinates; people supervise, approve, reject or improve. This clarification also governs how the earlier dashboard recommendations in this document are interpreted.
+
+These are ranked bets, not measured demand or claims of unique invention. The first three deepen mandatory scope. The later extensions can be prototyped without delaying completion of B01–B12; adopt added launch requirements only by explicitly updating the governing plan.
+
+| Priority / nature | Customer experience | Reuse and build delta | Proof of value |
+| --- | --- | --- | --- |
+| **1. Finish supported work from mixed evidence — mandatory completion** | A folder with statements, payroll, invoices and a credit becomes supported drafts plus a small set of specific questions. An unrelated invoice does not stop everything. | B03/B04/B11; reuse extraction, sources, methods and jobs. Add scoped evidence relationships, contradiction checks and per-method automatic eligibility. | Correct drafts across ordinary mixed packages, fewer factual confirmations, lower total effort; missing/contradictory evidence still blocks dependent decisions. |
+| **2. Decision packs with change impact — mandatory completion plus focused UX extension** | One payroll amendment shows affected workpapers, proposed journal difference, liability and published-report status, with the next legitimate decision beside the source. | B02/B06/B07/B11; reuse revision lineage, readiness, proposal previews and publications. Group by cause, preserve exact per-item approval and execution receipts. | The reviewer finishes correctly without reconstructing the story across tabs; unchanged approvals survive. Test after posting and after publication. |
+| **3. Firm methods that improve safely — deepen existing capability** | “Apply our approved treatment next month” produces a versioned rule proposal with scope, examples and a preview of affected clients. | B01/B04/B11; extend procedures and learning. Backtest before activation; record effective date, overrides and rollback. Reuse existing replay instead of building a generic memory product. | Repeat-month effort falls without cross-client policy leakage or retroactively changing accepted work. Exceptions remain explicit. |
+| **4. Persistent business watch with resolution — proposed extension** | “Watch for missed payroll funding or this client's broken payment promise.” The agent notices a relevant change, prepares a decision and closes the watch item only after evidence resolves it. | Extend existing goals, cash/open-item reads and Needs you. Add narrowly defined watch conditions, freshness, owner, deduplication, escalation and resolution receipts. | Actionable lead time and fewer repeated/false alerts. No notification storm, invented completion probability or implicit send/write authority. |
+| **5. Business decision through to observed outcome — proposed extension of B07–B10** | A projected cash shortfall leads to a collection draft or proposed payment-timing discussion; an approved promise changes the base plan; later captured payment reconciles the result. | Existing scenarios, open-item ownership, approved outbox and immutable reviews. Add the relationship between issue, assumptions, decision, authorized action and observed outcome; executive proposals stay distinct from base-plan authority. | Time from detected issue to resolution; promise kept/broken; changed cash timing versus forecast. Do not claim an email caused collection or present potential cash as realized savings. |
+| **6. Faster takeover from existing books — already adopted optional track** | The firm brings its existing ledger exports and reviewed schedules, sees proposed mappings/opening differences, and reaches the first useful draft with little re-keying. | Follow `books-sources.md`, its source identities and one authoritative month-books version. Prioritize actual customer formats; avoid a new connector per speculative ledger. | Time/assistance to first useful result and a complete reproducible opening baseline. Original files, formulas, units and source conflicts remain inspectable. |
+
+The strongest sales story combines 1, 2 and 5: **the agent prepares the accounting, isolates the decision, and follows the business issue through to a verified outcome.** Each component must work independently before the joined demo can justify the claim. Persistent business watches and retrospective outcomes are proposed product bets, not evidence of a defensible moat yet.
+
+### Recommended execution order
+
+1. **Protect the trust promise now.** Fix the semantic citation gap; resolve the cash-obligation matching cases; establish current live-provider and model-evaluation evidence. These run alongside the existing phase work, not after another UI rewrite.
+2. **Put the main accounting effort into B03/B04/B06/B11.** Mixed evidence, broader required preparation, precise decisions, partial replies and changes are the most direct route to lower customer labor. Keep completing the remaining B01–B12 obligations in the governing dependency order.
+3. **Deepen the business experience on top of correct facts.** Connect existing reports/budgets/cash/open-item actions. Prototype one complete shortfall-to-resolution journey and one cause-grouped review journey; measure against the existing process before generalizing.
+4. **Earn the maturity claim through phase E.** Independent accounting acceptance, actual-provider operation, unaided customer-role journeys, interrupted-run recovery, security/load/restore and the predeclared effort gate. Preserve the proposed 40% median reduction in total human effort for comparable completed scopes; include recurring support and record setup separately.
+
+Do not prioritize another redesign, a general autonomous planner, more model vendors, a tax module, multi-entity accounting or an ERP replacement merely to enlarge the feature list. Do not require prospects to become the acceptance team. Build and test now; commission focused external accounting review against concrete treatments and finished cases as they become ready.
+
+### How each recommendation fits the current experience
+
+These are implementation directions, not additional destinations or claims of delivered behavior. The build plan owns scope and the detailed interaction contract.
+
+| Work | Agent responsibility and existing surface | What the person actually does |
+| --- | --- | --- |
+| Correct financial claim support | Bind metric/entity/period/status to current report facts; render clear answers and existing source links in chat. | Inspect a figure's support when useful; never manually verify every otherwise eligible numeric sentence to compensate for a weak validator. |
+| Mixed evidence and broader preparation | Classify/link/verify eligible sources, calculate supported methods and prepare drafts under the existing client/month mandate. | Resolve the precise ambiguity or approve the resulting work; no repetitive factual assembly. |
+| Durable customer jobs | Continue supported dependencies and replies with the browser closed; show real progress and outcomes in the existing thread/close. | Confirm the initial mandate and handle genuine exceptions; no new prompt per stage. |
+| Cash-obligation matching | Match the specific commitment, preserve uninvoiced residuals and recompute the existing cash plan. | Decide only a genuinely uncertain association or assumption, with the proposed effect shown. |
+| Grouped decisions and late change | Bring a single cause and its affected work into the existing review/task card, with current source, difference and separately required approvals. | Review the change; approve, return or improve the exact effect without searching multiple tabs to reconstruct it. |
+| Safe firm-method improvement | Propose a scoped/versioned change with examples and affected work; apply only activated methods in subsequent preparation. | Approve the proposed policy separately from a one-off correction; no automatic learning from every override. |
+| Persistent watches (proposed) | Reuse goals/notices to monitor authorized conditions, group alerts and track evidence of resolution. | Confirm the watch scope and act on a specific exception; no separate monitoring dashboard. |
+| Business issue through outcome (proposed) | Connect an existing report/cash issue to a scenario, exact action preview and subsequent receipt in the same client context. | Choose assumptions and authorize the action; see whether it succeeded without chasing the system. |
+| Existing-books takeover (adopted optional track) | Inspect the supplied files, suggest scope/mappings and expose opening differences in the existing guided setup. | Confirm exceptions and baseline; no bulk re-keying or parallel import workspace. |
+| Provider/model evidence and recovery | Test the full product paths; preserve work, show freshness/degraded state and prepare a safe recovery action. | Reconnect or resolve only where their authority is needed; no interpretation of internal queues, logs or SQL. |
+
+Evaluate every change on correct work completed, necessary human interventions, time to a correct result and clarity of the remaining decision. Fewer questions must come from better evidence handling and authorized automation, never from silently guessing or hiding incomplete scope. Comparative leadership is an ambition to prove through these outcomes; it is not established by this document.
+
+### Evidence from this review
+
+- `npm run check` passed across the workspace on the checkout while it moved from #348 to #349. No claim of a full application build or full test-suite run.
+- Pinned source: `bcb5c17157598e8ee4d791324176d42b10a2235e`. All **142 migrations** applied to a disposable local PostgreSQL 18 database. No hosted database or Neon branch was used.
+- **30 selected existing test functions passed**, plus the separately named adversarial citation probe that demonstrated the accepted wrong-metric claim. No selected test skipped. Covered selected agent/session/access/support, straight-through, takeover, Home cohort, reports, budgets, executive access, cash/scenarios, workflow replay/lease and sample-corpus behavior. The command included packages with no test names matching the filter; those are not claimed as fully tested.
+- The first disposable database defaulted to SQL_ASCII and failed the 80-character Unicode chat-title case. The focused run passed after creating a fresh UTF-8 database. That initial failure was a review-environment error, not a reported product defect.
+- Ran `cmd/seed` into a separate disposable local database: **Done with 0 problems**. Inspected Home and the changed payroll close's Overview/Sign-off navigation in the local browser. No live model, provider write, mail send or hosted data was used. This is a limited UI inspection, not unaided usability or mobile acceptance.
+- The citation probe was added only to the temporary source archive, not the repository. Reproduce by calling `agentSupport("facts", "Net income is 8,000.00.", ...)` with a single support entry `{step:"t1", sentence:0, path:"/receivables", value:"8000.00"}` and the read described above; rejection is the eventual regression expectation.
+- Useful audit logs from this session are `/tmp/accounting-review-tests-utf8.log`, `/tmp/accounting-review-utf8-migrations.log` and `/tmp/accounting-review-seed.log`. Temporary logs are local evidence, not a permanent release certification.
+- Documentation needs routine reconciliation: the executive-agent absence claim in `management-reports.md` is superseded by `agent.go` and the October 8 validation entry; `performance.md` contains both historical “nothing is rendered on the server” wording and its newer server-rendering implementation. The provider inventory's dates must accompany its claims.
+
+**Not verified here:** live chat success/latency/cost, held-out model accuracy, real-book accounting acceptance, hosted operations/security/restore, the full B01–B12 customer journey, or observed customer savings. These are the remaining proof obligations for a maturity claim, not reasons to stop product development.
