@@ -205,7 +205,7 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 		if err != nil {
 			return nil, err
 		}
-		if p.FiscalStart != start || (p.State != "none" && p.Currency != currency) {
+		if p.FiscalStart != start || p.Currency != currency {
 			held = append(held, m.period)
 		}
 	}

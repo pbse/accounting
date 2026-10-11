@@ -670,7 +670,7 @@ function profileLine(name: string, profile: Profile, assumed: boolean) {
   const year = `${profile.currency}, with a fiscal year starting in ${fiscalMonth(profile.fiscal_year_start)}`;
   switch (profile.state) {
     case "conflict":
-      return `${name}’s connected ledgers report different currencies or fiscal years; disconnect the wrong one, or confirm its profile.`;
+      return `${name}’s connected ledgers report different currencies or fiscal years; disconnect the wrong one.`;
     case "confirmed":
       return `${year}, confirmed from ${monthName(profile.effective_from ?? "")}.`;
     case "differs":

@@ -125,7 +125,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client not found.")
 			return
 		}
-		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r), "can_review": canReview(r)}
+		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r), "can_review": canReview(r) && whole}
 
 		// Every month opened under any of the client's names that the reader could open, newest first, each with where
 		// its books come from now: the newer of its QuickBooks period capture (from the connection its books are read

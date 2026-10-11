@@ -66,7 +66,7 @@ func (p Profile) Unsettled() bool { return p.State == "conflict" || p.State == "
 func (p Profile) Question() string {
 	switch {
 	case p.State == "conflict":
-		return "This client's connected ledgers report different home currencies or fiscal years; disconnect the wrong one, or confirm the client's profile"
+		return "This client's connected ledgers report different home currencies or fiscal years; disconnect the wrong one"
 	case p.State == "differs" && p.Ledger.Conflict:
 		return fmt.Sprintf("This client's confirmed profile is %s from month %d, but its connected ledgers disagree with each other; disconnect the wrong one", p.Currency, p.FiscalStart)
 	case p.State == "differs":
