@@ -36,6 +36,13 @@ type importSummary struct {
 	Confirmed *confirmedRead `json:"confirmed,omitempty"`
 }
 
+// csvChoice is how a person chose to read a CSV: its encoding (utf-8, utf-16le, utf-16be, windows-1252) and delimiter
+// (comma, semicolon, tab, pipe); empty, as the reader reads it.
+type csvChoice struct {
+	Encoding  string `json:"encoding"`
+	Delimiter string `json:"delimiter"`
+}
+
 // listedImport is an import as the client's list shows it: what was sent, and whether its confirmed reading is clean,
 // without the reading itself, which an opened import reads.
 type listedImport struct {
@@ -68,6 +75,7 @@ type confirmedRead struct {
 	Reason   string            `json:"reason"`
 	Actor    string            `json:"actor"`
 	At       time.Time         `json:"at"`
+	CSV      csvChoice         `json:"csv"`
 	Balanced bool              `json:"balanced"`
 	// Problems is how many problems the reading names: a balanced reading with problems still holds what depends on it.
 	Problems int `json:"problems"`
@@ -118,8 +126,9 @@ func importClient(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, b
 	return name, true
 }
 
-// readImport is import id of client name in firm org: its stored file, read into tables.
-func readImport(ctx context.Context, q rowReader, org, name, id string) (importSummary, bookfiles.File, error) {
+// readImport is import id of client name in firm org: its stored file, read into tables; a CSV in the encoding and with
+// the delimiter a person chose, when they chose them, else as the reader reads it.
+func readImport(ctx context.Context, q rowReader, org, name, id string, as csvChoice) (importSummary, bookfiles.File, error) {
 	var s importSummary
 	var content []byte
 	var replaces sql.NullString
@@ -130,6 +139,10 @@ func readImport(ctx context.Context, q rowReader, org, name, id string) (importS
 		return s, bookfiles.File{}, err
 	}
 	s.Replaces = replaces.String
+	if s.Format == "csv" && as.Encoding != "" && as.Delimiter != "" {
+		file, err := bookfiles.ReadCSVAs(s.Name, content, as.Encoding, as.Delimiter)
+		return s, file, err
+	}
 	file, err := bookfiles.Read(s.Name, content)
 	return s, file, err
 }
@@ -138,9 +151,9 @@ func readImport(ctx context.Context, q rowReader, org, name, id string) (importS
 func latestLayout(ctx context.Context, q rowReader, org, name, id string) (*confirmedRead, error) {
 	var c confirmedRead
 	var layout, reading []byte
-	err := q.QueryRowContext(ctx, `SELECT id::text,layout,reading,reason,actor,created_at FROM books_layouts
+	err := q.QueryRowContext(ctx, `SELECT id::text,layout,reading,reason,actor,created_at,encoding,delimiter FROM books_layouts
  WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND ($3='' OR import_id::text=$3) ORDER BY id DESC LIMIT 1`, org, name, id).
-		Scan(&c.ID, &layout, &reading, &c.Reason, &c.Actor, &c.At)
+		Scan(&c.ID, &layout, &reading, &c.Reason, &c.Actor, &c.At, &c.CSV.Encoding, &c.CSV.Delimiter)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -349,16 +362,26 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		org := organization(r)
-		summary, file, err := readImport(r.Context(), db, org, name, r.URL.Query().Get("id"))
+		id := r.URL.Query().Get("id")
+		confirmed, err := latestLayout(r.Context(), db, org, name, id)
+		if err != nil {
+			problem(w, 503, "The file's layout is unavailable.")
+			return
+		}
+		// A CSV is read as asked (?encoding=&delimiter=), else as its layout was confirmed, else as the reader reads it.
+		as := csvChoice{Encoding: r.URL.Query().Get("encoding"), Delimiter: r.URL.Query().Get("delimiter")}
+		if as.Encoding == "" && confirmed != nil {
+			as = confirmed.CSV
+		}
+		summary, file, err := readImport(r.Context(), db, org, name, id, as)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
 			return
 		}
 		if err != nil {
-			problem(w, 422, "The file cannot be read: "+err.Error()+".")
+			problem(w, 422, "The file cannot be read that way: "+err.Error()+".")
 			return
 		}
-		confirmed, err := latestLayout(r.Context(), db, org, name, summary.ID)
 		var saved *confirmedRead
 		if err == nil && confirmed == nil {
 			saved, err = latestLayout(r.Context(), db, org, name, "")
@@ -409,6 +432,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			Action string           `json:"action"`
 			Layout bookfiles.Layout `json:"layout"`
 			Reason string           `json:"reason"`
+			CSV    csvChoice        `json:"csv"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -428,13 +452,18 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		org := organization(r)
-		summary, file, err := readImport(r.Context(), db, org, name, r.URL.Query().Get("id"))
+		summary, file, err := readImport(r.Context(), db, org, name, r.URL.Query().Get("id"), in.CSV)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
 			return
 		}
 		if err != nil {
-			problem(w, 422, "The file cannot be read: "+err.Error()+".")
+			problem(w, 422, "The file cannot be read that way: "+err.Error()+".")
+			return
+		}
+		// A confirmed reading says the month-end it is as of, in the import's month, and its currency.
+		if in.Action == "confirm" && (!strings.HasPrefix(in.Layout.AsOf, summary.Period+"-") || in.Layout.Currency == "") {
+			problem(w, 422, "Say the date the file is as of, in "+summary.Period+", and its currency, before confirming.")
 			return
 		}
 		table, found := tableOf(file, in.Layout)
@@ -455,8 +484,13 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		layout, _ := json.Marshal(in.Layout)
 		read, _ := json.Marshal(reading)
 		var id string
-		if err = db.QueryRowContext(r.Context(), `INSERT INTO books_layouts(organization_id,client_entity,import_id,layout,reading,reason,actor) VALUES($1,$2,$3::bigint,$4::jsonb,$5::jsonb,$6,$7) RETURNING id::text`,
-			org, name, summary.ID, string(layout), string(read), in.Reason, reviewerName(r)).Scan(&id); err != nil {
+		// The CSV choice kept is the one the file was read with: chosen, else the reader's own.
+		as := in.CSV
+		if as.Encoding == "" || as.Delimiter == "" {
+			as = csvChoice{Encoding: file.Encoding, Delimiter: file.Delimiter}
+		}
+		if err = db.QueryRowContext(r.Context(), `INSERT INTO books_layouts(organization_id,client_entity,import_id,layout,reading,reason,actor,encoding,delimiter) VALUES($1,$2,$3::bigint,$4::jsonb,$5::jsonb,$6,$7,$8,$9) RETURNING id::text`,
+			org, name, summary.ID, string(layout), string(read), in.Reason, reviewerName(r), as.Encoding, as.Delimiter).Scan(&id); err != nil {
 			problem(w, 503, "The layout could not be saved.")
 			return
 		}

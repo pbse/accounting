@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@close/ui/components/Card";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { workspaceQuery } from "../../data/queries";
@@ -32,12 +32,15 @@ type Line = { row: number; ref: string; kind: "posting" | "total" | "heading"; n
 type Reading = { lines: Line[]; debits: string; credits: string; balanced: boolean; problems: string[]; notes: string[] };
 // Status is a confirmed layout's outcome, as the list shows it; Confirmed adds the layout and what it read.
 type Status = { id: string; reason: string; actor: string; at: string; balanced: boolean; problems: number };
-type Confirmed = Status & { layout: Layout; reading: Reading };
+// CSV is how a person chose to read a CSV file; empty, as the reader read it.
+type CSV = { encoding: string; delimiter: string };
+type Confirmed = Status & { layout: Layout; reading: Reading; csv?: CSV };
 type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; confirmed?: Status };
 type ImportRead = {
   import: Omit<ImportRow, "confirmed"> & { confirmed?: Confirmed };
   tables: Table[];
   encoding?: string;
+  delimiter?: string;
   unsure?: string[];
   linked_workbooks?: string[];
   recalculate_on_open?: boolean;
@@ -75,7 +78,20 @@ const rowKinds: [RowKind, string][] = [
 const clean = (c: Status) => c.balanced && !c.problems;
 const lineKinds = { posting: "Account", total: "Total", heading: "Heading" };
 const filesPath = (name: string) => `/client/imports?name=${encodeURIComponent(name)}`;
-const importPath = (name: string, id: string) => `/client/import?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`;
+const importPath = (name: string, id: string, csv?: CSV) =>
+  `/client/import?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}${csv?.encoding ? `&encoding=${csv.encoding}&delimiter=${csv.delimiter}` : ""}`;
+const encodings = [
+  ["utf-8", "UTF-8"],
+  ["utf-16le", "UTF-16 (little-endian)"],
+  ["utf-16be", "UTF-16 (big-endian)"],
+  ["windows-1252", "Windows-1252"],
+];
+const delimiters = [
+  ["comma", "Commas"],
+  ["semicolon", "Semicolons"],
+  ["tab", "Tabs"],
+  ["pipe", "Pipes"],
+];
 
 // FilesCard is the client's files: what was sent for which month, whether its layout is confirmed and balanced, a way to
 // send another, and each one's reading.
@@ -185,14 +201,36 @@ function SendForm({ client, onSent, onCancel }: { client: string; onSent: (id: s
 // ImportReader shows a file's first rows, the layout to read it with (proposed, or the one confirmed), a preview of the
 // reading, and, for a reviewer, confirming the layout with a reason.
 function ImportReader({ client, id, onDone }: { client: string; id: string; onDone: () => void }) {
-  const read = useQuery(workspaceQuery<ImportRead>(importPath(client, id)));
-  if (read.error) return <p role="alert">{read.error.message || "The file could not be read."}</p>;
-  if (!read.data) return <p role="status">Reading the file…</p>;
+  // A CSV is read as the reader reads it until a person chooses another encoding or delimiter.
+  const [csv, setCsv] = useState<CSV | undefined>(undefined);
+  const read = useQuery({ ...workspaceQuery<ImportRead>(importPath(client, id, csv)), placeholderData: keepPreviousData });
+  if (!read.data) return read.error ? <p role="alert">{read.error.message || "The file could not be read."}</p> : <p role="status">Reading the file…</p>;
   const start = read.data.import.confirmed?.layout ?? read.data.proposal?.layout;
-  return <LayoutForm key={read.data.import.id} client={client} id={id} data={read.data} start={start} onDone={onDone} />;
+  return (
+    <>
+      {read.error && <p role="alert">{read.error.message || "The file could not be read that way."}</p>}
+      <LayoutForm key={read.data.import.id} client={client} id={id} data={read.data} start={start} csv={csv} onCsv={setCsv} onDone={onDone} />
+    </>
+  );
 }
 
-function LayoutForm({ client, id, data, start, onDone }: { client: string; id: string; data: ImportRead; start?: Layout; onDone: () => void }) {
+function LayoutForm({
+  client,
+  id,
+  data,
+  start,
+  csv,
+  onCsv,
+  onDone,
+}: {
+  client: string;
+  id: string;
+  data: ImportRead;
+  start?: Layout;
+  csv?: CSV;
+  onCsv: (csv: CSV) => void;
+  onDone: () => void;
+}) {
   const [layout, setLayout] = useState<Layout>(
     start ?? { table: data.tables[0]?.name ?? "", header_row: 1, columns: {}, style: { decimal_comma: false, scale: 1 }, as_of: "", currency: "" },
   );
@@ -203,7 +241,7 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
   // Rows come in pages: the first, or from a row a person asks for; the header keeps its names from the first page.
   const [from, setFrom] = useState(1);
   const [goTo, setGoTo] = useState("");
-  const later = useQuery({ ...workspaceQuery<ImportRead>(`${importPath(client, id)}&from=${from}`), enabled: from > 1 });
+  const later = useQuery({ ...workspaceQuery<ImportRead>(`${importPath(client, id, csv)}&from=${from}`), enabled: from > 1 });
   const first = data.tables.find((t) => t.name === layout.table) ?? data.tables[0];
   const table = from > 1 ? (later.data?.tables.find((t) => t.name === first?.name) ?? undefined) : first;
   const header = first?.rows.find((r) => r.number === layout.header_row);
@@ -213,7 +251,7 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
     setBusy(true);
     setError("");
     try {
-      const out = await workspaceRequest(importPath(client, id), { action, layout, reason: reason.trim() });
+      const out = await workspaceRequest(importPath(client, id), { action, layout, reason: reason.trim(), csv: csv ?? { encoding: "", delimiter: "" } });
       setReading(out.reading);
       if (action === "confirm") onDone();
     } catch (e) {
@@ -240,10 +278,34 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
           ))}
         </ul>
       ) : null}
-      {data.unsure?.length ? <p className="note">The file's {data.unsure.join(" and ")} could be read another way; check the rows below.</p> : null}
+      {data.unsure?.length ? <p className="note">The file's {data.unsure.join(" and ")} could be read another way: check the rows below, and choose another below if they read wrongly.</p> : null}
       {data.recalculate_on_open && <p className="note">The workbook asks to be recalculated when opened, so its stored results may be out of date.</p>}
       {data.linked_workbooks?.length ? <p className="note">It links to other workbooks: {data.linked_workbooks.join(", ")}.</p> : null}
       <fieldset disabled={busy}>
+        {data.encoding && (
+          <>
+            <label>
+              Text encoding
+              <select value={data.encoding} onChange={(e) => (onCsv({ encoding: e.target.value, delimiter: data.delimiter ?? "comma" }), setReading(undefined))}>
+                {encodings.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Values separated by
+              <select value={data.delimiter} onChange={(e) => (onCsv({ encoding: data.encoding ?? "utf-8", delimiter: e.target.value }), setReading(undefined))}>
+                {delimiters.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
         {data.tables.length > 1 && (
           <label>
             Sheet
@@ -410,7 +472,7 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
           {busy ? "Reading…" : "Preview the reading"}
         </button>
         {data.can_confirm && (
-          <button type="button" className="primary" disabled={busy || !reading || !reason.trim()} onClick={() => void act("confirm")}>
+          <button type="button" className="primary" disabled={busy || !reading || !reason.trim() || !layout.as_of || !layout.currency} onClick={() => void act("confirm")}>
             Confirm the layout
           </button>
         )}

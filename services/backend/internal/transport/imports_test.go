@@ -134,6 +134,20 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	}
 	bad["style"] = map[string]any{"decimal_comma": false, "scale": 7}
 	call("user_a", partner, "POST", path, map[string]any{"action": "confirm", "layout": bad, "reason": "Wrong scale"}, 422)
+	// A confirmed reading is as of a date in the import's month, in a currency.
+	for field, wrong := range map[string]string{"as_of": "2026-08-31", "currency": ""} {
+		off := map[string]any{}
+		for k, v := range layout {
+			off[k] = v
+		}
+		off[field] = wrong
+		call("user_a", partner, "POST", path, map[string]any{"action": "confirm", "layout": off, "reason": "Wrong " + field}, 422)
+	}
+	// A CSV can be read another way a person chooses: by semicolons, this file is one column.
+	if rows := call("user_b", preparer, "GET", path+"&encoding=utf-8&delimiter=semicolon", nil, 200)["tables"].([]any)[0].(map[string]any)["rows"].([]any); len(rows[1].(map[string]any)["cells"].([]any)) != 1 {
+		t.Fatalf("read by semicolons: %v", rows[1])
+	}
+	call("user_b", preparer, "GET", path+"&encoding=latin-9&delimiter=comma", nil, 422)
 	call("user_a", partner, "POST", path, map[string]any{"action": "confirm", "layout": layout, "reason": "Matches the export"}, 200)
 	listed := call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co", nil, 200)["imports"].([]any)
 	if len(listed) != 1 || listed[0].(map[string]any)["confirmed"].(map[string]any)["balanced"] != true {

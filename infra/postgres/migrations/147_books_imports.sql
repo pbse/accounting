@@ -34,6 +34,9 @@ CREATE TABLE books_layouts (
  layout jsonb NOT NULL,
  -- reading is what the layout read from the import when it was confirmed: lines, totals, problems and notes.
  reading jsonb NOT NULL,
+ -- A CSV's encoding and delimiter as the person confirmed them, when the reader's own guess was not the one kept.
+ encoding text NOT NULL DEFAULT '' CHECK (encoding IN ('','utf-8','utf-16le','utf-16be','windows-1252')),
+ delimiter text NOT NULL DEFAULT '' CHECK (delimiter IN ('','comma','semicolon','tab','pipe')),
  reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 500),
  actor text NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now()
