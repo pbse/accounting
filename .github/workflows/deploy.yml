@@ -69,6 +69,8 @@ jobs:
       MCP_RESOURCE_URL: ${{ vars.MCP_RESOURCE_URL }}
       MCP_ALLOWED_ORIGINS: ${{ vars.MCP_ALLOWED_ORIGINS }}
       PRODUCTION_POSTING_KINDS: ${{ vars.PRODUCTION_POSTING_KINDS }}
+      LEDGER_CONNECTORS: ${{ vars.LEDGER_CONNECTORS }}
+      BOOKS_RECORD_READERS: ${{ vars.BOOKS_RECORD_READERS }}
       XERO_POSTING_KINDS: ${{ vars.XERO_POSTING_KINDS }}
     steps:
       - uses: actions/checkout@v4

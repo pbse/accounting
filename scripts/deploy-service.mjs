@@ -44,6 +44,8 @@ export const configuration = {
   "MCP_ALLOWED_ORIGINS",
   "PRODUCTION_POSTING_KINDS",
   "XERO_POSTING_KINDS",
+  "LEDGER_CONNECTORS",
+  "BOOKS_RECORD_READERS",
   "AUTH_SESSION"
  ],
  "queue": [
