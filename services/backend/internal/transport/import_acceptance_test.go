@@ -709,7 +709,7 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 		}
 		return read
 	}
-	s := fileState{layout: columns(bookfiles.Movement), prior: "2026-11", priorBalances: map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"},
+	s := fileState{layout: columns(bookfiles.Movement), prior: "2026-11", priorIsBooks: true, priorBalances: map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"},
 		classes: map[string]string{"n:1000": "Asset", "n:3000": "Equity", "n:4000": "Revenue", "n:6000": "Expense"}}
 	s.reading = fileReading{Period: "2026-12", Accounts: []fileAccount{
 		account("1000", "Business Checking", "1200", "200", "Asset"),
@@ -720,6 +720,12 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	if c := rollForward(s); c.State != "passes" || c.Detail != "Every account opens at November 2026's accepted closing balance." {
 		t.Fatalf("a month that rolls: %+v", c)
 	}
+	// A prior month whose books are a ledger's: its accepted file supplements them, and nothing rolls from it.
+	s.priorIsBooks = false
+	if c := rollForward(s); c.State != "note" {
+		t.Fatalf("a prior month whose file only supplements its books: %+v", c)
+	}
+	s.priorIsBooks = true
 	s.reading.Accounts[0].Movement = "150"
 	if c := rollForward(s); c.State != "holds" || c.Detail != "1 account does not roll from November 2026's accepted books, unexplained: 1000 Business Checking opens at 1050.00, closed at 1000.00 (50.00)." {
 		t.Fatalf("a month that does not roll: %+v", c)
