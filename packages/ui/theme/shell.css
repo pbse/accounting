@@ -995,6 +995,352 @@ body {
   color: var(--ink);
   border-bottom-color: var(--ink);
 }
+/* A tab's badge counts the decisions whose action is on that tab. */
+.ks-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--att-tint);
+  color: var(--att-text);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+/* The close's own controls on the breadcrumb row: the agent's live chip, Sign off, the ⋯ menu. */
+.ks-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 26px;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-full);
+  box-shadow: var(--ring);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.ks-agent-chip i,
+.ks-agent-line i.live,
+.app-shell .pill.live::before {
+  animation: ks-pulse 1.4s ease-in-out infinite;
+}
+.ks-agent-chip i {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+@keyframes ks-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ks-agent-chip i,
+  .ks-agent-line i.live,
+  .app-shell .pill.live::before {
+    animation: none;
+  }
+}
+.ks-close-more {
+  position: relative;
+}
+.app-shell .ks-ib {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+}
+.ks-close-more .ks-menu {
+  top: calc(100% + var(--space-8));
+  bottom: auto;
+  left: auto;
+  right: 0;
+  width: 260px;
+}
+.ks-menu .ks-sep {
+  height: 1px;
+  margin: var(--space-4) var(--space-8);
+  background: var(--line);
+}
+.app-shell .ks-menu button.danger {
+  color: var(--neg-text);
+}
+/* Overview: what needs the person and the agent's work on the left, the rail on the right. */
+.ks-close-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 26%, 380px);
+  gap: var(--space-24);
+  align-items: start;
+}
+.ks-col {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+.app-shell .ks-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.ks-needs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+.ks-needs .ks-tasks {
+  width: 100%;
+}
+.ks-calm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  min-height: 48px;
+  margin: 0;
+  padding: 0 var(--space-16);
+  border-radius: var(--radius-lg);
+  box-shadow: inset var(--ring);
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.ks-calm svg {
+  color: var(--pos-text);
+  flex: none;
+}
+.app-shell .ks-fold {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-8);
+  width: 100%;
+  min-height: 36px;
+  margin: 0;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-3);
+  text-align: left;
+}
+.app-shell button.ks-fold:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.ks-fold svg {
+  color: var(--ink-4);
+  flex: none;
+}
+.ks-fold .ks-chev {
+  margin-left: auto;
+}
+.ks-fold[aria-expanded="true"] .ks-chev,
+.ks-done[open] > .ks-done-line .ks-chev {
+  transform: rotate(90deg);
+}
+.ks-fold.wait svg,
+.ks-done.waiting > .ks-done-line > svg:first-child {
+  color: var(--att-text);
+}
+.ks-done.unchecked > .ks-done-line > svg:first-child {
+  color: var(--neg-text);
+}
+.ks-details > .ks-done-line > svg:first-child {
+  color: var(--ink-3);
+}
+.ks-details > .stack {
+  margin-top: var(--space-16);
+}
+/* The tab's one table, its filter on its header row. */
+.ks-set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+.ks-sec {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-10);
+  min-height: 30px;
+}
+.app-shell .ks-sec h2 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.ks-sec small {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.ks-sec .ks-end {
+  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.ks-work .ks-tr {
+  --ks-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 0.9fr) 24px;
+}
+.ks-plan .ks-tr {
+  --ks-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 2.6fr);
+}
+.app-shell .pill.live {
+  background: none;
+  box-shadow: var(--ring);
+  color: var(--ink-2);
+}
+.app-shell .pill.live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+/* The rail: the same three panels on every tab. */
+.ks-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+.ks-col > section,
+.ks-rail > section {
+  margin: 0;
+}
+.app-shell section.ks-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-14) var(--space-16);
+}
+.ks-figs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-14) var(--space-16);
+}
+.ks-fig b {
+  display: block;
+  font-size: 20px;
+  line-height: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.ks-fig span {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-3);
+}
+.ks-fig.att b {
+  color: var(--att-text);
+}
+.app-shell .ks-quiet {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.app-shell .ks-agent-line {
+  display: grid;
+  grid-template-columns: 6px 1fr;
+  gap: var(--space-10);
+  align-items: baseline;
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
+.ks-agent-line i {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--ink-4);
+  transform: translateY(-1px);
+}
+.ks-agent-line i.live {
+  background: var(--accent);
+}
+.ks-agent-line small {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.app-shell .ks-act-link {
+  align-self: flex-start;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-text);
+}
+.ks-links {
+  display: flex;
+  flex-direction: column;
+  margin: -2px -8px -4px;
+}
+/* A row's name keeps its width first; its note takes what is left and is cut short. */
+.app-shell .ks-links a {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: 34px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.app-shell .ks-links a:hover {
+  background: var(--hover);
+}
+.ks-links a > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ks-links small {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.ks-links svg {
+  color: var(--ink-4);
+}
+.ks-activity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  margin: 0;
+  padding-left: var(--space-20);
+  font-size: 13px;
+}
+.ks-activity small {
+  color: var(--ink-3);
+}
 @media (max-width: 860px) {
   .ks-crumbs {
     flex-wrap: wrap;
@@ -1025,6 +1371,21 @@ body {
   }
   .ks-done-row {
     grid-template-columns: auto 1fr;
+  }
+  .ks-close-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ks-work .ks-tr {
+    --ks-columns: minmax(0, 1fr) auto 24px;
+  }
+  .ks-work .ks-tr > :nth-child(3) {
+    display: none;
+  }
+  .ks-plan .ks-tr {
+    --ks-columns: minmax(0, 1fr) auto;
+  }
+  .ks-plan .ks-tr > :nth-child(3) {
+    grid-column: 1 / -1;
   }
 }
 

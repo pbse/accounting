@@ -4,7 +4,7 @@ export const closeTabs = [
   ["overview", "Overview"],
   ["books", "Books"],
   ["workpapers", "Workpapers"],
-  ["evidence", "Evidence"],
+  ["evidence", "Documents"],
   ["requests", "Requests"],
   ["reports", "Reports"],
   ["cash", "Cash plan"],

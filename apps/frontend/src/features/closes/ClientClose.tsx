@@ -9,10 +9,8 @@ import { Segmented } from "@close/ui/components/Segmented";
 import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { BillCorrection } from "./BillCorrection";
 import { CreditApplications } from "./CreditApplications";
-import { CloseLede, CloseTasks, signOffAvailable, useBrief } from "./Stands";
+import { CloseLede, signOffAvailable, useBrief } from "./Stands";
 import { CarryForward } from "./CarryForward";
-import { Coordinator } from "./Coordinator";
-import { GoalPanel } from "./Goal";
 import { EmailReplies } from "./EmailReplies";
 import { Aging } from "./Aging";
 import { CashPlan } from "./CashPlan";
@@ -40,7 +38,7 @@ import { Replay } from "./Replay";
 import { RecurringAccruals } from "./RecurringAccruals";
 import { Requests } from "./Requests";
 import { EffortCard, EffortTracker, type Activity } from "./Effort";
-import { Work } from "./Work";
+import { AgentChip, CloseMenu, countsOf, needsFor, Overview, useDecisions, useGoalStatus } from "./Overview";
 import { workspaceRequest } from "./workspace";
 import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
@@ -57,7 +55,6 @@ const filters: Record<string, [string, (paper: Paper) => boolean]> = {
 };
 
 
-const basisLabels = { cash: "Cash basis", modified_cash: "Modified cash basis", accrual: "Accrual basis" };
 
 function profileLabel(p: Profile) {
   if (p.state === "conflict") return "Connected ledgers disagree on currency or fiscal year; disconnect the wrong one";
@@ -67,39 +64,6 @@ function profileLabel(p: Profile) {
       : `${p.currency} confirmed, but the ledger reports ${[p.ledger?.currency, p.ledger?.fiscal_year_start ? "another fiscal year" : ""].filter(Boolean).join(" and ")}: correct the client's profile or its connection`;
   if (p.state === "unknown") return "USD assumed until the ledger's currency is read: reconnect QuickBooks, or capture a Xero snapshot";
   return `${p.currency} · fiscal year starts ${new Date(2000, p.fiscal_year_start - 1).toLocaleString("en-US", { month: "long" })}`;
-}
-
-// The preparation forms, for work the agent did not prepare from evidence, behind one menu.
-function PrepareActions({ close }: { close: Close }) {
-  const query = `close=${close.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}`;
-  const accrualWork = close.basis !== "cash" && close.basis !== "modified_cash";
-  const forms: [string, string][] = [
-    ...(accrualWork
-      ? ([
-          ["Prepaid", `/dashboard/prepaids/new?${query}`],
-          ["Accrued expense", `/dashboard/accruals/new?${query}`],
-          ["Deferred revenue", `/dashboard/prepaids/new?${query}&schedule=deferred_revenue`],
-          ["Depreciation", `/dashboard/prepaids/new?${query}&schedule=depreciation`],
-        ] as [string, string][])
-      : []),
-    ["Loan schedule", `/dashboard/loans/new?${query}`],
-    ["Owner item", `/dashboard/owners/new?${query}`],
-    ["Payroll", `/dashboard/payroll/new?${query}`],
-    ["Statement reconciliation", `/dashboard/reconciliations/new?${query}`],
-    ["Stripe payouts", `/dashboard/settlements/new?${query}`],
-  ];
-  return (
-    <details className="prepare-menu">
-      <summary className="button">Prepare by hand</summary>
-      <div>
-        {forms.map(([label, to]) => (
-          <Link key={to} to={to}>
-            {label}
-          </Link>
-        ))}
-      </div>
-    </details>
-  );
 }
 
 function Package({ close }: { close: Close }) {
@@ -157,6 +121,8 @@ export default function ClientClose() {
   const { close, papers, more, error, refreshError, loading, reload } = useClose(id);
   const briefRead = useBrief(id ?? "");
   const brief = briefRead.data;
+  const decisionsRead = useDecisions(id ?? "");
+  const goalRead = useGoalStatus(id ?? "");
   const dates = useDates();
   const [deleted, setDeleted] = useState("");
   const tab: Tab = closeTab(params.get("tab"));
@@ -190,9 +156,16 @@ export default function ClientClose() {
   const shown = papers.filter(filters[filter][1]);
   const base = `/dashboard/closes/${close.id}`;
   const latest = more ? " among the latest 100" : "";
-  // Sign off is the page's one action, and waits until readiness says the close is ready, read without error, for a
-  // reader whose role may sign off: a status that could not be refreshed offers nothing on it.
+  // What needs the person, counted once for the sentence, the tabs' badges and Overview's list. Decisions that could not
+  // be read are said so, never counted as none.
+  const { needs, teammates } = needsFor(decisionsRead.data?.events, brief, papers, base);
+  const counts = countsOf(needs, goalRead.data, !decisionsRead.isError ? "" : decisionsRead.data ? `decisions not refreshed since ${dates.time(decisionsRead.dataUpdatedAt)}` : "decisions not read");
+  const decisionsError = decisionsRead.isError ? decisionsRead.error.message || "This close's decisions are unavailable." : "";
+  // Sign off waits until readiness says the close is ready, read without error, for a reader whose role may sign off: a
+  // status that could not be refreshed offers nothing on it. It is the page's one primary only when nothing else needs
+  // the person; otherwise the first need's action is.
   const signOffBlocked = !!briefRead.error || !signOffAvailable(brief) || !close.can_sign_off;
+  const signOffFirst = counts.decisions + counts.blockers === 0 && !counts.handOver;
   return (
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
@@ -203,39 +176,43 @@ export default function ClientClose() {
         <span>/</span>
         <b>{monthName(close.period)}</b>
         <div className="ks-tools">
-          <PrepareActions close={close} />
+          <AgentChip status={goalRead.data} />
           {signOffBlocked ? (
-            <button type="button" className="primary" disabled title={!close.can_sign_off ? "Your role cannot sign off; a reviewer can" : "Not ready yet; the Sign-off tab shows what blocks it"}>
+            <button type="button" disabled title={!close.can_sign_off ? "Your role cannot sign off; a reviewer can" : "Not ready yet; the Sign-off tab shows what blocks it"}>
               Sign off
             </button>
           ) : (
-            <Link className="button primary" to={`${base}?tab=signoff`}>
+            <Link className={signOffFirst ? "button primary" : "button"} to={`${base}?tab=signoff`}>
               Sign off
             </Link>
           )}
+          <CloseMenu close={close} status={goalRead.data} onPlanSaved={() => void reload()} />
         </div>
       </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
-      <CloseLede close={close} onPlanSaved={() => void reload()} />
-      <p className="ks-lede-notes">
-        {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]}</span>}
-        {close.profile && close.profile.state !== "none" && <span className={close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown" ? "chip warn" : "chip"} role={close.profile.state === "conflict" || close.profile.state === "differs" ? "alert" : undefined} title={close.profile.state === "confirmed" || close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>{profileLabel(close.profile)}</span>}
-      </p>
+      <CloseLede close={close} counts={counts} />
+      {close.profile && (close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown") && (
+        <p className="ks-lede-notes">
+          <span className="chip warn" role={close.profile.state === "unknown" ? undefined : "alert"} title={close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>
+            {profileLabel(close.profile)}
+          </span>
+        </p>
+      )}
       <nav className="ks-tabs" aria-label="Close sections">
         {tabs.map(([key, label]) => (
           <Link key={key} to={`${base}?tab=${key}`} aria-current={tab === key ? "page" : undefined}>
             {label}
+            {!!counts.tabs[key] && (
+              <span className="ks-badge">
+                <span className="visually-hidden">, </span>
+                {counts.tabs[key]}
+                <span className="visually-hidden">{counts.tabs[key] === 1 ? " decision" : " decisions"}</span>
+              </span>
+            )}
           </Link>
         ))}
       </nav>
-      {tab === "overview" && (
-        <div className="stack">
-          <CloseTasks key={`stands-${close.id}-${papers.map((paper) => paper.id + paper.review_state).join()}`} closeId={close.id} base={base} />
-          <GoalPanel key={`goal-${close.id}`} closeId={close.id} />
-          <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
-          <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
-        </div>
-      )}
+      {tab === "overview" && <Overview close={close} papers={papers} needs={needs} teammates={teammates} brief={brief} briefRead={briefRead} decisionsError={decisionsError} base={base} onPrepared={() => void reload()} />}
       {tab === "books" && (
         <div className="stack">
           <MonthBooks key={`books-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />

@@ -98,7 +98,8 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   const id = params.id;
   const tab = closeTab(url.searchParams.get("tab"));
   const reads: Partial<Record<CloseTab, string[]>> = {
-    overview: [`/${id}/brief`, `/${id}/goal?verify=1`, `/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")],
+    // The agent's plan, documents and accounts are one fold away on Overview; a link to a document's work opens it.
+    overview: [`/${id}/brief`, `/${id}/goal?verify=1`, `/${id}/effort`, ...(url.searchParams.get("job") ? [`/${id}/prepare-close`, `/${id}/coverage`, workPath(id, "all", "", 0, url.searchParams.get("job") ?? "")] : [])],
     books: [`/${id}/quickbooks`, `/${id}/quickbooks/entities`, `/${id}/xero`, `/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/coverage`, `/${id}/aging`, `/${id}/open-items`],
     evidence: [`/${id}/evidence?checks=1`, `/${id}/preparations`, `/${id}/jobs`, `/${id}/stripe`],
     requests: [`/${id}/requests`, `/${id}/email-replies`],
@@ -110,8 +111,10 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   // is Overview's to wait for; another tab starts it without waiting, and the sentence names the close until it comes.
   const { queryClient, read } = context.get(appData);
   if (tab !== "overview") prefetchLater(context, `/${id}/brief`);
+  // The decisions (Overview's list and every tab's badges) and the goal's light read (the header's agent chip) come with
+  // every tab.
   await Promise.all([
-    prefetch(context, `/${encodeURIComponent(id)}`, ...(reads[tab] ?? [])),
+    prefetch(context, `/${encodeURIComponent(id)}`, `/${id}/decisions`, `/${id}/goal`, ...(reads[tab] ?? [])),
     tab === "cash" ? queryClient.prefetchQuery(cashPlanQuery(id, "", false, read)) : null,
   ]);
   return null;
