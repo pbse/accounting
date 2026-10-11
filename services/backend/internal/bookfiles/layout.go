@@ -203,8 +203,10 @@ type Line struct {
 	// Other balances the file carries for the account, by meaning, and those of them not exact to the cent.
 	Others  map[Meaning]string `json:"others,omitempty"`
 	Rounded []Meaning          `json:"rounded,omitempty"`
-	Cents   bool               `json:"cents"`
-	Hidden  bool               `json:"hidden,omitempty"`
+	// Unread are the other balances whose cells could not be read as amounts.
+	Unread []Meaning `json:"unread,omitempty"`
+	Cents  bool      `json:"cents"`
+	Hidden bool      `json:"hidden,omitempty"`
 }
 
 // Label is what names the row: its account name, else its account number (a Trial Balance with codes alone writes its
@@ -405,8 +407,8 @@ func (l Layout) Read(t Table) Reading {
 		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cells: map[Meaning]string{}, Cents: true}
 		var debit, credit, balance *big.Rat
 		hasAmount, signed := false, false
-		// outside are the row's values in columns the layout does not name, and strays the columns of those that are
-		// amounts: nothing is dropped unseen.
+		// outside are the row's values in columns the layout does not name, and strays their columns: nothing is dropped
+		// unseen.
 		var outside []string
 		var strays []int
 		// side keeps one amount per side: a second (a Cr-marked amount in the debit column beside a credit) is a problem,
@@ -422,10 +424,10 @@ func (l Layout) Read(t Table) Reading {
 			meaning, ok := l.Columns[c.Column]
 			if !ok {
 				if strings.TrimSpace(c.Value) != "" && !slices.Contains(l.IgnoredColumns, c.Column) {
+					// Any value outside the chosen columns, an amount or a scope such as an entity or class, is the person's to
+					// place or ignore: rows of two entities must not read as one client's.
 					outside = append(outside, c.Ref)
-					if _, err := cellAmount(c, l.Style); err == nil {
-						strays = append(strays, c.Column)
-					}
+					strays = append(strays, c.Column)
 				}
 				continue
 			}
@@ -442,8 +444,14 @@ func (l Layout) Read(t Table) Reading {
 				line.Type = strings.TrimSpace(c.Value)
 			default:
 				a, err := cellAmount(c, l.Style)
-				if err != nil {
+				if err != nil && (meaning == Debit || meaning == Credit || meaning == Balance) {
 					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is not an amount", c.Ref, c.Value))
+					continue
+				}
+				// Another balance the file carries that cannot be read holds only what uses it: it is left out, and said so.
+				if err != nil {
+					line.Unread = append(line.Unread, meaning)
+					reading.Notes = append(reading.Notes, fmt.Sprintf("%s: %q in the %s column is not an amount, so that balance is left out", c.Ref, c.Value, strings.ReplaceAll(string(meaning), "_", " ")))
 					continue
 				}
 				hasAmount = true
@@ -591,7 +599,7 @@ func (l Layout) Read(t Table) Reading {
 		}
 	}
 	for _, c := range slices.Sorted(maps.Keys(beside)) {
-		reading.Problems = append(reading.Problems, fmt.Sprintf("Column %s holds amounts in rows %s outside the chosen columns: choose what it holds, or mark it ignored", strings.TrimRight(cellRef(c, 1), "1"), rowList(beside[c])))
+		reading.Problems = append(reading.Problems, fmt.Sprintf("Column %s holds values in rows %s outside the chosen columns: choose what it holds, or mark it ignored", strings.TrimRight(cellRef(c, 1), "1"), rowList(beside[c])))
 	}
 	reading.Debits, reading.Credits = exact(debits), exact(credits)
 	reading.Balanced = debits.Cmp(credits) == 0

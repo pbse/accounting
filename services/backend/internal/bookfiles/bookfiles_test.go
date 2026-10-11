@@ -520,10 +520,10 @@ func TestMissingBalancesStrayColumnsAndSides(t *testing.T) {
 	stray, _ := Read("tb.csv", []byte("Account,Balance,Prior,Memo\nBank,100.00,80.00,checked\nCapital,-100.00,-80.00,\n"))
 	layout, _ = ProposeLayout(stray.Tables[0])
 	layout.Columns = map[int]Meaning{0: AccountName, 1: Balance}
-	if reading := layout.Read(stray.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Column C holds amounts in rows 2, 3") {
-		t.Fatalf("amounts beside the chosen columns: %+v", reading.Problems)
+	if reading := layout.Read(stray.Tables[0]); len(reading.Problems) != 2 || !strings.Contains(reading.Problems[0], "Column C holds values in rows 2, 3") || !strings.Contains(reading.Problems[1], "Column D holds values in rows 2") {
+		t.Fatalf("values beside the chosen columns: %+v", reading.Problems)
 	}
-	layout.IgnoredColumns = []int{2}
+	layout.IgnoredColumns = []int{2, 3}
 	if reading := layout.Read(stray.Tables[0]); len(reading.Problems) != 0 {
 		t.Fatalf("a column marked ignored: %+v", reading.Problems)
 	}
@@ -590,5 +590,21 @@ func TestAnAccountNamedLikeATotal(t *testing.T) {
 	layout.Postings = []int{3}
 	if reading := layout.Read(file.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced || reading.Lines[1].Kind != Posting {
 		t.Fatalf("marked an account: %+v", reading)
+	}
+}
+
+// An entity column beside the chosen ones is the person's to place or ignore; a comparative that cannot be read is left
+// out with a note, holding nothing else.
+func TestScopeColumnsAndUnreadComparatives(t *testing.T) {
+	two, _ := Read("tb.csv", []byte("Entity,Account,Balance\nAcme US,Bank,100.00\nAcme UK,Bank,-100.00\n"))
+	layout := Layout{HeaderRow: 1, Columns: map[int]Meaning{1: AccountName, 2: Balance}, Style: NumberStyle{Scale: 1}}
+	if reading := layout.Read(two.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Column A holds values") {
+		t.Fatalf("two entities read as one: %+v", reading.Problems)
+	}
+	comparative, _ := Read("tb.csv", []byte("Account,Opening,Balance\nBank,N/A,100.00\nCapital,-90.00,-100.00\n"))
+	layout = Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountName, 1: Opening, 2: Balance}, Style: NumberStyle{Scale: 1}}
+	reading := layout.Read(comparative.Tables[0])
+	if len(reading.Problems) != 0 || !reading.Balanced || len(reading.Notes) != 1 || len(reading.Lines[0].Unread) != 1 {
+		t.Fatalf("an unread comparative holds nothing else: %+v", reading)
 	}
 }
