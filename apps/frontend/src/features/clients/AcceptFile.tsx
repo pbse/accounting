@@ -22,6 +22,7 @@ type Acceptance = {
   actor: string;
   at: string;
   current: boolean;
+  map_changed?: boolean;
 };
 type AcceptanceRead = {
   confirmed: boolean;
@@ -89,7 +90,7 @@ function AcceptForm({ client, id, data, onClose }: { client: string; id: string;
             <p>
               Accepted {dates.dayMonth(was.at)} by {was.actor} as the client's books for {monthName(was.period)}, from {was.system}, exported {was.exported_on}
               {was.final_adjustments ? ", with the final adjustments in." : ", before the final adjustments."}{" "}
-              {!was.current && <strong>That was of an earlier reading or attestation: accept this one again.</strong>}
+              {!was.current && <strong>{was.map_changed ? "The account map has changed how this file's accounts are classified since then: the month's books keep the earlier map until you accept this one again." : "That was of an earlier reading or attestation: accept this one again."}</strong>}
             </p>
           )}
           <p>{data.holds ? `${data.holds} check${data.holds === 1 ? "" : "s"} hold${data.holds === 1 ? "s" : ""} what depend${data.holds === 1 ? "s" : ""} on them. None refuses the file.` : "Every check passes."}</p>

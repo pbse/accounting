@@ -4374,3 +4374,9 @@ Reminders required an unused link and no reply at all, so a client who answered 
 
 Test: `TestApprovedEmailDurableRetryAndScope` records a partial reply on a used link: the reminder period restarts from it, the goal offers the reminder, approval succeeds and the worker sends it; seen to fail without the fix (and without the worker's change, cancelled). The closest email, attention, goal, partial-reply, inbound-reply and Work tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — A reclassified account puts a file's acceptance out of date (B03/B08)
+
+An accepted file stayed "current" after the client's account map was changed, so nothing told the reviewer that the month's books still classified an account the old way. The acceptance view now compares the map the acceptance was given on (its `map_stamp`) with the current map for this file's accounts only: a different class or type marks the acceptance not current with `map_changed`, and the reader says the month's books keep the earlier map until the file is accepted again. A map change that touches none of the file's accounts leaves it current. The month's books from files (`fileMonthBooks`) carry the same finding as a hold, so the management pack and budget comparison wait with that reason instead of presenting the earlier classification silently.
+
+Test: `TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks` reclassifies one of September's accounts in a newer map (acceptance out of date, `map_changed`), then removes that map (current again), and does the same for January's books from files (held, then released); seen to fail without the fix. The file acceptance tests passed on a fresh local PostgreSQL.
+

@@ -47,6 +47,36 @@ type fileAcceptance struct {
 	Actor            string        `json:"actor"`
 	At               time.Time     `json:"at"`
 	Current          bool          `json:"current"`
+	// MapChanged says the client's account map now classifies one of this file's accounts differently from the map the
+	// acceptance was given on; the month's books keep the accepted map until the file is accepted again.
+	MapChanged bool `json:"map_changed,omitempty"`
+}
+
+// acceptedMapChanged reports whether the account map acceptance id was given on classifies any of the reading's accounts
+// (as the current map maps them) differently, by class or type.
+func acceptedMapChanged(ctx context.Context, q rowReader, acceptance string, reading []fileAccount) (bool, error) {
+	var stamp string
+	if err := q.QueryRowContext(ctx, `SELECT map_stamp FROM books_import_acceptances WHERE id::text=$1`, acceptance).Scan(&stamp); err != nil {
+		return false, err
+	}
+	accepted := map[string]mappedAccount{}
+	if mapID, _, ok := strings.Cut(stamp, ":"); ok {
+		var raw []byte
+		if err := q.QueryRowContext(ctx, `SELECT accounts FROM books_account_maps WHERE id::text=$1`, mapID).Scan(&raw); err != nil && err != sql.ErrNoRows {
+			return false, err
+		}
+		json.Unmarshal(raw, &accepted)
+	}
+	for _, a := range reading {
+		was, had := accepted[a.Key]
+		switch {
+		case a.Mapped == nil && had, a.Mapped != nil && !had:
+			return true, nil
+		case a.Mapped != nil && (a.Mapped.Class != was.Class || a.Mapped.Type != was.Type):
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // fileState is what a file's checks read: its confirmed reading and layout, its latest attestation (nil unless of this
@@ -477,6 +507,11 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 		var accepted *fileAcceptance
 		if err == nil {
 			accepted, err = latestAcceptance(r.Context(), db, org, name, id)
+		}
+		if err == nil && found && accepted != nil && accepted.Current {
+			if accepted.MapChanged, err = acceptedMapChanged(r.Context(), db, accepted.ID, state.reading.Accounts); accepted.MapChanged {
+				accepted.Current = false
+			}
 		}
 		on, onErr := fileImportsOn(r.Context(), db, org)
 		if err != nil || onErr != nil {

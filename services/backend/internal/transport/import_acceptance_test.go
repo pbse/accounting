@@ -182,6 +182,18 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if a := call("user_b", preparer, "GET", path, nil, 200)["acceptance"].(map[string]any); a["current"] != true || a["system"] != "QuickBooks Desktop" || a["exported_on"] != "2026-10-03" {
 		t.Fatalf("the acceptance in force: %v", a)
 	}
+	// A newer account map that classifies one of September's accounts differently puts the acceptance out of date (the
+	// month's books keep the accepted map until it is accepted again); the map going back restores it.
+	var reclassified string
+	must(db.QueryRow(`INSERT INTO books_account_maps(organization_id,client_entity,period,accounts,reason,actor) SELECT organization_id,client_entity,period,jsonb_set(accounts,'{n:5000,class}','"Asset"'),'Reclassified','fixture' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1 RETURNING id::text`, org).Scan(&reclassified))
+	if a := call("user_b", preparer, "GET", path, nil, 200)["acceptance"].(map[string]any); a["current"] != false || a["map_changed"] != true {
+		t.Fatalf("a reclassified account puts the acceptance out of date: %v", a)
+	}
+	_, err = db.Exec(`DELETE FROM books_account_maps WHERE id::text=$1`, reclassified)
+	must(err)
+	if a := call("user_b", preparer, "GET", path, nil, 200)["acceptance"].(map[string]any); a["current"] != true {
+		t.Fatalf("the acceptance stands on its map again: %v", a)
+	}
 
 	// October's file leaves out an account with a balance in September's accepted books, and is dated mid-month.
 	october := send1("2026-10", "Number,Account,Debit,Credit\n1000,Business Checking,1700.25,\n3000,Owner's Equity,,1000.00\n4000,Sales,,700.25\n")
@@ -320,6 +332,24 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		Scan(&bank, &sales, &class, &unavailable, &source))
 	if bank != "1500.25" || sales != "700.25" || class != "Revenue" || unavailable != "" || source != januaryAccepted {
 		t.Fatalf("January's books from its file: bank %s, sales %s (%s), unavailable %q, from %s", bank, sales, class, unavailable, source)
+	}
+	// A newer map reclassifying one of January's accounts holds the month's statements, the books staying as accepted;
+	// the map going back releases them.
+	var newer string
+	must(db.QueryRow(`INSERT INTO books_account_maps(organization_id,client_entity,period,accounts,reason,actor) SELECT organization_id,client_entity,period,jsonb_set(accounts,'{n:4000,class}','"Expense"'),'Reclassified','fixture' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1 RETURNING id::text`, org).Scan(&newer))
+	holds := func() []string {
+		t.Helper()
+		_, month, err := fileMonthBooks(t.Context(), db, januaryClose)
+		must(err)
+		return month.Holds
+	}
+	if h := holds(); !slices.Contains(h, "the account map now classifies one of its accounts differently; accept the file again") {
+		t.Fatalf("a reclassified account holds the month's statements: %q", h)
+	}
+	_, err = db.Exec(`DELETE FROM books_account_maps WHERE id::text=$1`, newer)
+	must(err)
+	if h := holds(); slices.Contains(h, "the account map now classifies one of its accounts differently; accept the file again") {
+		t.Fatalf("the month's statements stand on their map again: %q", h)
 	}
 	// The month's management pack reads them: its profit and loss from the file's activity, provisional.
 	packOf := func() map[string]any {
