@@ -230,7 +230,8 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		}
 	}
 	var recapture bool
-	if err = tx.QueryRowContext(ctx, `SELECT `+quickbooks.RefreshStopped("$1::bigint"), id).Scan(&recapture); err != nil {
+	// Only a month that reads QuickBooks waits on its stopped refresh.
+	if err = tx.QueryRowContext(ctx, `SELECT `+quickbooks.RefreshStopped("$1::bigint")+` AND `+sourceAllows("$1::bigint", "quickbooks"), id).Scan(&recapture); err != nil {
 		return out, err
 	}
 	if recapture {

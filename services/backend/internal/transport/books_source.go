@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/quickbooks"
 )
 
 // Source selection (docs/books-sources.md, Migration step 2; delivery step 5): the source a client's month's books come
@@ -151,17 +152,19 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "The client's books source changed since you read it. Review it and try again.")
 			return
 		}
-		// A signed-off month keeps the books it was signed off with: a choice that could change which capture it reads
-		// (one that leaves out a provider it has captures from, now or before) waits for it to be reopened. The months
-		// are locked first, so a sign-off either waits for this change or is seen by it.
+		// A signed-off month keeps the books it was signed off with, and approved work the books it was prepared from: a
+		// choice that would change which capture such a month reads waits for it, or its work, to be reopened. The months
+		// are locked first, so a sign-off or an approval either waits for this change or is seen by it.
 		if _, err = tx.ExecContext(ctx, `SELECT c.id FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND ($3='' OR c.period=$3) ORDER BY c.id FOR UPDATE`, org, name, in.Period); err != nil {
 			problem(w, 503, "The client's books source is unavailable.")
 			return
 		}
 		rows, err := tx.QueryContext(ctx, `SELECT c.period,books_source(c.organization_id,c.entity,c.period),
- (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period'),(SELECT max(s.captured_at) FROM xero_snapshots s WHERE s.close_id=c.id)
+ (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+`),
+ (SELECT max(s.captured_at) FROM xero_snapshots s WHERE s.close_id=c.id)
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2)
- AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off'
+ AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off'
+  OR EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'))
  AND (($3<>'' AND c.period=$3) OR ($3='' AND NOT EXISTS(SELECT 1 FROM books_sources o WHERE o.organization_id=c.organization_id AND client_identity(o.organization_id,o.client_entity)=client_identity(c.organization_id,c.entity) AND o.period=c.period)))
  ORDER BY c.period`, org, name, in.Period)
 		if err != nil {
@@ -188,7 +191,7 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if len(held) > 0 {
-			problem(w, 409, "This would change the books of months already signed off ("+strings.Join(held, ", ")+"). Reopen them first, or choose a source for later months alone.")
+			problem(w, 409, "This would change the books of months already signed off or with approved work ("+strings.Join(held, ", ")+"). Reopen them, or their work, first, or choose a source for other months alone.")
 			return
 		}
 		var period any

@@ -889,7 +889,10 @@ function sourceLine(chosen: BooksSource[]) {
 // newest choice as read; a choice that would change a signed-off month's books is refused until it is reopened.
 function SourceForm({ client, chosen, onSaved, onCancel }: { client: string; chosen: BooksSource[]; onSaved: () => void; onCancel: () => void }) {
   const [period, setPeriod] = useState("");
-  const [source, setSource] = useState<BooksSource["source"]>(chosen.find((c) => c.period === "")?.source ?? "newest");
+  // The source in force for what is chosen for: the month's own, else the client's default, else the newest capture.
+  const inForce = (p: string) => chosen.find((c) => c.period === p)?.source ?? chosen.find((c) => c.period === "")?.source ?? "newest";
+  const [source, setSource] = useState<BooksSource["source"]>(inForce(""));
+  const choose = (p: string) => (setPeriod(p), setSource(inForce(p)));
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -912,7 +915,7 @@ function SourceForm({ client, chosen, onSaved, onCancel }: { client: string; cho
       <fieldset disabled={busy}>
         <label>
           For
-          <select value={period === "" ? "" : "month"} onChange={(e) => setPeriod(e.target.value === "" ? "" : new Date().toISOString().slice(0, 7))}>
+          <select value={period === "" ? "" : "month"} onChange={(e) => choose(e.target.value === "" ? "" : new Date().toISOString().slice(0, 7))}>
             <option value="">Every month without its own choice</option>
             <option value="month">One month</option>
           </select>
@@ -920,7 +923,7 @@ function SourceForm({ client, chosen, onSaved, onCancel }: { client: string; cho
         {period !== "" && (
           <label>
             Month
-            <input type="month" value={period} required onChange={(e) => setPeriod(e.target.value)} />
+            <input type="month" value={period} required onChange={(e) => choose(e.target.value)} />
           </label>
         )}
         <label>

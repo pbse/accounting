@@ -150,4 +150,18 @@ func TestTheBooksSourceIsChosenAndHonoured(t *testing.T) {
 	call("user_a", partner, map[string]any{"client": "Acme Co", "period": "", "source": "newest", "reason": "Back to the newest capture", "rev": newest}, 200)
 	must(db.QueryRow(`SELECT max(id)::text FROM books_sources WHERE organization_id=$1`, org).Scan(&newest))
 	call("user_a", partner, map[string]any{"client": "Acme Co", "period": "", "source": "xero", "reason": "Xero for every month", "rev": newest}, 409)
+
+	// August has approved work prepared from its QuickBooks books: choosing Xero for it waits for the work to reopen.
+	var paper string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','acme-paper','{"input":{"currency":"USD"}}') RETURNING id::text`, august).Scan(&paper))
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,decision,note,actor,paper_digest) VALUES($1,'approved','Synthetic approval','fixture','acme-paper')`, paper)
+	must(err)
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id=$1`, paper)
+		db.Exec(`DELETE FROM workpapers WHERE id=$1`, paper)
+	})
+	must(db.QueryRow(`SELECT max(id)::text FROM books_sources WHERE organization_id=$1`, org).Scan(&newest))
+	if out := call("user_a", partner, map[string]any{"client": "Acme Co", "period": "2026-08", "source": "xero", "reason": "Xero for August", "rev": newest}, 409); !strings.Contains(out["message"].(string), "approved work") {
+		t.Fatalf("approved work holds the change: %v", out)
+	}
 }
