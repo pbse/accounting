@@ -5,7 +5,7 @@ import { useBrowserHash } from "../../data/browser";
 import { useDates } from "../../data/time";
 import { money, workspaceRequest } from "../closes/workspace";
 
-export type XeroConnection = { id: string; state: string; tenant_name: string; tenants: { tenantId: string; tenantName: string }[]; error: string };
+type XeroConnection = { id: string; state: string; tenant_name: string; tenants: { tenantId: string; tenantName: string }[]; error: string };
 export type XeroGrant = { id: string; connection_id: string; tenant_id: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string };
 type Client = {
   entity: string;

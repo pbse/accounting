@@ -15,7 +15,7 @@ type Drive = { configured: boolean; connected?: boolean; reason?: string };
 // One read of a settings route, kept until it is replaced; each provider-backed part loads on its own.
 // useRead is a settings section's read: a query, so the section renders with the page when its loader read it.
 // setValue records what a save returned, without reading again.
-export function useRead<T>(path: string, unavailable: string) {
+function useRead<T>(path: string, unavailable: string) {
   const queryClient = useQueryClient();
   const read = useQuery(workspaceQuery<T>(path));
   return {

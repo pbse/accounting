@@ -95,7 +95,7 @@ func modelChecks(ctx context.Context, organization, subject string) []Check {
 	}
 	schema := &llm.OutputSchema{Name: "provider_check", Definition: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["ok"],"properties":{"ok":{"type":"boolean"}}}`)}
 	out := []Check{}
-	for _, purpose := range []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat", "ocr"} {
+	for _, purpose := range []string{"evidence_selection", "preparation", "procedure_draft", "statement", "plan", "written_answer", "investigation", "chat", "ocr"} {
 		model := llm.Model(ctx, purpose)
 		if model == "" {
 			detail := "no model route is configured for " + purpose

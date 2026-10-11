@@ -79,7 +79,7 @@ const activityEvents = `
  UNION ALL SELECT d.created_at,d.created_by,'agent.request_draft','Agent '||d.agent||' drafted a client request in '||c.entity||' '||c.period FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1 AND d.agent IS NOT NULL
  UNION ALL SELECT a.created_at,a.requested_by,'agent.approval_request','Agent '||a.agent||' asked for approval of draft #'||a.workpaper_id||' in '||c.entity||' '||c.period FROM approval_requests a JOIN client_closes c ON c.id=a.close_id WHERE c.organization_id=$1 AND a.agent IS NOT NULL`
 
-// securityActivity is the newest hundred activityEvents for the Security center.
+// securityActivity is the newest hundred activityEvents for Settings → Security.
 const securityActivity = `SELECT COALESCE(jsonb_agg(x ORDER BY x.at DESC),'[]'::jsonb) FROM (SELECT at,actor,text FROM (` + activityEvents + `
 ) events ORDER BY at DESC LIMIT 100) x`
 

@@ -18,7 +18,7 @@ type Finish = "review" | "signoff";
 type Goal = { id: string; author: string; due_on: string; state: "active" | "reached" | "stopped"; finish: Finish; created_at: string; reached_at: string | null; ready_at: string | null; finished_at: string | null; events: { actor: string; text: string; at: string }[] };
 type Signoff = { state: "open" | "signed_off" | "reopen_required"; signer: string; needs: string[]; entries: { draft: string; text: string }[]; next_close: string };
 type Routine = { author: string; finish: Finish; due_days: number | null; next_period: string; waiting: string };
-export type Step = { key: string; title: string; state: "done" | "agent" | "you" | "client" | "waits" | "none" | "unknown"; text: string; lines?: string[]; link?: string };
+type Step = { key: string; title: string; state: "done" | "agent" | "you" | "client" | "waits" | "none" | "unknown"; text: string; lines?: string[]; link?: string };
 export type Status = {
   goal: Goal | null;
   progress: { items: Item[]; needs: string[]; ready: boolean; signoff?: Signoff; coverage?: { total: number; open: number }; plan: Step[] };

@@ -106,7 +106,7 @@ These are pointers into the existing implementation, not evidence that a package
 | [Server rendering](docs/server-rendering.md) | Workspace pages rendered at the edge with their data: routes with loaders, TanStack Query, the Worker, headers, and the rules for code that renders on the server. |
 | [Page speed](docs/performance.md) | The 400 ms page budget, what made pages slow, container size and placement, connection pooling, prefetching in the browser, and reading `Server-Timing`. |
 | [Deployment](docs/deployment.md) | Environments, configuration/secrets, migrations, deployment workflows, costs and activation gaps. |
-| [Operations](docs/operations.md) | Security center, monitoring, retention, recovery, incidents and restore boundaries. |
+| [Operations](docs/operations.md) | Security settings, monitoring, retention, recovery, incidents and restore boundaries. |
 | [Migration README](infra/postgres/migrations/README.md) | Database migration conventions and operating instructions. Local checks use local PostgreSQL; never create a Neon branch. |
 | [Contract README](packages/contracts/README.md) | Shared API/MCP contract boundaries. |
 | [Retired workflow boundary](workers/workflows/README.md) | Why durable work belongs in Go rather than a second Cloudflare workflow implementation. |

@@ -4,7 +4,7 @@ Any MCP client can use close preparation at `POST /mcp`: Claude, ChatGPT, Cursor
 
 ## Deployment boundary
 
-The Go API implements this transport. The Cloudflare edge forwards `/mcp` and OAuth discovery (`/.well-known/oauth-protected-resource` and paths under it) to the API, behind the same check as `/v1` that hosted sign-in is configured; `/internal/*` stays private. The deploy workflows pass `WORKOS_AUTHKIT_DOMAIN`, `MCP_RESOURCE_URL` and `MCP_ALLOWED_ORIGINS` to the API container as GitHub environment variables, and refuse a deploy unless the first two are set together, the AuthKit domain is a bare HTTPS origin, and `MCP_RESOURCE_URL` is exactly `/mcp` on the API origin (`VITE_API_BASE_URL`, else the environment URL). Hosted MCP still needs the WorkOS setup below and a deploy; see [deployment](deployment.md#github-environment-settings).
+The Go API implements this transport. The Cloudflare edge forwards `/mcp` and OAuth discovery (`/.well-known/oauth-protected-resource` and paths under it) to the API, behind the same check as `/v1` that hosted sign-in is configured; `/internal/*` stays private. The deploy workflows pass `WORKOS_AUTHKIT_DOMAIN`, `MCP_RESOURCE_URL` and `MCP_ALLOWED_ORIGINS` to the API container as GitHub environment variables, and refuse a deploy unless the first two are set together, the AuthKit domain is a bare HTTPS origin, and `MCP_RESOURCE_URL` is exactly `/mcp` on the API origin (`VITE_API_BASE_URL`, else the environment URL). Hosted MCP still needs the WorkOS setup below and a deploy; see [deployment](deployment.md#environment-settings).
 
 ## Connect
 
@@ -22,7 +22,7 @@ Browser-based clients must also run on an origin listed in `MCP_ALLOWED_ORIGINS`
 
 ### Agent access per member
 
-AuthKit's OAuth tokens say who the person is but carry no app permissions, so the firm approves each member's agent access in **Agent access (MCP)**, which members use from **Settings → Connections** (Connections) and administrators from the **Security center**:
+AuthKit's OAuth tokens say who the person is but carry no app permissions, so the firm approves each member's agent access in **Agent access (MCP)**, which members and administrators both use from **Settings → Connections**:
 
 1. **The member asks** from their own signed-in session: read only, or read and prepare.
 2. **An administrator approves** (needs clients:all and members:manage). The approval can narrow the request but never widen it. The administrator can also decline or revoke, and the member can revoke their own access. Every decision is recorded with a reason.

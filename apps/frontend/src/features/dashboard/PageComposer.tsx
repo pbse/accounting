@@ -82,7 +82,7 @@ function remember(key: string, hidden: boolean) {
 // The composer at the foot of every page but Home (docs/design-system.md, Composer): a box with room for sentences
 // and three controls, the plus (the asks the agent answers here), the scope, and send. What is sent opens the agent
 // beside the page, in the close's conversation or the firm's; nothing runs from the page itself.
-export function PageComposer({ closeId, executive }: { closeId: string; executive: boolean }) {
+function PageComposer({ closeId, executive }: { closeId: string; executive: boolean }) {
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
   const [note, setNote] = useState("");

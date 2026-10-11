@@ -63,7 +63,7 @@ The **Reports** tab's management pack has no Xero cash-flow statement to read, s
 
 This keeps the same human steps and refusals as production QuickBooks posting (migration 060).
 
-0. **Firm setting.** Every Xero organisation counts as a client's live books, so nothing is posted until a firm administrator turns on **Writing to clients' books** in Firm settings ([production posting](production-posting.md)). It starts off.
+0. **Firm setting.** Every Xero organisation counts as a client's live books, so nothing is posted until a firm administrator turns on **Writing to clients' books** in Settings → Policies ([production posting](production-posting.md)). It starts off.
 1. **Grant.** Someone with `posting:approve` grants posting for the client under **Xero posting grant**. The grant lists 2–20 Xero account IDs (taken from the Trial Balance rows), the draft kinds it covers, a limit per journal and an expiry within 30 days. Type `GRANT XERO POSTING` to grant it or `REVOKE XERO POSTING` to revoke it.
 2. **Enable kinds.** **Connector operations** (Settings → Security → Advanced) shows each kind's status and the clients it is enabled for; the demo-company check is not recorded in the app. Each kind stays off until the operator lists it in `XERO_POSTING_KINDS` (for example `accrual,loan`), after checking Xero's behavior for it.
 3. **Preview.** **Reviewed Xero posting** on a draft reads Xero live and refuses unless all of these hold:

@@ -48,7 +48,7 @@ const ServerSessionContext = createContext<Session>({ ...signedOut, isLoading: t
 export type SessionState = { user: { email: string } | null; unavailable?: boolean };
 export const sessionKey = ["session"] as const;
 // Only a 401 means signed out; any other failure is shown as unavailable, not as a prompt to sign in.
-export const readSession = (): Promise<SessionState> =>
+const readSession = (): Promise<SessionState> =>
   fetch(`${apiBaseUrl}/v1/auth/session`)
     .then(async (response) => (response.ok ? { user: (await response.json()).user } : response.status === 401 ? { user: null } : { user: null, unavailable: true }))
     .catch(() => ({ user: null, unavailable: true }));

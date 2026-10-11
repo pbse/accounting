@@ -16,7 +16,7 @@ import (
 )
 
 // A close changes hands: its holder hands it to a teammate who can review the client, a firm administrator reassigns
-// it whoever holds it, nobody else can, and each change is recorded and shown in the Security center.
+// it whoever holds it, nobody else can, and each change is recorded and shown in Settings → Security.
 func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -239,7 +239,7 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	activity := call("user_a", admin, "GET", "/v1/closes/security", nil, 200)
 	for _, want := range []string{"Took Alpha 2026-09", "Took Alpha 2026-09 from user_b", "Assigned Alpha 2026-09 to user_c: Covering while I'm away", "Assigned Alpha 2026-09 to user_b from user_c: Back from leave", "Released Alpha 2026-09"} {
 		if !strings.Contains(activity, want) {
-			t.Fatalf("the Security center shows %q: %s", want, activity)
+			t.Fatalf("Settings → Security shows %q: %s", want, activity)
 		}
 	}
 }

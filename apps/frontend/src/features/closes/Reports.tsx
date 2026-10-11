@@ -281,7 +281,7 @@ function ImportCashFlow({ closeId, pack, onPack }: { closeId: string; pack: Extr
 }
 
 // An explanation of one line that moved, drafted from the ledger and then reviewed; published with the pack.
-export type Explanation = { account_id: string; name: string; change: string; material: boolean; text: string };
+type Explanation = { account_id: string; name: string; change: string; material: boolean; text: string };
 type Published = {
   id: string;
   version: number;

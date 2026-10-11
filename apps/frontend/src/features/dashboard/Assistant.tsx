@@ -17,7 +17,7 @@ import { Icon } from "@close/ui/components/Icon";
 // action the agent proposes is a card the member confirms. What the agent is doing shows step by step as it runs.
 
 // A step the agent made for an answer: what ran, its outcome and where its detail lives; never its content.
-export type Step = { id: string; tool: string; title: string; status: string; size?: number; truncated?: boolean; link?: { label: string; href: string } };
+type Step = { id: string; tool: string; title: string; status: string; size?: number; truncated?: boolean; link?: { label: string; href: string } };
 type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request" | "approval" | "portfolio" | "open_close"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null; proposal?: Record<string, unknown>; target_close_id?: string; target_close?: string; steps?: Step[] };
 
 function readOpen() {

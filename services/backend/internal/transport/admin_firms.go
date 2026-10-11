@@ -83,7 +83,7 @@ const adminInvitations = `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::
  'created_at',created_at,'expires_at',expires_at,'decided_at',decided_at) ORDER BY i.id DESC),'[]'::jsonb)
  FROM (SELECT * FROM member_invitations WHERE organization_id=$1 ORDER BY member_invitations.id DESC LIMIT 50) i`
 
-// adminFirmPeople is the firm's members (the Security center's view of them) and invitations. Reasons and the clients a
+// adminFirmPeople is the firm's members (Settings → Security's view of them) and invitations. Reasons and the clients a
 // member is assigned to are masked unless revealed; the number of assignments shows.
 func adminFirmPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	firm, reveal := r.PathValue("id"), r.URL.Query().Get("reveal") == "1"

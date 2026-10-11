@@ -2,7 +2,6 @@ package wf
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -36,14 +35,6 @@ func Effect[T any](ctx Context, key string, fn func(context.Context) (T, error),
 // is cancelled. The step's attempts count the calls. Of the step options, only Timeout applies, to each call.
 func Watch(ctx Context, key string, every time.Duration, fn func(context.Context) (bool, error), options ...StepOption) error {
 	return ctx.exec().watch(key, every, policyOf(options), fn)
-}
-
-// StepID identifies the current run and step, for use as an idempotency key in a step's writes.
-func StepID(ctx context.Context, key string) string {
-	if x := executionOf(ctx); x != nil {
-		return fmt.Sprintf("wf:%d:%s", x.run.id, key)
-	}
-	return ""
 }
 
 // DB is the engine's database, for use inside a workflow or step. Queries made with the step's
@@ -119,11 +110,6 @@ func Sleep(ctx Context, key string, d time.Duration) error {
 	return x.sleep(key, func() time.Time { return x.engine.now().Add(d) })
 }
 
-// SleepUntil parks the run until t.
-func SleepUntil(ctx Context, key string, t time.Time) error {
-	return ctx.exec().sleep(key, func() time.Time { return t.UTC() })
-}
-
 // WaitForEvent parks the run until an event with this key is recorded (Emit) for the run's firm, or
 // until timeout passes (ErrTimeout). It takes the earliest such event recorded after the run started
 // that this run has not already consumed, so an event that arrives before the wait still counts.
@@ -153,15 +139,6 @@ func Now(ctx Context) time.Time {
 		_ = json.Unmarshal(raw, &t)
 	}
 	return t
-}
-
-// Random returns a random string fixed at the first run through this point, the same on replay.
-func Random(ctx Context) string {
-	var s string
-	if raw, err := ctx.exec().value("random", func() any { return rand.Text() }); err == nil {
-		_ = json.Unmarshal(raw, &s)
-	}
-	return s
 }
 
 // typed decodes a step's saved result. A result that no longer fits its type means the code changed

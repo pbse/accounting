@@ -84,10 +84,6 @@ type OwnerSpec struct {
 	Purpose                  string
 }
 
-func (c *Client) prepaidMonthly(p PrepaidSpec) *big.Rat {
-	return new(big.Rat).Quo(Money(p.Amount), big.NewRat(int64(p.Months), 1))
-}
-
 // TxnsFor is the month's transactions: the shared recurring activity, the client's own, and what the work describes.
 func (c *Client) TxnsFor(g *ids, period string, n int) []Txn {
 	txns := recurring(c, g, period, c.Revenue, c.Customers, c.Income)

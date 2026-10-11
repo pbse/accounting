@@ -16,7 +16,7 @@ The public site at getkrith.com introduces Krith to accounting firms and finance
 
 Every page shares one header and footer (`features/marketing/Layout.tsx`). Header: the wordmark (home), **How it works** (`/#how`), **Security**, **About**, **Log in** and **Talk to us** (`/contact`). Footer: How it works, Security, About, Contact, Log in and Privacy notice. Every "Talk to us" goes to `/contact`; "How we protect client data" on the home page goes to `/security`. The client request page (`/request`) links to `/privacy` and `/security`. Nothing on the site links to another domain except the email address.
 
-Earlier pages (`/subprocessors`, `/ai`, `/data-retention`, `/pilot-terms`) were removed on 2026-10-05: the providers list and retention summary moved into the privacy notice, and the AI commitments into Security. The detailed statements remain true of the service and belong in the workspace's Security center and in a firm's written agreement. The site does not mention pilots or design partners.
+Earlier pages (`/subprocessors`, `/ai`, `/data-retention`, `/pilot-terms`) were removed on 2026-10-05: the providers list and retention summary moved into the privacy notice, and the AI commitments into Security. The detailed statements remain true of the service and belong in the workspace's Settings → Security and in a firm's written agreement. The site does not mention pilots or design partners.
 
 **Accuracy rule.** Every statement on Security and Privacy follows what the service does today; when the code changes, change the page and the privacy notice's date. Names, firms and figures on the home page are illustrative and labelled so.
 

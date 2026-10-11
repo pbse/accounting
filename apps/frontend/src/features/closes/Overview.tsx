@@ -32,12 +32,12 @@ export function useDecisions(closeId: string) {
 export function useGoalStatus(closeId: string) {
   return useQuery({ ...workspaceQuery<Status>(`/${closeId}/goal`), refetchInterval: 15_000 });
 }
-export const preparing = (status: Status | undefined) => status?.goal?.state === "active" && status.progress.items.some((i) => i.status === "working");
-export const toHandOver = (status: Status | undefined) => !!status && !status.signed_off && (!status.goal || status.goal.state === "stopped");
+const preparing = (status: Status | undefined) => status?.goal?.state === "active" && status.progress.items.some((i) => i.status === "working");
+const toHandOver = (status: Status | undefined) => !!status && !status.signed_off && (!status.goal || status.goal.state === "stopped");
 
 // One thing for the person: a decision (or several approvals in one review), a blocker from the brief, or handing the
 // close to the agent; the one action that settles it, the tab where that is done, and the decisions it stands for.
-export type Need = { key: string; title: string; detail: string; action: string; to?: string; act?: () => void; tab?: CloseTab; count: number; blocker?: boolean; review?: string[] };
+type Need = { key: string; title: string; detail: string; action: string; to?: string; act?: () => void; tab?: CloseTab; count: number; blocker?: boolean; review?: string[] };
 
 // Each kind of decision: the line under its title, its one action, and the tab its action is on (none: on Overview).
 const kinds: Record<string, { detail: string; action: string; tab?: CloseTab }> = {

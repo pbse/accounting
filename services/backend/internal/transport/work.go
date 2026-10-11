@@ -2,7 +2,6 @@ package transport
 
 import (
 	"cmp"
-	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -198,39 +197,6 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 	}
 	mux.HandleFunc("GET /v1/closes/work", read)
 	mux.HandleFunc("GET /v1/closes/{id}/work", read)
-	mux.HandleFunc("POST /v1/closes/work/interpret", func(w http.ResponseWriter, r *http.Request) {
-		var in struct {
-			Text   string   `json:"text"`
-			Labels []string `json:"labels"`
-		}
-		if !decode(w, r, &in) {
-			return
-		}
-		in.Text = strings.TrimSpace(in.Text)
-		if len(in.Text) == 0 || len(in.Text) > 300 || len(in.Labels) > 100 {
-			problem(w, 422, "Ask in up to 300 characters about at most 100 visible closes.")
-			return
-		}
-		model := llm.Model(r.Context(), "work_command")
-		if model == "" {
-			problem(w, 503, "Plain-language requests need the agent model. Use one of the listed commands.")
-			return
-		}
-		if !modelBudget(w, r, db, 1) {
-			return
-		}
-		action, target, err := interpretWork(r.Context(), in.Text, in.Labels)
-		if err != nil {
-			problem(w, 502, err.Error())
-			return
-		}
-		command, ok := workCommand(action, target, in.Labels)
-		if !ok {
-			problem(w, 422, "That request is not something Work can find, explain or preview yet. Try ‘show blockers’ or ‘why is Client · YYYY-MM waiting?’.")
-			return
-		}
-		jsonReply(w, 200, map[string]string{"command": command})
-	})
 	mux.HandleFunc("POST /v1/closes/{id}/work/{job}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Revision           int             `json:"revision"`
@@ -739,51 +705,6 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]string{"id": jobID, "link_token": linkToken, "passcode": passcode})
 	})
-}
-
-var askViews = map[string]string{"show_decisions": "show decisions", "show_blockers": "show blockers", "show_running": "show running work", "show_requests": "show client requests", "show_prepared": "show prepared work", "show_all": "show all work", "show_dependencies": "show dependencies"}
-
-func workCommand(action, target string, labels []string) (string, bool) {
-	if view, ok := askViews[action]; ok {
-		return view, target == ""
-	}
-	visible := slices.Contains(labels, target)
-	switch action {
-	case "prepare", "recheck", "stop":
-		return action + " " + target, visible || target == "all visible"
-	case "rehearse":
-		return "rehearse " + target, visible
-	case "explain":
-		return "why is " + target + " waiting?", visible
-	}
-	return "", false
-}
-
-func interpretWork(ctx context.Context, text string, labels []string) (string, string, error) {
-	actions := []string{"unsupported", "prepare", "recheck", "stop", "rehearse", "explain"}
-	for action := range askViews {
-		actions = append(actions, action)
-	}
-	slices.Sort(actions)
-	targets := append([]string{"", "all visible"}, labels...)
-	schema, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"action", "target"}, "properties": map[string]any{
-		"action": map[string]any{"type": "string", "enum": actions}, "target": map[string]any{"type": "string", "enum": targets}}})
-	input, _ := json.Marshal(map[string]any{"request": text, "visible_closes": labels})
-	request := llm.Request{Purpose: "work_command", MaxResponseBytes: 32768, MaxOutputTokens: 200, Instructions: "Map an accountant's request about their close work to one command. Actions: show_* filter the inbox (target empty); prepare, recheck or stop coordinate a close's source jobs (target one visible close, or \"all visible\"); rehearse opens a close's production journal rehearsal and explain says why a close is waiting (target one visible close). Choose a target only when the request clearly names one visible close; otherwise use unsupported. Never invent a close.", Data: json.RawMessage(input), Schema: &llm.OutputSchema{Name: "work_command", Definition: json.RawMessage(schema)}}
-	callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	response, err := llm.Generate(callCtx, request)
-	if err != nil {
-		return "", "", err
-	}
-	var answer struct {
-		Action string `json:"action"`
-		Target string `json:"target"`
-	}
-	if preparation.Strict([]byte(response.Text), &answer) != nil {
-		return "", "", errors.New("The agent model's answer was incomplete; use one of the listed commands")
-	}
-	return answer.Action, answer.Target, nil
 }
 
 var predictedAccounts = map[string][]string{"prepaid": {"prepaid_account"}, "accrual": {"liability_account"}, "payroll": {"clearing_account", "liability_account"}, "loan": {"loan_account", "accrued_interest_account", "current_portion_account"}, "owner": {"owner_account"}, "settlement": {"bank_account"}, "reconciliation": {"account"}}

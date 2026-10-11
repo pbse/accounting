@@ -89,7 +89,7 @@ Settings:
 
 ## Invitations
 
-A firm administrator invites someone by email from Security center → People and roles. WorkOS holds the invitation, but **Krith sends the email**, from the same sender and through the same queue as the welcome emails. WorkOS's own invitation email is turned off ([setup](#setup-once-per-environment)).
+A firm administrator invites someone by email from Settings → People. WorkOS holds the invitation, but **Krith sends the email**, from the same sender and through the same queue as the welcome emails. WorkOS's own invitation email is turned off ([setup](#setup-once-per-environment)).
 
 The email:
 - **Subject:** "<Inviter> invited you to join <firm> on Krith", or "You're invited to join <firm> on Krith" when WorkOS has no name or address for the inviter.

@@ -33,7 +33,7 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 	}
 	db.Exec(`DELETE FROM worker_heartbeats WHERE loop='worker'`)
 	t.Cleanup(func() { db.Exec(`DELETE FROM worker_heartbeats WHERE loop='worker'`) })
-	// Firm settings are served as the app serves them: a non-superuser through the tenant connection, so row-level
+	// Settings are served as the app serves them: a non-superuser through the tenant connection, so row-level
 	// security applies to the signed-in member's firm.
 	if _, err = db.Exec(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='close_rls_probe') THEN CREATE ROLE close_rls_probe LOGIN PASSWORD 'probe-only' NOSUPERUSER NOBYPASSRLS; END IF; END $$;
 		GRANT USAGE ON SCHEMA public TO close_rls_probe; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO close_rls_probe; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO close_rls_probe`); err != nil {
@@ -71,7 +71,7 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 		return policy.OCR
 	}
 	if got := read(); !strings.HasPrefix(got, "Not reported") {
-		t.Fatalf("before the worker reports, Firm settings say so: %q", got)
+		t.Fatalf("before the worker reports, Settings say so: %q", got)
 	}
 	// An administrator who manages members opens the firm's people and security sections as well as its clients.
 	admin := httptest.NewRequest("GET", "/v1/closes/organization/policy", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: org, Permissions: []string{"clients:all", "members:manage"}}))
@@ -94,7 +94,7 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(read(), "Google Gemini (gemini-3.8-flash) reads every PDF page") {
 		if time.Now().After(deadline) {
-			t.Fatalf("the worker's report reaches Firm settings: %q", read())
+			t.Fatalf("the worker's report reaches Settings: %q", read())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -120,7 +120,7 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 	if got := read(); !strings.HasPrefix(got, "Local only:") {
 		t.Fatalf("without a key, PDFs are read locally: %q", got)
 	}
-	// A key whose paid service the operator has not confirmed sends nothing, and Firm settings say why.
+	// A key whose paid service the operator has not confirmed sends nothing, and Settings say why.
 	if _, err = db.Exec(`UPDATE worker_heartbeats SET detail=detail||'{"ocr":{"provider":"tesseract","held":"paid service not confirmed"}}' WHERE loop='worker'`); err != nil {
 		t.Fatal(err)
 	}

@@ -25,10 +25,10 @@ const JOBS = [
   { job: "Client request", done: "Nothing missing", ask: "Send the client request", amt: "2 receipts outstanding" },
 ];
 const REVIEWERS = ["M. Alvarez", "J. Okafor", "R. Chen", "S. Patel"];
-export const TRANSACTIONS = 18412;
+const TRANSACTIONS = 18412;
 export const ILLUSTRATIVE_DECISIONS = DECISIONS;
 
-export type CityElements = {
+type CityElements = {
   hero: HTMLElement;
   canvas: HTMLCanvasElement;
   copy: HTMLElement;
