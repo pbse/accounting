@@ -4296,3 +4296,9 @@ Review follow-ups: the trigger and a one-time backfill share one function; a dra
 
 Limits: the match is textual (vendor names are compared in lower case, not normalized for punctuation), so a credit naming the vendor differently is missed and a document that names the vendor and mentions credit terms reopens the draft for a person to look at.
 
+## 2026-10-11 — Held email replies stop reminders (B04/B05)
+
+Durable follow-through gaps found by a code read of the handoff's B04/B05/B11 section; most of that section's acceptance cases were already met and tested. Fixed here: an emailed reply held for review did not stop reminders, so a client who had answered could be reminded again. Work's "reminder due", reminder approval and the sending worker now each refuse while a reply is held. The worker also rechecks that the approver is still a member of the firm before sending, whatever access they held, and a held reply outranks the "contact the client another way" follow-up.
+
+Test: `TestApprovedEmailDurableRetryAndScope` refuses a reminder while a held reply exists, seen to fail without the fix; the closest email, inbound-reply and delivery tests passed against a fresh local PostgreSQL.
+

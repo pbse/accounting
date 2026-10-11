@@ -222,6 +222,8 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 				item.Status, item.Text = "client", "Waiting on the client."
 			case request.Partial:
 				item.Text = "The client answered part of request #" + request.ID + ". Resume now from Work, or wait for the rest."
+			case request.Follow == "held":
+				item.Text = "An emailed reply to request #" + request.ID + " is held for review. Check it on the Requests tab."
 			case request.Undelivered:
 				item.Text = "The email for request #" + request.ID + " was not delivered. Check it on the Requests tab."
 			case request.Unsent:
@@ -236,7 +238,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 			default:
 				item.Status, item.Text = "client", "Waiting on the client's reply to request #"+request.ID+"."
 			}
-			if request != nil && !request.Partial && !request.Undelivered && !request.Unsent {
+			if request != nil && !request.Partial && !request.Undelivered && !request.Unsent && request.Follow != "held" {
 				waiting = append(waiting, wait{len(p.Items), request.ID})
 			}
 		case "completed":
