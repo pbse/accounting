@@ -407,7 +407,7 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 	})
 	mux.HandleFunc("GET /v1/closes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var item savedClose
-		err := db.QueryRowContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$2,COALESCE(b.method,''),COALESCE(b.scope,'') FROM client_closes LEFT JOIN LATERAL (SELECT p.method,CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END scope FROM procedure_versions p WHERE p.organization_id=client_closes.organization_id AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower(client_closes.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1) b ON true WHERE id::text=$1`, r.PathValue("id"), subject(r)).Scan(&item.ID, &item.Entity, &item.Period, &item.DueOn, &item.Priority, &item.Assigned, &item.OwnedByMe, &item.Basis, &item.BasisScope)
+		err := db.QueryRowContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$2,COALESCE(b.method,''),COALESCE(b.scope,'') FROM client_closes LEFT JOIN LATERAL (SELECT p.method,CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END scope FROM procedure_versions p WHERE p.organization_id=client_closes.organization_id AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower(client_closes.entity)) AND (p.effective_from IS NULL OR p.effective_from<=client_closes.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1) b ON true WHERE id::text=$1`, r.PathValue("id"), subject(r)).Scan(&item.ID, &item.Entity, &item.Period, &item.DueOn, &item.Priority, &item.Assigned, &item.OwnedByMe, &item.Basis, &item.BasisScope)
 		if err == sql.ErrNoRows {
 			problem(w, 404, "Close not found.")
 			return

@@ -15,6 +15,7 @@ type Version = {
   reason: string;
   actor: string;
   created_at: string;
+  effective_from?: string;
 };
 type Impact = {
   version_id: string;
@@ -27,10 +28,12 @@ type PublishImpact = { kind: string; client_entity: string; previous_id: string;
 export function Procedures({
   closeId,
   entity,
+  period,
   onApplied,
 }: {
   closeId: string;
   entity: string;
+  period: string;
   onApplied: () => void;
 }) {
   const dates = useDates();
@@ -46,6 +49,8 @@ export function Procedures({
   const [impact, setImpact] = useState<Impact>();
   const [suggestion, setSuggestion] = useState<Suggestion>();
   const [publishImpact, setPublishImpact] = useState<PublishImpact>();
+  // The first month a published version applies to ("" for every month); the impact preview is read for it.
+  const [effectiveFrom, setEffectiveFrom] = useState("");
   async function load() {
     setBusy(true);
     setError("");
@@ -87,6 +92,7 @@ export function Procedures({
         prepaid_account: data.get("prepaid_account") ?? "",
         enabled: kind === "basis" || data.get("enabled") === "on",
         reason: data.get("reason"),
+        effective_from: effectiveFrom,
         confirmed: data.get("confirmed") === "on",
       });
       setEditing(false);
@@ -107,7 +113,7 @@ export function Procedures({
     setError("");
     setPublishImpact(undefined);
     try {
-      setPublishImpact(await workspaceRequest(`/procedures?impact_kind=${encodeURIComponent(kind)}&client_entity=${encodeURIComponent(target === "client" ? entity : "")}`));
+      setPublishImpact(await workspaceRequest(`/procedures?impact_kind=${encodeURIComponent(kind)}&client_entity=${encodeURIComponent(target === "client" ? entity : "")}&effective_from=${encodeURIComponent(effectiveFrom)}`));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Affected closes unavailable.");
     } finally {
@@ -179,9 +185,11 @@ export function Procedures({
         <>
           <h3>Effective versions for {entity}</h3>
           {["basis", "owner", "prepaid", "reconciliation", "accrual", "loan", "payroll"].map((k) => {
+            // The version in effect for this close's month: a version taking effect later does not apply to it yet.
+            const inEffect = (p: Version) => !p.effective_from || p.effective_from <= period;
             const v =
-              versions.find((p) => matches(p, entity, k)) ??
-              versions.find((p) => matches(p, "", k));
+              versions.find((p) => matches(p, entity, k) && inEffect(p)) ??
+              versions.find((p) => matches(p, "", k) && inEffect(p));
             return (
               <section key={k}>
                 <h4>
@@ -364,6 +372,10 @@ export function Procedures({
                   its applicability. Unsupported accounting methods remain
                   blocked.
                 </label>
+                <label>
+                  Applies from (optional)
+                  <input type="month" value={effectiveFrom} onChange={(e) => { setEffectiveFrom(e.target.value); setPublishImpact(undefined); }} />
+                </label>
                 <button type="button" onClick={() => void previewPublish()}>Review affected closes</button>
                 {publishImpact?.kind === kind && publishImpact.client_entity.toLowerCase() === (target === "client" ? entity : "").toLowerCase() && <section role="status">
                   <p>{publishImpact.total_closes} existing close{publishImpact.total_closes === 1 ? "" : "s"} in this procedure scope. Publishing leaves their pinned context unchanged; each close needs a separate reviewed apply action.</p>
@@ -385,6 +397,7 @@ export function Procedures({
                   #{v.id} · {v.client_entity || "Firm default"} · {v.kind} ·{" "}
                   {v.enabled ? "enabled" : "disabled"}
                   <p>{v.instructions}</p>
+                  {v.effective_from && <p>Applies to months from {v.effective_from}; earlier months keep the version in effect for them.</p>}
                   <p>
                     {v.reason} · {v.actor}
                   </p>

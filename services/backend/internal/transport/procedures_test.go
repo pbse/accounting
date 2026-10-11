@@ -202,4 +202,47 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	}
 	actor.Permissions = []string{"workpapers:review"}
 	call("/v1/closes/procedures", map[string]any{}, 403)
+	// A version that takes effect from a later month leaves earlier months on the version in effect for them; the
+	// impact preview counts only the closes it will apply to.
+	actor.Permissions = []string{"clients:all", "workpapers:review", "procedures:manage"}
+	var october string
+	if e := db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Same client','2026-10') RETURNING id::text`, org).Scan(&october); e != nil {
+		t.Fatal(e)
+	}
+	current := func(closeID string) string {
+		t.Helper()
+		tx, _ := db.BeginTx(context.Background(), nil)
+		defer tx.Rollback()
+		p, e := preparation.CurrentProcedure(context.Background(), tx, closeID, "prepaid")
+		if e != nil {
+			t.Fatal(e)
+		}
+		return p.ID
+	}
+	september := current(id)
+	request := httptest.NewRequest("GET", "/v1/closes/procedures?impact_kind=prepaid&client_entity=Same%20client&effective_from=2026-10", nil)
+	request = request.WithContext(auth.WithActor(request.Context(), actor))
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	var scope struct {
+		PreviousID   string `json:"previous_id"`
+		ImpactDigest string `json:"impact_digest"`
+		Total        int    `json:"total_closes"`
+	}
+	if json.Unmarshal(response.Body.Bytes(), &scope) != nil || scope.Total != 1 {
+		t.Fatalf("the preview counts only the closes from the month the version takes effect: %s", response.Body.String())
+	}
+	later := map[string]any{"client_entity": "Same client", "kind": "prepaid", "instructions": "From October, actual-day allocation is reviewed separately.", "expense_account": "Insurance", "prepaid_account": "Prepaid insurance", "enabled": true, "reason": "Policy change from October", "confirmed": true, "previous_id": scope.PreviousID, "impact_digest": scope.ImpactDigest, "effective_from": "2026-13"}
+	call("/v1/closes/procedures", later, 422)
+	later["effective_from"] = "2026-10"
+	var published struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(call("/v1/closes/procedures", later, 200), &published)
+	if got := current(id); got != september {
+		t.Fatalf("September keeps the version in effect for it: %s, want %s", got, september)
+	}
+	if got := current(october); got != published.ID {
+		t.Fatalf("October takes the new version: %s, want %s", got, published.ID)
+	}
 }

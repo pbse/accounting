@@ -20,6 +20,8 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
   const [selected,setSelected]=useState<Draft>();
   const [examples,setExamples]=useState<Example[]>([]);
   const [impact,setImpact]=useState<Impact>();
+  // The first month the activated rule applies to ("" for every month); the preview is read for it.
+  const [effectiveFrom,setEffectiveFrom]=useState("");
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
@@ -86,7 +88,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
   }
   async function preview() {
     if(!selected)return;setBusy(true);setError("");setImpact(undefined);
-    try {setImpact(await workspaceRequest("/procedures?impact_kind="+selected.kind+"&client_entity="+encodeURIComponent(selected.client_entity)) as Impact);}
+    try {setImpact(await workspaceRequest("/procedures?impact_kind="+selected.kind+"&client_entity="+encodeURIComponent(selected.client_entity)+"&effective_from="+encodeURIComponent(effectiveFrom)) as Impact);}
     catch(e){setError(e instanceof Error?e.message:"Affected clients unavailable.");}
     finally{setBusy(false);}
   }
@@ -102,7 +104,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
     e.preventDefault();if(!selected||!impact)return;
     const data=new FormData(e.currentTarget);setBusy(true);setError("");
     try {
-      await workspaceRequest(base+"/"+selected.id+"/activate",{previous_id:impact.previous_id,impact_digest:impact.impact_digest,draft_revision:selected.revision,reason:data.get("reason"),confirmed:data.get("confirmed")==="on"});
+      await workspaceRequest(base+"/"+selected.id+"/activate",{previous_id:impact.previous_id,impact_digest:impact.impact_digest,draft_revision:selected.revision,reason:data.get("reason"),effective_from:effectiveFrom,confirmed:data.get("confirmed")==="on"});
       await load();onActivated();setImpact(undefined);
       setMessage("Rule activated for new context. Existing pinned closes need reviewed application.");
     } catch(err){setError(err instanceof Error?err.message:"Rule activation failed.");}
@@ -147,7 +149,8 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
           <button disabled={busy}>Approve example</button>
         </form>}
       </li>)}</ul>
-      {!selected.activated_version_id&&<><button type="button" disabled={busy||selected.example_count===0} onClick={()=>void preview()}>Preview affected clients</button>
+      {!selected.activated_version_id&&<><label>Applies from (optional) <input type="month" value={effectiveFrom} onChange={e=>{setEffectiveFrom(e.target.value);setImpact(undefined);}}/></label>
+        <button type="button" disabled={busy||selected.example_count===0} onClick={()=>void preview()}>Preview affected clients</button>
         {impact&&<form onSubmit={e=>void activate(e)}>
           <p>{impact.total_closes} close(s) in scope. Publishing leaves pinned evidence unchanged. {impact.has_more&&"Only the latest 100 are shown."}</p>
           <ul>{impact.closes.map(c=><li key={c.close_id}><a href={"/dashboard/closes/"+c.close_id}>{c.entity} · {c.period}</a> · {c.draft_count} drafts · {c.pinned_source_id?"pinned source #"+c.pinned_source_id:"no pinned procedure"}</li>)}</ul>

@@ -210,7 +210,7 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	if scope != nil && scope.LayoutID == reading.ID {
 		s.scope = scope
 	}
-	if s.approved, _, err = approvedBasis(ctx, q, org, name); err != nil {
+	if s.approved, _, err = approvedBasis(ctx, q, org, name, reading.Period); err != nil {
 		return s, false, err
 	}
 	profile, err := preparation.ClientProfileOf(ctx, q, org, name, reading.Period)
