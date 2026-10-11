@@ -930,6 +930,10 @@ func figurelessClaim(line string, c claim, got string, changeCited bool) string 
 		return "the sentence calls book cash available at the bank"
 	case c.stale && !claimStaleSaid.MatchString(lower):
 		return "the sentence states " + c.describe() + " as current, but the cited read is stale"
+	case c.forecast && !claimForecast.MatchString(lower):
+		return "the sentence states the forecast " + c.describe() + " as a fact"
+	case c.scenario && !strings.Contains(lower, "scenario") && !strings.Contains(lower, "if ") && !strings.Contains(lower, "what-if"):
+		return "the sentence states the scenario " + c.describe() + " without saying it is a scenario"
 	case c.incomplete && !claimIncompleteSaid.MatchString(lower):
 		return "the sentence states the forecast without saying its inputs are incomplete"
 	}
@@ -1233,6 +1237,9 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		}
 		if c.forecast != claims[0].forecast || c.scenario != claims[0].scenario {
 			return "a derived figure mixes forecast and actual figures"
+		}
+		if c.ytd != claims[0].ytd {
+			return "a derived figure mixes a month's figure with a year-to-date one"
 		}
 
 		if c.forecast && !claimForecast.MatchString(lower) {

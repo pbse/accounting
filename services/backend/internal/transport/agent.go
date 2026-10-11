@@ -639,6 +639,8 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	sentenceClaims := make([]map[int]claim, len(lines))
 	sentenceEntries := make([][]agentSupportEntry, len(lines))
 	sentenceMoney := make([][]moneyEntry, len(lines))
+	// Whether a sentence computes from a stale field, which lets it say "stale".
+	sentenceStale := make([]bool, len(lines))
 	// The clients each sentence's cited fields are of, so a client it names without a cited field is caught.
 	sentenceClients := make([]map[string]bool, len(lines))
 	for i := range lines {
@@ -683,9 +685,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 			for _, in := range s.of {
 				driver(s.sentence, in.step, in.path)
-				if e := claimOf(reads[in.step], in.path).entity; e != "" {
-					sentenceClients[s.sentence][strings.ToLower(e)] = true
+				c := claimOf(reads[in.step], in.path)
+				if c.entity != "" {
+					sentenceClients[s.sentence][strings.ToLower(c.entity)] = true
 				}
+				sentenceStale[s.sentence] = sentenceStale[s.sentence] || c.stale
 			}
 			covered[s.sentence] = true
 			continue
@@ -861,7 +865,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 		// A state the sentence asserts ("is reconciled", "ties") must be the cited value itself, or in the quote,
 		// of one of its own support entries: an amount never supports a state.
-		staleCited := false
+		staleCited := sentenceStale[i]
 		for _, c := range sentenceClaims[i] {
 			staleCited = staleCited || c.stale
 		}

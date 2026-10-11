@@ -298,6 +298,14 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Supplies are 6.3% under budget.", e("t29", 0, "/lines/0/month/percent", "-6.3"))
 	rejected("Supplies are 6.3% over budget.", "but the variance is -6.3", e("t29", 0, "/lines/0/month/percent", "-6.3"))
 
+	// Round eleven: no month added to its year to date; a figure-less forecast; a stale derived figure said to be stale.
+	rejected("Rent totals 93,500.00.", "year-to-date", derived(0, "sum", "93500.00", "t4", "/lines/0/month/actual", "t4", "/lines/0/ytd/actual"))
+	reads["t30"] = read(`{"state":"ready","currency":"USD","opening":{"amount":"64120.00","stale":false},"open_items":{"complete":true},"weeks":[{"start":"2026-12-20","closing":"23400.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Cash closes positive next week.", "as a fact", e("t30", 0, "/weeks/0/closing", "23400.00"))
+	ok("Cash is forecast to close positive next week.", e("t30", 0, "/weeks/0/closing", "23400.00"))
+	reads["t31"] = read(`{"publication":{"id":"6","state":"superseded"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"20100.00"},{"name":"Net income","amount":"1000.00"}]}}}`, "Published report", "read_publication", "", "")
+	ok("The report is stale; its net income figures total 21,100.00.", derived(0, "sum", "21100.00", "t31", "/pack/profit_and_loss/measures/0/amount", "t31", "/pack/profit_and_loss/measures/1/amount"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }
