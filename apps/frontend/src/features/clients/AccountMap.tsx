@@ -23,7 +23,8 @@ type AccountsRead = {
   classes: Record<string, string[]>;
   on: boolean;
   can_confirm: boolean;
-  map: null | { id: string; period: string; reason: string; actor: string; at: string };
+  reading: string;
+  map: null | { id: string; stamp: string; period: string; reason: string; actor: string; at: string };
 };
 
 const classOrder = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
@@ -72,7 +73,7 @@ export function AccountMap({ client, id, onClose }: { client: string; id: string
     setBusy(true);
     setError("");
     try {
-      const out: { unmapped: number } = await workspaceRequest(accountsPath(client, id), { accept: true, accounts: set, reason: reason.trim(), based_on: data.map?.id ?? "" });
+      const out: { unmapped: number } = await workspaceRequest(accountsPath(client, id), { accept: true, accounts: set, reason: reason.trim(), based_on: data.map?.stamp ?? "", reading: data.reading });
       setSet({});
       setReason("");
       setLater(undefined);

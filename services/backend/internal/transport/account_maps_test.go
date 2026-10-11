@@ -99,6 +99,22 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		confirmLayout(id, table, period)
 		return id
 	}
+	// confirm confirms a file's map as a reviewer who just opened it would: on the map and reading they saw, unless the
+	// body names others.
+	confirm := func(path string, body map[string]any, want int) map[string]any {
+		t.Helper()
+		seen := call("user_b", preparer, "GET", path, nil, 200)
+		if _, ok := body["based_on"]; !ok {
+			body["based_on"] = ""
+			if m, ok := seen["map"].(map[string]any); ok {
+				body["based_on"] = m["stamp"]
+			}
+		}
+		if _, ok := body["reading"]; !ok {
+			body["reading"] = seen["reading"]
+		}
+		return call("user_a", partner, "POST", path, body, want)
+	}
 	// readingOf is a file's confirmed reading, as the map records it.
 	readingOf := func(id string) string {
 		t.Helper()
@@ -131,14 +147,18 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	// Only a reviewer confirms, with a reason, classes and types that belong together, for the file's own accounts.
 	call("user_b", preparer, "POST", accountsPath, map[string]any{"accept": true, "reason": "Checked"}, 403)
 	// A confirmation says which version of the map it was made on: none yet, here.
-	call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "reason": "Checked", "based_on": "1"}, 409)
-	call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "reason": " "}, 422)
-	call("user_a", partner, "POST", accountsPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Asset", "type": "Expense"}}, "reason": "Checked"}, 422)
-	call("user_a", partner, "POST", accountsPath, map[string]any{"accounts": map[string]any{"n:9999": map[string]string{"class": "Expense", "type": "Expense"}}, "reason": "Checked"}, 422)
-	confirmed := call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Other Expense"}}, "reason": "Rent is below the line here"}, 200)
+	confirm(accountsPath, map[string]any{"accept": true, "reason": "Checked", "based_on": "1:x"}, 409)
+	// It also says which reading of the file it was made on.
+	confirm(accountsPath, map[string]any{"accept": true, "reason": "Checked", "reading": "0"}, 409)
+	confirm(accountsPath, map[string]any{"accept": true, "reason": " "}, 422)
+	confirm(accountsPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Asset", "type": "Expense"}}, "reason": "Checked"}, 422)
+	confirm(accountsPath, map[string]any{"accounts": map[string]any{"n:9999": map[string]string{"class": "Expense", "type": "Expense"}}, "reason": "Checked"}, 422)
+	confirmed := confirm(accountsPath, map[string]any{"accept": true, "accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Other Expense"}}, "reason": "Rent is below the line here"}, 200)
 	// Choices made on the map before that confirmation never overwrite it.
-	call("user_a", partner, "POST", accountsPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Expense"}}, "reason": "Stale"}, 409)
-	firstMap := confirmed["id"].(string)
+	confirm(accountsPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Expense"}}, "reason": "Stale", "based_on": ""}, 409)
+	if confirmed["stamp"] == nil {
+		t.Fatalf("a confirmation answers with the map's stamp: %v", confirmed)
+	}
 	if confirmed["unmapped"] != 0.0 {
 		t.Fatalf("every account mapped: %v", confirmed)
 	}
@@ -147,7 +167,7 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		t.Fatalf("the map in force: %v", read)
 	}
 	// Confirming nothing new is refused: a version is a change.
-	call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "reason": "Again", "based_on": firstMap}, 422)
+	confirm(accountsPath, map[string]any{"accept": true, "reason": "Again"}, 422)
 
 	// Next month's file finds its accounts mapped, as set, and asks only about the new one.
 	october := month("2026-10", "Number,Account,Type,Debit,Credit\n1000,Business Checking,Bank,1600.25,\n1100,Trade debtors,Current Asset,200.00,\n2000,Amex,Credit Card,,300.00\n3000,Owner's Equity,,,1000.00\n4000,Sales,,,900.25\n6000,Rent,,300.00,\n6100,Utilities,,100.00,\n")
@@ -168,8 +188,8 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		t.Fatalf("October's file is not confirmed on yet: %v", read)
 	}
 	// Rent changes type on October's file, keeping the file it was confirmed on before.
-	second := call("user_a", partner, "POST", "/v1/closes/client/import/accounts?name=Acme%20Co&id="+october, map[string]any{"accept": true, "accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Expense"}},
-		"reason": "Utilities added; rent back above the line", "based_on": firstMap}, 200)["id"].(string)
+	confirm("/v1/closes/client/import/accounts?name=Acme%20Co&id="+october, map[string]any{"accept": true, "accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Expense"}},
+		"reason": "Utilities added; rent back above the line"}, 200)
 	files := func(key string) (string, string) {
 		t.Helper()
 		var typ, from sql.NullString
@@ -188,8 +208,14 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["unmapped"] != 0.0 || read["recorded"] != false || read["unidentified"] != 1.0 || read["count"] != 6.0 {
 		t.Fatalf("every account mapped, none on November's file yet, one row naming none: %v", read)
 	}
-	third := call("user_a", partner, "POST", novemberPath, map[string]any{"accept": true, "reason": "Same accounts as before", "based_on": second}, 200)["id"].(string)
+	confirm(novemberPath, map[string]any{"accept": true, "reason": "Same accounts as before"}, 200)
 	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["recorded"] != true {
+		rows, _ := db.Query(`SELECT id,period,reason,import_id,created_at,clock_timestamp() FROM books_account_maps WHERE organization_id=$1 ORDER BY id`, org)
+		for rows.Next() {
+			var a, b, c, d, e, f sql.NullString
+			rows.Scan(&a, &b, &c, &d, &e, &f)
+			t.Logf("version %s %s %q import %s at %s now %s", a.String, b.String, c.String, d.String, e.String, f.String)
+		}
 		t.Fatalf("November's file recorded: %v", read)
 	}
 	// November's layout confirmed again asks for its map again; confirming it records the new reading too.
@@ -198,17 +224,35 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["recorded"] != false {
 		t.Fatalf("a reading confirmed again is mapped again: %v", read)
 	}
-	call("user_a", partner, "POST", novemberPath, map[string]any{"accept": true, "reason": "Layout reconfirmed", "based_on": third}, 200)
+	// Choices made on the earlier reading are refused.
+	confirm(novemberPath, map[string]any{"accept": true, "reason": "Layout reconfirmed", "reading": novemberFirst}, 409)
+	confirm(novemberPath, map[string]any{"accept": true, "reason": "Layout reconfirmed"}, 200)
 	novemberSecond := readingOf(november)
 	var versions int
 	must(db.QueryRow(`SELECT count(*) FROM books_account_maps WHERE organization_id=$1`, org).Scan(&versions))
 	if versions != 4 {
 		t.Fatalf("each confirmation a version holding the whole map: %d", versions)
 	}
+	// A section's total closes its heading: an account after "Total Current Assets" is proposed from its name, not as
+	// a current asset.
+	december := month("2026-12", "Number,Account,Type,Debit,Credit\n,Current Assets,,,\n1000,Business Checking,Bank,1500.25,\n,Total Current Assets,,1500.25,\n7000,Consulting income,,,1500.25\n")
+	var headings, totals int
+	must(db.QueryRow(`SELECT count(*) FILTER (WHERE e->>'kind'='heading'),count(*) FILTER (WHERE e->>'kind'='total') FROM books_layouts l,jsonb_array_elements(l.reading->'lines') e WHERE l.import_id::text=$1`, december).Scan(&headings, &totals))
+	if headings != 1 || totals != 1 {
+		t.Fatalf("December's reading has its heading and its total: %d %d", headings, totals)
+	}
+	for _, raw := range call("user_b", preparer, "GET", "/v1/closes/client/import/accounts?name=Acme%20Co&id="+december, nil, 200)["accounts"].([]any) {
+		if a := raw.(map[string]any); a["key"] == "n:7000" && (a["proposal"].(map[string]any)["class"] != "Revenue" || a["proposal"].(map[string]any)["from"] != "name") {
+			t.Fatalf("an account after a section's total: %v", a)
+		}
+	}
+	// A deletion that changes the map in place refuses choices made on it before.
+	before := call("user_b", preparer, "GET", novemberPath, nil, 200)["map"].(map[string]any)["stamp"]
 	// Deleting October's file takes from the map what only it named, utilities, from every version; deleting
 	// September's then leaves what November's names too.
 	manager := []string{"workpapers:review", "clients:all", "data:manage"}
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+october, map[string]any{"reason": "Sent in error"}, 200)
+	confirm(novemberPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Other Expense"}}, "reason": "Stale", "based_on": before}, 409)
 	var utilities int
 	must(db.QueryRow(`SELECT count(*) FILTER (WHERE accounts::text LIKE '%Utilities%' OR accounts ? 'n:6100') FROM books_account_maps WHERE organization_id=$1`, org).Scan(&utilities))
 	if typ, from := files("n:6000"); utilities != 0 || typ != "Expense" || from != `["`+septemberReading+`", "`+novemberFirst+`", "`+novemberSecond+`"]` {
@@ -223,5 +267,5 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)
 	must(err)
 	call("user_b", preparer, "GET", accountsPath, nil, 200)
-	call("user_a", partner, "POST", accountsPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Expense"}}, "reason": "Back"}, 403)
+	confirm(accountsPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Expense"}}, "reason": "Back"}, 403)
 }

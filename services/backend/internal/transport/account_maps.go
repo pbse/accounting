@@ -54,9 +54,11 @@ func addAmounts(a, b string) string {
 	return exactDecimal(sum)
 }
 
-// accountMap is a version of a client's map.
+// accountMap is a version of a client's map. Its stamp names it as it stands: its id and its content, which a file
+// deleted changes in place, so a confirmation made on what it was before is refused.
 type accountMap struct {
 	ID       string                   `json:"id"`
+	Stamp    string                   `json:"stamp"`
 	Period   string                   `json:"period"`
 	Reason   string                   `json:"reason"`
 	Actor    string                   `json:"actor"`
@@ -80,9 +82,9 @@ type fileAccount struct {
 func latestAccountMap(ctx context.Context, q rowReader, org, name string) (*accountMap, error) {
 	var m accountMap
 	var raw []byte
-	err := q.QueryRowContext(ctx, `SELECT id::text,period,reason,actor,created_at,accounts FROM books_account_maps
+	err := q.QueryRowContext(ctx, `SELECT id::text,id::text||':'||md5(accounts::text),period,reason,actor,created_at,accounts FROM books_account_maps
  WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) ORDER BY id DESC LIMIT 1`, org, name).
-		Scan(&m.ID, &m.Period, &m.Reason, &m.Actor, &m.At, &raw)
+		Scan(&m.ID, &m.Stamp, &m.Period, &m.Reason, &m.Actor, &m.At, &raw)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -121,11 +123,21 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 	}
 	accounts := []fileAccount{}
 	seen := map[string]int{}
-	heading := ""
+	// The headings an account sits under, innermost last: a section's total closes its heading, so an account after
+	// "Total Current Assets" is under the heading outside it, not "Current Assets".
+	var headings []string
 	for _, l := range lines {
+		heading := ""
+		if len(headings) > 0 {
+			heading = headings[len(headings)-1]
+		}
 		switch l.Kind {
 		case bookfiles.Heading:
-			heading = l.Name
+			headings = append(headings, l.Name)
+		case bookfiles.Total:
+			if len(headings) > 0 {
+				headings = headings[:len(headings)-1]
+			}
 		case bookfiles.Posting:
 			if strings.TrimSpace(l.Number) == "" && strings.TrimSpace(l.Name) == "" {
 				f.Unidentified++
@@ -197,7 +209,7 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		from := min(offset, len(accounts))
-		out := map[string]any{"accounts": accounts[from:min(from+200, len(accounts))], "count": len(accounts), "unmapped": unmapped, "recorded": recorded, "unidentified": reading.Unidentified, "more": len(accounts) > from+200,
+		out := map[string]any{"accounts": accounts[from:min(from+200, len(accounts))], "count": len(accounts), "unmapped": unmapped, "recorded": recorded, "unidentified": reading.Unidentified, "reading": reading.ID, "more": len(accounts) > from+200,
 			"classes": bookfiles.Types, "on": on, "can_confirm": canReview(r) && on, "map": nil}
 		if current != nil {
 			out["map"] = current
@@ -222,9 +234,10 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			} `json:"accounts"`
 			Accept bool   `json:"accept"`
 			Reason string `json:"reason"`
-			// BasedOn is the version of the map the reviewer saw ("" for none): one confirmed since is never overwritten
-			// by choices made before it.
+			// BasedOn is the map the reviewer saw, by its stamp ("" for none), and Reading the file's reading they saw:
+			// choices made on either before it changed are refused, never applied to what they did not see.
 			BasedOn string `json:"based_on"`
+			Reading string `json:"reading"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -252,7 +265,7 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		current, err := latestAccountMap(r.Context(), tx, org, name)
-		if err == nil && (current == nil && in.BasedOn != "" || current != nil && current.ID != in.BasedOn) {
+		if err == nil && (current == nil && in.BasedOn != "" || current != nil && current.Stamp != in.BasedOn) {
 			problem(w, 409, "The map was confirmed again since you opened it: reopen it to see what changed.")
 			return
 		}
@@ -262,6 +275,10 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			reading, found, err = readingAccounts(r.Context(), tx, org, name, id, current)
 		}
 		period, accounts := reading.Period, reading.Accounts
+		if found && reading.ID != in.Reading {
+			problem(w, 409, "The file's layout was confirmed again since you opened its accounts: reopen them to see what changed.")
+			return
+		}
 		if err != nil {
 			problem(w, 503, "The account map is unavailable.")
 			return
@@ -333,6 +350,11 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 				unmapped++
 			}
 		}
-		jsonReply(w, 200, map[string]any{"id": version, "unmapped": unmapped})
+		var stamp string
+		if err = db.QueryRowContext(r.Context(), `SELECT id::text||':'||md5(accounts::text) FROM books_account_maps WHERE id::text=$1`, version).Scan(&stamp); err != nil {
+			problem(w, 503, "The account map is unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"id": version, "stamp": stamp, "unmapped": unmapped})
 	})
 }

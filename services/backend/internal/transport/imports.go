@@ -855,6 +855,12 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		org, id := organization(r), r.URL.Query().Get("id")
+		// The client's account-map lock comes first, as a confirmation takes it, before the file's row: in one order, so
+		// a deletion and a confirmation never wait on each other.
+		if _, err = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('books_account_maps:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
+			problem(w, 503, "The file could not be deleted.")
+			return
+		}
 		var period, filename, digest string
 		var replaced, retained bool
 		// A file of a month whose close is under legal hold, or kept until a date still to come, is kept with it.
