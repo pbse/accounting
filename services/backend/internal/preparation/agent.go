@@ -882,6 +882,12 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			check := proposal
 			check.Unselected = slices.DeleteFunc(slices.Clone(proposal.Unselected), func(s Source) bool { return unrelated[s.ID] })
 			plan, reason = StraightThrough(check, invoice, current, procedure, rule, home, entity, period, id, unread, ledger)
+			// A rescan of an invoice already in the close is not prepared twice; a person decides only if it is a separate invoice.
+			if copied, e := EarlierCopy(persist, finish, closeID, id, proposal); e != nil {
+				return true, e
+			} else if copied != "" {
+				plan, reason = Plan{}, "this document is another copy of "+copied+" (the same vendor, invoice number, amount, currency and service dates), which prepares that invoice; prepare this one only if it is a separate invoice"
+			}
 			for _, s := range proposal.Unselected {
 				if unrelated[s.ID] {
 					plan.Unrelated = append(plan.Unrelated, s.ID)

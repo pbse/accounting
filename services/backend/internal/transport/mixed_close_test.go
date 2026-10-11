@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"close.local/backend/internal/documents"
@@ -284,5 +285,40 @@ func mixedClose(t *testing.T, serial bool) {
 	must(err)
 	if !unrelated[plain] || unrelated[refunded] || unrelated[named] || unrelated[unnamed] || unrelated[whole] {
 		t.Fatalf("a plain bank statement is another matter; one printing Acme's amount or naming its invoice, or a document not read as a statement, is not: %v", unrelated)
+	}
+	// A rescan of Acme's invoice (other bytes, the same vendor, number, amount, currency and service dates) does not hold
+	// Acme's invoice, and its own job waits for a person, naming the document it copies, rather than preparing it twice.
+	rescan := insert("acme rescan.txt", text(acme)+"Scanned 2026-09-30", "ready")
+	invoices[rescan] = acme
+	rescanJob := start(rescan)
+	for read() {
+	}
+	if unrelated, err = preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal); err != nil || !unrelated[rescan] {
+		t.Fatalf("a later copy does not hold the original: %v %v", unrelated, err)
+	}
+	// Acme's own work failed in this fixture, so the rescan is not deferred to it: Acme's copy does not hold the rescan.
+	var rescanProposal preparation.Proposal
+	must(db.QueryRow(`SELECT proposal FROM preparation_intakes WHERE job_id::text=$1`, rescanJob).Scan(&raw))
+	must(json.Unmarshal(raw, &rescanProposal))
+	if s, checkpoint := state(jobA); s != "failed" || strings.Contains(checkpoint, "another copy") {
+		t.Fatalf("the fixture's Acme job failed: %s %s", s, checkpoint)
+	}
+	if unrelated, err = preparation.UnrelatedEvidence(context.Background(), db, closeID, rescanJob, rescanProposal); err != nil || !unrelated[first] {
+		t.Fatalf("an earlier copy whose work stopped does not hold the rescan: %v %v", unrelated, err)
+	}
+	if _, checkpoint := state(rescanJob); strings.Contains(checkpoint, "another copy") {
+		t.Fatalf("a rescan is not deferred to stopped work: %s", checkpoint)
+	}
+	// While Acme's work is live, the rescan read again waits for a person, naming the document it copies.
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`, jobA)
+	must(err)
+	_, err = db.Exec(`UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL WHERE job_id::text=$1`, rescanJob)
+	must(err)
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='waiting_evidence',error='',finished_at=NULL WHERE id::text=$1`, rescanJob)
+	must(err)
+	for read() {
+	}
+	if s, checkpoint := state(rescanJob); s != "needs_confirmation" || !strings.Contains(checkpoint, "another copy of acme.txt") {
+		t.Fatalf("a rescan is not prepared twice: %s %s", s, checkpoint)
 	}
 }
