@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/big"
 	"net/http"
 	"slices"
@@ -103,7 +104,15 @@ type fileState struct {
 	// file is its books and not a supplement to a ledger's.
 	priorBalances map[string]string
 	priorIsBooks  bool
-	classes       map[string]string
+	// mapped is the account map in force, by key. derived says a ledger's month-end balances were rolled from the prior
+	// month's accepted books, and underived why they could not be.
+	mapped    map[string]mappedAccount
+	derived   bool
+	underived string
+	// priorUnavailable says why the prior month's closing balances cannot be had: its accepted ledger's could not be
+	// derived. What compares with them holds.
+	priorUnavailable string
+	classes          map[string]string
 	// reexport is the prior month's newest file read since its accepted one, with its balances by key: the evidence
 	// that the prior month changed after it was accepted; nil without one.
 	reexport *priorReexport
@@ -131,7 +140,8 @@ func monthActivity(s fileState) (activity map[string]*big.Rat, from, missing str
 			pl = append(pl, a)
 		}
 	}
-	movement := false
+	// A ledger's lines are the month's movement, as a movement column is.
+	movement := s.layout.Layout.Ledger()
 	for _, m := range s.layout.Layout.Columns {
 		movement = movement || m == bookfiles.Movement
 	}
@@ -198,11 +208,11 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	if err != nil {
 		return s, false, err
 	}
-	s.classes = map[string]string{}
+	s.classes, s.mapped = map[string]string{}, map[string]mappedAccount{}
 	if current != nil {
 		s.mapStamp = current.Stamp
 		for key, m := range current.Accounts {
-			s.classes[key] = m.Class
+			s.classes[key], s.mapped[key] = m.Class, m
 		}
 	}
 	reading, found, err := readingAccounts(ctx, q, org, name, id, current)
@@ -249,14 +259,17 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	// The prior month's accepted books, if any are current: every account with a balance there is in this reading, or
 	// is explained.
 	s.prior = previousMonth(reading.Period)
-	var priorLines []byte
-	var priorImport string
-	err = q.QueryRowContext(ctx, `SELECT COALESCE(l.reading->'lines','[]'::jsonb),a.import_id::text FROM books_import_acceptances a JOIN books_layouts l ON l.id=a.layout_id
+	var priorLines, priorLayout []byte
+	var priorImport, priorAcceptance string
+	err = q.QueryRowContext(ctx, `SELECT COALESCE(l.reading->'lines','[]'::jsonb),a.import_id::text,a.id::text,l.layout FROM books_import_acceptances a JOIN books_layouts l ON l.id=a.layout_id
  WHERE a.organization_id=$1 AND client_identity(a.organization_id,a.client_entity)=client_identity($1,$2) AND a.period=$3
   AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id)
- ORDER BY a.id DESC LIMIT 1`, org, name, s.prior).Scan(&priorLines, &priorImport)
+ ORDER BY a.id DESC LIMIT 1`, org, name, s.prior).Scan(&priorLines, &priorImport, &priorAcceptance, &priorLayout)
 	if err == sql.ErrNoRows {
 		s.prior = ""
+		if s.layout.Layout.Ledger() {
+			s.deriveLedger(nil)
+		}
 		return s, true, nil
 	}
 	if err != nil {
@@ -267,12 +280,55 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 		return s, false, err
 	}
 	order, balances, names := lineBalances(lines)
+	// A prior month read from its ledger closed at its derived balances, its lines being only the month's movements: as
+	// accepted, in its books version; for a month that is no close, derived now. One whose balances cannot be had holds
+	// what compares with them.
+	var prior bookfiles.Layout
+	json.Unmarshal(priorLayout, &prior)
+	if prior.Ledger() {
+		// Derived now, along the chain of ledger months before it, so a change further back holds each month after it.
+		f, ok, err := acceptedFileBooks(ctx, q, org, name, priorAcceptance, priorImport)
+		if err != nil {
+			return s, false, err
+		}
+		balances, names = f.balances, map[string]string{}
+		for key, a := range f.accounts {
+			names[key] = a.Name
+		}
+		switch {
+		case !ok:
+			s.priorUnavailable = "its accepted reading is no longer current"
+		case f.underived != "":
+			s.priorUnavailable = f.underived
+		}
+		var rawAccounts, rawBalances []byte
+		switch err := q.QueryRowContext(ctx, `SELECT accounts,balances FROM books_versions WHERE source='files' AND source_id=$1 ORDER BY books_versions.id DESC LIMIT 1`, priorAcceptance).Scan(&rawAccounts, &rawBalances); {
+		case err == sql.ErrNoRows:
+		case err != nil:
+			return s, false, err
+		default:
+			var accounts map[string]booksAccount
+			stored := map[string]string{}
+			if json.Unmarshal(rawAccounts, &accounts) != nil || json.Unmarshal(rawBalances, &stored) != nil {
+				return s, false, fmt.Errorf("the prior month's books version is unreadable")
+			}
+			// Its books as accepted are what it closed at; derived otherwise now, they are to be accepted again first.
+			if s.priorUnavailable == "" && !sameAmounts(stored, f.balances) {
+				s.priorUnavailable = "its balances changed since it was accepted, as the months before it changed: accept it again first"
+			}
+			balances, names = stored, map[string]string{}
+			for key, a := range accounts {
+				names[key] = a.Name
+			}
+		}
+		order = slices.Sorted(maps.Keys(balances))
+	}
 	here := map[string]bool{}
 	for _, a := range reading.Accounts {
 		here[a.Key] = true
 	}
 	for _, key := range order {
-		if !here[key] && nonZero(balances[key]) {
+		if s.priorUnavailable == "" && !here[key] && nonZero(balances[key]) {
 			s.missing = append(s.missing, names[key])
 		}
 	}
@@ -283,7 +339,98 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	if s.reexport, err = priorReexportOf(ctx, q, org, name, s.prior, priorImport); err != nil {
 		return s, false, err
 	}
+	if s.layout.Layout.Ledger() {
+		s.deriveLedger(names)
+	}
 	return s, true, nil
+}
+
+// deriveLedger makes a ledger's accounts what a month's books need (docs/books-sources.md, A Trial Balance is not
+// required): each account's lines summed are its movement, and its month-end balance that movement on the balance it
+// opened at, from the prior month's accepted closing balances; the prior month's accounts with no lines carry their
+// balance. Nothing is derived without an accepted prior month whose books are its files: why is said.
+func (s *fileState) deriveLedger(priorNames map[string]string) {
+	// Accounts with no lines this month are carried, never missing.
+	s.missing = nil
+	for i := range s.reading.Accounts {
+		s.reading.Accounts[i].Movement = cmp.Or(s.reading.Accounts[i].Balance, "0")
+	}
+	if s.prior == "" || !s.priorIsBooks {
+		s.underived = "No accepted books on files for " + monthTitle(previousMonth(s.reading.Period)) + " to roll this ledger's balances from: accept that month's books first, or send this month's Trial Balance."
+		return
+	}
+	if s.priorUnavailable != "" {
+		s.underived = monthTitle(s.prior) + "'s accepted ledger has no balances to roll from: " + strings.TrimSuffix(s.priorUnavailable, ".") + "."
+		return
+	}
+	openings, why := s.openings(s.priorBalances)
+	if why != "" {
+		s.underived = why
+		return
+	}
+	here := map[string]bool{}
+	for i := range s.reading.Accounts {
+		a := &s.reading.Accounts[i]
+		here[a.Key] = true
+		movement, ok := new(big.Rat).SetString(a.Movement)
+		if !ok {
+			s.underived = "The lines of " + strings.TrimSpace(a.Number+" "+a.Name) + " cannot be read as exact amounts."
+			return
+		}
+		a.Balance = exactDecimal(movement.Add(movement, cmp.Or(openings[a.Key], new(big.Rat))))
+	}
+	// Every account of the prior month without lines is carried, a zero balance too (a bank still to reconcile).
+	for _, key := range slices.Sorted(maps.Keys(openings)) {
+		if here[key] {
+			continue
+		}
+		a := fileAccount{Key: key, Name: priorNames[key], Balance: exactDecimal(openings[key]), Movement: "0", Cents: true}
+		if m, ok := s.mapped[key]; ok {
+			a.Number, a.Name, a.Mapped = m.Number, m.Name, &m
+		}
+		s.reading.Accounts = append(s.reading.Accounts, a)
+	}
+	s.derived = true
+}
+
+// openings are the balances a month opens at, from a month's closing balances by key: at the fiscal year's start, the
+// profit and loss closed into the one retained earnings account (the month's own, else the account map's); else "" or
+// why the year's result has nowhere to go.
+func (s fileState) openings(closing map[string]string) (map[string]*big.Rat, string) {
+	opening := map[string]*big.Rat{}
+	for key, b := range closing {
+		opening[key], _ = new(big.Rat).SetString(b)
+	}
+	if s.fiscalStart == 0 || monthOf(s.reading.Period) != s.fiscalStart {
+		return opening, ""
+	}
+	result := new(big.Rat)
+	for key, b := range opening {
+		if c := s.classes[key]; c == "Revenue" || c == "Expense" {
+			result.Add(result, b)
+			opening[key] = new(big.Rat)
+		}
+	}
+	var retained []string
+	for _, a := range s.reading.Accounts {
+		if a.Mapped != nil && a.Mapped.Class == "Equity" && contraName.MatchString(a.Name) {
+			retained = append(retained, a.Key)
+		}
+	}
+	if len(retained) == 0 {
+		for _, key := range slices.Sorted(maps.Keys(s.mapped)) {
+			if m := s.mapped[key]; m.Class == "Equity" && contraName.MatchString(m.Name) {
+				retained = append(retained, key)
+			}
+		}
+	}
+	switch {
+	case len(retained) == 1:
+		opening[retained[0]] = new(big.Rat).Add(cmp.Or(opening[retained[0]], new(big.Rat)), result)
+	case result.Sign() != 0:
+		return nil, "The year's result of " + result.FloatString(2) + " closes into retained earnings, and the books have " + map[bool]string{true: "no retained earnings account", false: "more than one"}[len(retained) == 0] + " to carry it to."
+	}
+	return opening, ""
 }
 
 // priorReexportOf is the newest replacement of a month's accepted file, along the files' replaces chain, that can stand
@@ -310,7 +457,7 @@ func priorReexportOf(ctx context.Context, q rowReader, org, name, period, accept
 		if err != nil {
 			return nil, err
 		}
-		if brief == nil || !brief.Reading.Balanced || len(brief.Reading.Problems) > 0 || brief.Layout.AsOf != monthEndDay(period) ||
+		if brief == nil || brief.Layout.Ledger() || !brief.Reading.Balanced || len(brief.Reading.Problems) > 0 || brief.Layout.AsOf != monthEndDay(period) ||
 			strings.ToUpper(strings.TrimSpace(brief.Layout.Currency)) != currency || c.Format != "csv" && !brief.Reading.FormulasMarked {
 			continue
 		}
@@ -428,6 +575,14 @@ func rollForward(s fileState) importCheck {
 		check.State, check.Detail = "holds", "An opening or movement cannot be read as exact, so the month's openings are not checked ("+unread+")."
 		return check
 	}
+	// Prior balances that cannot be had hold the comparison; the file's own arithmetic is still said.
+	if compared && s.priorUnavailable != "" {
+		check.State, check.Detail = "holds", monthTitle(s.prior)+"'s accepted ledger has no balances to roll from: "+strings.TrimSuffix(s.priorUnavailable, ".")+"."
+		if len(differences) > 0 {
+			check.Detail += " Besides, " + strings.Join(differences, "; ") + "."
+		}
+		return check
+	}
 	// With no accepted prior month the openings are not compared; the file's own arithmetic still is.
 	if !compared {
 		check.State, check.Detail, check.Holds = "note", "No accepted books for "+monthTitle(previousMonth(s.reading.Period))+" to roll from: the openings are not checked.", ""
@@ -438,37 +593,7 @@ func rollForward(s fileState) importCheck {
 		return check
 	}
 	yearStart := s.fiscalStart > 0 && monthOf(s.reading.Period) == s.fiscalStart
-	// The closing balances a month's openings come from: at the fiscal year's start, the profit and loss closed into the
-	// one retained earnings account; "" or why the year's result has nowhere to go.
-	expect := func(closing map[string]string) (map[string]*big.Rat, string) {
-		expected := map[string]*big.Rat{}
-		for key, b := range closing {
-			expected[key], _ = new(big.Rat).SetString(b)
-		}
-		if !yearStart {
-			return expected, ""
-		}
-		result := new(big.Rat)
-		for key, b := range expected {
-			if c := s.classes[key]; c == "Revenue" || c == "Expense" {
-				result.Add(result, b)
-				expected[key] = new(big.Rat)
-			}
-		}
-		var retained []string
-		for _, a := range s.reading.Accounts {
-			if a.Mapped != nil && a.Mapped.Class == "Equity" && contraName.MatchString(a.Name) {
-				retained = append(retained, a.Key)
-			}
-		}
-		switch {
-		case len(retained) == 1:
-			expected[retained[0]] = new(big.Rat).Add(cmp.Or(expected[retained[0]], new(big.Rat)), result)
-		case result.Sign() != 0:
-			return nil, "The year's result of " + result.FloatString(2) + " closes into retained earnings, and the file has " + map[bool]string{true: "no retained earnings account", false: "more than one"}[len(retained) == 0] + " to carry it to."
-		}
-		return expected, ""
-	}
+	expect := s.openings
 	expected, why := expect(s.priorBalances)
 	if why != "" {
 		check.State, check.Detail = "holds", why
@@ -546,6 +671,8 @@ func fileChecks(s fileState, explained string) []importCheck {
 	case len(s.missing) > 0:
 		add(importCheck{Key: "scope", Title: "The scope is complete", State: "holds", Detail: fmt.Sprintf("%d account%s with a balance in %s's accepted books %s not in this file: explain %s when accepting, or send the rest.", len(s.missing), suffix(len(s.missing)), monthTitle(s.prior), isAre(len(s.missing)), itThem(len(s.missing))),
 			Holds: "Every statement, total and check that includes those accounts, until they are explained or arrive.", Items: s.missing})
+	case s.priorUnavailable != "":
+		add(importCheck{Key: "scope", Title: "The scope is complete", State: "note", Detail: "The client's complete books for the month, as attested. " + monthTitle(s.prior) + "'s accepted ledger has no balances (" + strings.TrimSuffix(s.priorUnavailable, ".") + "), so its accounts are not compared."})
 	case s.prior != "":
 		add(importCheck{Key: "scope", Title: "The scope is complete", State: "passes", Detail: "The client's complete books for the month, as attested, with every account in " + monthTitle(s.prior) + "'s accepted books."})
 	default:
@@ -624,6 +751,14 @@ func fileChecks(s fileState, explained string) []importCheck {
 	// With openings in the file, each account rolls from the prior accepted month.
 	if c := rollForward(s); c.Key != "" {
 		add(c)
+	}
+	// A ledger's month-end balances are derived: its lines on the prior month's accepted closing balances.
+	if s.layout.Layout.Ledger() {
+		if s.derived {
+			add(importCheck{Key: "derived", Title: "Balances rolled from the prior month", State: "passes", Detail: "The month-end balances are " + monthTitle(s.prior) + "'s accepted closing balances moved by this ledger's lines, its accounts without lines carried: derived, not read."})
+		} else {
+			add(importCheck{Key: "derived", Title: "Balances rolled from the prior month", State: "holds", Detail: s.underived, Holds: "The month-end balances, and everything built on them."})
+		}
 	}
 	// Formula amounts are the last calculation, which the reader does not repeat: a values-only export has none, and a
 	// reviewer's attestation of a recalculated copy releases them.
@@ -778,9 +913,9 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 			out["checks"], out["holds"], out["reading"], out["map_stamp"] = checks, holding(checks), state.reading.ID, state.mapStamp
 			// A ledger's month-end balances are its lines rolled from the prior month's: read and mapped, it is not yet a
 			// month's books (docs/books-sources.md, delivery step 8).
-			out["period"], out["can_accept"] = state.reading.Period, canReview(r) && on && state.scope != nil && !state.layout.Layout.Ledger()
-			if state.layout.Layout.Ledger() {
-				out["ledger"] = "This file is the month's ledger detail: its lines are read, and its month-end balances, rolled from the prior month's accepted books, arrive with the next step."
+			out["period"], out["can_accept"] = state.reading.Period, canReview(r) && on && state.scope != nil && (!state.layout.Layout.Ledger() || state.derived)
+			if state.layout.Layout.Ledger() && !state.derived {
+				out["ledger"] = "This file is the month's ledger detail. " + state.underived
 			}
 			if state.scope != nil {
 				out["scope"] = state.scope.ID
@@ -865,8 +1000,8 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 		case !found:
 			problem(w, 409, "Confirm how the file is read before accepting it.")
 			return
-		case state.layout.Layout.Ledger():
-			problem(w, 409, "This file is the month's ledger detail: its month-end balances, rolled from the prior month's accepted books, arrive with the next step.")
+		case state.layout.Layout.Ledger() && !state.derived:
+			problem(w, 409, "This file is the month's ledger detail. "+state.underived)
 			return
 		case state.scope == nil:
 			problem(w, 409, "Attest what the file covers and its basis, for the reading confirmed now, before accepting it.")
@@ -923,4 +1058,23 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 		writeFileVersionsNow(r.Context(), db, org, name, state.reading.Period)
 		jsonReply(w, 200, map[string]any{"id": accepted, "checks": checks, "holds": holding(checks)})
 	})
+}
+
+// sameAmounts says whether two sets of balances by key hold the same keys at the same exact amounts.
+func sameAmounts(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, x := range a {
+		y, ok := b[key]
+		if !ok {
+			return false
+		}
+		u, okU := new(big.Rat).SetString(cmp.Or(x, "0"))
+		v, okV := new(big.Rat).SetString(cmp.Or(y, "0"))
+		if !okU || !okV || u.Cmp(v) != 0 {
+			return false
+		}
+	}
+	return true
 }
