@@ -16,7 +16,7 @@ import (
 	"close.local/backend/internal/llm"
 )
 
-func TestCompletionRejectsForeignIdentityAndPolicyBeforeDatabase(t *testing.T) {
+func TestCompletionRejectsInvalidPolicyBeforeExecution(t *testing.T) {
 	cfg := Config{Token: strings.Repeat("x", 32), DatabaseURL: "postgres://invalid/unused", CodexModel: "fixed", OpenAIKey: "key", Profiles: []llm.Scope{{Organization: "org", Subject: "owner", AccessProfile: "own"}}}
 	handler, err := New(cfg)
 	if err != nil {
@@ -27,7 +27,6 @@ func TestCompletionRejectsForeignIdentityAndPolicyBeforeDatabase(t *testing.T) {
 		change func(*llm.CompletionRequest)
 		status int
 	}{
-		{func(r *llm.CompletionRequest) { r.Scope.Subject = "other" }, 403},
 		{func(r *llm.CompletionRequest) { r.Model = "other" }, 400},
 		{func(r *llm.CompletionRequest) { r.Effort = "high" }, 400},
 		{func(r *llm.CompletionRequest) { r.Request.Purpose = "unknown" }, 400},
@@ -62,7 +61,7 @@ func TestInstalledCompletionCLIs(t *testing.T) {
 					t.Fatal(err)
 				}
 				calls := 0
-				proxy := &modelProxy{images: []llm.Image{{PNG: testPageImage(t)}}, ctx: context.Background(), token: "run", key: "private", model: "gpt-5", effort: "low", authMode: mode, agent: agent, limit: 1, tokens: 4096, completion: true, schema: schema}
+				proxy := &modelProxy{images: []llm.Image{{PNG: testPageImage(t)}}, ctx: context.Background(), token: "run", key: "private", model: "gpt-6.1-sol", effort: "medium", authMode: mode, agent: agent, limit: 1, tokens: 4096, completion: true, schema: schema}
 				if agent == "claude" {
 					proxy.model = "claude-sonnet-4-6"
 				}
@@ -113,7 +112,7 @@ func TestInstalledCompletionCLIs(t *testing.T) {
 					defer store.Close()
 					proxy.personal = &codexAuthSession{file: dir + "/auth.json", endpoint: store.URL, client: store.Client()}
 				}
-				args, env := command(agent, proxy.model, front.URL, "run", dir, 1, "low", mode)
+				args, env := command(agent, proxy.model, front.URL, "run", dir, 1, proxy.effort, mode)
 				args, err = completionCommand(agent, args, dir, schema)
 				if err != nil {
 					t.Fatal(err)
@@ -191,5 +190,94 @@ func TestCompletionPromptPreservesJSONNumbers(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatal("numeric input changed", prompt)
 		}
+	}
+}
+
+// Exercise the real service, subprocess and proxy with a fake CLI/provider. An
+// unreachable DB proves completion never consults membership or database state.
+func TestPrivateCompletionAcrossFirmsWithoutProfilesOrDatabaseReads(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal("Node is required for the CLI protocol fixture", err)
+	}
+	dir := t.TempDir()
+	script := `const fs=require('fs');
+const args=process.argv.slice(2);
+if(args.some(v=>v.startsWith('mcp_servers.')))process.exit(10);
+const setting=args.find(v=>v.startsWith('model_providers.context_machine.base_url='));
+const base=JSON.parse(setting.split('=').slice(1).join('='));
+const token=process.env.CONTEXT_MACHINE_RUN_TOKEN;
+(async()=>{
+ const mcp=await fetch(base.replace('/v1','')+'/mcp',{method:'POST',headers:{Authorization:'Bearer '+token},body:'{}'});
+ if(mcp.status!==404)process.exit(11);
+ const res=await fetch(base+'/responses',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({model:'wrong-cli-model',reasoning:{effort:'high'},input:[],tools:[{type:'function',name:'shell_command'}]})});
+ if(res.status!==200)process.exit(12);
+ await res.text();
+ const prompt=fs.readFileSync(0,'utf8');
+ const packet=JSON.parse(prompt.slice(prompt.indexOf('\n\n')+2));
+ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'answer:'+packet.Data.case}}));
+ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}}));
+})().catch(()=>process.exit(13));
+`
+	if err = os.WriteFile(dir+"/codex", []byte("#!"+node+"\n"+script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	old := http.DefaultClient
+	calls := 0
+	http.DefaultClient = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.URL.String() != "https://api.openai.com/v1/responses" || r.Header.Get("Authorization") != "Bearer fake-provider-key" {
+			t.Error("provider route changed")
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["model"] != "fixed" || body["reasoning"].(map[string]any)["effort"] != "medium" {
+			t.Error("upstream model/effort pin lost")
+		}
+		if len(body["tools"].([]any)) != 0 {
+			t.Error("completion acquired executable tools")
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = old })
+	cfg := Config{Token: strings.Repeat("x", 32), DatabaseURL: "postgres://unreachable.invalid/unused", CodexModel: "fixed", OpenAIKey: "fake-provider-key"}
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, scope := range []llm.Scope{{Organization: "firm-a", Subject: "user-a"}, {Organization: "firm-b", Subject: "user-b"}, {}} {
+		in := llm.CompletionRequest{Version: 1, Agent: "codex", Model: "fixed", Effort: "medium", Scope: scope, Deadline: time.Now().Add(10 * time.Second), Request: llm.Request{Purpose: "written_answer", Instructions: "Answer only supplied data", Data: map[string]any{"case": i}, MaxOutputTokens: 100, MaxResponseBytes: 4096}}
+		raw, _ := json.Marshal(in)
+		send := func(auth string) *httptest.ResponseRecorder {
+			r := httptest.NewRequest("POST", "/v1/complete", strings.NewReader(string(raw)))
+			r.Header.Set("Authorization", auth)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			return w
+		}
+		for _, auth := range []string{"", "Bearer wrong-service-token"} {
+			if w := send(auth); w.Code != 401 {
+				t.Fatal("unauthenticated completion accepted", w.Code)
+			}
+		}
+		w := send("Bearer " + cfg.Token)
+		var out llm.CompletionResponse
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || out.Text != fmt.Sprintf("answer:%d", i) || out.Scope != scope || out.ModelCalls != 1 {
+			t.Fatal("profile-free completion failed", w.Code, w.Body.String())
+		}
+	}
+	if calls != 3 {
+		t.Fatal("unexpected provider calls", calls)
+	}
+	// No profiles still means no database-research authority.
+	research := runRequest{Version: 1, Purpose: "research", Model: "codex", Instructions: "Read", Scope: llm.Scope{Organization: "firm-a", Subject: "user-a", AccessProfile: "invented"}, ReadOnly: true, Deadline: time.Now().Add(time.Minute), MaxModelCalls: 1, MaxOutputTokens: 100}
+	raw, _ := json.Marshal(research)
+	r := httptest.NewRequest("POST", "/v1/run", strings.NewReader(string(raw)))
+	r.Header.Set("Authorization", "Bearer "+cfg.Token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 403 || calls != 3 {
+		t.Fatal("research gained database authority", w.Code)
 	}
 }

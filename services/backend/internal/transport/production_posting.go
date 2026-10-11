@@ -107,12 +107,19 @@ func refuse(w http.ResponseWriter, err error) {
 
 // productionClient opens a client's production company under its grant: the saved grant when verifying an
 // earlier attempt, otherwise the current one, which must be unexpired and cover kind when kind is given.
-// The client's currency comes from the connection.
-func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedGrant string) (quickbooks.Sandbox, productionGrant, string, error) {
+// The client's currency comes from the connection. The grant and connection are the client's under any of its names
+// (a month opened under an alias posts through the client's), the month's own name first; the company's name must
+// match the name its connection is held under.
+func productionClient(ctx context.Context, db *sql.DB, org, entity, closeID, kind, savedGrant string) (quickbooks.Sandbox, productionGrant, string, error) {
 	var g productionGrant
 	var err error
-	if savedGrant != "" {
-		g, err = scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.id=$1 AND g.organization_id=$2 AND lower(g.client_entity)=lower($3)`, savedGrant, org, entity))
+	if savedGrant == "" && kind != "" {
+		// A new decision posts only through a grant on the connection this month's books are read from, so the proposal's
+		// source and its ledger effect are the same company.
+		g, err = scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND client_identity(g.organization_id,g.client_entity)=client_identity($1,$2) AND g.revoked_at IS NULL
+ AND g.connection_id=`+quickbooks.ReadingConnection("$3::bigint")+` ORDER BY g.id DESC LIMIT 1`, org, entity, closeID))
+	} else if savedGrant != "" {
+		g, err = scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.id=$1 AND g.organization_id=$2 AND client_identity(g.organization_id,g.client_entity)=client_identity($2,$3)`, savedGrant, org, entity))
 	} else {
 		g, err = readProductionGrant(ctx, db, org, entity)
 	}
@@ -125,11 +132,14 @@ func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedG
 	var encrypted []byte
 	var expires time.Time
 	var currency sql.NullString
+	var company string
 	connectionID := g.ConnectionID
 	if kind == "" {
-		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND environment='production' AND state='active' AND realm=$3 AND company_name=$2`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency)
+		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency,company_name FROM quickbooks_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2)
+ AND environment='production' AND state='active' AND realm=$3 AND company_name=client_entity ORDER BY id DESC LIMIT 1`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency, &company)
 	} else {
-		err = db.QueryRowContext(ctx, `SELECT credential,access_expires_at,home_currency FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND environment='production' AND state='active' AND realm=$4 AND company_name=$3`, connectionID, org, entity, g.Realm).Scan(&encrypted, &expires, &currency)
+		err = db.QueryRowContext(ctx, `SELECT credential,access_expires_at,home_currency,company_name FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)
+ AND environment='production' AND state='active' AND realm=$4 AND company_name=client_entity`, connectionID, org, entity, g.Realm).Scan(&encrypted, &expires, &currency, &company)
 	}
 	if err != nil || time.Until(expires) < 2*time.Minute {
 		return quickbooks.Sandbox{}, g, "", refusal{409, "Refresh the active production connection before posting."}
@@ -139,7 +149,8 @@ func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedG
 	if err != nil || json.Unmarshal(raw, &credentials) != nil || credentials.Access == "" {
 		return quickbooks.Sandbox{}, g, "", refusal{503, "Production credential unavailable."}
 	}
-	return quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Accounts: g.AccountIDs, Production: true, Currency: currency.String}, g, connectionID, nil
+	// Drafts are checked against the month's own name; the provider against the company the connection was confirmed for.
+	return quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Company: company, Accounts: g.AccountIDs, Production: true, Currency: currency.String}, g, connectionID, nil
 }
 
 func productionScope(ctx context.Context, db *sql.DB, closeID, org string) (string, error) {
@@ -161,7 +172,8 @@ func scanGrant(row *sql.Row) (productionGrant, error) {
 }
 
 func readProductionGrant(ctx context.Context, db *sql.DB, org, entity string) (productionGrant, error) {
-	return scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND lower(g.client_entity)=lower($2) AND g.revoked_at IS NULL LIMIT 1`, org, entity))
+	return scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND client_identity(g.organization_id,g.client_entity)=client_identity($1,$2) AND g.revoked_at IS NULL
+ ORDER BY lower(g.client_entity)=lower($2) DESC,g.id DESC LIMIT 1`, org, entity))
 }
 
 // postingKinds are the draft kinds enabled for production posting. New kinds stay off until the
@@ -536,102 +548,18 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		entity, err := productionScope(r.Context(), db, r.PathValue("id"), a.Organization)
-		if err != nil {
-			problem(w, 404, "Client close not found.")
-			return
+		if entity, ok := grantClient(w, r, db, a); ok {
+			productionGrantRead(w, r, db, a, entity)
 		}
-		access, err := clientAccess(db, r, entity)
-		if err != nil || !access {
-			problem(w, 403, "Client access is required.")
-			return
-		}
-		g, err := readProductionGrant(r.Context(), db, a.Organization, entity)
-		if err == sql.ErrNoRows {
-			jsonReply(w, 200, map[string]string{"state": "not_granted"})
-			return
-		}
-		if err != nil {
-			problem(w, 503, "Grant unavailable.")
-			return
-		}
-		jsonReply(w, 200, g)
 	})
 	mux.HandleFunc("POST "+grantPath, func(w http.ResponseWriter, r *http.Request) {
 		a, ok := productionActor(w, r, "posting:approve")
 		if !ok {
 			return
 		}
-		entity, err := productionScope(r.Context(), db, r.PathValue("id"), a.Organization)
-		if err != nil {
-			problem(w, 404, "Client close not found.")
-			return
+		if entity, ok := grantClient(w, r, db, a); ok && grantsWhole(w, r, db, entity) {
+			productionGrantChange(w, r, db, a, entity)
 		}
-		access, err := clientAccess(db, r, entity)
-		if err != nil || !access {
-			problem(w, 403, "Client access is required.")
-			return
-		}
-		var in struct {
-			Action       string    `json:"action"`
-			ConnectionID string    `json:"connection_id"`
-			GrantID      string    `json:"grant_id"`
-			AccountIDs   []string  `json:"account_ids"`
-			Kinds        []string  `json:"kinds"`
-			MaxAmount    string    `json:"max_amount"`
-			Reason       string    `json:"reason"`
-			Confirmation string    `json:"confirmation"`
-			ExpiresAt    time.Time `json:"expires_at"`
-		}
-		if !decode(w, r, &in) {
-			return
-		}
-		if in.Action == "revoke" {
-			if in.Confirmation != "REVOKE PRODUCTION GRANT" {
-				problem(w, 422, "Type REVOKE PRODUCTION GRANT.")
-				return
-			}
-			result, e := db.ExecContext(r.Context(), `UPDATE production_posting_grants SET revoked_at=now(),revoked_by=$4 WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND revoked_at IS NULL`, in.GrantID, a.Organization, entity, a.Subject)
-			if e != nil {
-				problem(w, 503, "Grant revocation unavailable.")
-				return
-			}
-			n, _ := result.RowsAffected()
-			if n != 1 {
-				problem(w, 409, "Grant changed. Refresh before deciding.")
-				return
-			}
-			jsonReply(w, 200, map[string]string{"state": "revoked"})
-			return
-		}
-		amount, amountErr := prepaids.Amount(in.MaxAmount)
-		accountsOK := len(in.AccountIDs) >= 2 && len(in.AccountIDs) <= 20
-		for i, id := range in.AccountIDs {
-			accountsOK = accountsOK && quickbooks.ValidRealm(id) && !slices.Contains(in.AccountIDs[:i], id)
-		}
-		kindsOK := len(in.Kinds) > 0
-		for i, kind := range in.Kinds {
-			kindsOK = kindsOK && slices.Contains(grantKinds, kind) && !slices.Contains(in.Kinds[:i], kind)
-		}
-		if in.Action != "grant" || in.Confirmation != "GRANT PRODUCTION POSTING" || !accountsOK || !kindsOK || amountErr != nil || amount <= 0 || in.ExpiresAt.Before(time.Now()) || in.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) || len(strings.TrimSpace(in.Reason)) < 10 || len(in.Reason) > 2000 {
-			problem(w, 422, "Confirm 2–20 distinct account IDs, the draft kinds covered, a positive limit, expiry within 30 days and a reason of at least 10 characters.")
-			return
-		}
-		var realm, company string
-		err = db.QueryRowContext(r.Context(), `SELECT realm,company_name FROM quickbooks_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND environment='production' AND state='active'`, in.ConnectionID, a.Organization, entity).Scan(&realm, &company)
-		if err != nil || !quickbooks.ValidRealm(realm) || company != entity {
-			problem(w, 409, "Confirm the production QuickBooks company for this exact client first.")
-			return
-		}
-		var id string
-		accounts, _ := json.Marshal(in.AccountIDs)
-		kinds, _ := json.Marshal(in.Kinds)
-		err = db.QueryRowContext(r.Context(), `INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,account_ids,kinds,max_amount,expires_at,reason,granted_by) VALUES($1,$2,$3,$4,ARRAY(SELECT jsonb_array_elements_text($5::jsonb)),ARRAY(SELECT jsonb_array_elements_text($6::jsonb)),$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, a.Organization, entity, in.ConnectionID, realm, string(accounts), string(kinds), in.MaxAmount, in.ExpiresAt, strings.TrimSpace(in.Reason), a.Subject).Scan(&id)
-		if err != nil {
-			problem(w, 409, "A current grant exists or the grant could not be saved. Refresh before deciding.")
-			return
-		}
-		jsonReply(w, 200, map[string]string{"id": id, "state": "granted"})
 	})
 	path := "/v1/closes/{id}/workpapers/{paper}/production-posting"
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
@@ -719,7 +647,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 				savedGrant = record.GrantID
 			}
 		}
-		client, g, _, err := productionClient(r.Context(), db, a.Organization, entity, decision, savedGrant)
+		client, g, _, err := productionClient(r.Context(), db, a.Organization, entity, r.PathValue("id"), decision, savedGrant)
 		if err != nil {
 			refuse(w, err)
 			return
@@ -1043,4 +971,130 @@ func verifyProduction(w http.ResponseWriter, r *http.Request, db *sql.DB, client
 		return
 	}
 	jsonReply(w, 200, p)
+}
+
+// grantClient is the client of the close a grant route names, when the reader may work on it; otherwise it answers and
+// ok is false.
+func grantClient(w http.ResponseWriter, r *http.Request, db *sql.DB, a *auth.Claims) (string, bool) {
+	entity, err := productionScope(r.Context(), db, r.PathValue("id"), a.Organization)
+	if err != nil {
+		problem(w, 404, "Client close not found.")
+		return "", false
+	}
+	access, err := clientAccess(db, r, entity)
+	if err != nil || !access {
+		problem(w, 403, "Client access is required.")
+		return "", false
+	}
+	return entity, true
+}
+
+// grantsWhole says the member may change the posting grants of the client a month names: a grant applies to every month
+// of the client, so it is changed by one who may open the client whole; otherwise it answers and says false.
+func grantsWhole(w http.ResponseWriter, r *http.Request, db *sql.DB, entity string) bool {
+	name, known, allowed, whole, err := clientNamed(r.Context(), db, organization(r), entity, firmAccess(r), subject(r))
+	if err != nil {
+		problem(w, 503, "The client is unavailable.")
+		return false
+	}
+	if !known || !allowed || !whole {
+		problem(w, 403, "A posting grant covers every month of the client; ask for access to "+name+".")
+		return false
+	}
+	return true
+}
+
+// productionGrantRead answers with the client entity's current production posting grant, or that it has none.
+func productionGrantRead(w http.ResponseWriter, r *http.Request, db *sql.DB, a *auth.Claims, entity string) {
+	g, err := readProductionGrant(r.Context(), db, a.Organization, entity)
+	if err == sql.ErrNoRows {
+		jsonReply(w, 200, map[string]string{"state": "not_granted"})
+		return
+	}
+	if err != nil {
+		problem(w, 503, "Grant unavailable.")
+		return
+	}
+	if !grantVisible(r, db, `SELECT client_entity FROM production_posting_grants WHERE id::text=$1`, g.ID) {
+		jsonReply(w, 200, map[string]string{"state": "held_elsewhere"})
+		return
+	}
+	jsonReply(w, 200, g)
+}
+
+// grantVisible says the reader may see a grant's details: they may open the client name it is held under (a grant
+// made under the client's own name stays its own, even for a month opened under an alias). heldUnder is SQL reading
+// that name for the grant's id.
+func grantVisible(r *http.Request, db *sql.DB, heldUnder, id string) bool {
+	var held string
+	if err := db.QueryRowContext(r.Context(), heldUnder, id).Scan(&held); err != nil {
+		return false
+	}
+	ok, err := clientAccess(db, r, held)
+	return err == nil && ok
+}
+
+// productionGrantChange grants the client entity bounded production posting, or revokes its grant, as a member with
+// posting:approve decides.
+func productionGrantChange(w http.ResponseWriter, r *http.Request, db *sql.DB, a *auth.Claims, entity string) {
+	var in struct {
+		Action       string    `json:"action"`
+		ConnectionID string    `json:"connection_id"`
+		GrantID      string    `json:"grant_id"`
+		AccountIDs   []string  `json:"account_ids"`
+		Kinds        []string  `json:"kinds"`
+		MaxAmount    string    `json:"max_amount"`
+		Reason       string    `json:"reason"`
+		Confirmation string    `json:"confirmation"`
+		ExpiresAt    time.Time `json:"expires_at"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.Action == "revoke" {
+		if in.Confirmation != "REVOKE PRODUCTION GRANT" {
+			problem(w, 422, "Type REVOKE PRODUCTION GRANT.")
+			return
+		}
+		result, e := db.ExecContext(r.Context(), `UPDATE production_posting_grants SET revoked_at=now(),revoked_by=$4 WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND revoked_at IS NULL`, in.GrantID, a.Organization, entity, a.Subject)
+		if e != nil {
+			problem(w, 503, "Grant revocation unavailable.")
+			return
+		}
+		n, _ := result.RowsAffected()
+		if n != 1 {
+			problem(w, 409, "Grant changed. Refresh before deciding.")
+			return
+		}
+		jsonReply(w, 200, map[string]string{"state": "revoked"})
+		return
+	}
+	amount, amountErr := prepaids.Amount(in.MaxAmount)
+	accountsOK := len(in.AccountIDs) >= 2 && len(in.AccountIDs) <= 20
+	for i, id := range in.AccountIDs {
+		accountsOK = accountsOK && quickbooks.ValidRealm(id) && !slices.Contains(in.AccountIDs[:i], id)
+	}
+	kindsOK := len(in.Kinds) > 0
+	for i, kind := range in.Kinds {
+		kindsOK = kindsOK && slices.Contains(grantKinds, kind) && !slices.Contains(in.Kinds[:i], kind)
+	}
+	if in.Action != "grant" || in.Confirmation != "GRANT PRODUCTION POSTING" || !accountsOK || !kindsOK || amountErr != nil || amount <= 0 || in.ExpiresAt.Before(time.Now()) || in.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) || len(strings.TrimSpace(in.Reason)) < 10 || len(in.Reason) > 2000 {
+		problem(w, 422, "Confirm 2–20 distinct account IDs, the draft kinds covered, a positive limit, expiry within 30 days and a reason of at least 10 characters.")
+		return
+	}
+	var realm, company string
+	err := db.QueryRowContext(r.Context(), `SELECT realm,company_name FROM quickbooks_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND environment='production' AND state='active'`, in.ConnectionID, a.Organization, entity).Scan(&realm, &company)
+	if err != nil || !quickbooks.ValidRealm(realm) || company != entity {
+		problem(w, 409, "Confirm the production QuickBooks company for this exact client first.")
+		return
+	}
+	var id string
+	accounts, _ := json.Marshal(in.AccountIDs)
+	kinds, _ := json.Marshal(in.Kinds)
+	err = db.QueryRowContext(r.Context(), `INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,account_ids,kinds,max_amount,expires_at,reason,granted_by) VALUES($1,$2,$3,$4,ARRAY(SELECT jsonb_array_elements_text($5::jsonb)),ARRAY(SELECT jsonb_array_elements_text($6::jsonb)),$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, a.Organization, entity, in.ConnectionID, realm, string(accounts), string(kinds), in.MaxAmount, in.ExpiresAt, strings.TrimSpace(in.Reason), a.Subject).Scan(&id)
+	if err != nil {
+		problem(w, 409, "A current grant exists or the grant could not be saved. Refresh before deciding.")
+		return
+	}
+	jsonReply(w, 200, map[string]string{"id": id, "state": "granted"})
 }

@@ -47,7 +47,7 @@ func (s Sandbox) PrepareVendorCredit(ctx context.Context, vendorID, apID, prepai
 	if err := s.request(ctx, "GET", "/companyinfo/"+s.Realm, nil, &company); err != nil {
 		return VendorCredit{}, err
 	}
-	if company.CompanyInfo.CompanyName != s.Entity {
+	if company.CompanyInfo.CompanyName != s.companyName() {
 		return VendorCredit{}, errors.New("QuickBooks company does not match the client")
 	}
 	if _, err := s.OpenPeriod(ctx, date); err != nil {

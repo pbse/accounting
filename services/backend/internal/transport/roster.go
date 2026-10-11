@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/ledgers"
 )
 
 // The firm's client roster and monthly close template (B01/B02, migration 127). Roster entries are matched to closes by
@@ -246,6 +247,8 @@ type rosterClose struct {
 	Priority  string `json:"priority,omitempty"`
 	Assigned  bool   `json:"assigned,omitempty"`
 	OwnedByMe bool   `json:"owned_by_me,omitempty"`
+	// Owner is who holds the close now (a subject), "" for nobody; a firm administrator sees whom it names.
+	Owner string `json:"owner,omitempty"`
 }
 
 func registerRoster(mux *http.ServeMux, db *sql.DB) {
@@ -312,7 +315,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		if err == nil {
 			var closes *sql.Rows
 			closes, err = tx.QueryContext(r.Context(), `SELECT r.client_entity,c.id::text,c.entity,c.period,COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')='signed_off',
- COALESCE(c.due_on::text,''),c.priority,c.owner<>'',c.owner<>'' AND c.owner=$3
+ COALESCE(c.due_on::text,''),c.priority,c.owner<>'',c.owner<>'' AND c.owner=$3,c.owner
  FROM current_client_roster r JOIN client_closes c ON c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)
  WHERE r.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(r.client_entity)))
  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))
@@ -321,7 +324,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				for closes.Next() {
 					var entity string
 					var cl rosterClose
-					if err = closes.Scan(&entity, &cl.ID, &cl.Entity, &cl.Period, &cl.SignedOff, &cl.DueOn, &cl.Priority, &cl.Assigned, &cl.OwnedByMe); err != nil {
+					if err = closes.Scan(&entity, &cl.ID, &cl.Entity, &cl.Period, &cl.SignedOff, &cl.DueOn, &cl.Priority, &cl.Assigned, &cl.OwnedByMe, &cl.Owner); err != nil {
 						break
 					}
 					if i, ok := index[strings.ToLower(entity)]; ok {
@@ -349,6 +352,64 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 		}
+		// How each client's books arrive, by client identity (its own name in lower case, as the Clients page groups
+		// it): the state of its QuickBooks connection (production first) and of its Xero connection, under any of its
+		// names, for every client the reader can see whole (the firm's, or one assigned to them under its own name, as
+		// the client's page shows them), on the roster or not; and, as "exports", whether the newest label of its
+		// uploaded exports, in place of a live ledger, is still on the current exports (labeled) or one has been
+		// replaced since (stale).
+		connections := map[string]map[string]string{}
+		if err == nil {
+			var rows *sql.Rows
+			if rows, err = tx.QueryContext(r.Context(), `SELECT DISTINCT ON (provider,client_identity($1,client_entity)) provider,client_identity($1,client_entity),state FROM (
+ SELECT 'quickbooks' AS provider,client_entity,state,environment='production' AS first,id FROM quickbooks_connections WHERE organization_id=$1 AND state<>'disconnected'
+ UNION ALL SELECT 'xero',client_entity,state,true,id FROM xero_connections WHERE organization_id=$1 AND state<>'disconnected'
+ UNION ALL SELECT 'exports',c.entity,CASE WHEN EXISTS(SELECT 1 FROM unnest(l.evidence_ids) e(id) WHERE NOT EXISTS(SELECT 1 FROM evidence v WHERE v.id=e.id AND v.close_id=l.close_id AND v.superseded_by IS NULL)) THEN 'stale' ELSE 'labeled' END,true,l.id
+  FROM close_export_labels l JOIN client_closes c ON c.id=l.close_id WHERE c.organization_id=$1 AND l.id=(SELECT max(n.id) FROM close_export_labels n WHERE n.close_id=l.close_id)) x
+ WHERE $2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$3 AND g.granted AND lower(g.client_entity)=client_identity($1,x.client_entity))
+ ORDER BY provider,client_identity($1,client_entity),first DESC,id DESC`, org, firmAccess(r), subject(r)); err == nil {
+				for rows.Next() {
+					var provider, client, state string
+					if err = rows.Scan(&provider, &client, &state); err != nil {
+						break
+					}
+					if connections[client] == nil {
+						connections[client] = map[string]string{}
+					}
+					connections[client][provider] = state
+				}
+				rows.Close()
+				if err == nil {
+					err = rows.Err()
+				}
+			}
+		}
+		// And, as "ledger", the ledger each client keeps as recorded (a catalog entry's name, or the name given for another
+		// ledger), for the same clients; not known yet says nothing.
+		if err == nil {
+			var rows *sql.Rows
+			if rows, err = tx.QueryContext(r.Context(), `SELECT l.client,l.ledger,l.other_name FROM current_client_ledgers l WHERE l.organization_id=$1 AND l.ledger<>'unknown'
+ AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$3 AND g.granted AND lower(g.client_entity)=l.client))`, org, firmAccess(r), subject(r)); err == nil {
+				for rows.Next() {
+					var client, ledger, other string
+					if err = rows.Scan(&client, &ledger, &other); err != nil {
+						break
+					}
+					name := other
+					if entry, ok := ledgers.Find(ledger); ok {
+						name = entry.Name
+					}
+					if connections[client] == nil {
+						connections[client] = map[string]string{}
+					}
+					connections[client]["ledger"] = name
+				}
+				rows.Close()
+				if err == nil {
+					err = rows.Err()
+				}
+			}
+		}
 		var owed []owedMonth
 		if err == nil {
 			owed, err = owedMonthsThrough(r.Context(), tx, time.Now().UTC().Format("2006-01"), org, firmAccess(r), canReview(r), subject(r), "")
@@ -363,7 +424,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		// A member sees no template, which is not the same as the firm having none: template_hidden says so.
-		out := map[string]any{"template": template, "template_hidden": !firmAccess(r), "clients": clients, "can_manage": canManageRoster(r)}
+		out := map[string]any{"template": template, "template_hidden": !firmAccess(r), "clients": clients, "connections": connections, "can_manage": canManageRoster(r)}
 		// An administrator chooses owners from the members who can do the work: a role reviewing every client (any
 		// client, and the template), or a reviewer, for the clients assigned to them.
 		if canManageRoster(r) {
@@ -390,6 +451,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			Owner   *string `json:"owner"`
 			Reason  string  `json:"reason"`
 			Rev     string  `json:"rev"` // the client's entry as read, "" for none
+			// Ledger is the ledger a client being added keeps (a catalog entry, other with its name, or unknown), recorded
+			// with its entry; "" records none. The client's page corrects it.
+			Ledger    string `json:"ledger"`
+			OtherName string `json:"other_name"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -414,6 +479,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		if in.DueDays != nil && (*in.DueDays < 0 || *in.DueDays > 60) {
 			problem(w, 422, "A close is due 1–60 days after its month ends, or 0 for no due date.")
+			return
+		}
+		if in.Ledger != "" && (in.Rev != "" || !ledgers.Valid(in.Ledger, in.OtherName)) {
+			problem(w, 422, "Choose the client's ledger from the list, name another one, or say it is not known yet.")
 			return
 		}
 		// The roster names each client once, by its own name: a confirmed alias of a client is that client.
@@ -481,6 +550,16 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
 			organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r))
+		// The ledger the new client keeps, unless one is recorded for it already (a client added again after leaving).
+		// The client's ledgers are locked as its page locks them, so a correction made there meanwhile is seen, not
+		// replaced.
+		if err == nil && in.Ledger != "" {
+			_, err = tx.ExecContext(r.Context(), clientLedgersLock, organization(r), in.Entity)
+		}
+		if err == nil && in.Ledger != "" {
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_ledgers(organization_id,client_entity,ledger,other_name,reason,actor) SELECT $1,$2,$3,$4,'Recorded when the client was added',$5
+ WHERE NOT EXISTS(SELECT 1 FROM current_client_ledgers WHERE organization_id=$1 AND client=client_identity($1,$2))`, organization(r), in.Entity, in.Ledger, strings.TrimSpace(in.OtherName), subject(r))
+		}
 		// A client that owes nothing more has no monthly hand-over to open its months.
 		if err == nil && !in.Active {
 			_, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND stopped_at IS NULL`,
@@ -572,26 +651,8 @@ type rosterPerson struct {
 // rosterPeople is the granted members who can hold closes, as rosterOwner judges them, with the clients assigned to
 // each; in the local development firm, which need not record members, the reader is one of them.
 func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPerson, error) {
-	// Each assigned client is named as its assignment names it (lowercase), as access to a client's closes is granted.
-	rows, err := tx.QueryContext(ctx, `SELECT m.subject,COALESCE((SELECT jsonb_agg(DISTINCT lower(g.client_entity)) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),'[]'::jsonb)
- FROM current_organization_members m WHERE m.organization_id=$1 AND m.granted ORDER BY m.subject`, org)
+	members, err := grantedMembers(ctx, tx, org)
 	if err != nil {
-		return nil, err
-	}
-	members := []rosterPerson{}
-	for rows.Next() {
-		var p rosterPerson
-		var clients []byte
-		if err = rows.Scan(&p.Subject, &clients); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		json.Unmarshal(clients, &p.Clients)
-		p.Name = p.Subject
-		members = append(members, p)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	if org == "local-development" {
@@ -607,6 +668,34 @@ func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPer
 	if err != nil {
 		return nil, err
 	}
+	return reviewersAmong(members, reviewers), nil
+}
+
+// grantedMembers is the firm's granted members, each with the clients assigned to them.
+func grantedMembers(ctx context.Context, tx *sql.Tx, org string) ([]rosterPerson, error) {
+	// Each assigned client is named as its assignment names it (lowercase), as access to a client's closes is granted.
+	rows, err := tx.QueryContext(ctx, `SELECT m.subject,COALESCE((SELECT jsonb_agg(DISTINCT lower(g.client_entity)) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),'[]'::jsonb)
+ FROM current_organization_members m WHERE m.organization_id=$1 AND m.granted ORDER BY m.subject`, org)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	members := []rosterPerson{}
+	for rows.Next() {
+		var p rosterPerson
+		var clients []byte
+		if err = rows.Scan(&p.Subject, &clients); err != nil {
+			return nil, err
+		}
+		json.Unmarshal(clients, &p.Clients)
+		p.Name = p.Subject
+		members = append(members, p)
+	}
+	return members, rows.Err()
+}
+
+// reviewersAmong is the members whose WorkOS role reviews work, named as WorkOS names them.
+func reviewersAmong(members []rosterPerson, reviewers map[string]reviewer) []rosterPerson {
 	out := []rosterPerson{}
 	for _, p := range members {
 		if rv := reviewers[p.Subject]; rv.review {
@@ -614,7 +703,7 @@ func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPer
 			out = append(out, p)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // canReview is a reader who reviews work: with workpapers:review, or anyone without an organization (local development).

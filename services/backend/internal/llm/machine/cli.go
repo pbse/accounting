@@ -39,6 +39,7 @@ func command(agent, model, base, token, dir string, budget int, effort, mode str
 		"model_providers.context_machine.stream_max_retries=0",
 		"model_providers.context_machine.supports_websockets=false",
 		"features.shell_tool=false", "features.unified_exec=false",
+		"features.code_mode.enabled=false", "features.incremental_tools=false", "features.multi_agent_v2=false", "features.sleep_tool=false",
 		"features.plugins=false", "features.remote_plugin=false",
 		"features.apps=false", "features.hooks=false", "features.multi_agent=false", "features.shell_snapshot=false", `web_search="disabled"`,
 		"mcp_servers.records.url=" + strconv.Quote(base+"/mcp"),

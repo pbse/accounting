@@ -1,3 +1,4 @@
+import { clientPage } from "../../data/clients";
 import { closeTab, closeTabs, type CloseTab } from "../../data/closeTabs";
 import { monthName, useDates } from "../../data/time";
 import { useEffect, useState } from "react";
@@ -27,8 +28,7 @@ import { Evidence, PreparationJobs } from "./Evidence";
 import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
 import { Memory } from "./Memory";
-import { ProductionAccess } from "./ProductionAccess";
-import { QuickBooks } from "./QuickBooks";
+import { MonthBooks } from "./MonthBooks";
 import { Xero } from "./Xero";
 import { HistoricalExports } from "./HistoricalExports";
 import { Stripe } from "./Stripe";
@@ -157,8 +157,20 @@ export default function ClientClose() {
   const [deleted, setDeleted] = useState("");
   const tab: Tab = closeTab(params.get("tab"));
   const filter = filters[params.get("filter") ?? ""] ? params.get("filter")! : "all";
+  // A link to a section scrolls to it once it is there: a section can mount after the month's data loads, so the
+  // target is looked for each frame for a few seconds.
   useEffect(() => {
-    if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView());
+    if (!location.hash) return;
+    const target = location.hash.slice(1);
+    const deadline = Date.now() + 5000;
+    let frame = 0;
+    const find = () => {
+      const section = document.getElementById(target);
+      if (section) section.scrollIntoView();
+      else if (Date.now() < deadline) frame = requestAnimationFrame(find);
+    };
+    frame = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(frame);
   }, [tab, location.hash]);
   if (deleted)
     return (
@@ -183,7 +195,7 @@ export default function ClientClose() {
       <div className="ks-crumbs">
         <Link to="/dashboard/clients">Clients</Link>
         <span>/</span>
-        <Link to={`/dashboard/clients?q=${encodeURIComponent(close.entity)}`}>{close.entity}</Link>
+        <Link to={clientPage(close.entity)}>{close.entity}</Link>
         <span>/</span>
         <b>{monthName(close.period)}</b>
         <div className="ks-tools">
@@ -222,6 +234,8 @@ export default function ClientClose() {
       )}
       {tab === "books" && (
         <div className="stack">
+          <MonthBooks key={`books-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
+          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
           <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
           <Flux key={`flux-${close.id}`} closeId={close.id} />
@@ -276,8 +290,6 @@ export default function ClientClose() {
       {tab === "evidence" && (
         <div className="stack">
           <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
-          <QuickBooks key={`qbo-${close.id}`} closeId={close.id} entity={close.entity} />
-          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} />
           <HistoricalExports key={`history-${close.id}`} closeId={close.id} />
           <Stripe key={`stripe-${close.id}`} closeId={close.id} entity={close.entity} />
           <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
@@ -310,7 +322,6 @@ export default function ClientClose() {
         <div className="stack">
           <Memory key={`memory-${close.id}`} closeId={close.id} />
           <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} onApplied={() => void reload()} />
-          <ProductionAccess closeId={close.id} entity={close.entity} currency={close.profile?.currency ?? "USD"} />
           <Replay key={`replay-${close.id}`} closeId={close.id} />
           <RetentionControls close={close} onDeleted={setDeleted} />
         </div>
