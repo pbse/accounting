@@ -620,7 +620,13 @@ func (l Layout) Read(t Table) Reading {
 					balance = a.Value
 					signed = a.Side != ""
 				default:
-					line.Others[meaning] = exact(a.Value)
+					// Another balance is kept as debit minus credit: a Dr or Cr mark says its side, else the balance's sign
+					// convention does.
+					v := a.Value
+					if a.Side == "" && l.BalanceSign == "credit" {
+						v = new(big.Rat).Neg(v)
+					}
+					line.Others[meaning] = exact(v)
 				}
 			}
 		}
