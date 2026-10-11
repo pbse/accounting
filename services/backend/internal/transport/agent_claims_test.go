@@ -526,6 +526,12 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Retail sales total 300.00.", "also uses Wholesale sales", derived(0, "sum", "300.00", "t68", "/profit_and_loss/sections/0/lines/0/amount", "t68", "/profit_and_loss/sections/0/lines/1/amount"))
 	ok("Retail sales and wholesale sales total 300.00.", derived(0, "sum", "300.00", "t68", "/profit_and_loss/sections/0/lines/0/amount", "t68", "/profit_and_loss/sections/0/lines/1/amount"))
 
+	// Round forty-one: a month no input is of; denying book cash is at the bank.
+	rejected("Retail sales and wholesale sales for September and October total 300.00.", "names September", derived(0, "sum", "300.00", "t68", "/profit_and_loss/sections/0/lines/0/amount", "t68", "/profit_and_loss/sections/0/lines/1/amount"))
+	ok("Retail sales and wholesale sales for October total 300.00.", derived(0, "sum", "300.00", "t68", "/profit_and_loss/sections/0/lines/0/amount", "t68", "/profit_and_loss/sections/0/lines/1/amount"))
+	ok("Opening book cash of 64,120.00 is not available cash at the bank.", e("t30", 0, "/opening/amount", "64120.00"))
+	rejected("Opening book cash of 64,120.00 is available at the bank.", "available at the bank", e("t30", 0, "/opening/amount", "64120.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

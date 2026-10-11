@@ -910,8 +910,8 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 		}
 		return "the sentence states the month's " + o.normalized + " as year to date"
 	}
-	// Book cash is the ledger's, not money available at the bank.
-	if c.keys["cash"] && claimAvailable.MatchString(lowerClause) {
+	// Book cash is the ledger's, not money available at the bank; saying it is not available is right.
+	if c.keys["cash"] && availableSaid(lowerClause) {
 		return "the sentence calls book cash of " + o.normalized + " available at the bank"
 	}
 	// A forecast week's figure is of the months that week runs in.
@@ -1535,6 +1535,11 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 			}
 		}
 	}
+	// Every month the sentence names is one its figure is computed from: two October figures are never "September and
+	// October". A change's month before counts only as its comparison; a forecast week counts its own months.
+	if why := derivedMonthsNamed(line, claims); why != "" {
+		return why
+	}
 	// A line the sentence names is only that line: "Retail sales total 300.00" may not add wholesale sales in.
 	for _, c := range claims {
 		if c.label == "" || !labelNamed(line, c.label) {
@@ -2154,4 +2159,50 @@ func isBalance(c claim) bool {
 		return true
 	}
 	return false
+}
+
+// availableSaid says whether a clause calls something available at the bank, rather than denying it ("is not
+// available cash at the bank").
+func availableSaid(clause string) bool {
+	for _, at := range claimAvailable.FindAllStringIndex(clause, -1) {
+		words := strings.Fields(clause[:at[0]])
+		if len(words) > 4 {
+			words = words[len(words)-4:]
+		}
+		if !claimNegation.MatchString(strings.Join(words, " ")) {
+			return true
+		}
+	}
+	return false
+}
+
+// derivedMonthsNamed checks that each month a sentence names is one a derived figure's inputs are of.
+func derivedMonthsNamed(line string, claims []claim) string {
+	named := namedMonths(line)
+	if len(named) == 0 {
+		return ""
+	}
+	known := false
+	fits := func(n [2]int, d time.Time) bool { return n[0] == int(d.Month()) && (n[1] == 0 || n[1] == d.Year()) }
+	for _, n := range named {
+		held := false
+		for _, c := range claims {
+			switch {
+			case c.forecast && c.from != "":
+				known = true
+				from, _ := time.Parse("2006-01-02", c.from)
+				to, _ := time.Parse("2006-01-02", c.to)
+				held = held || fits(n, from) || fits(n, to)
+			case !c.forecast && len(c.period) == 7:
+				known = true
+				p, _ := time.Parse("2006-01", c.period)
+				before := p.AddDate(0, -1, 0)
+				held = held || fits(n, p) || c.kind == "change" && fits(n, before) && comparedMonth(line, before)
+			}
+		}
+		if known && !held {
+			return "the sentence names " + time.Month(n[0]).String() + ", but its figure is computed from no figure of that month"
+		}
+	}
+	return ""
 }

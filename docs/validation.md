@@ -4176,6 +4176,8 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - `MoneyIn` also treats a number after a quantity or term label ("Qty 12", "Term: 12") as no amount;
   - a derived sum never adds balances at different dates (two weeks' closing cash), while flows across weeks still add;
   - a line the sentence names is only that line: "Retail sales total 300.00" cannot add wholesale sales in;
+  - every month a derived sentence names is one of its inputs' months ("September and October" fails for two October figures);
+  - denying that book cash is available at the bank is accepted; asserting it is not;
   - `TestFirmClientsFindsTheNamesAnAnswerUses` (new, database): the firm's clients named in an answer are found by the database across all clients with no cap (including a two-letter name), and never another firm's.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
