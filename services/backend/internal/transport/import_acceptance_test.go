@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -361,6 +362,11 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if row := tie["rows"].([]any)[0].(map[string]any); row["status"] != "ties" || row["account"] != "1000 Business Checking" || len(tie["unmatched"].([]any)) != 0 {
 		t.Fatalf("a reconciliation supports the file's bank: %v", tie)
 	}
+	// Its exceptions check the file's balances, named as from the file.
+	exceptions := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/quickbooks/exceptions", nil, 200)["balances"].(map[string]any)
+	if snapshot := exceptions["snapshot"].(map[string]any); snapshot["source"] != "files" || snapshot["file"] != "Acme 2027-01.csv" || len(exceptions["items"].([]any)) != 0 {
+		t.Fatalf("January's balances to review from its file: %v", exceptions)
+	}
 	// Its coverage is the file's accounts: the bank to reconcile, the rest for review, decided on the file's books.
 	coverage := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/coverage", nil, 200)["coverage"].(map[string]any)
 	kinds := map[string]string{}
@@ -417,6 +423,9 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if tie = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200); !strings.Contains(fmt.Sprint(tie["error"]), "Debits equal credits") || len(tie["rows"].([]any)) != 0 {
 		t.Fatalf("a held file's tie-out names its checks: %v", tie)
 	}
+	if exceptions = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/quickbooks/exceptions", nil, 200)["balances"].(map[string]any); !strings.Contains(fmt.Sprint(exceptions["error"]), "Debits equal credits") {
+		t.Fatalf("a held file's balances name its checks: %v", exceptions)
+	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
 		t.Fatalf("parity leaves a file's books alone: %v %v", mismatched, err)
@@ -452,4 +461,23 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		t.Fatalf("no acceptance while file imports are off: %v", read)
 	}
 	call("user_a", partner, "POST", path, with(read, nil), 403)
+}
+
+// A month on files' balances are reviewed as a capture's are, each account known by its name without its number: an
+// overdrawn bank and opening balance equity, but not accumulated depreciation or retained earnings, which sit opposite.
+func TestAFilesMonthsBalancesAreReviewed(t *testing.T) {
+	amount := func(s string) *big.Rat { r, _ := new(big.Rat).SetString(s); return r }
+	b := &books{Currency: "USD", Accounts: map[string]packAccount{
+		"n:1000": {Name: "1000 Business Checking", Class: "Asset", Type: "Bank"},
+		"n:1590": {Name: "1590 Accumulated Depreciation", Class: "Asset", Type: "Fixed Asset"},
+		"n:3200": {Name: "3200 Retained Earnings", Class: "Equity", Type: "Equity"},
+		"n:3900": {Name: "3900 Opening Balance Equity", Class: "Equity", Type: "Equity"},
+	}, Balances: map[string]*big.Rat{"n:1000": amount("-50"), "n:1590": amount("-200"), "n:3200": amount("300"), "n:3900": amount("-75")}}
+	found := map[string]string{}
+	for _, e := range fileBalanceExceptions(b) {
+		found[e.AccountID] = e.Type
+	}
+	if len(found) != 2 || found["n:1000"] != "abnormal_balance" || found["n:3900"] != "opening_balance_equity" {
+		t.Fatalf("a files month's balances to review: %v", found)
+	}
 }
