@@ -61,7 +61,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
  'coverage',COALESCE((SELECT jsonb_agg((CASE WHEN b.xero_snapshot_id IS NULL THEN to_jsonb(b)-'xero_snapshot_id' ELSE to_jsonb(b) END)-(CASE WHEN b.file_version_id IS NULL THEN 'file_version_id' ELSE '' END) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=c.id),'[]'),
  'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'digest',a.digest,'state',a.state,'source_id',a.source_id,'scan_version',a.scan_version,'decision_note',a.decision_note) ORDER BY a.id) FROM client_attachments a WHERE a.close_id=c.id),'[]'),
  'requests',COALESCE((SELECT jsonb_agg(to_jsonb(q) ORDER BY q.id) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id),'[]')
- )||COALESCE((SELECT jsonb_build_object('xero_postings',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_postings p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('xero_corrections',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_corrections p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('export_label',to_jsonb(l)) FROM close_export_labels l WHERE l.close_id=c.id ORDER BY l.id DESC LIMIT 1),'{}')||COALESCE((SELECT jsonb_build_object('cash_flow_import',to_jsonb(i)) FROM cash_flow_imports i WHERE i.close_id=c.id ORDER BY i.id DESC LIMIT 1),'{}')||COALESCE((SELECT jsonb_build_object('file_journals',jsonb_agg(to_jsonb(j) ORDER BY j.id)) FROM file_journals j WHERE j.close_id=c.id HAVING count(*)>0),'{}') FROM client_closes c WHERE c.id::text=$1`, id).Scan(&raw)
+ )||COALESCE((SELECT jsonb_build_object('xero_postings',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_postings p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('xero_corrections',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_corrections p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('export_label',to_jsonb(l)) FROM close_export_labels l WHERE l.close_id=c.id ORDER BY l.id DESC LIMIT 1),'{}')||COALESCE((SELECT jsonb_build_object('cash_flow_import',to_jsonb(i)) FROM cash_flow_imports i WHERE i.close_id=c.id ORDER BY i.id DESC LIMIT 1),'{}')||COALESCE((SELECT jsonb_build_object('file_journals',jsonb_agg(CASE WHEN j.state='withdrawn' THEN to_jsonb(j) ELSE to_jsonb(j)-'withdrawn_by'-'withdrawn_at'-'withdrawn_reason' END ORDER BY j.id)) FROM file_journals j WHERE j.close_id=c.id HAVING count(*)>0),'{}') FROM client_closes c WHERE c.id::text=$1`, id).Scan(&raw)
 	if err != nil {
 		return out, err
 	}
@@ -123,6 +123,23 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 			out.Blockers = append(out.Blockers, "Books from files: this month has no accepted file's books yet.")
 		case len(month.Holds) > 0:
 			out.Blockers = append(out.Blockers, "Books from files: the accepted file "+month.File+" has checks that hold its statements: "+strings.Join(month.Holds, "; ")+".")
+		}
+		// A journal written back to the client's ledger is in the month's statements only once its books verify it.
+		if month != nil {
+			journals, err := journalsOf(ctx, tx, id, month)
+			if err != nil {
+				return out, err
+			}
+			for _, j := range journals {
+				switch j.State {
+				case "exported":
+					out.Blockers = append(out.Blockers, "Books from files: journal "+j.Reference+" is exported but not recorded as entered in the client's ledger, or withdrawn.")
+				case "entered":
+					out.Blockers = append(out.Blockers, "Books from files: journal "+j.Reference+" is entered but not yet verified: accept the month's General Ledger exported after it was entered.")
+				case "uncertain":
+					out.Blockers = append(out.Blockers, "Books from files: journal "+j.Reference+" is uncertain. "+j.Note)
+				}
+			}
 		}
 	}
 	var snapshot struct {

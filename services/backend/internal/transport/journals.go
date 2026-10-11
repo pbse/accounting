@@ -2,12 +2,14 @@ package transport
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"mime"
 	"net/http"
 	"slices"
@@ -59,6 +61,13 @@ type fileJournal struct {
 	ExportedAt      time.Time       `json:"exported_at"`
 	EnteredBy       string          `json:"entered_by,omitempty"`
 	EnteredAt       *time.Time      `json:"entered_at,omitempty"`
+	WithdrawnBy     string          `json:"withdrawn_by,omitempty"`
+	WithdrawnAt     *time.Time      `json:"withdrawn_at,omitempty"`
+	WithdrawnReason string          `json:"withdrawn_reason,omitempty"`
+	// Note says why a journal is uncertain, or which books verified it; found counts the month's ledger lines that
+	// carry its reference.
+	Note  string `json:"note,omitempty"`
+	found int
 }
 
 // draftEntries are an approved draft's month-end entries, as a posting would post them: a prepaid's proposal (a
@@ -84,14 +93,14 @@ func draftEntries(kind string, raw []byte, period string) ([]prepaids.Adjustment
 	return []prepaids.Adjustment{*paper.Proposal}, paper.Input.SourceReference, nil
 }
 
-// pendingJournals are close id's current approved drafts whose entries are in no journal (but one found uncertain), each
+// pendingJournals are close id's current approved drafts whose entries are in no journal (but one uncertain or withdrawn), each
 // with its lines, or held with why: a procedure since changed or revoked authorizes none, and, as for a posting, a
 // source is entered once, from its newest draft.
 func pendingJournals(ctx context.Context, tx *sql.Tx, closeID, period string) ([]journalDraft, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT w.id::text,w.kind,w.digest,w.paper FROM workpaper_review_state w WHERE w.close_id::text=$1 AND w.review_state='approved'
  AND (jsonb_typeof(w.paper->'blockers') IS DISTINCT FROM 'array' OR w.paper->'blockers'='[]'::jsonb) AND w.kind IN ('prepaid','accrual','loan','owner','payroll','settlement')
  AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)
- AND NOT EXISTS(SELECT 1 FROM file_journals j WHERE j.close_id=w.close_id AND j.workpaper_id=w.id AND j.state<>'uncertain') ORDER BY w.id`, closeID)
+ AND NOT EXISTS(SELECT 1 FROM file_journals j WHERE j.close_id=w.close_id AND j.workpaper_id=w.id AND j.state NOT IN ('uncertain','withdrawn')) ORDER BY w.id`, closeID)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +142,7 @@ func pendingJournals(ctx context.Context, tx *sql.Tx, closeID, period string) ([
 				j.Held = err.Error()
 			} else {
 				var in string
-				if err = tx.QueryRowContext(ctx, `SELECT reference FROM file_journals WHERE close_id::text=$1 AND source_key=$2 AND state<>'uncertain'`, closeID, j.key).Scan(&in); err == nil {
+				if err = tx.QueryRowContext(ctx, `SELECT reference FROM file_journals WHERE close_id::text=$1 AND source_key=$2 AND state NOT IN ('uncertain','withdrawn')`, closeID, j.key).Scan(&in); err == nil {
 					j.Held = "Its source is already in journal " + in + "."
 				} else if err != sql.ErrNoRows {
 					return nil, err
@@ -154,16 +163,96 @@ func canEnterJournals(r *http.Request) bool {
 	return a != nil && (a.Organization == "" || slices.Contains(a.Permissions, "posting:approve"))
 }
 
-// journalsOf are close id's exported journals, newest batch first.
-func journalsOf(ctx context.Context, q rowReader, closeID string) ([]fileJournal, error) {
+// journalsOf are close id's exported journals, newest batch first, each exported or entered one where it stands in
+// month, the month's books from its files (nil while it has none).
+func journalsOf(ctx context.Context, q rowReader, closeID string, month *fileMonth) ([]fileJournal, error) {
 	var raw []byte
 	if err := q.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'batch',batch,'reference',reference,'paper_id',workpaper_id::text,'state',state,
- 'ledger_reference',ledger_reference,'lines',lines,'exported_by',exported_by,'exported_at',exported_at,'entered_by',NULLIF(entered_by,''),'entered_at',entered_at) ORDER BY batch DESC,id),'[]')
+ 'ledger_reference',ledger_reference,'lines',lines,'exported_by',exported_by,'exported_at',exported_at,'entered_by',NULLIF(entered_by,''),'entered_at',entered_at,
+ 'withdrawn_by',NULLIF(withdrawn_by,''),'withdrawn_at',withdrawn_at,'withdrawn_reason',NULLIF(withdrawn_reason,'')) ORDER BY batch DESC,id),'[]')
  FROM file_journals WHERE close_id::text=$1`, closeID).Scan(&raw); err != nil {
 		return nil, err
 	}
 	out := []fileJournal{}
-	return out, json.Unmarshal(raw, &out)
+	if err := json.Unmarshal(raw, &out); err != nil || month == nil {
+		return out, err
+	}
+	for i := range out {
+		if out[i].State != "exported" && out[i].State != "entered" {
+			continue
+		}
+		if err := verifyJournal(ctx, q, &out[i], month); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// verifyJournal sets where an exported or entered journal stands in the month's books (docs/books-sources.md, Writing
+// back): verified when the month's ledger lines carrying its reference in their memo, or the ledger's own reference,
+// are exactly its lines; uncertain when they hold it twice or only partly, or when none does in a ledger exported on a
+// day after it was entered; otherwise as it was. A Trial Balance alone, without lines, verifies none. The journal
+// carries no dimensions (its draft has none), so none is compared.
+func verifyJournal(ctx context.Context, q rowReader, j *fileJournal, month *fileMonth) error {
+	var ledger bool
+	var raw []byte
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM books_lines WHERE version_id=$1::bigint),COALESCE(jsonb_agg(cells ORDER BY position),'[]') FROM books_lines
+ WHERE version_id=$1::bigint AND (cells->>'memo' ~* ('(^|[^a-z0-9-])'||$2||'($|[^a-z0-9-])') OR ($3<>'' AND lower(trim(cells->>'reference'))=lower($3)))`, month.Version, j.Reference, j.LedgerReference).Scan(&ledger, &raw); err != nil {
+		return err
+	}
+	var found []struct{ Date, Account, Amount string }
+	var lines []journalLine
+	if err := json.Unmarshal(raw, &found); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(j.Lines, &lines); err != nil {
+		return err
+	}
+	j.found = len(found)
+	used, matched := make([]bool, len(found)), 0
+	for _, l := range lines {
+		want, _ := new(big.Rat).SetString(cmp.Or(l.Debit, "0"))
+		if credit, ok := new(big.Rat).SetString(cmp.Or(l.Credit, "0")); ok {
+			want.Sub(want, credit)
+		}
+		for k, f := range found {
+			if have, ok := new(big.Rat).SetString(f.Amount); ok && !used[k] && f.Date == l.Date && have.Cmp(want) == 0 && sameAccount(f.Account, l.Account) {
+				used[k], matched = true, matched+1
+				break
+			}
+		}
+	}
+	exported := month.ExportedAt.Format("2 January 2006")
+	switch {
+	case len(found) == 0 && ledger && j.EnteredAt != nil && month.ExportedAt.After(*j.EnteredAt):
+		j.State, j.Note = "uncertain", "Not found in "+month.File+", the ledger exported on "+exported+", after it was entered."
+	case len(found) == 0:
+	case matched == len(lines) && len(found) == len(lines):
+		j.State, j.Note = "verified", "Found in "+month.File+", the ledger exported on "+exported+"."
+	case matched == len(lines):
+		j.State, j.Note = "uncertain", fmt.Sprintf("Found in %s more than once: %d lines carry its reference, for its %d.", month.File, len(found), len(lines))
+	default:
+		j.State, j.Note = "uncertain", fmt.Sprintf("Found in %s only in part: %d of its %d lines match.", month.File, matched, len(lines))
+	}
+	return nil
+}
+
+// sameAccount reports whether a ledger line's account, as read ("number name"), is a journal line's, named either way:
+// by number where both have one, else by name, or one's number as the other's whole name.
+func sameAccount(read, named string) bool {
+	split := func(s string) (string, string) {
+		s = strings.Join(strings.Fields(strings.ToLower(s)), " ")
+		if number, name, ok := strings.Cut(s, " "); ok && strings.ContainsAny(number, "0123456789") {
+			return number, name
+		}
+		return "", s
+	}
+	rn, rname := split(read)
+	jn, jname := split(named)
+	if rn != "" && jn != "" {
+		return rn == jn
+	}
+	return rname == jname || (rn != "" && rn == jname) || (jn != "" && jn == rname)
 }
 
 // writeJournal writes a journal's lines as rows of a batch's CSV, each with the journal's reference.
@@ -236,7 +325,10 @@ func registerJournals(mux *http.ServeMux, db *sql.DB) {
 		pending, err := pendingJournals(r.Context(), tx, r.PathValue("id"), period)
 		var journals []fileJournal
 		if err == nil {
-			journals, err = journalsOf(r.Context(), tx, r.PathValue("id"))
+			var month *fileMonth
+			if _, month, err = fileMonthBooks(r.Context(), tx, r.PathValue("id")); err == nil {
+				journals, err = journalsOf(r.Context(), tx, r.PathValue("id"), month)
+			}
 		}
 		var ledger, other string
 		if err == nil {
@@ -261,16 +353,18 @@ func registerJournals(mux *http.ServeMux, db *sql.DB) {
 			Action          string `json:"action"`
 			Journal         string `json:"journal"`
 			LedgerReference string `json:"ledger_reference"`
+			Reason          string `json:"reason"`
 			Confirmed       bool   `json:"confirmed"`
 		}
 		if !decode(w, r, &in) {
 			return
 		}
-		if in.Action == "entered" && !canEnterJournals(r) {
-			problem(w, 403, "Recording a journal as entered requires posting:approve.")
+		ledgerAction := in.Action == "entered" || in.Action == "withdraw"
+		if ledgerAction && !canEnterJournals(r) {
+			problem(w, 403, "Recording a journal as entered, or withdrawing it, requires posting:approve.")
 			return
 		}
-		if in.Action != "entered" && !canReview(r) {
+		if !ledgerAction && !canReview(r) {
 			problem(w, 403, "Exporting journals requires workpapers:review.")
 			return
 		}
@@ -363,8 +457,40 @@ func registerJournals(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			jsonReply(w, 200, map[string]string{"state": "entered"})
+		case "withdraw":
+			// A journal never imported into the client's ledger is withdrawn, with why; one the month's ledger holds any
+			// line of is not.
+			in.Reason = strings.TrimSpace(in.Reason)
+			if in.Reason == "" || utf8.RuneCountInString(in.Reason) > 500 {
+				problem(w, 422, "Say why the journal was not imported (1–500 characters).")
+				return
+			}
+			_, month, err := fileMonthBooks(r.Context(), tx, r.PathValue("id"))
+			var journals []fileJournal
+			if err == nil {
+				journals, err = journalsOf(r.Context(), tx, r.PathValue("id"), month)
+			}
+			if err != nil {
+				problem(w, 503, "The journals are unavailable.")
+				return
+			}
+			i := slices.IndexFunc(journals, func(j fileJournal) bool { return j.ID == in.Journal })
+			if i < 0 || journals[i].State == "withdrawn" || journals[i].State == "verified" || journals[i].found > 0 {
+				problem(w, 409, "Only a journal of this month that its ledger does not hold can be withdrawn.")
+				return
+			}
+			if _, err = tx.ExecContext(r.Context(), `UPDATE file_journals SET state='withdrawn',withdrawn_by=$3,withdrawn_at=now(),withdrawn_reason=$4 WHERE id::text=$1 AND close_id::text=$2 AND state IN ('exported','entered')`,
+				in.Journal, r.PathValue("id"), reviewerName(r), in.Reason); err != nil {
+				problem(w, 503, "The journal could not be saved.")
+				return
+			}
+			if err = tx.Commit(); err != nil {
+				problem(w, 503, "The journal could not be saved.")
+				return
+			}
+			jsonReply(w, 200, map[string]string{"state": "withdrawn"})
 		default:
-			problem(w, 422, "Export the batch, or record a journal as entered.")
+			problem(w, 422, "Export the batch, or record a journal as entered or withdrawn.")
 		}
 	})
 }
