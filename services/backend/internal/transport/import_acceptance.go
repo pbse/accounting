@@ -260,10 +260,11 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	if err != nil {
 		return s, false, err
 	}
-	order, balances, names, err := lineBalances(priorLines)
-	if err != nil {
+	var lines []bookfiles.Line
+	if err = json.Unmarshal(priorLines, &lines); err != nil {
 		return s, false, err
 	}
+	order, balances, names := lineBalances(lines)
 	here := map[string]bool{}
 	for _, a := range reading.Accounts {
 		here[a.Key] = true
@@ -274,31 +275,57 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 		}
 	}
 	s.priorBalances = balances
-	// A file of the prior month read since its accepted one is a re-export: the evidence of a change to that month.
-	var again []byte
-	var againName string
-	switch err = q.QueryRowContext(ctx, `SELECT i.name,COALESCE(l.reading->'lines','[]'::jsonb) FROM books_imports i JOIN books_layouts l ON l.id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=i.id)
- WHERE i.organization_id=$1 AND client_identity(i.organization_id,i.client_entity)=client_identity($1,$2) AND i.period=$3 AND i.id>$4::bigint ORDER BY i.id DESC LIMIT 1`, org, name, s.prior, priorImport).Scan(&againName, &again); {
-	case err == sql.ErrNoRows:
-	case err != nil:
+	if s.reexport, err = priorReexportOf(ctx, q, org, name, s.prior, priorImport); err != nil {
 		return s, false, err
-	default:
-		_, reexported, _, err := lineBalances(again)
-		if err != nil {
-			return s, false, err
-		}
-		s.reexport = &priorReexport{againName, reexported}
 	}
 	return s, true, nil
 }
 
+// priorReexportOf is the newest replacement of a month's accepted file, along the files' replaces chain, when it can
+// stand as that month's books: its reading confirmed with no problem and balanced, as of the month-end, every amount
+// exact and no formula's result unattested, its scope attested complete on that reading in the accepted file's basis.
+// Nil otherwise: a file that cannot establish the month's closing books is no evidence that they changed.
+func priorReexportOf(ctx context.Context, q rowReader, org, name, period, accepted string) (*priorReexport, error) {
+	var id, file, basis string
+	switch err := q.QueryRowContext(ctx, `WITH RECURSIVE chain(id) AS (SELECT $1::bigint UNION SELECT i.id FROM books_imports i JOIN chain c ON i.replaces=c.id)
+ SELECT i.id::text,i.name,COALESCE((SELECT y.basis FROM books_import_acceptances a JOIN books_import_scopes y ON y.id=a.scope_id WHERE a.import_id=$1::bigint ORDER BY a.id DESC LIMIT 1),'')
+ FROM books_imports i WHERE i.id IN (SELECT id FROM chain) AND i.id<>$1::bigint ORDER BY i.id DESC LIMIT 1`, accepted).Scan(&id, &file, &basis); {
+	case err == sql.ErrNoRows:
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	brief, err := confirmedBrief(ctx, q, org, name, id)
+	if err != nil || brief == nil {
+		return nil, err
+	}
+	scope, err := latestImportScope(ctx, q, org, name, id)
+	if err != nil || scope == nil || scope.LayoutID != brief.ID || !scope.Complete || scope.Basis != basis {
+		return nil, err
+	}
+	if !brief.Reading.Balanced || len(brief.Reading.Problems) > 0 || brief.Layout.AsOf != monthEndDay(period) {
+		return nil, nil
+	}
+	var raw []byte
+	if err = q.QueryRowContext(ctx, `SELECT COALESCE(reading->'lines','[]'::jsonb) FROM books_layouts WHERE id::text=$1`, brief.ID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var lines []bookfiles.Line
+	if err = json.Unmarshal(raw, &lines); err != nil {
+		return nil, err
+	}
+	for _, l := range lines {
+		if l.Kind == bookfiles.Posting && (!l.Cents || monthEndFormula(l) && !scope.Recalculated) {
+			return nil, nil
+		}
+	}
+	_, balances, _ := lineBalances(lines)
+	return &priorReexport{file, balances}, nil
+}
+
 // lineBalances is a reading's lines as balances by account key, in the order read, with each account's name: an
 // account on several rows (one per department, say) has the balance of their sum.
-func lineBalances(raw []byte) ([]string, map[string]string, map[string]string, error) {
-	var lines []bookfiles.Line
-	if err := json.Unmarshal(raw, &lines); err != nil {
-		return nil, nil, nil, err
-	}
+func lineBalances(lines []bookfiles.Line) ([]string, map[string]string, map[string]string) {
 	var order []string
 	balances, names := map[string]string{}, map[string]string{}
 	for _, l := range lines {
@@ -312,7 +339,7 @@ func lineBalances(raw []byte) ([]string, map[string]string, map[string]string, e
 		}
 		balances[key] = addAmounts(balances[key], l.Amount)
 	}
-	return order, balances, names, nil
+	return order, balances, names
 }
 
 // rollForward compares each account's opening balance with the prior accepted month's closing balance
@@ -457,7 +484,8 @@ func rollForward(s fileState) importCheck {
 			parts = append(parts, "unexplained: "+strings.Join(differences, "; "))
 		}
 		check.State, check.Detail = "holds", fmt.Sprintf("%d account%s %s not roll from %s's accepted books, %s.", n, suffix(n), map[bool]string{true: "does", false: "do"}[n == 1], prior, strings.Join(parts, "; "))
-		if len(changed) > 0 {
+		// Only when the re-export explains every difference does accepting it release them.
+		if len(changed) > 0 && len(differences) == 0 {
 			check.Holds = "The accounts that do not roll, and the statements built on them, until " + prior + "'s re-export is accepted, or these accounts explained."
 		}
 		return check
