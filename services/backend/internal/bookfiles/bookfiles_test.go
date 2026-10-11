@@ -647,3 +647,13 @@ func TestAByteOrderAgainstTheMark(t *testing.T) {
 		t.Fatalf("the marked order reads: %v", err)
 	}
 }
+
+// A negative amount in a side's column counts on the other side, said in a note.
+func TestNegativeSides(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nContra,-100.00,\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	reading := layout.Read(file.Tables[0])
+	if reading.Debits != "100" || reading.Credits != "100" || !reading.Balanced || len(reading.Notes) != 1 || reading.Lines[1].Amount != "-100" {
+		t.Fatalf("a negative debit is a credit: %+v", reading)
+	}
+}

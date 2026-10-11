@@ -476,6 +476,14 @@ func (l Layout) Read(t Table) Reading {
 					} else {
 						side(&credit, new(big.Rat).Neg(a.Value), "credit", c.Ref)
 					}
+				// A negative amount in a side's column is the other side's (a contra account's credit written as a negative
+				// debit), said in a note.
+				case meaning == Debit && a.Value.Sign() < 0:
+					side(&credit, new(big.Rat).Neg(a.Value), "credit", c.Ref)
+					reading.Notes = append(reading.Notes, fmt.Sprintf("%s: %s in the debit column is read as a credit of %s", c.Ref, c.Value, exact(new(big.Rat).Neg(a.Value))))
+				case meaning == Credit && a.Value.Sign() < 0:
+					side(&debit, new(big.Rat).Neg(a.Value), "debit", c.Ref)
+					reading.Notes = append(reading.Notes, fmt.Sprintf("%s: %s in the credit column is read as a debit of %s", c.Ref, c.Value, exact(new(big.Rat).Neg(a.Value))))
 				case meaning == Debit:
 					side(&debit, a.Value, "debit", c.Ref)
 				case meaning == Credit:
