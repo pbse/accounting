@@ -273,6 +273,10 @@ func TestTheReaderTakesNothingForGranted(t *testing.T) {
 	if reading := layout.Read(summed); reading.Lines[0].Kind != Posting || !reading.Balanced || len(reading.Problems) != 0 {
 		t.Fatalf("an account whose balance is a SUM formula is an account: %+v", reading)
 	}
+	// Its balance is a formula's stored result, said of that line alone.
+	if reading := layout.Read(summed); !slices.Equal(reading.Lines[0].Formulas, []Meaning{Balance}) || len(reading.Lines[1].Formulas) != 0 {
+		t.Fatalf("a formula's result is marked as one: %+v", reading.Lines)
+	}
 	both, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,100.00,50.00\nCapital,,50.00\nTOTAL,100.00,100.00\n"))
 	layout, _ = ProposeLayout(both.Tables[0])
 	if reading := layout.Read(both.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {

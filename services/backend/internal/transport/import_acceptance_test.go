@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/rand"
 	"database/sql"
@@ -212,6 +213,58 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		if i["id"] == september && i["accepted"] != true || i["id"] == october && i["accepted"] != false {
 			t.Fatalf("which files are accepted: %v", i)
 		}
+	}
+	// A workbook whose balance is a formula's stored result holds its use as the month's books until a reviewer attests,
+	// with its scope, that it is a recalculated copy.
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	var zipped bytes.Buffer
+	z := zip.NewWriter(&zipped)
+	for name, body := range map[string]string{
+		"xl/workbook.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml": `<worksheet ` + main + `><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Number</t></is></c><c r="B1" t="inlineStr"><is><t>Account</t></is></c><c r="C1" t="inlineStr"><is><t>Debit</t></is></c><c r="D1" t="inlineStr"><is><t>Credit</t></is></c></row>` +
+			`<row r="2"><c r="A2"><v>1000</v></c><c r="B2" t="inlineStr"><is><t>Business Checking</t></is></c><c r="C2"><f>SUM(F2:F9)</f><v>500</v></c></row>` +
+			`<row r="3"><c r="A3"><v>3000</v></c><c r="B3" t="inlineStr"><is><t>Owner's Equity</t></is></c><c r="D3"><v>500</v></c></row></sheetData></worksheet>`,
+	} {
+		w, e := z.Create(name)
+		must(e)
+		_, e = w.Write([]byte(body))
+		must(e)
+	}
+	must(z.Close())
+	var b bytes.Buffer
+	m := multipart.NewWriter(&b)
+	must(m.WriteField("period", "2026-08"))
+	must(m.WriteField("one_client", "true"))
+	f, e := m.CreateFormFile("file", "Acme August.xlsx")
+	must(e)
+	_, e = f.Write(zipped.Bytes())
+	must(e)
+	must(m.Close())
+	workbookFile := send("user_b", preparer, "POST", "/v1/closes/client/imports?name=Acme%20Co", m.FormDataContentType(), b.Bytes(), 201)["id"].(string)
+	confirmLayout(workbookFile, "2026-08-31")
+	attest(workbookFile)
+	mapAll(workbookFile)
+	scopeRead := call("user_a", partner, "GET", "/v1/closes/client/import/scope?name=Acme%20Co&id="+workbookFile, nil, 200)
+	if scopeRead["formulas"] != 1.0 {
+		t.Fatalf("one month-end amount is a formula result: %v", scopeRead)
+	}
+	workbookPath := "/v1/closes/client/import/acceptance?name=Acme%20Co&id=" + workbookFile
+	if c := checksOf(call("user_a", partner, "GET", workbookPath, nil, 200))["formulas"]; c["state"] != "holds" || len(c["items"].([]any)) != 1 {
+		t.Fatalf("a formula balance holds: %v", c)
+	}
+	call("user_a", partner, "POST", "/v1/closes/client/import/scope?name=Acme%20Co&id="+workbookFile, map[string]any{"book": "Firm workbook", "complete": true, "basis": "accrual", "recalculated": true, "reason": "Recalculated after refreshing its links"}, 200)
+	if c := checksOf(call("user_a", partner, "GET", workbookPath, nil, 200))["formulas"]; c["state"] != "note" {
+		t.Fatalf("an attested recalculated copy releases it: %v", c)
+	}
+	if c := checksOf(call("user_a", partner, "GET", path, nil, 200))["formulas"]; c["state"] != "passes" {
+		t.Fatalf("a CSV's amounts are stored values: %v", c)
+	}
+	// A workbook reading saved before formula results were marked says nothing of them, so it holds.
+	_, err = db.Exec(`UPDATE books_layouts SET reading=reading-'formulas_marked' WHERE import_id::text=$1`, workbookFile)
+	must(err)
+	if c := checksOf(call("user_a", partner, "GET", workbookPath, nil, 200))["formulas"]; c["state"] != "holds" {
+		t.Fatalf("an unmarked workbook reading holds: %v", c)
 	}
 	// With file imports switched off, the checks are read, and nothing is accepted.
 	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)
