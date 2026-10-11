@@ -401,11 +401,11 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 // publicationRows lays a frozen pack out as statement rows: a heading, then each line with its prior and change.
 func publicationRows(p publication) ([][]string, error) {
 	var pack struct {
-		Entity, Period, Currency, Basis, Source, Overall string
-		AsOf                                             time.Time `json:"as_of"`
-		Prior                                            *struct {
+		Entity, Period, Currency, Basis, Source, Overall, File string
+		AsOf                                                   json.RawMessage `json:"as_of"`
+		Prior                                                  *struct {
 			Period string
-			AsOf   time.Time `json:"as_of"`
+			AsOf   json.RawMessage `json:"as_of"`
 		}
 		ProfitAndLoss struct {
 			Sections []packSection
@@ -434,9 +434,28 @@ func publicationRows(p publication) ([][]string, error) {
 		return nil, err
 	}
 	stamp := func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+	// A capture is stamped with the time it was taken; a month on files' books with the calendar date they are as of.
+	taken := func(raw json.RawMessage) (time.Time, string) {
+		var at time.Time
+		if json.Unmarshal(raw, &at) == nil {
+			return at, ""
+		}
+		var day string
+		json.Unmarshal(raw, &day)
+		return time.Time{}, day
+	}
 	prior, priorCaptured := "", "no comparison"
 	if pack.Prior != nil {
-		prior, priorCaptured = pack.Prior.Period, pack.Prior.Period+" captured "+stamp(pack.Prior.AsOf)
+		at, day := taken(pack.Prior.AsOf)
+		prior, priorCaptured = pack.Prior.Period, pack.Prior.Period+" captured "+stamp(at)
+		if day != "" {
+			priorCaptured = pack.Prior.Period + " as of " + day
+		}
+	}
+	at, day := taken(pack.AsOf)
+	figures := "captured from " + pack.Source + " " + stamp(at)
+	if day != "" {
+		figures = "from the accepted file " + pack.File + ", as of " + day
 	}
 	published := []string{"Published", stamp(p.PublishedAt)}
 	if p.PublishedBy != "" {
@@ -444,7 +463,7 @@ func publicationRows(p publication) ([][]string, error) {
 	}
 	rows := [][]string{
 		{"Management pack", pack.Entity, pack.Period, pack.Basis + " basis", pack.Currency, "Version " + strconv.Itoa(p.Version)},
-		{"Figures", "captured from " + pack.Source + " " + stamp(pack.AsOf), priorCaptured, "status " + pack.Overall},
+		{"Figures", figures, priorCaptured, "status " + pack.Overall},
 		published,
 		{"Commentary", p.Commentary},
 		{"Note", pack.Note},
