@@ -1535,6 +1535,32 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 			}
 		}
 	}
+	// A line the sentence names is only that line: "Retail sales total 300.00" may not add wholesale sales in.
+	for _, c := range claims {
+		if c.label == "" || !labelNamed(line, c.label) {
+			continue
+		}
+		for _, d := range claims {
+			// Another line is named by its label, or by a measure of its own the sentence names ("less expenses").
+			ownMeasure := len(d.keys) > 0 && overlaps(named, d.keys) && !overlaps(c.keys, d.keys)
+			if d.label != "" && !strings.EqualFold(d.label, c.label) && !labelNamed(line, d.label) && !ownMeasure {
+				return "the sentence names " + c.label + ", but its figure also uses " + d.label + "; name each line"
+			}
+		}
+	}
+	// Balances at different dates do not add up: two weeks' closing cash is no total.
+	if s.derive == "sum" {
+		for _, c := range claims {
+			if !isBalance(c) {
+				continue
+			}
+			for _, d := range claims {
+				if c.period != d.period || c.from != d.from {
+					return "a derived sum adds balances at different dates; a balance is only added to others at its own date"
+				}
+			}
+		}
+	}
 	for i, c := range claims {
 		if len(c.keys) > 0 && overlaps(named, c.keys) || labelNamed(line, c.label) {
 		} else {
@@ -2110,4 +2136,22 @@ func proseHolds(line, f string, prose []proseFigure) bool {
 		}
 	}
 	return true
+}
+
+// isBalance says whether a claim is a balance at a point in time (cash, receivables, a week's closing cash) rather than
+// a flow over a period (revenue, receipts).
+func isBalance(c claim) bool {
+	if c.kind != "level" && c.kind != "prior" {
+		return false
+	}
+	for k := range c.keys {
+		if balanceMeasures[k] {
+			return true
+		}
+	}
+	switch strings.ToLower(c.field) {
+	case "closing", "opening", "low", "balance", "ledger_balance", "ending_balance", "book_cash":
+		return true
+	}
+	return false
 }

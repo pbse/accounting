@@ -141,7 +141,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		derived(0, "difference", "21780.00", "t2", "/profit_and_loss/sections/0/lines/0/amount", "t2", "/profit_and_loss/sections/1/total/amount"))
 	ok("Rent and marketing total 9,040.00.", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
 	rejected("Rent and marketing total 9,400.00.", "is 9040.00, not 9400.00", derived(0, "sum", "9400.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
-	rejected("Rent and utilities total 9,040.00.", "does not name Marketing", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
+	rejected("Rent and utilities total 9,040.00.", "also uses Marketing", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
 	ok("Net income is 17.0% of patient fees.", derived(0, "ratio", "17.0%", "t2", ni+"/amount", "t2", "/profit_and_loss/sections/0/lines/0/amount"))
 	rejected("Net income is 16.9% of patient fees.", "not 16.9%", derived(0, "ratio", "16.9%", "t2", ni+"/amount", "t2", "/profit_and_loss/sections/0/lines/0/amount"))
 	// A ratio to a zero base is refused rather than invented.
@@ -517,6 +517,14 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Receivables were 8,000.00 at month end.", e("t65", 0, "/publication/commentary", "Receivables were 8,000.00 at month end."))
 	reads["t66"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","versions":[{"lines":[{"account_id":"4000","name":"Sales","amount":"100.00"}]},{"lines":[{"account_id":"4000","name":"Revenue","amount":"100.00"}]}]}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
 	rejected("Revenue totals 200.00.", "counts the same figure twice", derived(0, "sum", "200.00", "t66", "/versions/0/lines/0/amount", "t66", "/versions/1/lines/0/amount"))
+
+	// Round forty: balances at different dates; a named line is only that line.
+	reads["t67"] = read(`{"state":"ready","currency":"USD","opening":{"amount":"20000.00","as_of":"2026-10-31"},"open_items":{"complete":true},"weeks":[{"start":"2026-11-02","end":"2026-11-08","receipts":"5000.00","payments":"2000.00","closing":"23000.00"},{"start":"2026-11-09","end":"2026-11-15","receipts":"6000.00","payments":"2000.00","closing":"27000.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Forecast cash closings total 50,000.00.", "balances at different dates", derived(0, "sum", "50000.00", "t67", "/weeks/0/closing", "t67", "/weeks/1/closing"))
+	ok("Forecast receipts for the two weeks total 11,000.00.", derived(0, "sum", "11000.00", "t67", "/weeks/0/receipts", "t67", "/weeks/1/receipts"))
+	reads["t68"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"sections":[{"name":"Income","lines":[{"name":"Retail sales","amount":"100.00"},{"name":"Wholesale sales","amount":"200.00"}]}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Retail sales total 300.00.", "also uses Wholesale sales", derived(0, "sum", "300.00", "t68", "/profit_and_loss/sections/0/lines/0/amount", "t68", "/profit_and_loss/sections/0/lines/1/amount"))
+	ok("Retail sales and wholesale sales total 300.00.", derived(0, "sum", "300.00", "t68", "/profit_and_loss/sections/0/lines/0/amount", "t68", "/profit_and_loss/sections/0/lines/1/amount"))
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
