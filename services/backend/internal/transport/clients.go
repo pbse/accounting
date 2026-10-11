@@ -343,6 +343,19 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["profile"] = profile
+		// Whether QuickBooks and Xero are switched on for the firm: a connection to one switched off reads nothing.
+		catalog, err := firmCatalog(ctx, tx, org)
+		if err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		switched := map[string]bool{}
+		for _, l := range catalog {
+			if l.Connector != "" {
+				switched[l.Connector] = l.Connected
+			}
+		}
+		out["connectors"] = switched
 		// The ledger the client keeps, as recorded, and its catalog entry.
 		if out["ledger"], err = readClientLedger(ctx, tx, org, name); err != nil {
 			problem(w, 503, "The client is unavailable.")

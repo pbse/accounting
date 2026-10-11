@@ -46,6 +46,9 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Confirm the connected company and this close month.")
 			return
 		}
+		if connectorOff(r.Context(), w, db, a.Organization, "quickbooks", "QuickBooks") {
+			return
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Transaction refresh storage unavailable.")

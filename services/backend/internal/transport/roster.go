@@ -424,7 +424,19 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		// A member sees no template, which is not the same as the firm having none: template_hidden says so.
-		out := map[string]any{"template": template, "template_hidden": !firmAccess(r), "clients": clients, "connections": connections, "can_manage": canManageRoster(r)}
+		// Whether QuickBooks and Xero are switched on for the firm, so Clients says when a connection reads nothing.
+		catalog, catalogErr := firmCatalog(r.Context(), db, org)
+		if catalogErr != nil {
+			problem(w, 503, "The client roster is unavailable.")
+			return
+		}
+		switched := map[string]bool{}
+		for _, l := range catalog {
+			if l.Connector != "" {
+				switched[l.Connector] = l.Connected
+			}
+		}
+		out := map[string]any{"template": template, "template_hidden": !firmAccess(r), "clients": clients, "connections": connections, "connectors": switched, "can_manage": canManageRoster(r)}
 		// An administrator chooses owners from the members who can do the work: a role reviewing every client (any
 		// client, and the template), or a reviewer, for the clients assigned to them.
 		if canManageRoster(r) {
