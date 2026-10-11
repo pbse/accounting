@@ -32,7 +32,7 @@ const standing: Record<string, [string, string]> = {
   unverified: ["status info", "Could not be checked against the books right now"],
 };
 type Overview = { executive: boolean; closes?: Close[]; published?: Published[] };
-export type ExecutiveView = "overview" | "reports" | "cash" | "decisions";
+type ExecutiveView = "overview" | "reports" | "cash" | "decisions";
 
 const pages: Record<ExecutiveView, [string, string]> = {
   overview: ["Business overview", "Each client's newest published management pack. A published version is reviewed, signed off and never edited; if the books change afterwards, it is marked and the firm publishes a correction."],

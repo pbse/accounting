@@ -3821,7 +3821,7 @@ PR 2a of the [agentic chat plan](agent-chat.md): `organizations.agent_chat` (off
 - The assistant panel's note describes the one setting and the model-chosen reads.
 - The staff planner keeps its own consent (`assistant_model_answers`, `staff_planning` in the policy route, with its own control in Firm settings); `TestPlanProposals*` still sets it, and the written-answers test shows an unrelated change records no level.
 
-Not verified: a hosted firm's migration from the three old settings; the backfill rule is in the migration and in [chat.md](chat.md#written-answers).
+Not verified: a hosted firm's migration from the three old settings; the backfill rule is in the migration and in [chat.md](chat.md#written-answers-and-investigations).
 
 
 ## 2026-10-07: Your settings
@@ -4526,3 +4526,14 @@ Tests and checks, on local PostgreSQL:
 - `tsc` passes.
 - In Edge at 1440 and 390: Start review, Approve, then Return with a note, with the outcomes and "Up next" shown and focus moved to each card.
 
+
+## 2026-10-11 — Dead-code cleanup from the 2026-10-09 audit
+
+The audit was re-run against current main before anything was removed.
+- **Go:** `deadcode -test` (golang.org/x/tools v0.38.0) now reports nothing. Removed: the QuickBooks OAuth helpers without an environment (`AuthorizationURL`, `Exchange`, `Refresh`; the `…For` versions are the ones used), the workflow engine's `ProposePlan` and `RejectPlan` wrappers (their transaction versions are used), and its unused `StepID`, `SleepUntil` and `Random`, plus four unused helpers in the seed and transport. The engine's other primitives stay: tests exercise them.
+- **Route:** `POST /v1/closes/work/interpret`, which nothing but its own tests called, is removed with its model call and tests. The `work_command` model purpose stays accepted, because model settings that name an unknown purpose refuse to load, and production settings may still name it.
+- **Frontend:** knip's unused exports and types were checked one by one. Thirteen types and five functions lose a needless `export`; `openAssistant`, which nothing called, is removed. Exports the server entry or a test imports stay. knip's unused files are the server and prerender entries and the tests, so none were removed.
+- **Docs and copy:** eight broken links now point at the headings that hold their content. Current-state docs, the public Security and Privacy pages, and code comments name Settings and its sections instead of the retired Firm settings and Security center. Dated entries in this log, the workspace-simplification decisions, the agent-chat plan and the governing build plan keep their wording.
+- **Compose:** the admin service's unused `VITE_WORKOS_API_HOSTNAME` is removed. `ACCEPTANCE_DATABASE_URL` is already documented.
+
+Tests and checks: `go build`, `go vet`, `go test` for the changed backend packages on local PostgreSQL, `tsc` for both apps, `npm test` (62 pass), `docker compose config`, and the link check finds no broken anchor.

@@ -60,11 +60,6 @@ export function usePending() {
 // Opening the panel from elsewhere (the sidebar) is counted, so every click opens and focuses it.
 let openRequests = 0;
 
-export function openAssistant() {
-  openRequests += 1;
-  listeners.forEach((l) => l());
-}
-
 export function useOpenRequests() {
   return useSyncExternalStore(subscribe, () => openRequests, () => 0);
 }

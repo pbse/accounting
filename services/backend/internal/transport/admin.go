@@ -409,7 +409,7 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 }
 
 // RunHeartbeat records every 30 seconds that loop is alive, for the admin overview, with detail about how it is set up
-// (the worker's OCR setting, which Firm settings and the security view show).
+// (the worker's OCR setting, which Settings → Policies and Settings → Security show).
 func RunHeartbeat(ctx context.Context, db *sql.DB, loop string, detail map[string]any) {
 	instance, _ := os.Hostname()
 	if detail == nil {

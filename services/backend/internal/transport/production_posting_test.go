@@ -238,7 +238,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header)}, nil
 	})
 	path := "/v1/closes/" + closeID + "/workpapers/" + paperID + "/production-posting"
-	// Until the firm turns writing to clients' books on in Firm settings, nothing is posted, not even previewed.
+	// Until the firm turns writing to clients' books on in Settings → Policies, nothing is posted, not even previewed.
 	if refused := call(path, map[string]string{"action": "preview"}, 409); !strings.Contains(string(refused), `"code":"LEDGER_WRITES_OFF"`) || writes != 0 {
 		t.Fatalf("a firm that has not turned writing on posts nothing: %s", refused)
 	}

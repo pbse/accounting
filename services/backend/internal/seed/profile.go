@@ -148,15 +148,6 @@ func nextMonth(period string) string {
 	return t.AddDate(0, 1, 0).Format("2006-01")
 }
 
-func monthIndex(period string) int {
-	for i, m := range Months {
-		if m == period {
-			return i
-		}
-	}
-	return -1
-}
-
 // ids hands out transaction IDs unique within a client, in the QuickBooks range a small company shows.
 type ids struct{ next int }
 

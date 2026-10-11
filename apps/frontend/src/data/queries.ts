@@ -12,7 +12,7 @@ import { workspaceRequest } from "../features/closes/workspace";
 // rejects with a RequestError, as workspaceRequest does.
 export type Read = (path: string) => Promise<unknown>;
 
-export type AppData = { queryClient: QueryClient; read: Read };
+type AppData = { queryClient: QueryClient; read: Read };
 
 // Set per request on the server and once in the browser; loaders take the query client and read from it.
 export const appData = createContext<AppData>();

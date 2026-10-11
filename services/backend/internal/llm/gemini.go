@@ -58,7 +58,7 @@ func newGemini(key, model, endpoint string, transport http.RoundTripper) *Gemini
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
-// OCRSetting is how this process reads PDF pages, as the worker reports it for Firm settings and the security view.
+// OCRSetting is how this process reads PDF pages, as the worker reports it for Settings → Policies and Settings → Security.
 func OCRSetting() map[string]string {
 	// A key that cannot be used is reported held, with why, so the operator can repair it rather than see local
 	// reading only.

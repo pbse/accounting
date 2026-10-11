@@ -48,9 +48,6 @@ func OAuthConfiguredFor(environment string) bool {
 	}
 	return os.Getenv(prefix+"CLIENT_ID") != "" && os.Getenv(prefix+"CLIENT_SECRET") != "" && e == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.Path == "/v1/quickbooks/callback"
 }
-func AuthorizationURL(state string) string {
-	return AuthorizationURLFor("sandbox", state)
-}
 func AuthorizationURLFor(environment, state string) string {
 	prefix := envPrefix(environment)
 	if prefix == "" {
@@ -76,14 +73,8 @@ func exchange(ctx context.Context, environment string, values url.Values) (Crede
 	}
 	return result, nil
 }
-func Exchange(ctx context.Context, code string) (Credentials, error) {
-	return ExchangeFor(ctx, "sandbox", code)
-}
 func ExchangeFor(ctx context.Context, environment, code string) (Credentials, error) {
 	return exchange(ctx, environment, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {os.Getenv(envPrefix(environment) + "REDIRECT_URI")}})
-}
-func Refresh(ctx context.Context, token string) (Credentials, error) {
-	return RefreshFor(ctx, "sandbox", token)
 }
 func RefreshFor(ctx context.Context, environment, token string) (Credentials, error) {
 	return exchange(ctx, environment, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {token}})

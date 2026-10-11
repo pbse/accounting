@@ -33,6 +33,8 @@ type Config struct {
 	HTTP                                               *http.Client
 }
 
+// purposes are the accounting tasks a model is routed for. work_command is retired (no request uses it); it stays
+// accepted so model settings that still name it keep loading.
 var purposes = []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat", "ocr"}
 
 // AnyMember is the legacy wildcard subject in research/evaluation configuration; it never gates inference.

@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations), A1 (workflows), A2 (firm management), A3 (plans) and A4 (hardening) implemented** (2026-09-28). Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations), A1 (workflows), A2 (firm management), A3 (plans) and A4 (hardening) implemented** (2026-09-28). Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-settings--security).
 
 ## Purpose
 
@@ -136,7 +136,7 @@ Workflow tables (`workflow_runs`, `workflow_steps`, `workflow_events`, `workflow
 ### Activity sources
 
 **Phase A2 reads the existing records through one paged API:**
-- the Security center's "Recent changes" derivation in `internal/transport/security.go`: membership, client and agent access, invitations, connections, posting grants, email-sender changes, and records agents made;
+- the "Recent changes" derivation behind Settings → Security in `internal/transport/security.go`: membership, client and agent access, invitations, connections, posting grants, email-sender changes, and records agents made;
 - close goal events;
 - preparation job state changes;
 - email outbox deliveries;
@@ -231,7 +231,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 
 - **Firm page tabs.** Overview (counts, last health check, recent runs, suspend or resume), People (members with their decision, client-assignment count and agent access; invitations), Activity (paged, filterable by kind) and Staff audit (paged `platform_audit` for the firm, refusals and reveals included).
 - **Shared domain functions.** The firm's own screens and the console call the same code: `setOrganizationEnabled` (suspend and, new, resume), `decideMemberAccess` (a membership decision, removing a revoked member's assistant history, portfolio goals and attention marks), `closeInvitation` and `revokeInWorkOS`. Staff actions run through `adminAct` as the firm, need a reason of 10–2,000 characters like the firm's own screens, and are audited. Suspending or resuming needs the firm's ID typed to confirm. Revoking a member needs the decision staff saw (`previous_id`), so a change made meanwhile is not overwritten.
-- **Masking.** People shows user IDs, decisions, invited email addresses and assignment counts. Member reasons and the names of assigned clients are masked until revealed. Activity comes from the Security center's derivation (`activityEvents` in `security.go`, now with a kind per row), plus workflow runs and the last suspension. The firm's own records are masked until revealed; workflow rows show. The firm page shows when and by whom a firm was last suspended; the reason is in its activity. The staff audit shows who did which action to what and whether it went through; reasons, the request's details and a refusal's error are masked until revealed. Reveals use the same `platform:content` gate as the run page, via `adminReveal`, and are audited per firm.
+- **Masking.** People shows user IDs, decisions, invited email addresses and assignment counts. Member reasons and the names of assigned clients are masked until revealed. Activity comes from the derivation behind Settings → Security (`activityEvents` in `security.go`, now with a kind per row), plus workflow runs and the last suspension. The firm's own records are masked until revealed; workflow rows show. The firm page shows when and by whom a firm was last suspended; the reason is in its activity. The staff audit shows who did which action to what and whether it went through; reasons, the request's details and a refusal's error are masked until revealed. Reveals use the same `platform:content` gate as the run page, via `adminReveal`, and are audited per firm.
 - **Firm detail.** Moved members to People (masked) and dropped run errors from the recent-runs list; the run page masks them.
 - **Stuck work.** `GET /v1/admin/jobs` lists what each firm's operations screen shows, across firms: counts by kind (items, firms, oldest), then items oldest first, filtered by kind and firm. It shares `operationsAlerts` (`operations.go`) with the firm screen and the alert worker; one firm or all firms, by the same query. Read-only: firms act on their items from their own screen, and no generic requeue exists.
 - **Connections.** `GET /v1/admin/connections` lists QuickBooks, Xero, Stripe and the enabled email sender across firms. Each row has its state, mode, when it was connected and changed, and when it last brought data in (a snapshot, a saved Stripe report, an accepted email). Counts by provider and state come first, and connections needing a reconnect lead the list. Client, company and account names are never selected. Reconnecting stays a firm action.

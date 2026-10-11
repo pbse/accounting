@@ -583,11 +583,6 @@ func UpdatePlanTx(ctx context.Context, tx *sql.Tx, id int64, raw json.RawMessage
 	})
 }
 
-// ProposePlan asks for approval of a draft.
-func ProposePlan(ctx context.Context, db *sql.DB, id int64, by string) error {
-	return inTx(ctx, db, func(tx *sql.Tx) error { return ProposePlanTx(ctx, tx, id, by) })
-}
-
 // ProposePlanTx is ProposePlan in the caller's transaction. A template is never proposed: it is copied.
 func ProposePlanTx(ctx context.Context, tx *sql.Tx, id int64, by string) error {
 	return planChangeTx(ctx, tx, id, func(tx *sql.Tx, state, _ string) error {
@@ -597,11 +592,6 @@ func ProposePlanTx(ctx context.Context, tx *sql.Tx, id int64, by string) error {
 		_, err := tx.ExecContext(ctx, `UPDATE workflow_plans SET state='proposed',updated_at=now() WHERE id=$1`, id)
 		return err
 	})
-}
-
-// RejectPlan turns down a draft or proposal.
-func RejectPlan(ctx context.Context, db *sql.DB, id int64, by string) error {
-	return inTx(ctx, db, func(tx *sql.Tx) error { return RejectPlanTx(ctx, tx, id, by) })
 }
 
 // RejectPlanTx is RejectPlan in the caller's transaction. A template is never rejected: it is archived.

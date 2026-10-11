@@ -28,7 +28,6 @@ services:
     environment:
       API_ORIGIN: http://api:8080
       VITE_WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
-      VITE_WORKOS_API_HOSTNAME: ${WORKOS_API_HOSTNAME:-}
       VITE_AUTH_SESSION: ${AUTH_SESSION:-}
     ports: ["127.0.0.1:5174:5174"]
     volumes:

@@ -1834,13 +1834,6 @@ func (s *seeder) overviewAnswer(ctx context.Context) string {
 	return answer
 }
 
-// openCount says how many of the demonstration's September closes are open, as the closes stand.
-func (s *seeder) openCount(ctx context.Context) string {
-	var open int
-	s.db.QueryRowContext(ctx, `SELECT count(*) FROM client_closes c WHERE organization_id=$1 AND period='2026-09' AND lower(entity)=ANY($2) AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'`, s.o.Organization, s.clientNames()).Scan(&open)
-	return fmt.Sprintf("%d September closes are open.", open)
-}
-
 // ownershipAnswer says, from the open closes as they are owned, which September closes are the administrator's.
 func (s *seeder) ownershipAnswer(ctx context.Context) string {
 	var mine, others []string

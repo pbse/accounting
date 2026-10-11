@@ -14,7 +14,7 @@ import { ImportScope } from "./ImportScope";
 // month's file. Nothing here is a month's books yet: accepting an import arrives with a later step.
 
 type Meaning = "account_number" | "account_name" | "account_type" | "debit" | "credit" | "balance" | "opening" | "movement" | "year_to_date" | "dimension";
-export type Layout = {
+type Layout = {
   table: string;
   header_row: number;
   columns: Record<string, Meaning>;

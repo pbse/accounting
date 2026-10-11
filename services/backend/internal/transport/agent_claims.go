@@ -1919,13 +1919,6 @@ func hedged(text string) bool {
 	return claimHedge.MatchString(strings.ToLower(text)) || claimMayModal.MatchString(text)
 }
 
-func strconvBool(b bool) string {
-	if b {
-		return "1"
-	}
-	return "0"
-}
-
 // figureClauses is a figure's clause with the figure-less clauses joined before it, which share its subject ("Bluegrass
 // and Birch each had net income of 21,780.00"), as written.
 func figureClauses(line string, o occurrence) string {

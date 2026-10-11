@@ -7,7 +7,7 @@ import { money, workspaceRequest } from "../closes/workspace";
 
 // A connection is held under the name of the month it was made from (client_entity), which may be the client's alias; a
 // production company's name must match that name.
-export type QuickBooksConnection = { id: string; client_entity: string; environment: "sandbox" | "production"; state: string; realm: string; company_name: string; error: string };
+type QuickBooksConnection = { id: string; client_entity: string; environment: "sandbox" | "production"; state: string; realm: string; company_name: string; error: string };
 export type ProductionGrant = { id: string; realm: string; company: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string; connection_id: string };
 type Client = {
   entity: string;

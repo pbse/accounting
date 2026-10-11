@@ -41,7 +41,7 @@ func heldBecause(reason string) string {
 	return "it was not installed with the operator's paid-service confirmation (reinstall it with the credential script's --paid-service)"
 }
 
-// ocrLabel says, for Firm settings, how PDF pages are read.
+// ocrLabel says, for Settings → Policies, how PDF pages are read.
 func ocrLabel(provider, detail string) string {
 	switch provider {
 	case "gemini":

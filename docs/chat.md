@@ -113,7 +113,7 @@ A command that needs a close uses the one you are on. Elsewhere the palette list
 
 ## Written answers and investigations
 
-Replaced by the agent (above) in migration 135: a question is no longer sent with a fixed set of reads and checked by quotes alone; the agent chooses its reads and every figure is bound to a field. The firm policy is the one [Agent chat](#what-it-answers) level (Settings → Policies); the staff planner keeps its own consent (`staff_planning` in Firm settings). The track record under Human effort shows, for closes you can open, how many answers were asked and kept in the last 30 days and the typical time, and the firm's firm-wide counts.
+Replaced by the agent (above) in migration 135: a question is no longer sent with a fixed set of reads and checked by quotes alone; the agent chooses its reads and every figure is bound to a field. The firm policy is the one [Agent chat](#what-it-answers) level (Settings → Policies); the staff planner keeps its own consent (`staff_planning`, Settings → Policies). The track record under Human effort shows, for closes you can open, how many answers were asked and kept in the last 30 days and the typical time, and the firm's firm-wide counts.
 
 Checks: `go test ./internal/transport -run 'TestAgentSupport|TestAgentChat'` with `TEST_DATABASE_URL`.
 
