@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -97,6 +98,10 @@ type fileState struct {
 	recorded    bool
 	prior       string
 	missing     []string
+	// priorBalances are the prior accepted month's closing balances by key, and classes each key's class in the map
+	// in force, for the roll-forward.
+	priorBalances map[string]string
+	classes       map[string]string
 }
 
 // monthActivity is each profit and loss account's activity for the month, by key, in the profit and loss sign (revenue
@@ -183,8 +188,12 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	if err != nil {
 		return s, false, err
 	}
+	s.classes = map[string]string{}
 	if current != nil {
 		s.mapStamp = current.Stamp
+		for key, m := range current.Accounts {
+			s.classes[key] = m.Class
+		}
 	}
 	reading, found, err := readingAccounts(ctx, q, org, name, id, current)
 	if err != nil || !found {
@@ -269,7 +278,137 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 			s.missing = append(s.missing, names[key])
 		}
 	}
+	s.priorBalances = balances
 	return s, true, nil
+}
+
+// rollForward compares each account's opening balance with the prior accepted month's closing balance
+// (docs/books-sources.md, Roll-forward and changed prior months): from the file's opening column, or else its month-end
+// balance less its movement. In the fiscal year's first month the profit and loss accounts open at zero, their prior
+// closing balances carried into retained earnings, as the year's closing entries do: modelled, not a difference. The
+// check is "" when the file gives no openings.
+func rollForward(s fileState) importCheck {
+	// The file's confirmed columns say what it gives: a blank cell in one is zero, as the month's activity reads it.
+	var openingColumn, movementColumn bool
+	if s.layout != nil {
+		for _, m := range s.layout.Layout.Columns {
+			openingColumn, movementColumn = openingColumn || m == bookfiles.Opening, movementColumn || m == bookfiles.Movement
+		}
+	}
+	if !openingColumn && !movementColumn {
+		return importCheck{}
+	}
+	check := importCheck{Key: "roll_forward", Title: "Rolls forward from the prior month", Holds: "The accounts that do not roll, and the statements built on them."}
+	// A formula's stored result is released by the attestation of a recalculated copy, as for the other amounts; an
+	// amount the file does not give exactly is never taken as zero.
+	recalculated := s.scope != nil && s.scope.Recalculated
+	usable := func(value, held string) (*big.Rat, string) {
+		if held == "formula" && recalculated {
+			held = ""
+		}
+		v, ok := new(big.Rat).SetString(cmp.Or(value, "0"))
+		switch {
+		case held != "":
+			return nil, held
+		case !ok:
+			return nil, "unreadable"
+		}
+		return v, ""
+	}
+	opening, differences, unread := map[string]*big.Rat{}, []string{}, ""
+	for _, a := range s.reading.Accounts {
+		name := strings.TrimSpace(a.Number + " " + a.Name)
+		balance, why := usable(a.Balance, "")
+		movement := new(big.Rat)
+		if movementColumn && why == "" {
+			movement, why = usable(a.Movement, a.MovementHeld)
+		}
+		if why != "" {
+			unread = cmp.Or(unread, name+": "+why)
+			continue
+		}
+		if !openingColumn {
+			opening[a.Key] = new(big.Rat).Sub(balance, movement)
+			continue
+		}
+		v, why := usable(a.Opening, a.OpeningHeld)
+		if why != "" {
+			unread = cmp.Or(unread, name+": "+why)
+			continue
+		}
+		opening[a.Key] = v
+		// With both columns, the opening and the month's movement make the month-end balance.
+		if movementColumn {
+			if sum := new(big.Rat).Add(v, movement); sum.Cmp(balance) != 0 {
+				differences = append(differences, fmt.Sprintf("%s opens at %s and moves by %s, but closes at %s", name, v.FloatString(2), movement.FloatString(2), balance.FloatString(2)))
+			}
+		}
+	}
+	// An amount that cannot be read holds whatever needed it: the file's own arithmetic, with both columns, or the
+	// comparison with the prior month.
+	if unread != "" && (movementColumn && openingColumn || s.prior != "") {
+		check.State, check.Detail = "holds", "An opening or movement cannot be read as exact, so the month's openings are not checked ("+unread+")."
+		return check
+	}
+	// With no accepted prior month the openings are not compared; the file's own arithmetic still is.
+	if s.prior == "" {
+		check.State, check.Detail, check.Holds = "note", "No accepted books for "+monthTitle(previousMonth(s.reading.Period))+" to roll from: the openings are not checked.", ""
+		if len(differences) > 0 {
+			check.State, check.Holds = "holds", "The accounts whose figures do not agree, and the statements built on them."
+			check.Detail = fmt.Sprintf("%d account%s' opening and movement %s not make %s balance: %s.", len(differences), suffix(len(differences)), map[bool]string{true: "does", false: "do"}[len(differences) == 1], map[bool]string{true: "its", false: "their"}[len(differences) == 1], strings.Join(differences, "; "))
+		}
+		return check
+	}
+	expected := map[string]*big.Rat{}
+	for key, b := range s.priorBalances {
+		expected[key], _ = new(big.Rat).SetString(b)
+	}
+	yearStart := s.fiscalStart > 0 && monthOf(s.reading.Period) == s.fiscalStart
+	if yearStart {
+		result := new(big.Rat)
+		for key, b := range expected {
+			if c := s.classes[key]; c == "Revenue" || c == "Expense" {
+				result.Add(result, b)
+				expected[key] = new(big.Rat)
+			}
+		}
+		var retained []string
+		for _, a := range s.reading.Accounts {
+			if a.Mapped != nil && a.Mapped.Class == "Equity" && contraName.MatchString(a.Name) {
+				retained = append(retained, a.Key)
+			}
+		}
+		switch {
+		case len(retained) == 1:
+			expected[retained[0]] = new(big.Rat).Add(cmp.Or(expected[retained[0]], new(big.Rat)), result)
+		case result.Sign() != 0:
+			check.State, check.Detail = "holds", "The year's result of "+result.FloatString(2)+" closes into retained earnings, and the file has "+map[bool]string{true: "no retained earnings account", false: "more than one"}[len(retained) == 0]+" to carry it to."
+			return check
+		}
+	}
+	for _, a := range s.reading.Accounts {
+		e := cmp.Or(expected[a.Key], new(big.Rat))
+		if o := opening[a.Key]; o.Cmp(e) != 0 {
+			differences = append(differences, fmt.Sprintf("%s opens at %s, closed at %s (%s)", strings.TrimSpace(a.Number+" "+a.Name), o.FloatString(2), e.FloatString(2), new(big.Rat).Sub(o, e).FloatString(2)))
+		}
+	}
+	prior := monthTitle(s.prior)
+	if len(differences) > 0 {
+		check.State, check.Detail = "holds", fmt.Sprintf("%d account%s %s not roll from %s's accepted books, unexplained: %s.", len(differences), suffix(len(differences)), map[bool]string{true: "does", false: "do"}[len(differences) == 1], prior, strings.Join(differences, "; "))
+		return check
+	}
+	check.State, check.Detail, check.Holds = "passes", "Every account opens at "+prior+"'s accepted closing balance", ""
+	if yearStart {
+		check.Detail += ", the year's result carried into retained earnings"
+	}
+	check.Detail += "."
+	return check
+}
+
+// monthOf is a period's month number (2027-01 is 1).
+func monthOf(period string) int {
+	m, _ := strconv.Atoi(strings.TrimPrefix(period[min(5, len(period)):], "0"))
+	return m
 }
 
 // nonZero says whether an exact amount is not zero.
@@ -370,6 +509,10 @@ func fileChecks(s fileState, explained string) []importCheck {
 			said = "From the year-to-date balances: the fiscal year's first month"
 		}
 		add(importCheck{Key: "activity", Title: "The month's activity", State: "passes", Detail: fmt.Sprintf("%s: revenue %s, expenses %s.", said, revenue.FloatString(2), expense.FloatString(2))})
+	}
+	// With openings in the file, each account rolls from the prior accepted month.
+	if c := rollForward(s); c.Key != "" {
+		add(c)
 	}
 	// Formula amounts are the last calculation, which the reader does not repeat: a values-only export has none, and a
 	// reviewer's attestation of a recalculated copy releases them.
