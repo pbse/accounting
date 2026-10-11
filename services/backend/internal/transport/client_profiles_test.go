@@ -256,4 +256,12 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 			t.Fatalf("Cedar's month %s: %+v %v", id, p, e)
 		}
 	}
+	// A profile scheduled for a month still to come supersedes nothing yet: the month in force is still asked.
+	_, err = db.Exec(`INSERT INTO client_profiles(organization_id,client_entity,effective_from,currency,fiscal_year_start,reason,actor) VALUES($1,'Cedar Ltd',to_char(now()+interval '2 months','YYYY-MM'),'GBP',1,'Pounds, later','fixture')`, org)
+	must(err)
+	_, err = db.Exec(`UPDATE quickbooks_connections SET home_currency='EUR' WHERE organization_id=$1 AND client_entity='Cedar Ltd'`, org)
+	must(err)
+	if p, e := preparation.ClientProfile(t.Context(), db, cedarLater); e != nil || p.State != "differs" || p.Currency != "CAD" {
+		t.Fatalf("a future profile leaves the question open: %+v %v", p, e)
+	}
 }

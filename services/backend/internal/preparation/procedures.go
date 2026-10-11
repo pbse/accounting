@@ -114,7 +114,7 @@ func clientProfile(ctx context.Context, q interface {
  UNION ALL SELECT r.home_currency,r.fiscal_year_start FROM xero_connections r JOIN c ON c.organization_id=r.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(c.organization_id,c.entity) WHERE r.state='active'),
  f AS (SELECT f.currency,f.fiscal_year_start,f.effective_from FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1)
  SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('currency',home_currency,'start',fiscal_year_start)) FROM x),'[]'::jsonb),(SELECT currency FROM f),(SELECT fiscal_year_start FROM f),(SELECT effective_from FROM f),
- EXISTS(SELECT 1 FROM client_profiles l, c WHERE l.organization_id=c.organization_id AND client_identity(l.organization_id,l.client_entity)=client_identity(c.organization_id,c.entity) AND l.effective_from>(SELECT effective_from FROM f))`, args...).Scan(&raw, &confirmed, &confirmedStart, &effective, &superseded)
+ EXISTS(SELECT 1 FROM client_profiles l, c WHERE l.organization_id=c.organization_id AND client_identity(l.organization_id,l.client_entity)=client_identity(c.organization_id,c.entity) AND l.effective_from>(SELECT effective_from FROM f) AND l.effective_from<=to_char(now() AT TIME ZONE 'UTC','YYYY-MM'))`, args...).Scan(&raw, &confirmed, &confirmedStart, &effective, &superseded)
 	if err != nil {
 		return p, err
 	}
@@ -154,8 +154,9 @@ func clientProfile(ctx context.Context, q interface {
 		return p, nil
 	}
 	// The confirmed profile stands; a connection that reports otherwise, in any field it reports, asks a question. A
-	// connection reports the client's books as they are now, which the newest profile answers for: a month under a
-	// profile a later one has superseded keeps its own, unasked.
+	// connection reports the client's books as they are now, which the profile in effect now answers for: a month under
+	// a profile a later one, already in effect, has superseded keeps its own, unasked. One taking effect only in a
+	// month still to come supersedes nothing yet.
 	confirmedProfile := Profile{Currency: confirmed.String, FiscalStart: int(confirmedStart.Int64), State: "confirmed", EffectiveFrom: effective.String}
 	if superseded {
 		return confirmedProfile, nil
