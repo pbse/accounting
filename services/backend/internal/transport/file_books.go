@@ -414,7 +414,7 @@ func fileSupplement(ctx context.Context, q rowReader, org, name, acceptance, fil
 		return nil, err
 	}
 	var closeID string
-	switch err = q.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND client_identity(organization_id,entity)=client_identity($1,$2) AND period=$3 ORDER BY id LIMIT 1`, org, name, f.period).Scan(&closeID); {
+	switch err = q.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND client_identity(organization_id,entity)=client_identity($1,$2) AND period=$3 ORDER BY id DESC LIMIT 1`, org, name, f.period).Scan(&closeID); {
 	case err == sql.ErrNoRows:
 		return nil, nil
 	case err != nil:
@@ -424,6 +424,23 @@ func fileSupplement(ctx context.Context, q rowReader, org, name, acceptance, fil
 		return nil, err
 	}
 	out := map[string]any{"state": "unavailable", "period": f.period, "close_id": closeID}
+	// A file whose accepted checks hold its statements is not compared; the month's activity alone holds none of them.
+	var raw []byte
+	if err = q.QueryRowContext(ctx, `SELECT checks FROM books_import_acceptances WHERE id::text=$1`, acceptance).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var kept []importCheck
+	json.Unmarshal(raw, &kept)
+	holds := []string{}
+	for _, c := range kept {
+		if c.State == "holds" && c.Key != "activity" {
+			holds = append(holds, c.Title)
+		}
+	}
+	if len(holds) > 0 {
+		out["reason"] = "Checks it was accepted with hold its statements, so it is not compared: " + strings.Join(holds, "; ") + "."
+		return out, nil
+	}
 	m, err := periodBooks(ctx, q, closeID, f.period)
 	if err != nil {
 		return nil, err

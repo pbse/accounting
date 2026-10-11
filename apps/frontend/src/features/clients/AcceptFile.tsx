@@ -109,12 +109,12 @@ function AcceptForm({ client, id, data, onClose }: { client: string; id: string;
             <>
               <p>
                 {monthName(data.supplement.period)}’s books come from {data.supplement.ledger === "xero" ? "Xero" : data.supplement.ledger === "quickbooks" ? "QuickBooks" : "its ledger"}, so this file supplements them and never
-                replaces them:{" "}
+                replaces them.{" "}
                 {data.supplement.state === "unavailable"
                   ? data.supplement.reason
                   : data.supplement.state === "reconciled"
-                    ? `it agrees with the capture of ${dates.dateTime(data.supplement.captured_at ?? "")} to the cent, across ${data.supplement.accounts} accounts.`
-                    : `it does not agree with the capture of ${dates.dateTime(data.supplement.captured_at ?? "")}, and is not used.`}
+                    ? `It agrees with the capture of ${dates.dateTime(data.supplement.captured_at ?? "")} to the cent, across ${data.supplement.accounts} accounts.`
+                    : `It does not agree with the capture of ${dates.dateTime(data.supplement.captured_at ?? "")}, and is not used.`}
               </p>
               {data.supplement.state === "differs" && (
                 <ul>

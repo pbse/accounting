@@ -213,12 +213,25 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if kept["scope"]["state"] != "note" || kept["as_of"]["state"] != "holds" || out["holds"] != 2.0 {
 		t.Fatalf("the checks kept with the acceptance: %v", out)
 	}
-	// For a month whose books come from a live ledger, the accepted file is a supplement, reconciled to its books: with
-	// no capture yet, it says so.
+	// For a month whose books come from a live ledger, the accepted file is a supplement, reconciled to its books: not
+	// while checks it was accepted with hold its statements, nor with no capture yet.
 	var octoberClose string
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme Co','2026-10') RETURNING id::text`, org).Scan(&octoberClose))
-	if supplement, _ := call("user_a", partner, "GET", octoberPath, nil, 200)["supplement"].(map[string]any); supplement["state"] != "unavailable" || supplement["close_id"] != octoberClose || !strings.Contains(fmt.Sprint(supplement["reason"]), "no captured books") {
-		t.Fatalf("October's file as a supplement: %v", supplement)
+	supplementOf := func() map[string]any {
+		t.Helper()
+		supplement, _ := call("user_a", partner, "GET", octoberPath, nil, 200)["supplement"].(map[string]any)
+		if supplement["state"] != "unavailable" || supplement["close_id"] != octoberClose {
+			t.Fatalf("October's file as a supplement: %v", supplement)
+		}
+		return supplement
+	}
+	if reason := fmt.Sprint(supplementOf()["reason"]); !strings.Contains(reason, "not compared") {
+		t.Fatalf("a held file is not compared: %s", reason)
+	}
+	_, err = db.Exec(`UPDATE books_import_acceptances SET checks=(SELECT jsonb_agg(CASE WHEN c->>'state'='holds' THEN jsonb_set(c,'{state}','"passes"') ELSE c END) FROM jsonb_array_elements(checks) c) WHERE import_id::text=$1`, october)
+	must(err)
+	if reason := fmt.Sprint(supplementOf()["reason"]); !strings.Contains(reason, "no captured books") {
+		t.Fatalf("a month with no capture: %s", reason)
 	}
 	// Reopened, the accepted file shows the checks it was accepted with, its explanation included.
 	if shown := checksOf(call("user_b", preparer, "GET", octoberPath, nil, 200)); shown["scope"]["state"] != "note" {
