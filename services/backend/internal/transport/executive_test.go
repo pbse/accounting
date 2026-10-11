@@ -46,7 +46,7 @@ func TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews(t *testing.T
 			db.Exec(q, org)
 		}
 	}()
-	pack := `{"entity":"Alpha","period":"2026-09","currency":"USD","basis":"Accrual","note":"","profit_and_loss":{"sections":[],"measures":[{"name":"Net income","amount":"300.00"}]},
+	pack := `{"entity":"Alpha","period":"2026-09","currency":"USD","basis":"Accrual","note":"","draft_commentary":"Internal: check rent accrual","profit_and_loss":{"sections":[],"measures":[{"name":"Net income","amount":"300.00"}]},
  "balance_sheet":{"sections":[]},"working_capital":{"book_cash":{"name":"Book cash","amount":"1500.00"},"working_capital":{"name":"Working capital","amount":"1300.00"}}}`
 	must(db.QueryRow(`INSERT INTO management_publications(organization_id,close_id,version,pack,digest,commentary,published_by) VALUES($1,$2,1,$3,'d','Rent held; net income 300.','user_staff') RETURNING id::text`, org, alpha, pack).Scan(&publication))
 
@@ -82,11 +82,13 @@ func TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews(t *testing.T
 	}
 	base := "/v1/closes/" + alpha
 	call("user_ceo", ceo, "GET", base+"/management-pack/publications", nil, 200)
-	if body := call("user_ceo", ceo, "GET", base+"/management-pack/publications/"+publication+"/export?format=csv", nil, 200); !strings.Contains(string(body), "Net income,300.00") {
+	if body := call("user_ceo", ceo, "GET", base+"/management-pack/publications/"+publication+"/export?format=csv", nil, 200); !strings.Contains(string(body), "Net income,300.00") || strings.Contains(string(body), "user_staff") {
 		t.Fatalf("an executive downloads the published version: %s", body)
 	}
 	if body := call("user_ceo", ceo, "GET", base+"/management-pack/publications/"+publication, nil, 200); !strings.Contains(string(body), `"Rent held; net income 300."`) || !strings.Contains(string(body), `"Net income"`) {
 		t.Fatalf("an executive reads the frozen version in the page: %s", body)
+	} else if strings.Contains(string(body), "Internal: check rent accrual") || strings.Contains(string(body), "user_staff") {
+		t.Fatalf("an executive is not given the firm's draft commentary or the publisher's internal ID: %s", body)
 	}
 	call("user_ceo", ceo, "POST", base+"/management-pack/publications", map[string]any{"action": "acknowledge", "publication_id": publication}, 200)
 	call("user_ceo", ceo, "POST", base+"/management-pack/publications", map[string]any{"action": "publish", "digest": "d", "commentary": "x", "confirmed": true}, 403)
@@ -96,8 +98,8 @@ func TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews(t *testing.T
 	call("user_ceo", ceo, "POST", base+"/cash-plan/reviews", map[string]any{"digest": "d", "assumptions": "Looks right to me", "confirmed": true}, 403)
 	_, err = db.Exec(`INSERT INTO budget_versions(organization_id,client_entity,name,company,currency,lines,digest,source,created_by) VALUES($1,'Alpha','Draft plan','quickbooks:123','USD','[{"account":"Salaries","account_id":"","months":{"2026-09":"9000.00"}}]','b','Pasted CSV','user_staff')`, org)
 	must(err)
-	if body := call("user_ceo", ceo, "GET", base+"/budget", nil, 200); strings.Contains(string(body), "Draft plan") || strings.Contains(string(body), "Salaries") {
-		t.Fatalf("an executive sees the comparison, not draft budget versions: %s", body)
+	if body := call("user_ceo", ceo, "GET", base+"/budget", nil, 200); strings.Contains(string(body), "Draft plan") || strings.Contains(string(body), "Salaries") || !strings.Contains(string(body), "published management pack") {
+		t.Fatalf("an executive sees the comparison only with a published pack that still stands, never draft budget versions: %s", body)
 	}
 	if body := call("user_staff", []string{"clients:all"}, "GET", base+"/budget", nil, 200); !strings.Contains(string(body), "Draft plan") {
 		t.Fatalf("staff still see the budget versions: %s", body)

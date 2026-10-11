@@ -668,6 +668,9 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			problem(w, refused.status, refused.message)
 			return
 		}
+		if err == nil && executive(r) {
+			err = payrollUnnamed(r, db, client, out)
+		}
 		if err != nil {
 			problem(w, 503, "The cash plan is unavailable.")
 			return
@@ -1043,6 +1046,79 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 
 // reviewedState is what an unchanged review of a plan is: current only when the forecast is complete; a draft or
 // incomplete forecast (its unresolved items, named in it, accepted by the reviewer) is reviewed as a draft, never current.
+// payrollUnnamed shows a client's executive payroll schedules as "Payroll", not by name (a bonus, a person's pay),
+// wherever the plan names them: an item or match that points at a payroll schedule is relabelled, a listed name is
+// replaced, and readiness messages have the name replaced in their text. The digest and review state stay the firm's.
+func payrollUnnamed(r *http.Request, db *sql.DB, client func(*http.Request) (string, string, error), out map[string]any) error {
+	if out["state"] != "ready" {
+		return nil
+	}
+	org, entity, err := client(r)
+	if err != nil {
+		return err
+	}
+	obligations, err := clientObligations(r, db, org, entity)
+	if err != nil {
+		return err
+	}
+	payroll, names := map[string]bool{}, []string{}
+	for _, o := range obligations {
+		if o.Category == "payroll" {
+			payroll[o.ID] = true
+			if o.Name != "" {
+				names = append(names, o.Name)
+			}
+		}
+	}
+	slices.SortFunc(names, func(a, b string) int { return len(b) - len(a) })
+	// byName is how a plain string is matched: not at all, as a whole listed name, or within a message's text.
+	const notByName, wholeName, inText = 0, 1, 2
+	var walk func(v any, byName int) any
+	walk = func(v any, byName int) any {
+		switch t := v.(type) {
+		case map[string]any:
+			if ref, _ := t["ref"].(string); payroll[strings.TrimPrefix(ref, "obligation:")] && strings.HasPrefix(ref, "obligation:") {
+				t["label"] = "Payroll"
+			}
+			if id, _ := t["obligation_id"].(string); payroll[id] {
+				if _, ok := t["obligation"]; ok {
+					t["obligation"] = "Payroll"
+				}
+			}
+			for k, x := range t {
+				t[k] = walk(x, byName)
+			}
+		case []any:
+			for i, x := range t {
+				t[i] = walk(x, byName)
+			}
+		case string:
+			for _, name := range names {
+				if byName == wholeName && t == name {
+					return "Payroll"
+				}
+				if byName == inText {
+					t = strings.ReplaceAll(t, name, "Payroll")
+				}
+			}
+			return t
+		}
+		return v
+	}
+	for _, key := range []string{"weeks", "readiness", "matches", "questions", "lapsed", "past_due", "after_horizon", "unscheduled", "other_currency", "scenario"} {
+		raw, err := json.Marshal(out[key])
+		var v any
+		if err == nil {
+			err = json.Unmarshal(raw, &v)
+		}
+		if err != nil {
+			return err
+		}
+		out[key] = walk(v, map[string]int{"readiness": inText, "other_currency": wholeName}[key])
+	}
+	return nil
+}
+
 func reviewedState(plan map[string]any) string {
 	if ready, ok := plan["readiness"].(map[string]any); ok && ready["state"] == "complete" {
 		return "current"

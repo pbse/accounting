@@ -4326,6 +4326,12 @@ Slice 5. A month's pinned copy of a procedure kept authorizing work after the fi
 
 Test: `TestReplacedInvoiceIsRecalculatedStraightThrough` publishes a disabled version for the client and the approval is refused (409), then succeeds once the version is gone; seen to pass wrongly (200) without the approval check. The closest procedure, review, standing-approval, carry-forward, payroll, loan and straight-through tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — Executives see only what is theirs to see (B07)
+
+Slice 5. A client's executive could read, in a published version, the firm's frozen internal draft commentary, the publisher's internal ID and other people's acknowledgments; the budget comparison used live, unpublished actuals; and the cash plan named payroll schedules (a bonus, a person's pay). Publication reads and listings now strip those fields for executives (`forExecutive`), the budget comparison waits until the month's newest publication still stands, and payroll schedule names read "Payroll" wherever the executive's cash plan names them (rewritten in the reply, after the plan's digest, so review status is unaffected). Exports drop the publisher for executives, and the year to date counts only months whose newest publication still stands (others are listed as missing).
+
+Test: `TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews` asserts the draft commentary and publisher ID are absent from an executive's read and the budget waits for a standing publication; seen to fail without the fix. The payroll relabelling has no test fixture of its own. The closest executive, budget, cash-plan and management tests passed on a fresh local PostgreSQL.
+
 ## 2026-10-11 — An emailed answer can follow a partial link reply (B04/B05)
 
 Releasing a held emailed reply required the request link to be unused, so after any partial reply through the link an emailed answer could never be released ("Request is no longer open"). Release now applies the first-reply checks (request exactly as approved, work waiting) only to an unused link; after a partial reply it needs the link live and the request still taking answers, as the client's link does. The release option now says it resumes the work, treating the request as answered; such a release also records the request's open questions as answered in the email and a complete submission naming it (earlier records stay as they were), so Work and the goal no longer call it partial, and it keeps the link's first-use time.

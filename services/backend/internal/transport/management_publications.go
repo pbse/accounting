@@ -108,6 +108,11 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Publications unavailable.")
 			return
 		}
+		if executive(r) {
+			for i := range list {
+				forExecutive(r, &list[i])
+			}
+		}
 		jsonReply(w, 200, map[string]any{"publications": list})
 	})
 	// Publishing freezes the reviewed pack with its commentary; a correction is a new version naming the one it replaces.
@@ -326,6 +331,9 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			defer tx.Rollback()
 			p.State = publicationState(r, tx, r.PathValue("id"), p.ID)
 		}
+		if executive(r) {
+			forExecutive(r, &p)
+		}
 		jsonReply(w, 200, map[string]any{"publication": p, "pack": p.Pack})
 	})
 	// Exports are rendered from the frozen version, so they always agree with what was published.
@@ -337,6 +345,9 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 		if err != nil {
 			problem(w, 404, "Publication not found.")
 			return
+		}
+		if executive(r) {
+			forExecutive(r, &p)
 		}
 		rows, err := publicationRows(p)
 		if err != nil {
@@ -427,10 +438,14 @@ func publicationRows(p publication) ([][]string, error) {
 	if pack.Prior != nil {
 		prior, priorCaptured = pack.Prior.Period, pack.Prior.Period+" captured "+stamp(pack.Prior.AsOf)
 	}
+	published := []string{"Published", stamp(p.PublishedAt)}
+	if p.PublishedBy != "" {
+		published = append(published, "by "+p.PublishedBy)
+	}
 	rows := [][]string{
 		{"Management pack", pack.Entity, pack.Period, pack.Basis + " basis", pack.Currency, "Version " + strconv.Itoa(p.Version)},
 		{"Figures", "captured from " + pack.Source + " " + stamp(pack.AsOf), priorCaptured, "status " + pack.Overall},
-		{"Published", stamp(p.PublishedAt), "by " + p.PublishedBy},
+		published,
 		{"Commentary", p.Commentary},
 		{"Note", pack.Note},
 		{"Statement", "Section", "Line", pack.Period, prior, "Change"},
@@ -493,4 +508,22 @@ func publicationState(r *http.Request, tx *sql.Tx, closeID, publicationID string
 		}
 	}
 	return state
+}
+
+// forExecutive strips what a client's executive is not given from a published version: the publisher's internal ID,
+// other people's acknowledgments, and the pack's internal draft commentary (the published commentary stays).
+func forExecutive(r *http.Request, p *publication) {
+	p.PublishedBy = ""
+	mine := []acknowledgment{}
+	for _, a := range p.Acknowledgments {
+		if a.Subject == subject(r) {
+			mine = append(mine, a)
+		}
+	}
+	p.Acknowledgments = mine
+	var pack map[string]json.RawMessage
+	if json.Unmarshal(p.Pack, &pack) == nil {
+		delete(pack, "draft_commentary")
+		p.Pack, _ = json.Marshal(pack)
+	}
 }
