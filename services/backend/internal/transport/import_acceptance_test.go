@@ -487,6 +487,20 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if februaryBooks == nil || februaryBooks.Balances["n:1000"].FloatString(2) != "1300.25" || februaryBooks.Balances["n:4000"].FloatString(2) != "-700.25" || len(februaryMonth.Holds) != 0 {
 		t.Fatalf("February's books from its ledger: %v %v", februaryBooks, februaryMonth)
 	}
+	// March's ledger opens at February's derived balances, never at February's lines.
+	march := send1("2027-03", "Date,Number,Account,Description,Debit,Credit\n03/15/2027,1000,Business Checking,Cash sale,50.00,\n03/15/2027,4000,Sales,Cash sale,,50.00\n")
+	confirmColumns(march, "2027-03-31", map[string]string{"0": "date", "1": "account_number", "2": "account_name", "3": "memo", "4": "debit", "5": "credit"})
+	attest(march)
+	mapAll(march)
+	marchState, _, err := readFileState(t.Context(), db, org, "Acme Co", march)
+	must(err)
+	marchBalances := map[string]string{}
+	for _, a := range marchState.reading.Accounts {
+		marchBalances[a.Key] = a.Balance
+	}
+	if !marchState.derived || marchBalances["n:1000"] != "1350.25" || marchBalances["n:4000"] != "-750.25" || marchBalances["n:6000"] != "400" {
+		t.Fatalf("March rolls from February's derived balances: %v %s", marchBalances, marchState.underived)
+	}
 	// Published, its export names the file and the date its books are as of.
 	frozen, _ := json.Marshal(pack)
 	if rows, err := publicationRows(publication{Pack: frozen}); err != nil || !strings.Contains(fmt.Sprint(rows), "from the accepted file Acme 2027-01.csv, as of 2027-01-31") {

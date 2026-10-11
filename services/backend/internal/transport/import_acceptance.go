@@ -256,12 +256,12 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	// The prior month's accepted books, if any are current: every account with a balance there is in this reading, or
 	// is explained.
 	s.prior = previousMonth(reading.Period)
-	var priorLines []byte
-	var priorImport string
-	err = q.QueryRowContext(ctx, `SELECT COALESCE(l.reading->'lines','[]'::jsonb),a.import_id::text FROM books_import_acceptances a JOIN books_layouts l ON l.id=a.layout_id
+	var priorLines, priorLayout []byte
+	var priorImport, priorAcceptance string
+	err = q.QueryRowContext(ctx, `SELECT COALESCE(l.reading->'lines','[]'::jsonb),a.import_id::text,a.id::text,l.layout FROM books_import_acceptances a JOIN books_layouts l ON l.id=a.layout_id
  WHERE a.organization_id=$1 AND client_identity(a.organization_id,a.client_entity)=client_identity($1,$2) AND a.period=$3
   AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id)
- ORDER BY a.id DESC LIMIT 1`, org, name, s.prior).Scan(&priorLines, &priorImport)
+ ORDER BY a.id DESC LIMIT 1`, org, name, s.prior).Scan(&priorLines, &priorImport, &priorAcceptance, &priorLayout)
 	if err == sql.ErrNoRows {
 		s.prior = ""
 		if s.layout.Layout.Ledger() {
@@ -277,6 +277,27 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 		return s, false, err
 	}
 	order, balances, names := lineBalances(lines)
+	// A prior month read from its ledger closed at its derived balances, its lines being only the month's movements; one
+	// whose balances could not be derived gives none to roll from.
+	var prior bookfiles.Layout
+	json.Unmarshal(priorLayout, &prior)
+	if prior.Ledger() {
+		f, ok, err := acceptedFileBooks(ctx, q, org, name, priorAcceptance, priorImport)
+		if err != nil {
+			return s, false, err
+		}
+		if !ok || f.underived != "" {
+			s.prior = ""
+			if s.layout.Layout.Ledger() {
+				s.deriveLedger(nil)
+			}
+			return s, true, nil
+		}
+		order, balances, names = slices.Sorted(maps.Keys(f.balances)), f.balances, map[string]string{}
+		for key, a := range f.accounts {
+			names[key] = a.Name
+		}
+	}
 	here := map[string]bool{}
 	for _, a := range reading.Accounts {
 		here[a.Key] = true
@@ -329,8 +350,9 @@ func (s *fileState) deriveLedger(priorNames map[string]string) {
 		}
 		a.Balance = exactDecimal(movement.Add(movement, cmp.Or(openings[a.Key], new(big.Rat))))
 	}
+	// Every account of the prior month without lines is carried, a zero balance too (a bank still to reconcile).
 	for _, key := range slices.Sorted(maps.Keys(openings)) {
-		if here[key] || openings[key].Sign() == 0 {
+		if here[key] {
 			continue
 		}
 		a := fileAccount{Key: key, Name: priorNames[key], Balance: exactDecimal(openings[key]), Movement: "0", Cents: true}
@@ -406,7 +428,7 @@ func priorReexportOf(ctx context.Context, q rowReader, org, name, period, accept
 		if err != nil {
 			return nil, err
 		}
-		if brief == nil || !brief.Reading.Balanced || len(brief.Reading.Problems) > 0 || brief.Layout.AsOf != monthEndDay(period) ||
+		if brief == nil || brief.Layout.Ledger() || !brief.Reading.Balanced || len(brief.Reading.Problems) > 0 || brief.Layout.AsOf != monthEndDay(period) ||
 			strings.ToUpper(strings.TrimSpace(brief.Layout.Currency)) != currency || c.Format != "csv" && !brief.Reading.FormulasMarked {
 			continue
 		}

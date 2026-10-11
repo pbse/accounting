@@ -108,6 +108,8 @@ func writeFileVersion(ctx context.Context, db *sql.DB, org, name, acceptance, fi
 // acceptedFile is the books an acceptance gives its month: its file's reading as the map it was accepted on classifies
 // it, balances and the month's activity as exact decimals, with what the month's activity is missing, if anything.
 type acceptedFile struct {
+	// underived says why a ledger's month-end balances could not be derived; its balances are then only its movements.
+	underived                              string
 	accounts                               map[string]booksAccount
 	balances, activity                     map[string]string
 	missing, period, currency, asOf, basis string
@@ -158,7 +160,7 @@ func acceptedFileBooks(ctx context.Context, q rowReader, org, name, acceptance, 
 	for key, v := range month {
 		f.activity[key] = exactDecimal(v)
 	}
-	f.missing = missing
+	f.missing, f.underived = missing, state.underived
 	return f, true, nil
 }
 
@@ -253,10 +255,11 @@ func liveHolds(ctx context.Context, q rowReader, org, entity, importID, acceptan
 		holds = append(holds, "it no longer rolls forward: "+c.Detail)
 	}
 	if state.layout.Layout.Ledger() && stored != nil {
-		changed := !state.derived
+		// The accounts derived now, and their balances, must be the ones stored.
+		changed := !state.derived || len(state.reading.Accounts) != len(stored)
 		for _, a := range state.reading.Accounts {
 			live, _ := new(big.Rat).SetString(a.Balance)
-			if was := stored[a.Key]; live == nil || was == nil && live.Sign() != 0 || was != nil && live.Cmp(was) != 0 {
+			if was := stored[a.Key]; live == nil || was == nil || live.Cmp(was) != 0 {
 				changed = true
 			}
 		}
