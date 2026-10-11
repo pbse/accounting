@@ -463,6 +463,12 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	approve(reminder, 409)
 	_, err = db.Exec(`DELETE FROM work_replies WHERE request_id=$1`, group.ID)
 	must(err)
+	// So does an emailed reply still held for review: the client has answered, so no reminder goes out meanwhile.
+	_, err = db.Exec(`INSERT INTO inbound_replies(close_id,request_id,outbox_id,message_digest,envelope_from,header_from,body,addresses_match) SELECT d.close_id,q.id,$2,md5(random()::text),'client@example.test','client@example.test','Attached as asked',true FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id::text=$1`, group.ID, first)
+	must(err)
+	approve(reminder, 409)
+	_, err = db.Exec(`DELETE FROM inbound_replies WHERE request_id::text=$1`, group.ID)
+	must(err)
 	queued := approve(reminder, 200)
 	event(first, "bounced", "group-bounce", false, 204)
 	before := attempts
