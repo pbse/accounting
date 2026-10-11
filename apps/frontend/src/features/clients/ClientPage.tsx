@@ -7,7 +7,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { clientPath } from "../../data/clients";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, monthShort, useDates, useToday } from "../../data/time";
-import { ClientForm, type Person, type RosterEntry } from "../closes/Roster";
+import { ClientForm, LedgerPicker, type CatalogLedger, type LedgerChoice, type Person, type RosterEntry } from "../closes/Roster";
 import { workspaceRequest } from "../closes/workspace";
 
 type Books = {
@@ -64,6 +64,8 @@ type ClientRead = {
   owed: Owed[];
   quickbooks: QuickBooksConnection[];
   xero: XeroConnection[];
+  // The ledger the client keeps, as recorded: not how its books arrive.
+  ledger: KeptLedger | null;
   profile: Profile | null;
   basis: {
     method: "accrual" | "cash" | "modified_cash";
@@ -75,6 +77,8 @@ type ClientRead = {
   people?: Person[];
   people_unavailable?: string;
 };
+// The ledger a client keeps, as recorded when it was added or corrected on its page, with its catalog entry.
+type KeptLedger = { id: string; ledger: string; other_name?: string; entry?: CatalogLedger; reason: string; actor: string; at: string };
 // A request to the client that it has not finished answering, from any month the reader can open.
 type AskedOfClient = {
   id: string;
@@ -119,7 +123,7 @@ export default function ClientPage() {
   const client = read.data;
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"" | "another" | "schedule">("");
+  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "ledger">("");
   const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   if (!client) {
     if (read.isPending) return <p role="status">Opening the client…</p>;
@@ -185,6 +189,22 @@ export default function ClientPage() {
               ? `${name} is signed off through ${monthName(signed[0].period)}.`
               : `${name} has no months yet.`;
   const ledger = books(client, dates.dayMonth);
+  // The ledger the client keeps, as recorded, said first on the Books card; a ledger the firm cannot connect is served by
+  // files once they reach the firm, with its export steps.
+  const kept = client.ledger;
+  const canRecord = client.can_manage || client.can_connect;
+  const keptName = kept?.entry?.name ?? (kept?.ledger === "other" ? kept.other_name : "");
+  const keeps = !kept
+    ? canRecord
+      ? "Its ledger is not recorded yet. "
+      : ""
+    : kept.ledger === "unknown"
+      ? "Its ledger is not known yet. "
+      : `Keeps its books in ${keptName}.${
+          !ledger.connected && (!kept.entry || !kept.entry.connected)
+            ? ` ${keptName} has no connector here${kept.entry?.connector ? " switched on for your firm" : ""}: once file import reaches your firm, its books come from its exports.`
+            : ""
+        } `;
   const roster = client.roster;
   const dueDays = roster?.due_days ?? client.template?.due_days ?? null;
   const context = !client.whole
@@ -294,22 +314,29 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              client.can_connect && (managedIn || fixes.length) ? (
+              (client.can_connect && (managedIn || fixes.length)) || canRecord ? (
                 <>
-                  {managedIn && (
+                  {canRecord && (
+                    <button type="button" onClick={() => setDialog("ledger")}>
+                      Ledger
+                    </button>
+                  )}
+                  {client.can_connect && managedIn && (
                     <Link className="button" to={`/dashboard/closes/${managedIn.id}?tab=${ledger.tab}#${ledger.anchor}`}>
                       {ledger.connected ? "Manage" : "Connect"} in {monthShort(managedIn.period)}
                     </Link>
                   )}
-                  {fixes.map((f) => (
-                    <Link key={`${f.ledger.source}:${f.ledger.name}:${f.month.id}`} className="button" to={`/dashboard/closes/${f.month.id}?tab=${f.ledger.tab}#${f.ledger.anchor}`}>
-                      Fix {f.ledger.name}
-                    </Link>
-                  ))}
+                  {client.can_connect &&
+                    fixes.map((f) => (
+                      <Link key={`${f.ledger.source}:${f.ledger.name}:${f.month.id}`} className="button" to={`/dashboard/closes/${f.month.id}?tab=${f.ledger.tab}#${f.ledger.anchor}`}>
+                        Fix {f.ledger.name}
+                      </Link>
+                    ))}
                 </>
               ) : undefined
             }
           >
+            {keeps}
             {ledger.line}
             {managedIn || !client.can_connect ? "" : ` Open a month under ${ledger.held ?? name} to ${ledger.connected ? "manage" : "connect"} its ledger.`}
           </Card>
@@ -495,6 +522,16 @@ export default function ClientPage() {
           </DialogActions>
         </form>
       </Dialog>
+      {canRecord && (
+        <Dialog
+          open={dialog === "ledger"}
+          onClose={() => setDialog("")}
+          title={`${name}’s ledger`}
+          description="Which product the client keeps its books in. It is not how a month’s books arrive, and changing it changes no books."
+        >
+          <LedgerForm key={kept?.id ?? "none"} client={name} kept={kept} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
+        </Dialog>
+      )}
       {client.can_manage && (
         <Dialog
           open={dialog === "schedule"}
@@ -633,4 +670,62 @@ type Ledger = { source: string; short: string; name: string; line: string; held:
 // Names joined as a sentence lists them: "Ann", "Ann and Cy", "Ann, Bea and Cy".
 function listed(names: string[]) {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+// LedgerForm records or corrects the ledger a client keeps, with a reason, against the ledger as read; a catalog entry
+// shows the steps that export its books.
+function LedgerForm({ client, kept, onSaved, onCancel }: { client: string; kept: KeptLedger | null; onSaved: () => void; onCancel: () => void }) {
+  const [choice, setChoice] = useState<LedgerChoice>({ ledger: kept?.ledger ?? "unknown", other_name: kept?.other_name ?? "" });
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const catalog = useQuery(workspaceQuery<{ ledgers: CatalogLedger[] }>("/ledgers"));
+  const entry = catalog.data?.ledgers.find((l) => l.id === choice.ledger);
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest("/client/ledger", { client, ledger: choice.ledger, other_name: choice.other_name.trim(), reason: reason.trim(), rev: kept?.id ?? "" });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The ledger could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form onSubmit={save}>
+      <fieldset disabled={busy}>
+        <LedgerPicker value={choice} onChange={setChoice} />
+        {entry && (
+          <details>
+            <summary>How {entry.name} exports its books</summary>
+            <p>
+              <b>Trial Balance:</b> {entry.exports.trial_balance}
+            </p>
+            <p>
+              <b>General Ledger:</b> {entry.exports.general_ledger}
+            </p>
+            <p>
+              <b>Open items:</b> {entry.exports.open_items}
+            </p>
+          </details>
+        )}
+        <label>
+          Reason
+          <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+        </label>
+        {error && <p role="alert">{error}</p>}
+        <DialogActions>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" disabled={busy || !reason.trim() || (choice.ledger === "other" && !choice.other_name.trim())}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </DialogActions>
+      </fieldset>
+    </form>
+  );
 }
