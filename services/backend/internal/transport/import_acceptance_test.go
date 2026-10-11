@@ -50,7 +50,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
+		for _, q := range []string{`DELETE FROM close_scopes WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
 			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM coverage_bindings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_versions WHERE organization_id=$1`, `DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM books_sources WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
 			`DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
 			`DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
@@ -430,14 +430,41 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
 		t.Fatalf("parity leaves a file's books alone: %v %v", mismatched, err)
 	}
-	// A month whose books are its files is not signed off yet.
-	tx, err := db.BeginTx(t.Context(), nil)
+	// A month whose books are its files is signed off over them, while no check it was accepted with holds them.
+	readinessOf := func() readiness {
+		t.Helper()
+		tx, err := db.BeginTx(t.Context(), nil)
+		must(err)
+		defer tx.Rollback()
+		r, err := closeReadiness(t.Context(), tx, januaryClose)
+		must(err)
+		return r
+	}
+	fromFiles := func(r readiness) []string {
+		return slices.DeleteFunc(slices.Clone(r.Blockers), func(b string) bool { return !strings.HasPrefix(b, "Books from files") })
+	}
+	if held := fromFiles(readinessOf()); len(held) != 1 || !strings.Contains(held[0], "Debits equal credits") {
+		t.Fatalf("a held file holds the sign-off, named: %v", held)
+	}
+	_, err = db.Exec(`UPDATE books_import_acceptances SET checks=(SELECT jsonb_agg(c) FROM jsonb_array_elements(checks) c WHERE c->>'key'<>'balanced' OR c->>'state'<>'holds') WHERE id::text=$1`, januaryAccepted)
 	must(err)
-	readiness, err := closeReadiness(t.Context(), tx, januaryClose)
-	tx.Rollback()
+	if r := readinessOf(); len(fromFiles(r)) != 0 {
+		t.Fatalf("a files month with no check holding it can be signed off: %v", r.Blockers)
+	}
+	// Its scope defined and each account decided on the file's books, it is signed off over them, and so is its pack.
+	_, err = db.Exec(`INSERT INTO close_scopes(close_id,scope,actor) VALUES($1::bigint,'{"description":"Bookkeeping close","required_papers":[],"external_steps":[]}','fixture')`, januaryClose)
 	must(err)
-	if !slices.ContainsFunc(readiness.Blockers, func(b string) bool { return strings.HasPrefix(b, "Books from files") }) {
-		t.Fatalf("a files month waits to be signed off: %v", readiness.Blockers)
+	_, err = db.Exec(`INSERT INTO coverage_bindings(close_id,file_version_id,account_id,job_ids,excluded,reason,actor) SELECT $1::bigint,v.id,a,'[]',true,'Reviewed outside this close','fixture'
+ FROM books_versions v CROSS JOIN unnest(ARRAY['n:1000','n:4000','n:6000']) a WHERE v.close_id=$1::bigint AND v.source='files' AND v.source_id=$2`, januaryClose, januaryAccepted)
+	must(err)
+	ready := readinessOf()
+	if len(ready.Blockers) != 0 {
+		t.Fatalf("January is ready to sign off: %v", ready.Blockers)
+	}
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1::bigint,'signed_off',$2,'{}','Signed off','fixture')`, januaryClose, ready.Digest)
+	must(err)
+	if pack = packOf(); pack["overall"] != "signed_off" || pack["open"] != false || strings.Contains(pack["note"].(string), "Provisional") {
+		t.Fatalf("a signed-off files month's pack: %v %v %v", pack["overall"], pack["open"], pack["note"])
 	}
 	// A month signed off on the file's books holds the file, and another reading of it; reopened, deleting the file
 	// takes its books with it.
