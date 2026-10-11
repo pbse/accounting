@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -433,7 +434,8 @@ func TestRequestTakesTheRestAfterTheFirmActs(t *testing.T) {
 		}
 	}
 	var cid, conn string
-	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Follow-through "+rand.Text()).Scan(&cid))
+	entity := "Follow-through " + rand.Text()
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&cid))
 	defer func() {
 		for _, q := range []string{`DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`, `DELETE FROM coverage_bindings WHERE close_id=$1`, `DELETE FROM preparation_jobs WHERE close_id=$1`,
 			`DELETE FROM request_drafts WHERE close_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
@@ -524,9 +526,16 @@ func TestRequestTakesTheRestAfterTheFirmActs(t *testing.T) {
 		db.QueryRow(`SELECT i.job_id::text FROM client_attachments a JOIN preparation_intakes i ON i.source_id=a.source_id WHERE a.id=$1`, id).Scan(&job)
 		return job
 	}
+	// open is whether the request still takes the client's answers, and the client's page lists it as outstanding exactly
+	// then.
 	open := func() bool {
 		t.Helper()
-		return bytes.Contains(call("GET", "/v1/client-request", request.Token, nil, 200), []byte(`"open":true`))
+		taking := bytes.Contains(call("GET", "/v1/client-request", request.Token, nil, 200), []byte(`"open":true`))
+		listed := bytes.Contains(call("GET", "/v1/closes/client?name="+url.QueryEscape(entity), token, nil, 200), []byte(`"id":"`+request.ID+`"`))
+		if listed != taking {
+			t.Fatalf("the client's page lists the request: %v, while it takes answers: %v", listed, taking)
+		}
+		return taking
 	}
 	// The client sends X and promises Y; the firm releases X, binds its work to the account and finishes it.
 	reply([]clientAnswer{{1, "answered", "Invoice X attached"}, {2, "awaiting_document", ""}}, "x.txt", "Invoice X amount: 100.00", 200)

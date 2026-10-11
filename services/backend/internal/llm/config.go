@@ -28,13 +28,14 @@ type Config struct {
 	CodexModel, ClaudeModel, CodexEffort, ClaudeEffort string
 	Profiles                                           []Scope
 	AllowUncappedOutputTokens                          bool
+	APIImages                                          bool
+	Gemini                                             *Gemini
 	HTTP                                               *http.Client
 }
 
-var purposes = []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat"}
+var purposes = []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat", "ocr"}
 
-// AnyMember is the subject of an organization-wide caller profile: every current member of the organization may
-// complete through it, and the context machine checks that member's own access on every call.
+// AnyMember is the legacy wildcard subject in research/evaluation configuration; it never gates inference.
 const AnyMember = "*"
 
 // New freezes routing configuration. Unknown purposes fail closed rather than
@@ -70,9 +71,9 @@ func New(cfg Config) (*Client, error) {
 		}
 		seenProfiles[key] = true
 	}
-	c := &Client{http: cfg.HTTP, routes: make(map[string]route), profiles: slices.Clone(cfg.Profiles)}
+	c := &Client{apiImages: cfg.APIImages, http: cfg.HTTP, routes: make(map[string]route), profiles: slices.Clone(cfg.Profiles)}
 	for _, purpose := range purposes {
-		if cfg.Provider == "api" && cfg.Model != "" {
+		if cfg.Provider == "api" && cfg.Model != "" && (purpose != "ocr" || cfg.APIImages) {
 			c.routes[purpose] = route{Provider: OpenAI, Token: cfg.APIKey, Model: cfg.Model, Effort: cfg.ReasoningEffort}
 		}
 	}
@@ -84,24 +85,31 @@ func New(cfg Config) (*Client, error) {
 		if effort == "" {
 			effort = "medium"
 		}
-		if model == "" || !ValidAgentEffort(cfg.ContextMachineModel, effort) || len(cfg.Profiles) == 0 {
-			return nil, errors.New("context-machine completion requires its model, effort and profiles")
+		if model == "" || !ValidAgentEffort(cfg.ContextMachineModel, effort) {
+			return nil, errors.New("context-machine completion requires its model and effort")
 		}
 		for _, purpose := range purposes {
 			c.routes[purpose] = route{Provider: ContextMachine, Model: model, Agent: cfg.ContextMachineModel, Effort: effort, Token: cfg.ContextMachineToken, Uncapped: cfg.AllowUncappedOutputTokens}
 		}
+	}
+	if cfg.Provider == "api" && cfg.Gemini != nil && !cfg.APIImages {
+		c.gemini = cfg.Gemini
+		c.routes["ocr"] = route{Provider: Google, Token: cfg.Gemini.key, Model: cfg.Gemini.model}
 	}
 	for purpose, model := range cfg.Models {
 		route, known := c.routes[purpose]
 		if !known || model == "" {
 			return nil, errors.New("LLM_MODELS requires a known accounting purpose and a nonempty model")
 		}
+		if route.Provider == Google {
+			return nil, errors.New("configure Gemini OCR with GEMINI_OCR_MODEL")
+		}
 		route.Model = model
 		c.routes[purpose] = route
 	}
 	for purpose, effort := range cfg.ReasoningEfforts {
 		r, ok := c.routes[purpose]
-		if !ok || !validEffort(effort) || (r.Provider == ContextMachine && !ValidAgentEffort(r.Agent, effort)) {
+		if !ok || r.Provider == Google || !validEffort(effort) || (r.Provider == ContextMachine && !ValidAgentEffort(r.Agent, effort)) {
 			return nil, errors.New("invalid LLM_REASONING_EFFORTS")
 		}
 		r.Effort = effort
@@ -130,8 +138,14 @@ func New(cfg Config) (*Client, error) {
 
 // FromEnv is called once by API/worker startup, not by model workflows.
 func FromEnv() (*Client, error) {
-	cfg := Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: os.Getenv("OPENAI_MODEL"), ContextMachineToken: os.Getenv("CONTEXT_MACHINE_TOKEN"), ContextMachineModel: os.Getenv("CONTEXT_MACHINE_MODEL"), ContextMachineEndpoint: os.Getenv("CONTEXT_MACHINE_ENDPOINT")}
+	cfg := Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: os.Getenv("OPENAI_MODEL"), ContextMachineToken: os.Getenv("CONTEXT_MACHINE_TOKEN"), ContextMachineModel: os.Getenv("CONTEXT_MACHINE_MODEL"), ContextMachineEndpoint: os.Getenv("CONTEXT_MACHINE_ENDPOINT"), Gemini: GeminiFromEnv()}
 	cfg.Provider = os.Getenv("LLM_PROVIDER")
+	if raw := os.Getenv("LLM_API_IMAGE_ENABLED"); raw != "" {
+		if raw != "true" && raw != "false" {
+			return nil, errors.New("LLM_API_IMAGE_ENABLED must be true or false")
+		}
+		cfg.APIImages = raw == "true"
+	}
 	cfg.CodexModel, cfg.ClaudeModel = os.Getenv("CODEX_MODEL"), os.Getenv("CLAUDE_MODEL")
 	cfg.CodexEffort, cfg.ClaudeEffort = os.Getenv("CODEX_REASONING_EFFORT"), os.Getenv("CLAUDE_REASONING_EFFORT")
 	if raw := os.Getenv("LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS"); raw != "" {
@@ -323,6 +337,9 @@ func ProviderLabel(ctx context.Context, purpose string) string {
 		return "the configured model provider"
 	}
 	r := c.routes[purpose]
+	if r.Provider == Google {
+		return "Google Gemini"
+	}
 	if r.Provider == ContextMachine {
 		if r.Agent == "claude" {
 			return "Claude (Anthropic) through the private context machine"
@@ -332,64 +349,29 @@ func ProviderLabel(ctx context.Context, purpose string) string {
 	return "OpenAI API"
 }
 
-// CompletionProfiles supplies immutable caller eligibility for background SQL selection.
-// Nil means API routing, where existing caller authorization applies.
-func CompletionProfiles(ctx context.Context) []Scope {
+// EvaluationProfiles exposes optional local replay mappings, never inference eligibility.
+func EvaluationProfiles(ctx context.Context) []Scope {
 	c, _ := ctx.Value(clientKey{}).(*Client)
-	if c == nil || c.routes["preparation"].Provider != ContextMachine {
+	if c == nil {
 		return nil
 	}
 	return slices.Clone(c.profiles)
 }
 
-// Allows checks configured caller eligibility before a workflow reserves budget.
-// Background selection without identity may inspect only its configured organizations;
-// each selected job must then supply its recorded creator before dispatch.
+// Allows checks the application's established tenant context before budget use;
+// any organization can use the configured inference route.
 func Allows(ctx context.Context, organization string) bool {
-	c, _ := ctx.Value(clientKey{}).(*Client)
-	if c == nil || c.routes["preparation"].Provider != ContextMachine {
-		return true
-	}
 	id, has := ctx.Value(identityKey{}).(identity)
-	if has && (id.organization != organization || id.subject == "" || id.subject == AnyMember) {
-		return false
-	}
-	return c.profile(organization, id.subject).AccessProfile != ""
+	return !has || id.organization == organization
 }
 
-// ViaWideProfile reports that the caller's eligibility rests on an organization-wide profile rather than their own:
-// membership alone put them there, so a background caller must also check the client grant the work needs.
-func ViaWideProfile(ctx context.Context, organization string) bool {
+// RequiresClientGrant triggers the existing SQL membership/client-grant checks
+// before background data is sent to context-machine inference. It does not grant access.
+func RequiresClientGrant(ctx context.Context) bool {
 	c, _ := ctx.Value(clientKey{}).(*Client)
-	id, has := ctx.Value(identityKey{}).(identity)
-	if c == nil || !has || c.routes["preparation"].Provider != ContextMachine || id.organization != organization {
-		return false
-	}
-	for _, p := range c.profiles {
-		if p.Organization == organization && p.Subject == id.subject {
-			return false
-		}
-	}
-	return c.profile(organization, id.subject).AccessProfile != ""
+	return c != nil && c.routes["preparation"].Provider == ContextMachine
 }
 
-// profile finds the configured scope for a caller: the member's own profile first, then the organization-wide one,
-// which stands for the member themselves. Without a subject, any profile for the organization makes it eligible.
-func (c *Client) profile(organization, subject string) Scope {
-	var wide Scope
-	for _, p := range c.profiles {
-		if p.Organization != organization {
-			continue
-		}
-		if subject == "" || p.Subject == subject {
-			return p
-		}
-		if p.Subject == AnyMember {
-			wide = p
-		}
-	}
-	if wide.AccessProfile == "" {
-		return Scope{}
-	}
-	return Scope{Organization: organization, Subject: subject, AccessProfile: wide.AccessProfile}
-}
+// ContextMachineEndpoint exposes non-secret transport metadata for local evaluation
+// safeguards. Workflow code must continue dispatching through Generate.
+func (c *Client) ContextMachineEndpoint() string { return c.routes["research"].URL }

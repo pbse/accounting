@@ -1,3 +1,4 @@
+import { clientPage } from "../../data/clients";
 import { closeTab, closeTabs, type CloseTab } from "../../data/closeTabs";
 import { monthName, useDates } from "../../data/time";
 import { useEffect, useState } from "react";
@@ -157,8 +158,20 @@ export default function ClientClose() {
   const [deleted, setDeleted] = useState("");
   const tab: Tab = closeTab(params.get("tab"));
   const filter = filters[params.get("filter") ?? ""] ? params.get("filter")! : "all";
+  // A link to a section scrolls to it once it is there: a section can mount after the month's data loads, so the
+  // target is looked for each frame for a few seconds.
   useEffect(() => {
-    if (location.hash) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView());
+    if (!location.hash) return;
+    const target = location.hash.slice(1);
+    const deadline = Date.now() + 5000;
+    let frame = 0;
+    const find = () => {
+      const section = document.getElementById(target);
+      if (section) section.scrollIntoView();
+      else if (Date.now() < deadline) frame = requestAnimationFrame(find);
+    };
+    frame = requestAnimationFrame(find);
+    return () => cancelAnimationFrame(frame);
   }, [tab, location.hash]);
   if (deleted)
     return (
@@ -183,7 +196,7 @@ export default function ClientClose() {
       <div className="ks-crumbs">
         <Link to="/dashboard/clients">Clients</Link>
         <span>/</span>
-        <Link to={`/dashboard/clients?q=${encodeURIComponent(close.entity)}`}>{close.entity}</Link>
+        <Link to={clientPage(close.entity)}>{close.entity}</Link>
         <span>/</span>
         <b>{monthName(close.period)}</b>
         <div className="ks-tools">

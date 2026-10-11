@@ -40,8 +40,10 @@ func FromEnv() (http.Handler, error) {
 	cfg.CodexEffort, cfg.ClaudeEffort = os.Getenv("CODEX_REASONING_EFFORT"), os.Getenv("CLAUDE_REASONING_EFFORT")
 	cfg.DefaultAgent = os.Getenv("CONTEXT_MACHINE_MODEL")
 	cfg.CodexAuthJSON, cfg.CodexAuthStateURL = os.Getenv("CODEX_AUTH_JSON"), os.Getenv("CODEX_AUTH_STATE_URL")
-	if err := json.Unmarshal([]byte(os.Getenv("CONTEXT_MACHINE_PROFILES")), &cfg.Profiles); err != nil {
-		return nil, errors.New("CONTEXT_MACHINE_PROFILES must be a JSON array")
+	if raw := os.Getenv("CONTEXT_MACHINE_PROFILES"); raw != "" {
+		if json.Unmarshal([]byte(raw), &cfg.Profiles) != nil {
+			return nil, errors.New("CONTEXT_MACHINE_PROFILES must be a JSON array")
+		}
 	}
 	for name, dest := range map[string]*map[string]string{"LLM_MODELS": &cfg.Models, "LLM_REASONING_EFFORTS": &cfg.Efforts} {
 		if raw := os.Getenv(name); raw != "" {
@@ -61,8 +63,8 @@ type server struct {
 }
 
 func New(cfg Config) (http.Handler, error) {
-	if len(cfg.Token) < 32 || cfg.DatabaseURL == "" || len(cfg.Profiles) == 0 {
-		return nil, errors.New("context machine requires token, read-only database, profiles and an enabled agent")
+	if len(cfg.Token) < 32 || cfg.DatabaseURL == "" {
+		return nil, errors.New("context machine requires token, read-only database and an enabled agent")
 	}
 	agents := map[string]agentSettings{}
 	for _, name := range []string{"codex", "claude"} {
@@ -90,7 +92,7 @@ func New(cfg Config) (http.Handler, error) {
 		wide = wide || p.Subject == llm.AnyMember
 	}
 	personal := agents["codex"].mode == "chatgpt" || agents["codex"].mode == "subscription" || agents["claude"].mode == "subscription"
-	if personal && len(cfg.Profiles) != 1 {
+	if personal && len(cfg.Profiles) > 0 && len(cfg.Profiles) != 1 {
 		return nil, errors.New("personal subscriptions require exactly one owner access profile")
 	}
 	// An organization-wide profile serves every member of the firm, so it needs a provider arrangement that may serve
@@ -99,7 +101,7 @@ func New(cfg Config) (http.Handler, error) {
 		return nil, errors.New("an organization-wide access profile requires API-key agents")
 	}
 	if a := agents["codex"]; a.mode == "chatgpt" {
-		if len(cfg.Profiles) != 1 {
+		if len(cfg.Profiles) > 0 && len(cfg.Profiles) != 1 {
 			return nil, errors.New("personal ChatGPT auth requires exactly one owner access profile")
 		}
 		if cfg.CodexAuthStateURL != "http://context-machine-auth.internal/codex" {
@@ -161,6 +163,7 @@ func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 type runRequest struct {
+	CompletionImages                  []llm.Image     `json:"-"`
 	CompletionSchema                  json.RawMessage `json:"-"`
 	CompletionModel, CompletionEffort string          `json:"-"`
 	Version                           int             `json:"version"`
@@ -274,7 +277,7 @@ func (s *server) execute(ctx context.Context, in runRequest) (result llm.Respons
 	if completion {
 		settings.model, settings.effort = in.CompletionModel, in.CompletionEffort
 	}
-	proxy := &modelProxy{completion: completion, schema: in.CompletionSchema, ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: settings.credential, model: settings.model, effort: settings.effort, authMode: settings.mode}
+	proxy := &modelProxy{images: in.CompletionImages, completion: completion, schema: in.CompletionSchema, ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: settings.credential, model: settings.model, effort: settings.effort, authMode: settings.mode}
 	if settings.mode == "chatgpt" {
 		auth, err := restoreCodexAuth(ctx, s.cfg, dir)
 		if err != nil {

@@ -37,7 +37,7 @@ Cloudflare Worker secrets are authoritative for service credentials; the private
 | `CODEX_MODEL` | GitHub variable | Exact OpenAI model ID for enabled Codex. |
 | `CLAUDE_MODEL` | GitHub variable | Exact Anthropic model ID for enabled Claude; it must support adaptive thinking and `output_config.effort`. |
 | `CONTEXT_MACHINE_MODEL` | GitHub variable | `codex` or `claude`: selects the research agent. |
-| `CONTEXT_MACHINE_PROFILES` | GitHub variable | Nonempty JSON array of organization/subject/access-profile triples; a subject of `*` covers every current member of the organization ([below](#organization-wide-profiles)). |
+| `CONTEXT_MACHINE_PROFILES` | GitHub variable | Optional JSON array for autonomous database research. Leave unset or `[]` for completions; no platform owner profile is needed for inference. |
 | `LLM_MODELS` | GitHub variable, optional | JSON purpose-to-model overrides for existing API workflows. |
 
 Existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` deploy all services. The token/account must support Workers, Durable Objects and Containers; Containers billing must be enabled. API keys require API billing and access to the chosen models. Subscription tokens use the corresponding account's permissions and limits. Only the selected research agent must be configured; an unused agent does not require a key or model. In `auto`, a missing model leaves that research agent disabled even if its API key exists for direct workflows. An explicitly selected auth mode with a missing credential fails startup/deployment. `auto` chooses once at startup; expired tokens, quota errors and refusals fail the run without changing credentials or repeating the request.
@@ -46,15 +46,15 @@ For example, these **variables** pin Codex research independently from direct AP
 
 ```text
 CONTEXT_MACHINE_MODEL=codex
-CODEX_MODEL=gpt-5.5
+CODEX_MODEL=gpt-6.1-sol
 CODEX_REASONING_EFFORT=medium
 CODEX_AUTH_MODE=auto
-OPENAI_MODEL=gpt-5.5
-OPENAI_REASONING_EFFORT=low
-LLM_REASONING_EFFORTS={"work_command":"none","investigation":"none","written_answer":"none"}
+OPENAI_MODEL=gpt-6.1-sol
+OPENAI_REASONING_EFFORT=medium
+LLM_REASONING_EFFORTS={}
 ```
 
-These small-budget overrides use GPT-5.5’s supported `none` effort; revalidate them if you choose a different model. Claude can be pinned separately with `CLAUDE_MODEL=claude-opus-5-5` and `CLAUDE_REASONING_EFFORT=medium`.
+**Staged policy, not an activated model:** the October 10 live ChatGPT-subscription smoke rejected `gpt-6.1-sol` as unsupported for that account. The user chose to keep this pin staged and subscription inference disabled until supported. This pins enabled purposes to medium reasoning unless an explicit purpose override is added. GPT-6.1 Sol supports medium reasoning and image input ([model documentation](https://developers.openai.com/api/docs/models/gpt-6.1-sol)); verify entitlement with the actual account before activation. Claude can be pinned separately with `CLAUDE_MODEL=claude-opus-5-5` and `CLAUDE_REASONING_EFFORT=medium`.
 
 Use model IDs available to your account. Model/effort variables can be staged before credentials: the Worker hides direct-API route metadata from its container when the Cloudflare `OPENAI_API_KEY` binding is empty, while preserving the GitHub variables. Install the key directly in Cloudflare and run the normal deployment to activate the saved policy. Setting `CODEX_AUTH_MODE=subscription` explicitly chooses the account token even when an API key exists. Direct API mode still needs an API key. Context-machine completion mode preserves schemas and caller-executed tool proposals; it is separate from autonomous research.
 
@@ -70,17 +70,11 @@ Example profile shape (replace both IDs with existing members):
 
 Profiles map to existing organization memberships and **explicit client grants**. They do not infer access from an administrator title or allow arbitrary subject substitution. Provision members and client grants using existing platform controls. Disabled organizations and revoked memberships/clients are denied by the read tools.
 
-### Organization-wide profiles
+### Profile-free inference and scoped research
 
-A profile whose subject is `*` serves every current member of its organization, which the agent chat needs so that each member of a firm can ask as themselves:
+Data-only inference has no organization/member profile allowlist. Every trusted application workflow can call `/v1/complete` with its authorized prompt/data; optional organization/user values are provenance, never eligibility. The application still checks firm/client access and reserves that firm's budget. Background preparation, OCR and replay recheck current creator/uploader membership and client grants before sending data.
 
-```json
-[{"organization":"org_EXAMPLE","subject":"*","access_profile":"accounting-read"}]
-```
-
-The first cohort runs with one wide profile per firm (decision of 2026-10-08): one entry per organization, each with its own `access_profile` name (the names must be unique, for example `accounting-read-<org>`), under API-key mode. Add a firm by appending its entry and redeploying; nothing else is provisioned per firm.
-
-The gateway resolves a caller to their own exact profile first, then to the organization's wide profile, and sends the member's own subject on the wire, never `*`. The service accepts a scope whose organization and access profile match a wide profile and whose subject is a real member, and then checks that member's current membership and client grants exactly as for an exact profile; the wildcard itself, an empty subject and another organization are refused. Scheduled replays under a wide profile may select any member's confirmed readings of that organization, and a background call made eligible only by the wide profile first checks that the model's caller still holds the client: a preparation job whose creator lost the client fails with that reason, scheduled replays select only readings whose creator is still a member and still holds the client, and a member replaying by hand must hold it themselves. A wide profile requires API-key agents: the service refuses to start with one under a personal Codex login or Claude subscription, which serve their owner only. Autonomous research (`/v1/run`) still needs an exact profile.
+`CONTEXT_MACHINE_PROFILES` now governs autonomous database research only. Leave it unset or `[]` to disable `/v1/run` while using normal completions. Research retains its exact scope match, dedicated read-only role and per-read membership/client grants. Personal research credentials still require one exact research profile; the legacy wildcard profile is not an inference activation requirement.
 
 Create a new database LOGIN with a random password using the database owner's secure administration tooling. Grant only the supported read surface:
 
@@ -95,7 +89,7 @@ When the production owner credential is available only in GitHub, use the manual
 
 Neon requires an unhashed password when creating a login. For direct `.neon.tech` endpoints, the job sends the password as COPY data over the required TLS connection, uses a temporary table that disappears at commit, and catches creation errors so dynamic password-bearing SQL is not relayed. The transmitted SQL statements contain no password literal. Other PostgreSQL endpoints receive a locally generated SCRAM verifier. Raw database output stays private in both cases.
 
-Download `context-machine-reader-connection` from the successful run, combine its `connection_without_password` with the retained password in memory, and pass the resulting URL to `node scripts/cloudflare-credentials.mjs CONTEXT_MACHINE_DATABASE_URL production` over standard input. Then remove the temporary password secret and local file. Keep the retained file until the final secret is stored; Cloudflare cannot return stored Worker secret values. If the role already exists, use its provisioned credential or an explicitly approved rotation rather than rerunning creation. The job does not activate AI or deploy the service. An operator still sets `CONTEXT_MACHINE_PROFILES` only after verifying the owner's current enabled app membership and client grants; a WorkOS dashboard administrator is not automatically an app member.
+Download `context-machine-reader-connection` from the successful run, combine its `connection_without_password` with the retained password in memory, and pass the resulting URL to `node scripts/cloudflare-credentials.mjs CONTEXT_MACHINE_DATABASE_URL production` over standard input. Then remove the temporary password secret and local file. Keep the retained file until the final secret is stored; Cloudflare cannot return stored Worker secret values. If the role already exists, use its provisioned credential or an explicitly approved rotation rather than rerunning creation. The job does not activate AI or deploy the service. For autonomous database research, an operator sets `CONTEXT_MACHINE_PROFILES` only after verifying the owner's current enabled app membership and client grants; a WorkOS dashboard administrator is not automatically an app member.
 
 Local development and tests use local PostgreSQL only. Never create Neon branches. Host-run Go processes may set `CONTEXT_MACHINE_ENDPOINT=http://127.0.0.1:8081/v1/run` for a separately started local runner. Docker Compose API/worker containers need a reachable private HTTPS endpoint: their loopback addresses refer to themselves, not the host.
 
@@ -129,16 +123,16 @@ One container accepts one run at a time, with a two-minute deadline and 1–16 m
 
 Pin upgrades in `services/context-machine/Dockerfile` and rerun CI's actual-CLI smoke tests. Roll back by redeploying the last known-good commit of **all three Workers** with matching configuration. Update a rotated service token on all three in the same deployment. Failed later steps do not automatically undo earlier Worker deployments.
 
-Provision the selected agent credentials/models, read-only service database credential and authorized profiles before deploying. A PR or dry run is not evidence of a live deployment.
+Provision the selected agent credentials/models, read-only service database credential before deploying; add research profiles only if autonomous database research is needed. A PR or dry run is not evidence of a live deployment.
 
 ## Launch acceptance checks
 
-Starting the context machine enables the `research` route. Set `LLM_PROVIDER=context_machine` to route all nine accounting purposes through its private completion endpoint too; the main API and queue then need no provider API key. `LLM_PROVIDER=api` retains direct API routing. Research currently has no production feature caller. Integrate it into an authorized workflow with consent, budget reservation, provenance and citation validation before exposing it to users.
+Starting the context machine enables its private model endpoints. Autonomous database research additionally requires an authorized profile. Set `LLM_PROVIDER=context_machine` to route all ten accounting purposes through its private completion endpoint too; the main API and queue then need no provider API key. `LLM_PROVIDER=api` retains direct API routing. Research currently has no production feature caller. Integrate it into an authorized workflow with consent, budget reservation, provenance and citation validation before exposing it to users.
 
 Before calling the AI layer ready:
 
 - Require a passing PR CI run, then a successful production deploy and `/readyz`. If Actions was blocked by billing, resolve billing and rerun CI before retrying deployment; merging does not bypass this gate.
-- Install the selected credentials, exact model IDs, efforts, read-only database login and profile using the settings above. `auto` uses API keys first; test subscription mode explicitly if it will be used, since successful API inference does not verify subscription entitlement.
+- Install the selected credentials, exact model IDs, efforts, read-only database login using the settings above. `auto` uses API keys first; test subscription mode explicitly if it will be used, since successful API inference does not verify subscription entitlement.
 - On synthetic, authorized accounting records, exercise evidence selection/preparation, statement extraction, procedure drafting, work commands, workflow planning, written-answer streaming and multi-round investigations. Verify strict JSON, final citations, tool continuation and the configured model/effort. Keep normal firm consent and approval gates enabled.
 - Check token budgets against the chosen model and effort. These ceilings include reasoning: work commands have 200 output tokens, investigation rounds 600 and written answers 1,200. Higher effort can consume the ceiling before any usable answer. Select a supported low/no-reasoning setting for small tasks or deliberately change and retest their budgets; do not assume one global medium/high effort suits every purpose.
 - Run an authorized context-machine research call through the main service's private binding for every credential mode that will be used. Confirm the response model, effort, auth mode, call count and evidence references. Confirm revoked client/member access is denied. Codex subscription calls require the explicit uncapped-output acknowledgement described in the gateway contract.
@@ -147,11 +141,11 @@ Fake-provider tests and `/readyz` do not prove live provider authentication, acc
 
 ### Missing configuration is not repaired by retrying deployment
 
-A GitHub variable stores a non-secret setting; a Cloudflare Worker secret stores a runtime service credential. `CONTEXT_MACHINE_DATABASE_URL` is a **secret containing a real, provisioned read-only login**, not a service URL and not a copy of `DATABASE_URL`. `CONTEXT_MACHINE_PROFILES` must name existing authorized platform members; a provider subscription token cannot replace that identity.
+A GitHub variable stores a non-secret setting; a Cloudflare Worker secret stores a runtime service credential. `CONTEXT_MACHINE_DATABASE_URL` is a **secret containing a real, provisioned read-only login**, not a service URL and not a copy of `DATABASE_URL`. Optional `CONTEXT_MACHINE_PROFILES` entries for database research must name existing authorized platform members; data-only completions require no profile.
 
 With `LLM_PROVIDER=api`, existing accounting features require `OPENAI_API_KEY`. With `LLM_PROVIDER=context_machine`, the selected CLI credential is sufficient for all model calls; provider keys remain confined to that service. `CODEX_ACCESS_TOKEN` can additionally enable Codex subscription mode, and `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` enables Claude. Install these through the direct Cloudflare stdin helper described above. API credentials cannot be generated by this repository, and stored Worker secret values cannot be retrieved.
 
-With research enabled, do not rerun deployment until the required secrets and profile have been provisioned. Validation remains strict for enabled research.
+Before enabling the service, provision its required credentials and dedicated read-only login. Profiles are optional for completions; database research remains unavailable until an authorized profile is configured.
 
 To deploy the main app while research is being provisioned, explicitly set `CONTEXT_MACHINE_ENABLED=false` in the GitHub environment. Deployment then skips the context-machine build/deploy, removes its bindings from the disposable API/queue Wrangler configuration, and clears the caller model configuration and hides the token from its container. Cloudflare credentials and GitHub variables are retained. No context-machine Worker needs to exist, and readiness does not depend on research. Direct API features are independently available only when their API key is installed.
 
@@ -161,11 +155,13 @@ To enable research later, install the credentials, read-only login and access pr
 
 With `CONTEXT_MACHINE_ENABLED=false` and `CONTEXT_MACHINE_TOKEN` installed in the production Cloudflare Workers, run **Provision context machine in standby** (`provision-context-machine.yml`) on `main`. This deploys `close-context-machine-production` and the real container image with pinned Codex and Claude CLIs. It does not rebuild the main app, run migrations, require provider/database credentials, or enable research. The private Worker authenticates requests, then returns HTTP 503 with `{"status":"disabled"}` without starting a container. The image stays available on demand; no CLI process runs while disabled. Find it under Workers & Pages and Containers in the deployment account, not at a public URL.
 
-The equivalent local command is `node scripts/deploy-context-machine.mjs --provision-disabled --production`. It refuses to run unless research is explicitly disabled. Routine app deployments still skip this service while disabled, avoiding repeated image builds. To activate it, supply the provider credentials, read-only database login and access profile, set `CONTEXT_MACHINE_ENABLED=true`, and run the normal production deployment so the service and caller bindings are configured together. Readiness remains unavailable until then.
+The equivalent local command is `node scripts/deploy-context-machine.mjs --provision-disabled --production`. It refuses to run unless research is explicitly disabled. Routine app deployments still skip this service while disabled, avoiding repeated image builds. To activate it, supply the provider credentials and read-only database login, set `CONTEXT_MACHINE_ENABLED=true`, and run the normal production deployment so the service and caller bindings are configured together. Readiness remains unavailable until then.
 
-### Personal subscriptions: your own research only
+### Personal subscriptions for your own platform work
 
-Use one owner access profile in `CONTEXT_MACHINE_PROFILES`; personal Codex login and Claude subscription mode reject multiple profiles and organization-wide (`*`) profiles. These credentials must not serve other platform users. All accounting workflows can use the personal login with `LLM_PROVIDER=context_machine`, but only requests from its configured owner identity are accepted. Other platform users require an appropriate API/provider arrangement.
+Before activating personal-subscription inference, verify that the subscription owner is the only human using platform inference. This is the current operating assumption, stated by the operator on 2026-10-10; the completion service does not enforce an owner allowlist. Before admitting another human user, switch to an appropriate API/provider arrangement.
+
+For ordinary accounting inference, leave `CONTEXT_MACHINE_PROFILES` unset or `[]`: no platform owner registration is needed, and prompt/data calls work across firms. Personal credentials remain subject to their provider's permitted personal use. If autonomous database research is needed, configure one exact research profile; personal research modes still reject multiple or wildcard profiles.
 
 **Codex / ChatGPT Pro:** create a separate managed session for this service using the official CLI. Do not upload the auth file actively used by your desktop: concurrent refreshes of the same session can invalidate each other. On your trusted computer:
 
@@ -194,15 +190,15 @@ node scripts/cloudflare-credentials.mjs CLAUDE_CODE_OAUTH_TOKEN production < /pa
 gh variable set CLAUDE_AUTH_MODE --body subscription --env production --repo pbse/accounting
 ```
 
-Claude's setup token is already supported by the service. Its real value stays in the parent; the restricted CLI receives a per-run proxy bearer. This static setup token is not automatically refreshed: generate and install a replacement when it expires or is revoked, then redeploy. Do not copy browser cookies or macOS Keychain data. Use this mode only for the subscription owner's research, with the published Claude Code binary; serving other users needs the appropriate API/provider arrangement.
+Claude's setup token is already supported by the service. Its real value stays in the parent; the restricted CLI receives a per-run proxy bearer. This static setup token is not automatically refreshed: generate and install a replacement when it expires or is revoked, then redeploy. Do not copy browser cookies or macOS Keychain data. Use this mode for the subscription owner's own platform work across their firms, with the published Claude Code binary. Operating for other people requires an appropriate API/provider arrangement; the inference service has no owner allowlist.
 
-Keep `CONTEXT_MACHINE_ENABLED=false` until the read-only database login and owner profile are configured. Then enable research and run the normal production deployment to apply configuration and restore caller bindings. The standby-only provisioning workflow preserves installed credentials; it does not install them or activate research. Validate one authorized run in each selected mode after activation; fake-provider CLI tests cannot prove real entitlement or token validity.
+Keep `CONTEXT_MACHINE_ENABLED=false` until credentials, the selected model and read-only database login have passed acceptance. Then enable the service and run the normal production deployment to apply configuration and restore caller bindings. The standby-only provisioning workflow preserves installed credentials; it does not install them or activate research. Validate one authorized run in each selected mode after activation; fake-provider CLI tests cannot prove real entitlement or token validity.
 
 Sources: [OpenAI managed auth on trusted runners](https://learn.chatgpt.com/docs/auth/ci-cd-auth), [Claude token lifecycle](https://code.claude.com/docs/en/env-vars#claude_code_oauth_token), and [Claude hosted-use requirements](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
 
 ## Route every accounting call through the context machine (B04/B12)
 
-After installing the credentials and read-only owner profile, set production **variables**:
+After installing the credentials and read-only service login, set production **variables**:
 
 ```sh
 gh variable set LLM_PROVIDER --body context_machine --env production --repo pbse/accounting
@@ -216,8 +212,33 @@ gh variable set LLM_REASONING_EFFORTS --body '{"work_command":"low","investigati
 
 Pin `CODEX_MODEL` / `CLAUDE_MODEL` and their default effort. Optional `LLM_MODELS` and `LLM_REASONING_EFFORTS` apply to every completion purpose; the same policy is deployed to the gateway and service. Redeploy using the normal production workflow to update the service, API and queue together. Preflight rejects routing to a disabled service, unsupported CLI efforts, missing credentials and unacknowledged Codex subscription token limits before builds/migrations. Small existing output ceilings may need explicit, budget-reviewed adjustment after live acceptance; a fluent partial answer is never success.
 
-The HTTP organization boundary supplies the authenticated organization/subject. Preparation jobs use their recorded creator; scheduled replays use the original job creator, while manual replays retain the current caller identity. The service matches the entire provisioned profile, or a member under an organization-wide profile, and checks current organization/member access before launching the CLI. Personal accounts require one owner profile and reject other identities. Do not expose personal subscriptions to other platform users.
+The HTTP organization boundary supplies caller attribution. Preparation jobs use their recorded creator; scheduled replays use the original job creator, while manual replays retain the current caller identity. Completions need no profile or caller identity and never query the service database. Application data/capability authorization, current background client grants and per-firm budgets still apply. Service authentication, model policy and isolated tool-free inference remain required. Autonomous database research retains its separate profile and read authorization.
 
 Each `/v1/complete` call uses exactly one model-call reservation and no agent read tools. Schemas and tool proposals are returned to existing domain validators; the caller's existing capability authorization, consent and approval gates still apply. Completion text arrives in one callback after validation, rather than live token deltas. Autonomous research retains its separately reserved multi-call/read-tool protocol. `/readyz` checks the same private binding for either mode but performs no paid inference.
 
 To return accounting calls to direct API, set `LLM_PROVIDER=api`, install `OPENAI_API_KEY`/`OPENAI_MODEL`, restore API-compatible effort/model policy and redeploy. Research may stay enabled independently. There is no automatic fallback and no code change. Review provider disclosures and existing firm consent before switching account/provider types; task workspace deletion does not imply provider-side zero retention.
+
+## Local golden-set evaluation
+
+Use a migrated disposable local PostgreSQL database and a local context-machine process connected to it through a dedicated read-only role. No profile is required to replay data-only completion fixtures. If you want to remap recorded identities with the optional `-profile` flag, configure one synthetic local mapping, for example:
+
+```json
+[{"organization":"org_AgentEvalLocal","subject":"user_agent_eval","access_profile":"local-eval"}]
+```
+
+Use the same agent, model, effort and token in the evaluator's environment, with `LLM_PROVIDER=context_machine`, `CONTEXT_MACHINE_ENDPOINT=http://127.0.0.1:8090/v1/run`, `CODEX_MODEL=gpt-6.1-sol`, `CODEX_REASONING_EFFORT=medium`, and `LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS=true`. Point `ACCEPTANCE_DATABASE_URL` at the local database. In `services/backend`, run:
+
+```sh
+go run ./cmd/agent-eval -profile local-eval -only question-prefix -report /tmp/agent-eval-smoke.json
+go run ./cmd/agent-eval -profile local-eval -report /tmp/agent-eval.json
+```
+
+Replace the smoke prefix with an ID prefix from `acceptance/agent/golden.json`; the full run spends real subscription/API calls and is deliberately on demand. The replay installs the recorded synthetic local membership and preserves each close, permitted read and score. The optional `-profile` flag additionally remaps fixture identities. It rejects the hosted context-machine endpoint. Do not change production research profiles to synthetic evaluation identities or wildcard subjects. Passing means at least 90% of accounting questions and 100% of off-scope refusals; record the selected model/effort and report before claiming live acceptance.
+
+Production's automatic deployment reuses the merged PR's exact CI head. It waits up to three minutes if that run is still pending, then fails closed if it remains pending or fails. CI uploads a small `ci-provenance` artifact with the tested file-tree hash; automatic deployment requires that hash to match the exact main tree, catching an untested combination of otherwise green PRs. Artifact and merge-association metadata can lag, so both are included in the bounded wait. It starts no second suite and does not accept an unrelated ancestor's green run. The intentional manual `workflow_dispatch` operator override skips this guard; it requires independent validation of the release revision and is not automatic CI evidence. A successful app `/readyz` with the context machine disabled is app readiness only; data-only inference activation additionally needs `CONTEXT_MACHINE_ENABLED=true`, `LLM_PROVIDER=context_machine`, supported provider credentials/model policy and a successful authorized hosted inference. Application data permissions remain enforced. `CONTEXT_MACHINE_PROFILES` is required only for autonomous database research.
+
+`LLM_API_IMAGE_ENABLED=false` is the default. Set its GitHub variable to `true` only to explicitly opt into whole PDF pages being sent to the OpenAI API; the credential remains a Cloudflare secret. This selection replaces paid Gemini image reading in API mode. A text API key alone, or a Gemini key held for missing paid-service acknowledgment, never enables OpenAI image upload. API `ocr` model/effort overrides require this opt-in and fail preflight before deployment mutations if it is missing. Personal subscriptions additionally require their account's model-improvement setting disabled and operator verification of that data handling before activation.
+
+The pinned Codex CLI also starts with plugins, connected apps, hooks, subagents and shell snapshots explicitly disabled, avoiding background plugin downloads in the temporary run directory. The only research MCP tools remain the two scoped record reads; completion mode removes them and the parent proxy advertises no executable tools.
+
+The direct Claude image endpoint limits each base64-encoded image to 10 MB ([current vision documentation](https://platform.claude.com/docs/en/build-with-claude/vision#request-limits)); this gateway does not use the lower-limit Bedrock/Vertex transports. Automatic CI evidence expires after seven days, and an expired artifact fails promptly with a rerun-CI instruction. An absent image route never reports an unused Gemini key as an active reader. Context-machine image failures stop model attempts for the remaining PDF pages instead of repeatedly consuming reservations.

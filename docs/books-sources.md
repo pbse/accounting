@@ -219,6 +219,8 @@ The demonstration seed writes QuickBooks-shaped captures from generated reports.
 
 File imports stay behind a firm setting until every feature a month on files needs reads the record.
 
+The record landed first as step 3 of the delivery, with no visible change (migration 145): the worker's books-versions loop writes a version for every QuickBooks period capture and Xero capture that has none, the existing ones first, a batch at a time, then each new one within a minute. A version is the books `readLedgerMonth` makes of the capture (accounts with class, type and subtype; balances and activity as exact decimals; the ledger's cash-flow statement when it has one), with the capture it came from, the company, the month-end date and a digest of its figures; a QuickBooks capture's General Ledger rows are kept as its lines, each with its report location. A capture the readers cannot read is kept with the reason, once, so a reader that would refuse it agrees with the record. The parity check recomputes each stored version from its capture's payload and names any that disagree; the staff console's Connections page shows how many captures have their version and whether the readers agree. No reader reads the record yet.
+
 ## Connections
 
 ### Today
@@ -246,6 +248,8 @@ Each client gets a page at `/dashboard/clients/<client>`, on the Krith design sy
 - open client requests, and the members with access.
 
 It follows [design system](design-system.md#rollout) as any screen added during the rollout does: Krith's tokens, the Krith component from the artifact where one exists, and the rollout's stated fallback otherwise. It does not wait for the files work: on its own it moves today's QuickBooks and Xero connection panels out of the month. Until it ships, connections stay where they are today.
+
+The page landed first, reading everything above in one request (`GET /v1/closes/client?name=…`, which names the client in the query because a path segment would collide with a close's own routes) and opening from each row of Clients and from a month's breadcrumb. Clients' rows became links to it, as the design's records table has them, with the client's books, what is up next, its state and its owner; opening a month moved to the client's page, whose one action opens the oldest month in hand, else the earliest month owed. Until the connection actions move onto the Books card, the card shows the client's connections and its newest month's books, and links to the month where each connection is still managed.
 
 ### Ledger catalog and onboarding
 

@@ -26,6 +26,10 @@ const securityPeople = `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',m.id::
 const securityInvitations = `SELECT COALESCE(jsonb_agg(jsonb_build_object('email',email,'role',role_name,'invited_by',invited_by,'expires_at',expires_at,'created_at',created_at) ORDER BY id DESC),'[]'::jsonb)
  FROM member_invitations WHERE organization_id=$1 AND state IN ('sending','pending')`
 
+// securityClients is the firm's clients for assignments: every name a close was opened under, and every client on the
+// roster, which may not have opened its first month yet.
+const securityClients = `SELECT COALESCE(jsonb_agg(DISTINCT name),'[]'::jsonb) FROM (SELECT entity AS name FROM client_closes WHERE organization_id=$1 UNION SELECT client_entity FROM current_client_roster WHERE organization_id=$1) n`
+
 // securityServices lists connections that are not disconnected; credentials, OAuth digests and secrets are never selected.
 const securityServices = `SELECT COALESCE(jsonb_agg(x ORDER BY x.connected_at DESC),'[]'::jsonb) FROM (
  SELECT 'QuickBooks' AS provider,c.close_id::text AS close_id,c.client_entity AS client,COALESCE(c.company_name,'') AS account,c.environment AS mode,c.state,c.actor AS connected_by,c.created_at AS connected_at,c.confirmed_by,c.confirmed_at FROM quickbooks_connections c WHERE c.organization_id=$1 AND c.state<>'disconnected'
@@ -87,7 +91,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var raw []byte
-		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(DISTINCT entity),'[]'::jsonb) FROM client_closes WHERE organization_id=$1`, organization(r)).Scan(&raw); err != nil {
+		if err := db.QueryRowContext(r.Context(), securityClients, organization(r)).Scan(&raw); err != nil {
 			problem(w, 503, "The firm's clients could not be read.")
 			return
 		}
@@ -115,7 +119,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		org := organization(r)
 		out := map[string]any{"organization_id": org}
 		for key, query := range map[string]string{"people": securityPeople, "invitations": securityInvitations, "services": securityServices, "email": securityEmail, "posting_grants": securityGrants, "activity": securityActivity,
-			"clients": `SELECT COALESCE(jsonb_agg(DISTINCT entity),'[]'::jsonb) FROM client_closes WHERE organization_id=$1`} {
+			"clients": securityClients} {
 			var raw []byte
 			if err = tx.QueryRowContext(r.Context(), query, org).Scan(&raw); err != nil {
 				problem(w, 503, "Security is unavailable.")
@@ -145,7 +149,8 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		if level == "firm" {
 			answers += " Agent chat is also on firm-wide: a question typed outside a close is sent the same way with the reads the model chooses across the closes the member can open (the list of closes, Work's lists, the review queue, the morning brief, the track record, closes handed to the agent, a search, and any close read by its id), with client names."
 		}
-		gemini := map[string]string{"gemini": "Key set on the worker; model " + ocrModel, "tesseract": "Key not set on the worker; PDFs are read locally", "held": "Key set on the worker, but " + heldBecause(ocrModel) + ", so PDFs are read locally", "": "The worker has not reported its PDF reading in the last five minutes"}[ocr]
+		pageProvider, pageEvidence := ocrDisclosure(ocr, ocrModel)
+
 		// Krith's sender and a firm's own Resend connection both send through Resend, from different accounts.
 		resendAccount, resendEvidence := "the firm's own Resend account", "No enabled sending connection"
 		switch email {
@@ -156,7 +161,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		}
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.
 		out["providers"] = []map[string]any{
-			{"provider": "Google Gemini", "receives": "Each page of a PDF the firm adds (uploaded, imported, forwarded or sent by a client), as an image, to read its text. A page's own PDF text is always kept; there Gemini's reading only checks it.", "evidence": gemini + "; " + plural(pageReads, "page reading", "page readings") + " reserved in the last 30 days", "in_use": ocr == "gemini" || pageReads > 0},
+			{"provider": pageProvider, "receives": "Each page of a PDF the firm adds, as an image, to read its text when the configured route authorizes its uploader. PDF text is always kept; the image reading only checks it. Page images are sent as uploaded and are not text-redacted.", "evidence": pageEvidence + "; " + plural(pageReads, "page reading", "page readings") + " reserved in the last 30 days (across configured image providers; not confirmed delivery)", "in_use": ocr == "gemini" || ocr == "openai" || ocr == "context_machine" || pageReads > 0},
 			{"provider": llm.ProviderLabel(r.Context(), "preparation"), "receives": "Extracted text of the documents the agent reads (their names first, then up to 20 it selects), PDF statement text for row proposals, policy text or reviewer edits for procedure drafts, a Work command with the visible client names, and, when platform staff draft a workflow plan for a close while the firm allows staff plan drafts, their instruction with the close's client, month, sign-off state and counts of its preparation work. " + answers + " Card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details are removed from document text and those questions and reads first; file names and Work commands are sent as written. API requests ask the provider not to store them; the context machine deletes each task's workspace after the call.", "evidence": plural(calls, "model call", "model calls") + " reserved in the last 30 days (a budget count, not confirmed delivery)", "in_use": calls > 0},
 			{"provider": "Resend", "receives": "Emails a person approved, sent through " + resendAccount + ": client request emails (the recipient, a standard notice from the firm's sender and the private reply link; never the request's questions or the client's figures) and collection reminders to the client's customers (the recipient and the approved subject and message, which by default name the invoice, its amount, its due date and the client, and carry whatever the accountant wrote).",
 				"evidence": resendEvidence, "in_use": email == delivery.Krith || email == "resend"},
@@ -222,4 +227,23 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]bool{"saved": true})
 	})
+}
+
+// Historical OCR budget reservations do not identify a provider. Report the
+// worker's current route and avoid attributing those calls to Google after a switch.
+func ocrDisclosure(provider, model string) (string, string) {
+	switch provider {
+	case "gemini":
+		return "Google Gemini", "Key set on the worker; model " + model
+	case "openai":
+		return "OpenAI API (PDF images)", "Worker image route; model " + model
+	case "context_machine":
+		return "Private context machine (PDF images)", "Worker image route; model " + model + "; authorized uploaders with current client grants"
+	case "tesseract":
+		return "PDF image reading", "Model route not set on the worker; PDFs are read locally"
+	case "held":
+		return "PDF image reading", "Key set on the worker, but " + heldBecause(model) + ", so PDFs are read locally"
+	default:
+		return "PDF image reading", "The worker has not reported its PDF reading in the last five minutes"
+	}
 }
