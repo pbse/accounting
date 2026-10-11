@@ -61,7 +61,7 @@ func TestInstalledCompletionCLIs(t *testing.T) {
 					t.Fatal(err)
 				}
 				calls := 0
-				proxy := &modelProxy{images: []llm.Image{{PNG: testPageImage(t)}}, ctx: context.Background(), token: "run", key: "private", model: "gpt-5", effort: "low", authMode: mode, agent: agent, limit: 1, tokens: 4096, completion: true, schema: schema}
+				proxy := &modelProxy{images: []llm.Image{{PNG: testPageImage(t)}}, ctx: context.Background(), token: "run", key: "private", model: "gpt-6.1-sol", effort: "medium", authMode: mode, agent: agent, limit: 1, tokens: 4096, completion: true, schema: schema}
 				if agent == "claude" {
 					proxy.model = "claude-sonnet-4-6"
 				}
@@ -112,7 +112,7 @@ func TestInstalledCompletionCLIs(t *testing.T) {
 					defer store.Close()
 					proxy.personal = &codexAuthSession{file: dir + "/auth.json", endpoint: store.URL, client: store.Client()}
 				}
-				args, env := command(agent, proxy.model, front.URL, "run", dir, 1, "low", mode)
+				args, env := command(agent, proxy.model, front.URL, "run", dir, 1, proxy.effort, mode)
 				args, err = completionCommand(agent, args, dir, schema)
 				if err != nil {
 					t.Fatal(err)

@@ -28,8 +28,7 @@ import { Evidence, PreparationJobs } from "./Evidence";
 import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
 import { Memory } from "./Memory";
-import { ProductionAccess } from "./ProductionAccess";
-import { QuickBooks } from "./QuickBooks";
+import { MonthBooks } from "./MonthBooks";
 import { Xero } from "./Xero";
 import { HistoricalExports } from "./HistoricalExports";
 import { Stripe } from "./Stripe";
@@ -62,6 +61,10 @@ const basisLabels = { cash: "Cash basis", modified_cash: "Modified cash basis", 
 
 function profileLabel(p: Profile) {
   if (p.state === "conflict") return "Connected ledgers disagree on currency or fiscal year; disconnect the wrong one";
+  if (p.state === "differs")
+    return p.ledger?.conflict
+      ? `${p.currency} confirmed, but the connected ledgers disagree with each other: disconnect the wrong one`
+      : `${p.currency} confirmed, but the ledger reports ${[p.ledger?.currency, p.ledger?.fiscal_year_start ? "another fiscal year" : ""].filter(Boolean).join(" and ")}: correct the client's profile or its connection`;
   if (p.state === "unknown") return "USD assumed until the ledger's currency is read: reconnect QuickBooks, or capture a Xero snapshot";
   return `${p.currency} · fiscal year starts ${new Date(2000, p.fiscal_year_start - 1).toLocaleString("en-US", { month: "long" })}`;
 }
@@ -216,7 +219,7 @@ export default function ClientClose() {
       <CloseLede close={close} onPlanSaved={() => void reload()} />
       <p className="ks-lede-notes">
         {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]}</span>}
-        {close.profile && close.profile.state !== "none" && <span className={close.profile.state === "conflict" || close.profile.state === "unknown" ? "chip warn" : "chip"} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
+        {close.profile && close.profile.state !== "none" && <span className={close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown" ? "chip warn" : "chip"} role={close.profile.state === "conflict" || close.profile.state === "differs" ? "alert" : undefined} title={close.profile.state === "confirmed" || close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>{profileLabel(close.profile)}</span>}
       </p>
       <nav className="ks-tabs" aria-label="Close sections">
         {tabs.map(([key, label]) => (
@@ -235,6 +238,8 @@ export default function ClientClose() {
       )}
       {tab === "books" && (
         <div className="stack">
+          <MonthBooks key={`books-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
+          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
           <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
           <Flux key={`flux-${close.id}`} closeId={close.id} />
@@ -289,8 +294,6 @@ export default function ClientClose() {
       {tab === "evidence" && (
         <div className="stack">
           <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
-          <QuickBooks key={`qbo-${close.id}`} closeId={close.id} entity={close.entity} />
-          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} />
           <HistoricalExports key={`history-${close.id}`} closeId={close.id} />
           <Stripe key={`stripe-${close.id}`} closeId={close.id} entity={close.entity} />
           <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
@@ -323,7 +326,6 @@ export default function ClientClose() {
         <div className="stack">
           <Memory key={`memory-${close.id}`} closeId={close.id} />
           <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} onApplied={() => void reload()} />
-          <ProductionAccess closeId={close.id} entity={close.entity} currency={close.profile?.currency ?? "USD"} />
           <Replay key={`replay-${close.id}`} closeId={close.id} />
           <RetentionControls close={close} onDeleted={setDeleted} />
         </div>

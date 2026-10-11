@@ -82,7 +82,8 @@ func preparationInventory(ctx context.Context, tx *sql.Tx, closeID string) ([]by
 // The latest ledger capture is pinned alongside the upload jobs, not disguised
 // as an invoice job. Its absence is explicit and never means complete coverage.
 //
-// The capture is the books', chosen as the tie-out chooses them: the latest QuickBooks period capture (by capture time)
+// The capture is the books', chosen as the tie-out chooses them, of the month's source: the latest QuickBooks period
+// capture (by capture time)
 // of the connection the books are read from (quickbooksReading), unless the close's latest Xero capture is newer. A QuickBooks capture reads exactly as it was stored, so its JSON, and the
 // sign-offs whose digests include it, never change. A Xero capture's coverage is proposed from it on read
 // (xero.Coverage), so every Xero capture has one; it is named "xero:<id>" (snapshot IDs of the two providers would
@@ -91,8 +92,8 @@ func preparationInventory(ctx context.Context, tx *sql.Tx, closeID string) ([]by
 func ledgerCoverage(ctx context.Context, tx *sql.Tx, closeID string) (json.RawMessage, error) {
 	var raw json.RawMessage
 	var quickbooksAt sql.NullTime
-	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('snapshot_id',s.id::text,'digest',s.digest,'source_id',s.payload->>'source_id','period',s.payload->>'period','captured_at',s.captured_at,'items',s.payload->'coverage','stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),'null'::jsonb),
- (SELECT s.captured_at FROM quickbooks_snapshots s WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1)`, closeID).Scan(&raw, &quickbooksAt)
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('snapshot_id',s.id::text,'digest',s.digest,'source_id',s.payload->>'source_id','period',s.payload->>'period','captured_at',s.captured_at,'items',s.payload->'coverage','stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),'null'::jsonb),
+ (SELECT s.captured_at FROM quickbooks_snapshots s WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1)`, closeID).Scan(&raw, &quickbooksAt)
 	if err != nil {
 		return raw, err
 	}
@@ -101,7 +102,7 @@ func ledgerCoverage(ctx context.Context, tx *sql.Tx, closeID string) (json.RawMe
 	var stale bool
 	var payload []byte
 	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.digest,s.period,s.captured_at,x.state<>'active' OR s.period<>c.period,jsonb_build_object('accounts',s.payload->'accounts','trial_balance',s.payload->'trial_balance')
- FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id WHERE s.close_id=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&id, &digest, &period, &at, &stale, &payload)
+ FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id WHERE s.close_id=$1 AND `+sourceAllows("s.close_id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&id, &digest, &period, &at, &stale, &payload)
 	if err == sql.ErrNoRows || (err == nil && quickbooksAt.Valid && !at.After(quickbooksAt.Time)) {
 		return raw, nil
 	}

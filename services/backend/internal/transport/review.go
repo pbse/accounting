@@ -110,6 +110,10 @@ func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, deci
 			}
 			return "", 409, issue
 		}
+		// A draft prepared before the client's profile changed is approved only in the currency the profile now holds.
+		if err := preparation.CurrencyIssue(ctx, tx, closeID, raw); err != nil {
+			return "", 409, err.Error()
+		}
 		issue, err := independenceIssue(ctx, tx, closeID, paperID, actor)
 		if err != nil {
 			return "", 503, "Firm review policy could not be checked."

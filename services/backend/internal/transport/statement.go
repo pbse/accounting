@@ -326,8 +326,12 @@ func registerStatements(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client's currency is unavailable.")
 			return
 		}
-		if profile.State == "conflict" || profile.State == "unknown" {
-			reject("The client's home currency is not established; confirm its ledger connection before binding a statement.")
+		if profile.Unsettled() {
+			reject(profile.Question() + " before binding a statement.")
+			return
+		}
+		if profile.State == "unknown" {
+			reject("The client's home currency is not established; confirm its profile on the client's page, or its ledger connection, before binding a statement.")
 			return
 		}
 		if !strings.EqualFold(strings.TrimSpace(in.Currency), profile.Currency) {

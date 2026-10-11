@@ -66,7 +66,7 @@ func scanApplication(row interface{ Scan(...any) error }) (creditApplication, er
 func capturedOpen(ctx context.Context, db *sql.DB, closeID string) (string, string, string, map[string][]json.RawMessage, error) {
 	var captureID, realm, currency string
 	var raw []byte
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,x.realm,COALESCE(NULLIF(x.home_currency,''),'USD'),COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state IN ('completed','unchanged') AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &currency, &raw)
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,x.realm,COALESCE(NULLIF(x.home_currency,''),'USD'),COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "quickbooks")+` AND s.state IN ('completed','unchanged') AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &currency, &raw)
 	if err != nil {
 		return "", "", "", nil, errors.New("A current completed QuickBooks transaction capture is required")
 	}
@@ -260,7 +260,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				saved, kind = item.GrantID, ""
 			}
 			var err error
-			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entityName, kind, saved); err != nil {
+			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entityName, closeID, kind, saved); err != nil {
 				refuse(w, err)
 				return
 			}

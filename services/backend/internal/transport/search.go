@@ -102,9 +102,9 @@ func searchWork(ctx context.Context, db *sql.DB, r *http.Request, closeID, query
 			case "draft":
 				hit.Title, hit.Href = title+" draft #"+id, base+"/workpapers/"+url.PathEscape(id)
 			case "transaction":
-				hit.Href = base + "?tab=evidence#quickbooks-ledger"
+				hit.Href = base + "?tab=books#quickbooks-ledger"
 			case "xero":
-				hit.Kind, hit.Href = "transaction", base+"?tab=evidence#xero"
+				hit.Kind, hit.Href = "transaction", base+"?tab=books#xero"
 			case "procedure":
 				hit.Href = base + "?tab=settings"
 			case "decision":

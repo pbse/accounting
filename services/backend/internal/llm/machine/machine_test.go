@@ -203,7 +203,7 @@ func TestInstalledCLIs(t *testing.T) {
 			})
 			fake := httptest.NewServer(mux)
 			defer fake.Close()
-			model := "gpt-5"
+			model := "gpt-6.1-sol"
 			if agent == "claude" {
 				model = "claude-sonnet-4-6"
 			}
@@ -211,6 +211,9 @@ func TestInstalledCLIs(t *testing.T) {
 			// just CLI-to-fake-provider protocol compatibility.
 			upstream, _ := url.Parse(fake.URL)
 			proxy := &modelProxy{ctx: context.Background(), token: "fake-token", key: "upstream-secret", model: model, effort: effort, authMode: mode, agent: agent, limit: 2, tokens: 4096}
+			if agent == "codex" {
+				proxy.researchTools = codexRecordTools()
+			}
 			proxy.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 				if (mode == "subscription" || agent == "codex") && r.Header.Get("Authorization") != "Bearer upstream-secret" {
 					t.Error("subscription credential missing")

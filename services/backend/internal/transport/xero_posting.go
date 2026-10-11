@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"close.local/backend/internal/auth"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -125,7 +127,7 @@ func planXeroPosting(ctx context.Context, db *sql.DB, org, entity, closeID, pape
 	if err != nil {
 		return plan, err
 	}
-	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND revoked_at IS NULL`, org, entity))
+	g, err := xeroBooksGrant(ctx, db, org, entity, closeID)
 	if err != nil || time.Now().After(g.Expires) {
 		return plan, refusal{409, "An unexpired client-specific Xero posting grant is required."}
 	}
@@ -265,83 +267,15 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 	}
 	grantPath := "/v1/closes/{id}/xero-grant"
 	mux.HandleFunc("GET "+grantPath, func(w http.ResponseWriter, r *http.Request) {
-		org, entity, ok := scope(w, r, "")
-		if !ok {
-			return
+		if org, entity, ok := scope(w, r, ""); ok {
+			xeroGrantRead(w, r, db, org, entity)
 		}
-		g, err := scanXeroGrant(db.QueryRowContext(r.Context(), `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND revoked_at IS NULL`, org, entity))
-		if err == sql.ErrNoRows {
-			jsonReply(w, 200, map[string]string{"state": "not_granted"})
-			return
-		}
-		if err != nil {
-			problem(w, 503, "Grant unavailable.")
-			return
-		}
-		jsonReply(w, 200, g)
 	})
 	mux.HandleFunc("POST "+grantPath, func(w http.ResponseWriter, r *http.Request) {
-		org, entity, ok := scope(w, r, "posting:approve")
-		if !ok {
-			return
+		if _, entity, ok := scope(w, r, "posting:approve"); ok && grantsWhole(w, r, db, entity) {
+			a, _ := productionActor(w, r, "posting:approve")
+			xeroGrantChange(w, r, db, a, entity)
 		}
-		a, _ := productionActor(w, r, "posting:approve")
-		var in struct {
-			Action       string    `json:"action"`
-			ConnectionID string    `json:"connection_id"`
-			GrantID      string    `json:"grant_id"`
-			AccountIDs   []string  `json:"account_ids"`
-			Kinds        []string  `json:"kinds"`
-			MaxAmount    string    `json:"max_amount"`
-			Reason       string    `json:"reason"`
-			Confirmation string    `json:"confirmation"`
-			ExpiresAt    time.Time `json:"expires_at"`
-		}
-		if !decode(w, r, &in) {
-			return
-		}
-		if in.Action == "revoke" {
-			if in.Confirmation != "REVOKE XERO POSTING" {
-				problem(w, 422, "Type REVOKE XERO POSTING.")
-				return
-			}
-			result, err := db.ExecContext(r.Context(), `UPDATE xero_posting_grants SET revoked_at=now(),revoked_by=$4 WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND revoked_at IS NULL`, in.GrantID, org, entity, a.Subject)
-			if err != nil {
-				problem(w, 503, "Grant revocation unavailable.")
-				return
-			}
-			if n, _ := result.RowsAffected(); n != 1 {
-				problem(w, 409, "Grant changed. Refresh before deciding.")
-				return
-			}
-			jsonReply(w, 200, map[string]string{"state": "revoked"})
-			return
-		}
-		amount, amountErr := prepaids.Amount(in.MaxAmount)
-		valid := len(in.AccountIDs) >= 2 && len(in.AccountIDs) <= 20 && len(in.Kinds) > 0
-		for i, id := range in.AccountIDs {
-			valid = valid && xeroID.MatchString(id) && !slices.Contains(in.AccountIDs[:i], id)
-		}
-		for i, kind := range in.Kinds {
-			valid = valid && (slices.Contains(postableKinds, kind) || kind == "bill_correction") && !slices.Contains(in.Kinds[:i], kind)
-		}
-		if in.Action != "grant" || in.Confirmation != "GRANT XERO POSTING" || !valid || amountErr != nil || amount <= 0 || in.ExpiresAt.Before(time.Now()) || in.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) || len(strings.TrimSpace(in.Reason)) < 10 || len(in.Reason) > 2000 {
-			problem(w, 422, "Confirm 2–20 distinct Xero account IDs, the draft kinds covered, a positive limit, expiry within 30 days and a reason of at least 10 characters.")
-			return
-		}
-		var tenant string
-		if err := db.QueryRowContext(r.Context(), `SELECT tenant_id FROM xero_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND state='active'`, in.ConnectionID, org, entity).Scan(&tenant); err != nil || tenant == "" {
-			problem(w, 409, "Confirm the client's Xero organisation first.")
-			return
-		}
-		accounts, _ := json.Marshal(in.AccountIDs)
-		kinds, _ := json.Marshal(in.Kinds)
-		var id string
-		if err := db.QueryRowContext(r.Context(), `INSERT INTO xero_posting_grants(organization_id,client_entity,connection_id,tenant_id,account_ids,kinds,max_amount,expires_at,reason,granted_by) VALUES($1,$2,$3,$4,ARRAY(SELECT jsonb_array_elements_text($5::jsonb)),ARRAY(SELECT jsonb_array_elements_text($6::jsonb)),$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, org, entity, in.ConnectionID, tenant, string(accounts), string(kinds), in.MaxAmount, in.ExpiresAt, strings.TrimSpace(in.Reason), a.Subject).Scan(&id); err != nil {
-			problem(w, 409, "A current grant exists or the grant could not be saved. Refresh before deciding.")
-			return
-		}
-		jsonReply(w, 200, map[string]string{"id": id, "state": "granted"})
 	})
 
 	path := "/v1/closes/{id}/workpapers/{paper}/xero-posting"
@@ -394,7 +328,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 			}
 			// A reconnection replaces the connection; the attempt stays bound to its organisation.
 			var connection string
-			if err := db.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND tenant_id=$3 AND state='active'`, org, entity, record.TenantID).Scan(&connection); err != nil {
+			if err := db.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND tenant_id=$3 AND state='active' ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity, record.TenantID).Scan(&connection); err != nil {
 				problem(w, 409, "Connect the same Xero organisation for this client to verify the attempt.")
 				return
 			}
@@ -440,6 +374,26 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 		if err := preparation.CurrencyIssue(r.Context(), db, closeID, paperRaw); err != nil {
 			problem(w, 409, err.Error())
 			return
+		}
+		// A write goes to the organisation as it is today: a draft in another currency than it keeps is never written
+		// there, whatever profile its month was closed under.
+		if in.Action != "verify" {
+			var draft struct {
+				Input struct{ Currency string } `json:"input"`
+			}
+			json.Unmarshal(paperRaw, &draft)
+			// The organisation is the one the posting goes to: the connection the month's books were captured from, as
+			// its grant is chosen, else the client's newest working one.
+			var keeps sql.NullString
+			if err := db.QueryRowContext(r.Context(), `SELECT x.home_currency FROM xero_connections x WHERE x.id=COALESCE((SELECT s.connection_id FROM xero_snapshots s WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),
+ (SELECT x.id FROM xero_connections x JOIN client_closes c ON c.id::text=$1 WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active' ORDER BY x.id DESC LIMIT 1))`, closeID).Scan(&keeps); err != nil && err != sql.ErrNoRows {
+				problem(w, 503, "Posting status unavailable.")
+				return
+			}
+			if keeps.String != "" && !strings.EqualFold(keeps.String, cmp.Or(draft.Input.Currency, "USD")) {
+				problem(w, 409, "This draft is in "+cmp.Or(draft.Input.Currency, "USD")+", but the Xero organisation keeps its books in "+keeps.String+": it cannot be written there.")
+				return
+			}
 		}
 		plan, err := planXeroPosting(r.Context(), db, org, entity, closeID, paperID, kind, period, paperDigest, paperRaw)
 		if err != nil {
@@ -556,7 +510,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var connection string
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE id::text=$1 AND state='active' AND tenant_id=$2 AND organization_id=$3 AND lower(client_entity)=lower($4) FOR UPDATE`, plan.grant.ConnectionID, plan.grant.TenantID, org, entity).Scan(&connection); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE id::text=$1 AND state='active' AND tenant_id=$2 AND organization_id=$3 AND client_identity(organization_id,client_entity)=client_identity($3,$4) FOR UPDATE`, plan.grant.ConnectionID, plan.grant.TenantID, org, entity).Scan(&connection); err != nil {
 			problem(w, 409, "The Xero connection changed before this decision.")
 			return
 		}
@@ -598,4 +552,94 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 		}
 		verifyXero(w, r, db, plan.access, plan.tenant, record, id)
 	})
+}
+
+// xeroGrantRead answers with the client entity's current Xero posting grant, or that it has none.
+func xeroGrantRead(w http.ResponseWriter, r *http.Request, db *sql.DB, org, entity string) {
+	g, err := scanXeroGrant(db.QueryRowContext(r.Context(), `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity))
+	if err == sql.ErrNoRows {
+		jsonReply(w, 200, map[string]string{"state": "not_granted"})
+		return
+	}
+	if err != nil {
+		problem(w, 503, "Grant unavailable.")
+		return
+	}
+	if !grantVisible(r, db, `SELECT client_entity FROM xero_posting_grants WHERE id::text=$1`, g.ID) {
+		jsonReply(w, 200, map[string]string{"state": "held_elsewhere"})
+		return
+	}
+	jsonReply(w, 200, g)
+}
+
+// xeroGrantChange grants the client entity bounded Xero posting, or revokes its grant, as a member with posting:approve
+// decides.
+func xeroGrantChange(w http.ResponseWriter, r *http.Request, db *sql.DB, a *auth.Claims, entity string) {
+	org := a.Organization
+	var in struct {
+		Action       string    `json:"action"`
+		ConnectionID string    `json:"connection_id"`
+		GrantID      string    `json:"grant_id"`
+		AccountIDs   []string  `json:"account_ids"`
+		Kinds        []string  `json:"kinds"`
+		MaxAmount    string    `json:"max_amount"`
+		Reason       string    `json:"reason"`
+		Confirmation string    `json:"confirmation"`
+		ExpiresAt    time.Time `json:"expires_at"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.Action == "revoke" {
+		if in.Confirmation != "REVOKE XERO POSTING" {
+			problem(w, 422, "Type REVOKE XERO POSTING.")
+			return
+		}
+		result, err := db.ExecContext(r.Context(), `UPDATE xero_posting_grants SET revoked_at=now(),revoked_by=$4 WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND revoked_at IS NULL`, in.GrantID, org, entity, a.Subject)
+		if err != nil {
+			problem(w, 503, "Grant revocation unavailable.")
+			return
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			problem(w, 409, "Grant changed. Refresh before deciding.")
+			return
+		}
+		jsonReply(w, 200, map[string]string{"state": "revoked"})
+		return
+	}
+	amount, amountErr := prepaids.Amount(in.MaxAmount)
+	valid := len(in.AccountIDs) >= 2 && len(in.AccountIDs) <= 20 && len(in.Kinds) > 0
+	for i, id := range in.AccountIDs {
+		valid = valid && xeroID.MatchString(id) && !slices.Contains(in.AccountIDs[:i], id)
+	}
+	for i, kind := range in.Kinds {
+		valid = valid && (slices.Contains(postableKinds, kind) || kind == "bill_correction") && !slices.Contains(in.Kinds[:i], kind)
+	}
+	if in.Action != "grant" || in.Confirmation != "GRANT XERO POSTING" || !valid || amountErr != nil || amount <= 0 || in.ExpiresAt.Before(time.Now()) || in.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) || len(strings.TrimSpace(in.Reason)) < 10 || len(in.Reason) > 2000 {
+		problem(w, 422, "Confirm 2–20 distinct Xero account IDs, the draft kinds covered, a positive limit, expiry within 30 days and a reason of at least 10 characters.")
+		return
+	}
+	var tenant string
+	if err := db.QueryRowContext(r.Context(), `SELECT tenant_id FROM xero_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND state='active'`, in.ConnectionID, org, entity).Scan(&tenant); err != nil || tenant == "" {
+		problem(w, 409, "Confirm the client's Xero organisation first.")
+		return
+	}
+	accounts, _ := json.Marshal(in.AccountIDs)
+	kinds, _ := json.Marshal(in.Kinds)
+	var id string
+	if err := db.QueryRowContext(r.Context(), `INSERT INTO xero_posting_grants(organization_id,client_entity,connection_id,tenant_id,account_ids,kinds,max_amount,expires_at,reason,granted_by) VALUES($1,$2,$3,$4,ARRAY(SELECT jsonb_array_elements_text($5::jsonb)),ARRAY(SELECT jsonb_array_elements_text($6::jsonb)),$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, org, entity, in.ConnectionID, tenant, string(accounts), string(kinds), in.MaxAmount, in.ExpiresAt, strings.TrimSpace(in.Reason), a.Subject).Scan(&id); err != nil {
+		problem(w, 409, "A current grant exists or the grant could not be saved. Refresh before deciding.")
+		return
+	}
+	jsonReply(w, 200, map[string]string{"id": id, "state": "granted"})
+}
+
+// xeroBooksGrant is the client's Xero posting grant on the organisation month closeID's books were captured from
+// (before any capture, the month's working connection), under any of the client's names: the proposal's source and its
+// ledger effect are then the same organisation.
+func xeroBooksGrant(ctx context.Context, db *sql.DB, org, entity, closeID string) (xeroGrant, error) {
+	return scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL
+ AND connection_id=COALESCE((SELECT s.connection_id FROM xero_snapshots s WHERE s.close_id::text=$3 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),
+  (SELECT x.id FROM xero_connections x JOIN client_closes c ON c.id::text=$3 WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active'
+   ORDER BY x.id DESC LIMIT 1)) ORDER BY id DESC LIMIT 1`, org, entity, closeID))
 }

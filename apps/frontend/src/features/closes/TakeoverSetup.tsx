@@ -13,11 +13,15 @@ type Content = {
   assigned: { subject: string; member: boolean }[];
   routine: { finish: string; due_days: number | null } | null;
   scope: { unavailable?: string; items?: { name: string; state: string }[] };
+  // A confirmed client profile, and "files" for books that come as files with no connection.
+  profile?: { currency: string; fiscal_year_start: number; state: string };
+  books?: "files";
 };
 type Setup = { id: string; digest: string; timezone: string; confirmed_by: string; confirmed_at: string };
 type View = { takeover: boolean; content?: Content; digest?: string; problems?: string[]; setups?: Setup[]; you?: string[] };
 
 const plain = (s: string) => s.replaceAll("_", " ");
+const yearStart = (month: number) => new Date(Date.UTC(2000, month - 1, 1)).toLocaleString("en-US", { month: "long", timeZone: "UTC" });
 
 // The opening month's takeover setup: what the client is taken over with, read from the firm's records and confirmed once.
 export function TakeoverSetup({ closeId }: { closeId: string }) {
@@ -70,8 +74,22 @@ export function TakeoverSetup({ closeId }: { closeId: string }) {
       <dl>
         <dt>Company the books are read from</dt>
         <dd>
-          {content.companies.length === 0 ? "None connected." : content.companies.map((c) => `${c.provider} · ${c.name || c.company}${c.environment ? ` (${c.environment})` : ""} · ${plain(c.state)}`).join("; ")} <Link to={settings}>Connections</Link>
+          {content.books === "files"
+            ? "None: its books come as files."
+            : content.companies.length === 0
+              ? "None connected."
+              : content.companies.map((c) => `${c.provider} · ${c.name || c.company}${c.environment ? ` (${c.environment})` : ""} · ${plain(c.state)}`).join("; ")}{" "}
+          <Link to={settings}>Connections</Link>
         </dd>
+        {content.profile && (
+          <>
+            <dt>Currency and fiscal year</dt>
+            <dd>
+              {content.profile.currency}, with a fiscal year starting in {yearStart(content.profile.fiscal_year_start)}
+              {content.profile.state === "differs" ? " (its ledger reports otherwise: answer that on the client's page)" : ""}
+            </dd>
+          </>
+        )}
         <dt>Firm procedures in force</dt>
         <dd>
           {content.procedures.length === 0 ? "None approved." : (
