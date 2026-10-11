@@ -39,9 +39,18 @@ func TestFirmClientsFindsTheNamesAnAnswerUses(t *testing.T) {
 		db.Exec(`DELETE FROM client_closes WHERE organization_id IN ($1,$2)`, firm, other)
 		db.Exec(`DELETE FROM organizations WHERE id IN ($1,$2)`, firm, other)
 	})
-	got := firmClients(context.Background(), db, firm, "Birch Dental and Acme Europe each grew, as did GE; Zenith Other did not.")
+	got, err := firmClients(context.Background(), db, firm, "Birch Dental and Acme Europe each grew, as did GE; Zenith Other did not.")
+	if err != nil {
+		t.Fatal(err)
+	}
 	slices.Sort(got)
 	if len(got) != 3 || got[0] != "Acme Europe" || got[1] != "Birch Dental" || got[2] != "GE" {
 		t.Fatalf("the firm's clients the answer names, and no other firm's: %v", got)
+	}
+	// A failed lookup is an error, never an empty list the gate would read as "no client named".
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := firmClients(ctx, db, firm, "Birch Dental"); err == nil {
+		t.Fatal("a failed lookup reports its error")
 	}
 }

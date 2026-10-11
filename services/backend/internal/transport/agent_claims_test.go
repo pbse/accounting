@@ -545,6 +545,12 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Retail sales were 100.00.", e("t68", 0, "/profit_and_loss/sections/0/lines/0/amount", "100.00"))
 	ok("Opening book cash of 64,120.00 is shown. Opening book cash is not available at the bank.", e("t30", 0, "/opening/amount", "64120.00"), e("t30", 1, "/opening/amount", "64120.00"))
 
+	// Round forty-four: a rate is never money; a movement is of the same books.
+	reads["t70"] = read(`{"currency":"USD","loan":{"name":"Equipment loan","opening_principal":"1000.00","annual_rate":"5.25","term_months":"36"}}`, "Loan workpaper", "loan_schedule", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Opening principal and annual rate total 1,005.25.", "combines money with a percent", derived(0, "sum", "1005.25", "t70", "/loan/opening_principal", "t70", "/loan/annual_rate"))
+	reads["t71"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","basis":"cash","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00","change":"5000.00"}]}}`, "Management pack (cash basis)", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Net income rose to 21,780.00, up 5,000.00.", "nothing cited shows it rose", e("t2", 0, ni+"/amount", "21780.00"), e("t71", 0, "/profit_and_loss/measures/0/change", "5000.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

@@ -230,7 +230,10 @@ var (
 	claimChangeKeys  = map[string]bool{"change": true, "variance": true, "difference": true, "delta": true, "movement": true, "net_change": true, "increase": true, "decrease": true, "unexplained": true}
 	claimPriorKeys   = map[string]bool{"prior": true, "prior_month": true, "previous": true, "prior_amount": true, "last_month": true}
 	claimPercentKeys = map[string]bool{"percent": true, "ratio": true, "margin_percent": true}
-	claimMoneyKeys   = map[string]bool{"amount": true, "balance": true, "ledger_balance": true, "statement_balance": true, "supported": true, "trial_balance": true, "total": true, "actual": true, "budget": true, "opening": true, "closing": true, "lowest": true, "receipts": true, "disbursements": true, "net": true, "open": true, "due": true}
+	// A field named as a rate is a percentage; one named as a term or count is a number of things.
+	claimRateKey   = regexp.MustCompile(`(^|_)(rate|percent|pct|apr|apy|yield)($|_)`)
+	claimCountKey  = regexp.MustCompile(`(^|_)(months|days|weeks|years|term|count|quantity|qty|units|periods|number)($|_)`)
+	claimMoneyKeys = map[string]bool{"amount": true, "balance": true, "ledger_balance": true, "statement_balance": true, "supported": true, "trial_balance": true, "total": true, "actual": true, "budget": true, "opening": true, "closing": true, "lowest": true, "receipts": true, "disbursements": true, "net": true, "open": true, "due": true}
 	// A cash plan's week fields name what they measure.
 	claimKeyMetrics = map[string]string{"opening": "cash", "closing": "cash", "lowest": "cash", "receipts": "receipts", "disbursements": "disbursements",
 		// The budget comparison's totals.
@@ -414,7 +417,8 @@ func claimOf(read agentRead, path string) claim {
 		c.kind = "prior"
 	case last == "budget":
 		c.kind = "budget"
-	case claimPercentKeys[last]:
+	case claimPercentKeys[last] || claimRateKey.MatchString(last):
+		// A rate ("annual_rate": "5.25") is a percentage, whatever its decimals look like.
 		c.kind = "percent"
 	}
 	// A variance or percentage beside a budget is a variance against it, stated over or under in its sign.
@@ -476,6 +480,10 @@ func claimOf(read agentRead, path string) claim {
 	c.money = claimMoneyKeys[last] || claimChangeKeys[last] || claimPriorKeys[last] || claimMoneyValue.MatchString(strings.TrimSpace(got)) || len(c.keys) > 0 && c.kind != "percent"
 	// The product writes money as decimal strings; a whole JSON number ("total": 3 accounts) is a count, whatever its key.
 	if n, isNumber := value.(json.Number); isNumber && !strings.Contains(n.String(), ".") {
+		c.money = false
+	}
+	// A rate, a term or a count is never money, however it is written.
+	if c.kind == "percent" || claimCountKey.MatchString(last) {
 		c.money = false
 	}
 	return c
@@ -1391,6 +1399,9 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		}
 		// Money is computed with money and counts with counts; a ratio may compare two counts, never a count and money.
 		if len(claims) > 0 && c.money != claims[0].money {
+			if c.kind == "percent" || claims[0].kind == "percent" {
+				return "a derived figure combines money with a percent"
+			}
 			return "a derived figure combines money with a count"
 		}
 		if !c.money && s.derive != "ratio" {
@@ -1637,20 +1648,23 @@ func strconvItoa(n int) string { return big.NewInt(int64(n)).String() }
 // firmClients is the firm's clients whose names appear in the answer, found by the database across all of them (no cap),
 // so the support gate knows a client a sentence names even when no read mentioned it. A failed read returns none; the
 // reads' own clients are still checked.
-func firmClients(ctx context.Context, db *sql.DB, org, answer string) []string {
+func firmClients(ctx context.Context, db *sql.DB, org, answer string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT DISTINCT entity FROM client_closes WHERE organization_id=$1 AND length(entity)>=2 AND strpos(lower($2), lower(entity))>0`, org, answer)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	out := []string{}
 	for rows.Next() {
 		var name string
-		if rows.Scan(&name) == nil && strings.TrimSpace(name) != "" {
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(name) != "" {
 			out = append(out, name)
 		}
 	}
-	return out
+	return out, rows.Err()
 }
 
 // derivedResult holds what the sentence says a computed figure is: a sum or a ratio is an amount, never a movement; a
@@ -1736,8 +1750,21 @@ func movementShown(c claim, got, direction string, cited []moneyEntry) string {
 	if !ok {
 		return ""
 	}
+	// A change and a prior month of the line, cited together, must reconcile with the level.
+	for _, a := range cited {
+		for _, b := range cited {
+			if a.claim.kind != "change" || b.claim.kind != "prior" || !sameStanding(a.claim, c) || !sameStanding(b.claim, c) {
+				continue
+			}
+			ch, ok1 := new(big.Rat).SetString(a.n)
+			prior, ok2 := new(big.Rat).SetString(b.n)
+			if ok1 && ok2 && new(big.Rat).Sub(level, prior).Cmp(ch) != 0 {
+				return "the cited change " + normalizeFigure(a.n) + " does not take " + c.describe() + " from " + normalizeFigure(b.n) + " to " + normalizeFigure(got)
+			}
+		}
+	}
 	for _, m := range cited {
-		if !strings.EqualFold(m.claim.label, c.label) || m.claim.entity != "" && c.entity != "" && !isSameClient(m.claim.entity, c.entity) {
+		if !sameStanding(m.claim, c) {
 			continue
 		}
 		// A change is of the level's month; a prior amount is of the month before it.
@@ -2304,4 +2331,15 @@ func lineBinds(line string, o occurrence, label string, labels map[string]bool) 
 
 func isWordByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b >= 0x80
+}
+
+// sameStanding says whether two claims are the same line of the same books: client, basis, currency, account and
+// standing (a published report against live books, a stale capture against a current one).
+func sameStanding(a, b claim) bool {
+	return strings.EqualFold(a.label, b.label) &&
+		(a.entity == "" || b.entity == "" || isSameClient(a.entity, b.entity)) &&
+		(a.basis == "" || b.basis == "" || a.basis == b.basis) &&
+		(a.currency == "" || b.currency == "" || strings.EqualFold(a.currency, b.currency)) &&
+		(a.account == "" || b.account == "" || a.account == b.account) &&
+		a.published == b.published && a.stale == b.stale
 }

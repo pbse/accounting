@@ -1592,7 +1592,12 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		}
 		entries = append(entries, entry)
 	}
-	citations, rejected := agentSupport(answer.Kind, text, entries, reads, names, firmClients(ctx, db, org, text)...)
+	// Without the firm's client names the gate cannot tell whose figure a sentence states: the answer is withheld.
+	clients, err := firmClients(ctx, db, org, text)
+	citations, rejected := []chatCitation(nil), "the firm's clients could not be read to check the answer"
+	if err == nil {
+		citations, rejected = agentSupport(answer.Kind, text, entries, reads, names, clients...)
+	}
 	if rejected != "" {
 		out.outcome, out.why = "not_kept", rejected
 		return out
