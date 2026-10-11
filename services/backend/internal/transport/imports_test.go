@@ -242,6 +242,23 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 		t.Fatalf("rows from 240: %v", later)
 	}
 	call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+big+"&from=0", nil, 422)
+	// A file of more chunks than go in at once is kept whole, its last rows read from what was kept.
+	var longer strings.Builder
+	longer.WriteString("Account,Debit,Credit\n")
+	for i := 1; i <= 10249; i++ {
+		fmt.Fprintf(&longer, "Account %d,1.00,\n", i)
+	}
+	longest := upload("user_b", preparer, "Longer.csv", "2026-05", longer.String(), 201)["id"].(string)
+	call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+longest, nil, 200)
+	must(db.QueryRow(`SELECT count(*) FROM books_import_pages WHERE import_id::text=$1`, longest).Scan(&chunks))
+	if chunks != 52 {
+		t.Fatalf("a file of 10,250 rows is kept in 52 chunks: %d", chunks)
+	}
+	_, err = db.Exec(`UPDATE books_imports SET content='not the file' WHERE id::text=$1`, longest)
+	must(err)
+	if last := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+longest+"&from=10201", nil, 200)["tables"].([]any)[0].(map[string]any); len(last["rows"].([]any)) != 50 || last["more"] != 0.0 {
+		t.Fatalf("the last rows, from what was kept: %v", last["more"])
+	}
 
 	// A file downloads as it was sent, and the firm's export lists each with where it downloads.
 	r := httptest.NewRequest("GET", "/v1/closes/client/import/file?name=Acme%20Co&id="+id, nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: partner}))

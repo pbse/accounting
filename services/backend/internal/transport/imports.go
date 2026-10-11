@@ -197,7 +197,30 @@ func storeImportPages(ctx context.Context, db *sql.DB, org, id, key string, file
 	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM books_import_pages WHERE import_id::text=$1 AND parse=$2)`, id, key).Scan(&kept); err != nil || kept {
 		return err
 	}
-	var chunks []chunk
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM books_import_pages WHERE import_id=$1::bigint AND parse<>$2`, id, key); err != nil {
+		return err
+	}
+	// The chunks go in fifty at a time (ten thousand rows), so a large file is never written as one value.
+	var batch []chunk
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		raw, err := json.Marshal(batch)
+		if err != nil {
+			return err
+		}
+		batch = batch[:0]
+		_, err = tx.ExecContext(ctx, `INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows,meta)
+ SELECT $1,$2::bigint,$3,c.position,c.table_name,c.hidden,c.hidden_columns,c.total,c.chunk,c.first_row,c.rows,c.meta FROM jsonb_to_recordset($4::jsonb)
+  AS c(position int,table_name text,hidden boolean,hidden_columns jsonb,total int,chunk int,first_row int,rows jsonb,meta jsonb) ON CONFLICT DO NOTHING`, org, id, key, string(raw))
+		return err
+	}
 	meta := fileFacts(file)
 	for position, t := range file.Tables {
 		hidden := t.HiddenColumns
@@ -210,26 +233,14 @@ func storeImportPages(ctx context.Context, db *sql.DB, org, id, key string, file
 			if len(rows) > 0 {
 				first = rows[0].Number
 			}
-			chunks = append(chunks, chunk{position, t.Name, t.Hidden, hidden, len(t.Rows), start / previewRows, first, rows, meta})
+			if batch = append(batch, chunk{position, t.Name, t.Hidden, hidden, len(t.Rows), start / previewRows, first, rows, meta}); len(batch) == 50 {
+				if err = flush(); err != nil {
+					return err
+				}
+			}
 		}
 	}
-	raw, err := json.Marshal(chunks)
-	if err != nil {
-		return err
-	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM books_import_pages WHERE import_id=$1::bigint AND parse<>$2`, id, key); err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows,meta)
- SELECT $1,$2::bigint,$3,c.position,c.table_name,c.hidden,c.hidden_columns,c.total,c.chunk,c.first_row,c.rows,c.meta FROM jsonb_to_recordset($4::jsonb)
-  AS c(position int,table_name text,hidden boolean,hidden_columns jsonb,total int,chunk int,first_row int,rows jsonb,meta jsonb)
- WHERE NOT EXISTS(SELECT 1 FROM books_import_pages p WHERE p.import_id=$2::bigint AND p.parse=$3) ON CONFLICT DO NOTHING`, org, id, key, string(raw))
-	if err != nil {
+	if err = flush(); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -367,28 +378,15 @@ func confirmedBrief(ctx context.Context, q rowReader, org, name, id string) (*co
 	return &c, nil
 }
 
-// layoutRef is the layout confirmed last for client name (for import id when id is not ""), or nil, with only its id
-// and CSV choice: what decides how a file is read, without its reading.
-func layoutRef(ctx context.Context, q rowReader, org, name, id string) (*confirmedRead, error) {
-	var c confirmedRead
-	err := q.QueryRowContext(ctx, `SELECT id::text,encoding,delimiter FROM books_layouts
- WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND ($3='' OR import_id::text=$3) ORDER BY id DESC LIMIT 1`, org, name, id).Scan(&c.ID, &c.CSV.Encoding, &c.CSV.Delimiter)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
-// latestLayout is the layout confirmed last for client name (for import id when id is not ""), or nil.
+// latestLayout is the layout confirmed last for client name (for import id when id is not ""), or nil: the layout and
+// the CSV choice it was confirmed with, which decide how a file is read and proposed, without its reading
+// (confirmedBrief has that, for display).
 func latestLayout(ctx context.Context, q rowReader, org, name, id string) (*confirmedRead, error) {
 	var c confirmedRead
-	var layout, reading []byte
-	err := q.QueryRowContext(ctx, `SELECT id::text,layout,reading,reason,actor,created_at,encoding,delimiter FROM books_layouts
+	var layout []byte
+	err := q.QueryRowContext(ctx, `SELECT id::text,layout,reason,actor,created_at,encoding,delimiter FROM books_layouts
  WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND ($3='' OR import_id::text=$3) ORDER BY id DESC LIMIT 1`, org, name, id).
-		Scan(&c.ID, &layout, &reading, &c.Reason, &c.Actor, &c.At, &c.CSV.Encoding, &c.CSV.Delimiter)
+		Scan(&c.ID, &layout, &c.Reason, &c.Actor, &c.At, &c.CSV.Encoding, &c.CSV.Delimiter)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -396,8 +394,6 @@ func latestLayout(ctx context.Context, q rowReader, org, name, id string) (*conf
 		return nil, err
 	}
 	json.Unmarshal(layout, &c.Layout)
-	json.Unmarshal(reading, &c.Reading)
-	c.Balanced, c.Problems = c.Reading.Balanced, len(c.Reading.Problems)
 	return &c, nil
 }
 
@@ -675,12 +671,12 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		org := organization(r)
 		id := r.URL.Query().Get("id")
-		// How the file is read is decided by the layouts' ids and CSV choices alone, read without their readings, so a later
-		// page of rows needs nothing more.
-		ownRef, err := layoutRef(r.Context(), db, org, name, id)
-		var clientRef *confirmedRead
-		if err == nil && ownRef == nil {
-			clientRef, err = layoutRef(r.Context(), db, org, name, "")
+		// How the file is read and proposed is decided by its own confirmed layout, else the client's last, read without
+		// their readings.
+		confirmed, err := latestLayout(r.Context(), db, org, name, id)
+		var saved *confirmedRead
+		if err == nil && confirmed == nil {
+			saved, err = latestLayout(r.Context(), db, org, name, "")
 		}
 		if err != nil {
 			problem(w, 503, "The file's layout is unavailable.")
@@ -700,7 +696,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, refusal)
 			return
 		}
-		key := parseKey(format, asked, ownRef, clientRef)
+		key := parseKey(format, asked, confirmed, saved)
 		// Rows come in pages: from the first, or from the row a person asks for (?from=), so any row can be seen and
 		// marked. A later page is read from the rows kept the first time the file was read this way.
 		from := 1
@@ -713,7 +709,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		// A later page, and a confirmed file reopened, are read from what was kept the first time the file was read
 		// this way: its rows and what it was read as, with the import and its confirmed reading, without reading the
 		// file again.
-		if from > 1 || ownRef != nil {
+		if from > 1 || confirmed != nil {
 			tables, facts, kept, err := storedImportPage(r.Context(), db, org, name, id, key, from)
 			if err != nil {
 				problem(w, 503, "The file's rows are unavailable.")
@@ -747,15 +743,6 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		confirmed, err := latestLayout(r.Context(), db, org, name, id)
-		var saved *confirmedRead
-		if err == nil && confirmed == nil {
-			saved, err = latestLayout(r.Context(), db, org, name, "")
-		}
-		if err != nil {
-			problem(w, 503, "The file's layout is unavailable.")
-			return
-		}
 		summary, file, err := readImportAs(r.Context(), db, org, name, id, asked, confirmed, saved)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
@@ -768,16 +755,11 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		// The confirmed reading comes with its totals, problems and notes; its lines, which can number thousands, come in
 		// pages of their own (/client/import/lines).
 		if confirmed != nil {
-			brief := *confirmed
-			brief.LineCount, brief.Reading.Lines = len(confirmed.Reading.Lines), []bookfiles.Line{}
-			for _, l := range confirmed.Reading.Lines {
-				if l.Kind == bookfiles.Posting {
-					brief.Accounts++
-				}
+			if summary.Confirmed, err = confirmedBrief(r.Context(), db, org, name, id); err != nil {
+				problem(w, 503, "The file's layout is unavailable.")
+				return
 			}
-			confirmed = &brief
 		}
-		summary.Confirmed = confirmed
 		if err = storeImportPages(r.Context(), db, org, id, key, file); err != nil {
 			problem(w, 503, "The file's rows could not be kept.")
 			return
