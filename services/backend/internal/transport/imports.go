@@ -49,14 +49,16 @@ type csvChoice struct {
 // listedImport is an import as the client's list shows it: what was sent, and whether its confirmed reading is clean,
 // without the reading itself, which an opened import reads.
 type listedImport struct {
-	ID        string           `json:"id"`
-	Period    string           `json:"period"`
-	Name      string           `json:"name"`
-	Format    string           `json:"format"`
-	Replaces  string           `json:"replaces,omitempty"`
-	Why       string           `json:"replaces_reason,omitempty"`
-	Actor     string           `json:"actor"`
-	At        time.Time        `json:"at"`
+	ID       string    `json:"id"`
+	Period   string    `json:"period"`
+	Name     string    `json:"name"`
+	Format   string    `json:"format"`
+	Replaces string    `json:"replaces,omitempty"`
+	Why      string    `json:"replaces_reason,omitempty"`
+	Actor    string    `json:"actor"`
+	At       time.Time `json:"at"`
+	// Accepted says the file's latest reading is accepted as the client's books for its month, on its latest scope.
+	Accepted  bool             `json:"accepted"`
 	Confirmed *confirmedStatus `json:"confirmed,omitempty"`
 }
 
@@ -518,7 +520,8 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		rows, err := db.QueryContext(r.Context(), `SELECT i.id::text,i.period,i.name,i.format,COALESCE(i.replaces::text,''),i.replaces_reason,i.actor,i.created_at,
- l.id::text,COALESCE(l.reason,''),COALESCE(l.actor,''),l.created_at,COALESCE((l.reading->>'balanced')::boolean,false),COALESCE(jsonb_array_length(l.reading->'problems'),0)
+ l.id::text,COALESCE(l.reason,''),COALESCE(l.actor,''),l.created_at,COALESCE((l.reading->>'balanced')::boolean,false),COALESCE(jsonb_array_length(l.reading->'problems'),0),
+ EXISTS(SELECT 1 FROM books_import_acceptances a WHERE a.import_id=i.id AND a.layout_id=l.id AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=i.id))
  FROM books_imports i LEFT JOIN LATERAL (SELECT * FROM books_layouts b WHERE b.import_id=i.id ORDER BY b.id DESC LIMIT 1) l ON true
  WHERE i.organization_id=$1 AND client_identity(i.organization_id,i.client_entity)=client_identity($1,$2) ORDER BY i.period DESC,i.id DESC LIMIT 101 OFFSET $3`, organization(r), name, offset)
 		if err != nil {
@@ -531,7 +534,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			var c confirmedStatus
 			var layoutID sql.NullString
 			var at sql.NullTime
-			if err = rows.Scan(&s.ID, &s.Period, &s.Name, &s.Format, &s.Replaces, &s.Why, &s.Actor, &s.At, &layoutID, &c.Reason, &c.Actor, &at, &c.Balanced, &c.Problems); err != nil {
+			if err = rows.Scan(&s.ID, &s.Period, &s.Name, &s.Format, &s.Replaces, &s.Why, &s.Actor, &s.At, &layoutID, &c.Reason, &c.Actor, &at, &c.Balanced, &c.Problems, &s.Accepted); err != nil {
 				break
 			}
 			if layoutID.Valid {

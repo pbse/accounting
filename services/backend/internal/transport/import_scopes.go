@@ -33,6 +33,14 @@ type importScope struct {
 // basisLabels are the bases as a person reads them.
 var basisLabels = map[string]string{"accrual": "accrual", "cash": "cash", "modified_cash": "modified cash"}
 
+// onBasis is "on an accrual basis", "on a cash basis" or "on a modified cash basis".
+func onBasis(basis string) string {
+	if basis == "accrual" {
+		return "on an accrual basis"
+	}
+	return "on a " + basisLabels[basis] + " basis"
+}
+
 // latestImportScope is import id's latest attestation, or nil.
 func latestImportScope(ctx context.Context, q rowReader, org, name, id string) (*importScope, error) {
 	var s importScope
@@ -63,7 +71,7 @@ func scopeNote(s *importScope, approved string) string {
 	case approved == "":
 		return "No basis is approved for the client yet: the file's " + basisLabels[s.Basis] + " basis is compared once one is."
 	case s.Basis != approved:
-		return "The file is on a " + basisLabels[s.Basis] + " basis, and the client's approved basis is " + basisLabels[approved] + ": statements, comparisons and sign-off built on it are held until the source data agrees, an approved conversion is evidenced, or the procedure changes."
+		return "The file is " + onBasis(s.Basis) + ", and the client's approved basis is " + basisLabels[approved] + ": statements, comparisons and sign-off built on it are held until the source data agrees, an approved conversion is evidenced, or the procedure changes."
 	}
 	return ""
 }
@@ -154,9 +162,20 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Confirm how the file is read before attesting what it covers.")
 			return
 		}
-		// The attestation is of the reading confirmed now: one confirmed meanwhile is never attested unseen.
+		// The attestation is of the reading confirmed now: one confirmed meanwhile is never attested unseen. It takes the
+		// client's map lock, as an acceptance does, so none is given on an attestation this one replaces while it runs.
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The file's scope could not be saved.")
+			return
+		}
+		defer tx.Rollback()
+		if _, err = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('books_account_maps:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
+			problem(w, 503, "The file's scope could not be saved.")
+			return
+		}
 		var attested string
-		err = db.QueryRowContext(r.Context(), `INSERT INTO books_import_scopes(organization_id,client_entity,import_id,layout_id,book,filters,complete,missing,basis,reason,actor)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO books_import_scopes(organization_id,client_entity,import_id,layout_id,book,filters,complete,missing,basis,reason,actor)
  SELECT $1,$2,l.import_id,l.id,$4,$5,$6,$7,$8,$9,$10 FROM books_layouts l WHERE l.id::text=$3 AND l.organization_id=$1
   AND l.id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=l.import_id) RETURNING id::text`,
 			org, name, layout.ID, in.Book, in.Filters, in.Complete, in.Missing, in.Basis, in.Reason, reviewerName(r)).Scan(&attested)
@@ -164,7 +183,7 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "The file's layout was confirmed again meanwhile: reopen it to attest that reading.")
 			return
 		}
-		if err != nil {
+		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The file's scope could not be saved.")
 			return
 		}
