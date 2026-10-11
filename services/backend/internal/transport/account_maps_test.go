@@ -223,7 +223,8 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		}
 		t.Fatalf("November's file recorded: %v", read)
 	}
-	// November's layout confirmed again asks for its map again; confirming it records the new reading too.
+	// November's layout confirmed again asks for its map again; confirming it records the new reading in place of the
+	// one it supersedes.
 	novemberFirst := readingOf(november)
 	confirmLayout(november, call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+november, nil, 200)["import"].(map[string]any)["confirmed"].(map[string]any)["layout"].(map[string]any)["table"], "2026-11")
 	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["recorded"] != false {
@@ -268,11 +269,11 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	confirm(novemberPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Other Expense"}}, "reason": "Stale", "based_on": before}, 409)
 	var utilities int
 	must(db.QueryRow(`SELECT count(*) FILTER (WHERE accounts::text LIKE '%Utilities%' OR accounts ? 'n:6100') FROM books_account_maps WHERE organization_id=$1`, org).Scan(&utilities))
-	if typ, from := files("n:6000"); utilities != 0 || typ != "Expense" || from != `["`+septemberReading+`", "`+novemberFirst+`", "`+novemberSecond+`"]` {
+	if typ, from := files("n:6000"); utilities != 0 || typ != "Expense" || from != `["`+septemberReading+`", "`+novemberSecond+`"]` {
 		t.Fatalf("a deleted file leaves nothing only it named: %d versions name utilities; rent %s from %s", utilities, typ, from)
 	}
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+september, map[string]any{"reason": "Sent in error"}, 200)
-	if typ, from := files("n:1000"); typ != "Bank" || from != `["`+novemberFirst+`", "`+novemberSecond+`"]` {
+	if typ, from := files("n:1000"); typ != "Bank" || from != `["`+novemberSecond+`"]` {
 		t.Fatalf("the bank stays mapped, on November's file: %s %s", typ, from)
 	}
 	accountsPath = novemberPath

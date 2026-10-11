@@ -141,21 +141,25 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 		}
 		switch l.Kind {
 		case bookfiles.Heading:
-			headings = append(headings, l.Name)
+			headings = append(headings, l.Label())
 		case bookfiles.Total:
 			// A total closes the heading it names and every heading inside it ("Total Assets" closes "Assets" and
-			// "Fixed Assets" under it); one that names none closes the innermost.
-			closed := false
-			if of := bookfiles.TotalOf(l.Name); of != "" {
+			// "Fixed Assets" under it); a grand total closes them all, and one that names nothing ("Subtotal") the
+			// innermost. A total named for an account ("Total Cash" under "Current Assets") leaves them open.
+			switch of, grand := bookfiles.TotalOf(l.Label()); {
+			case grand:
+				headings = nil
+			case of == "":
+				if len(headings) > 0 {
+					headings = headings[:len(headings)-1]
+				}
+			default:
 				for i := len(headings) - 1; i >= 0; i-- {
 					if strings.EqualFold(strings.TrimSpace(headings[i]), of) {
-						headings, closed = headings[:i], true
+						headings = headings[:i]
 						break
 					}
 				}
-			}
-			if !closed && len(headings) > 0 {
-				headings = headings[:len(headings)-1]
 			}
 		case bookfiles.Posting:
 			if strings.TrimSpace(l.Number) == "" && strings.TrimSpace(l.Name) == "" {
@@ -347,6 +351,39 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Map only the accounts the file names.")
 				return
 			}
+		}
+		// The file's earlier readings are superseded by this one: they leave the map, and an account only they named
+		// goes with them, so a reading corrected never leaves its mistakes mapped.
+		rows, err := tx.QueryContext(r.Context(), `SELECT id::text FROM books_layouts WHERE import_id::text=$1 AND id::text<>$2`, id, reading.ID)
+		if err != nil {
+			problem(w, 503, "The account map is unavailable.")
+			return
+		}
+		var superseded []string
+		for rows.Next() {
+			var old string
+			if err = rows.Scan(&old); err != nil {
+				break
+			}
+			superseded = append(superseded, old)
+		}
+		rows.Close()
+		if err != nil || rows.Err() != nil {
+			problem(w, 503, "The account map is unavailable.")
+			return
+		}
+		for key, m := range next {
+			kept := slices.DeleteFunc(slices.Clone(m.Readings), func(r string) bool { return slices.Contains(superseded, r) })
+			if len(kept) == len(m.Readings) {
+				continue
+			}
+			changed = true
+			if len(kept) == 0 && !named[key] {
+				delete(next, key)
+				continue
+			}
+			m.Readings = kept
+			next[key] = m
 		}
 		if !changed {
 			problem(w, 422, "Nothing to confirm: every account is mapped as it was, on this file.")
