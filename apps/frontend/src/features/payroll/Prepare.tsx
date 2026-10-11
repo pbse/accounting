@@ -23,6 +23,11 @@ export function PayrollResult({ result }: { result: PayrollWorkpaper }) {
         taxes {show(input.employer_taxes)}, contributions {show(input.employer_contributions)}: total cost {show(result.total_cost)}. The provider debited{" "}
         {show(input.provider_debits)}; the ledger shows {show(input.ledger_debits)}. Still owed: {show(result.unpaid)}.
       </p>
+      {result.checks && (
+        <ul aria-label="Checks before review">
+          {result.checks.map((c) => <li key={c.name}>{c.name}: {c.state === "passed" ? "passed" : c.state === "failed" ? "failed" : "not checked"}. {c.detail}</li>)}
+        </ul>
+      )}
       {result.blockers.map((b) => <p role="alert" key={b}>{b}</p>)}
       {result.proposals.length > 0 && (
         <ul>
@@ -52,8 +57,8 @@ export default function PreparePayroll() {
     setError("");
     setResult(undefined);
     const data = new FormData(event.currentTarget);
-    const text = [...data].filter(([name]) => !name.endsWith("_confirmed")).map(([name, value]) => [name, String(value).trim()]).filter(([, value]) => value !== "");
-    const input = { ...Object.fromEntries(text), currency, method: "payroll_summary_v1", approved_confirmed: data.has("approved_confirmed"), not_booked_confirmed: data.has("not_booked_confirmed") } as PayrollInput;
+    const text = [...data].map(([name, value]) => [name, String(value).trim()]).filter(([, value]) => value !== "");
+    const input = { ...Object.fromEntries(text), currency, method: "payroll_summary_v1" } as PayrollInput;
     try {
       const response = await fetch(`${apiBaseUrl}/v1/payroll:prepare`, { method: "POST", headers: { "Content-Type": "application/json", ...(await authenticationHeaders()) }, body: JSON.stringify(input) });
       const value = await response.json();
@@ -111,8 +116,7 @@ export default function PreparePayroll() {
             {field("benefits_account", "Benefits expense account", "text", "Needed only for employer contributions", false)}
             {field("liability_account", "Payroll liability account", "text", "For amounts withheld or owed but not yet paid")}
           </div>
-          <label><input name="approved_confirmed" type="checkbox" required /> The summary is the provider's final, approved payroll for these pay dates, not a preview.</label>
-          <label><input name="not_booked_confirmed" type="checkbox" required /> The ledger shows these bank debits in the clearing account, and this payroll is not yet recorded.</label>
+          <p>Saved drafts are checked for duplicates and against the month's QuickBooks capture; the reviewer then confirms the summary is final and the payroll not already booked when approving it.</p>
         </fieldset>
         <button className="primary" disabled={busy || !revision.ready}>{busy ? "Checking…" : "Prepare payroll entry"}</button>
       </form>

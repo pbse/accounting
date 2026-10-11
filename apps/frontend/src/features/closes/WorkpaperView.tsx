@@ -410,6 +410,7 @@ export default function WorkpaperView() {
             key={saved.id}
             closeId={close.id}
             paperId={saved.id}
+            payroll={saved.kind === "payroll"}
             onChange={() => {
               void reload();
               if (older)

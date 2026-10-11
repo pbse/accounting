@@ -5,4 +5,4 @@ export type PayrollInput = {
   provider_debits: string; ledger_debits: string; ledger_reference: string; wage_account: string; tax_expense_account: string; benefits_account?: string;
   clearing_account: string; liability_account: string; method: "payroll_summary_v1"; approved_confirmed?: boolean; not_booked_confirmed?: boolean;
 };
-export type PayrollWorkpaper = { status: "draft"; method: "payroll_summary_v1"; input: PayrollInput; total_cost: string; unpaid: string; proposals: NonNullable<PrepaidWorkpaper["proposal"]>[]; blockers: string[] };
+export type PayrollWorkpaper = { status: "draft"; method: "payroll_summary_v1"; input: PayrollInput; total_cost: string; unpaid: string; proposals: NonNullable<PrepaidWorkpaper["proposal"]>[]; blockers: string[]; checks?: { name: string; state: "passed" | "failed" | "unavailable"; detail: string }[] };
