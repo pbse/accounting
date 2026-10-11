@@ -7,6 +7,7 @@ import (
 	"close.local/backend/internal/owners"
 	"close.local/backend/internal/payroll"
 	"close.local/backend/internal/preparation"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -650,6 +651,12 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		client, g, _, err := productionClient(r.Context(), db, a.Organization, entity, r.PathValue("id"), decision, savedGrant)
 		if err != nil {
 			refuse(w, err)
+			return
+		}
+		// A write goes to the company as it is today: a draft in another currency than it keeps is never written there,
+		// whatever profile its month was closed under.
+		if in.Action != "verify" && client.Currency != "" && !strings.EqualFold(client.Currency, cmp.Or(head.Input.Currency, "USD")) {
+			problem(w, 409, "This draft is in "+cmp.Or(head.Input.Currency, "USD")+", but the QuickBooks company keeps its books in "+client.Currency+": it cannot be written there.")
 			return
 		}
 		client.Currency = head.Input.Currency

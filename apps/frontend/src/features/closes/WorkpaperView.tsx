@@ -31,7 +31,15 @@ import { citedLines, citedPage } from "./citation";
 import { Comments, type PickedLine } from "./Comments";
 import { BackLink } from "@close/ui/components/BackLink";
 
-export type Profile = { currency: string; fiscal_year_start: number; state: "detected" | "none" | "unknown" | "conflict" };
+// state is confirmed (the client's confirmed profile), differs (confirmed, but a connected ledger reports otherwise, a
+// question that holds drafts), detected (from the connected ledgers), none, unknown or conflict.
+export type Profile = {
+  currency: string;
+  fiscal_year_start: number;
+  state: "confirmed" | "differs" | "detected" | "none" | "unknown" | "conflict";
+  effective_from?: string;
+  ledger?: { currency?: string; fiscal_year_start?: number; conflict?: boolean };
+};
 export type Close = { id: string; entity: string; period: string; basis?: "cash" | "modified_cash" | "accrual"; basis_scope?: "client" | "firm"; profile?: Profile } & Plan;
 type Saved<K, P> = { kind: K; paper: P & { sources?: Source[]; revises?: string; blockers?: string[] } };
 export type Paper = { id: string; created_at: string; review_state: string } & (

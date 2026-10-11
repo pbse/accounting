@@ -126,7 +126,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client not found.")
 			return
 		}
-		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r), "can_grant": canGrant(r)}
+		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r), "can_grant": canGrant(r), "can_review": canReview(r) && whole}
 
 		// Every month opened under any of the client's names that the reader could open, newest first, each with where
 		// its books come from now: the newer of its QuickBooks period capture (from the connection its books are read
@@ -265,7 +265,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		// A member who can open only some of the client's months, under another of its names, sees those alone: nothing
 		// of the client as a whole, its connections and posting grants included, and no action on it.
 		if !whole {
-			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"], out["ledger"] = nil, nil, true, []any{}, []any{}, nil, nil, nil
+			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["profiles"], out["basis"], out["ledger"] = nil, nil, true, []any{}, []any{}, nil, []any{}, nil, nil
 			out["production_grants"], out["xero_grants"], out["can_grant"], out["can_connect"], out["can_manage"] = []any{}, []any{}, false, false, false
 			jsonReply(w, 200, out)
 			return
@@ -361,9 +361,10 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		out["production_grants"], out["xero_grants"] = productionGrants, xeroGrants
 
-		// The client's currency and fiscal year as its connected ledgers report them, under any of its names, and its
-		// approved basis (a client override first, then the firm's), as a close reads it.
-		profile, err := preparation.ClientProfileOf(ctx, tx, org, name)
+		// The client's currency and fiscal year in force this month (its confirmed profile, else as its connected ledgers
+		// report them, under any of its names), its confirmed profile's history, and its approved basis (a client override
+		// first, then the firm's), as a close reads it.
+		profile, err := preparation.ClientProfileOf(ctx, tx, org, name, time.Now().UTC().Format("2006-01"))
 		if err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
@@ -380,6 +381,10 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		out["connectable"] = connectable
 		if out["ledger"], err = readClientLedger(ctx, tx, org, name); err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		if out["profiles"], err = profileHistory(ctx, tx, org, name); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}

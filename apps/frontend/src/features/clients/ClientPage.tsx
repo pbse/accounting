@@ -51,8 +51,12 @@ type XeroConnection = {
 type Profile = {
   currency: string;
   fiscal_year_start: number;
-  state: "detected" | "none" | "unknown" | "conflict";
+  state: "confirmed" | "differs" | "detected" | "none" | "unknown" | "conflict";
+  effective_from?: string;
+  ledger?: { currency?: string; fiscal_year_start?: number; conflict?: boolean };
 };
+// One confirmed profile in the client's history: the currency and fiscal year from a month on.
+type ConfirmedProfile = { id: string; effective_from: string; currency: string; fiscal_year_start: number; reason: string; actor: string; at: string };
 type ClientRead = {
   entity: string;
   // whole says the reader may see the client as a whole; without it they see only the months they can open, opened
@@ -60,6 +64,8 @@ type ClientRead = {
   whole: boolean;
   can_manage: boolean;
   can_connect: boolean;
+  // can_review says the reader may confirm the client's profile.
+  can_review: boolean;
   // can_grant says the reader may give and revoke the client's posting grants.
   can_grant: boolean;
   roster: RosterEntry | null;
@@ -79,6 +85,7 @@ type ClientRead = {
   production_grants?: ProductionGrant[];
   xero_grants?: XeroGrant[];
   profile: Profile | null;
+  profiles: ConfirmedProfile[];
   basis: {
     method: "accrual" | "cash" | "modified_cash";
     scope: "client" | "firm";
@@ -135,7 +142,7 @@ export default function ClientPage() {
   const client = read.data;
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "ledger">("");
+  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "profile" | "ledger">("");
   const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   if (!client) {
     if (read.isPending) return <p role="status">Opening the client…</p>;
@@ -364,11 +371,15 @@ export default function ClientPage() {
           </Card>
           <Card
             icon="measure"
-            tone={profile.state === "conflict" || assumed ? "wait" : "done"}
+            tone={profile.state === "conflict" || profile.state === "differs" || assumed ? "wait" : "done"}
             title="Currency and year"
             chip={
               profile.state === "conflict" ? (
                 <span className="pill danger">Ledgers disagree</span>
+              ) : profile.state === "differs" ? (
+                <span className="pill danger">Ledger differs</span>
+              ) : profile.state === "confirmed" ? (
+                <span className="pill">Confirmed</span>
               ) : assumed ? (
                 <span className="pill muted">Assumed</span>
               ) : (
@@ -376,16 +387,24 @@ export default function ClientPage() {
               )
             }
             action={
-              latest ? (
-                <Link className="button" to={`/dashboard/closes/${latest.id}?tab=settings`}>
-                  Procedures
-                </Link>
+              latest || client.can_review ? (
+                <>
+                  {client.can_review && (
+                    <button type="button" onClick={() => setDialog("profile")}>
+                      {profile.state === "confirmed" || profile.state === "differs" ? "Change" : "Confirm"}
+                    </button>
+                  )}
+                  {latest && (
+                    <Link className="button" to={`/dashboard/closes/${latest.id}?tab=settings`}>
+                      Procedures
+                    </Link>
+                  )}
+                </>
               ) : undefined
             }
           >
-            {profile.state === "conflict"
-              ? `${name}’s connected ledgers report different currencies or fiscal years; disconnect the wrong one. ${procedure}${aliasBases}`
-              : `${profile.currency}, with a fiscal year starting in ${fiscalMonth(profile.fiscal_year_start)}${assumed ? (profile.state === "none" ? ", assumed until a ledger is connected" : ", assumed until the ledger’s currency is read") : ""}. ${procedure}${aliasBases}`}
+            {profileLine(name, profile, assumed)} {procedure}
+            {aliasBases}
           </Card>
           {client.can_manage && (
             <Card
@@ -529,6 +548,16 @@ export default function ClientPage() {
           </DialogActions>
         </form>
       </Dialog>
+      {client.can_review && (
+        <Dialog
+          open={dialog === "profile"}
+          onClose={() => setDialog("")}
+          title={`${name}’s currency and year`}
+          description="The currency its books are kept in and the month its fiscal year starts, from a month on. A connected ledger that reports otherwise asks a question; it never overrides this."
+        >
+          <ProfileForm key={client.profiles[0]?.id ?? "none"} client={name} profile={profile} history={client.profiles} first={months.length ? months[months.length - 1].period : undefined} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
+        </Dialog>
+      )}
       {canRecord && (
         <Dialog
           open={dialog === "ledger"}
@@ -666,6 +695,109 @@ function listed(names: string[]) {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
+// profileLine says the client's currency and fiscal year, and where they come from: confirmed (from which month), with
+// any question a connected ledger asks; or the connected ledgers, or assumed.
+function profileLine(name: string, profile: Profile, assumed: boolean) {
+  const year = `${profile.currency}, with a fiscal year starting in ${fiscalMonth(profile.fiscal_year_start)}`;
+  switch (profile.state) {
+    case "conflict":
+      return `${name}’s connected ledgers report different currencies or fiscal years; disconnect the wrong one.`;
+    case "confirmed":
+      return `${year}, confirmed from ${monthName(profile.effective_from ?? "")}.`;
+    case "differs":
+      return profile.ledger?.conflict
+        ? `${year}, confirmed from ${monthName(profile.effective_from ?? "")}, but its connected ledgers disagree with each other: disconnect the wrong one. Drafts wait until then.`
+        : `${year}, confirmed from ${monthName(profile.effective_from ?? "")}, but its connected ledger reports ${ledgerReports(profile)}: correct the profile or the connection. Drafts wait until then.`;
+  }
+  return `${year}${assumed ? (profile.state === "none" ? ", assumed until a ledger is connected or the profile is confirmed" : ", assumed until the ledger’s currency is read") : ""}.`;
+}
+
+// ledgerReports says what a connected ledger reports that differs from the confirmed profile.
+function ledgerReports(profile: Profile) {
+  const parts = [profile.ledger?.currency, profile.ledger?.fiscal_year_start ? `a fiscal year starting in ${fiscalMonth(profile.ledger.fiscal_year_start)}` : ""].filter(Boolean);
+  return parts.join(" and ");
+}
+
+// ProfileForm confirms or changes the client's profile from a month on, against its newest profile as read, and shows
+// the history: earlier months keep the profile they were closed under.
+function ProfileForm({ client, profile, history, first, onSaved, onCancel }: { client: string; profile: Profile; history: ConfirmedProfile[]; first?: string; onSaved: () => void; onCancel: () => void }) {
+  const today = useToday();
+  const [currency, setCurrency] = useState(profile.currency);
+  const [start, setStart] = useState(String(profile.fiscal_year_start));
+  // A first confirmation covers every month on record; a change, from this month on.
+  const [from, setFrom] = useState(history.length ? today.slice(0, 7) : (first ?? today.slice(0, 7)));
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest("/client/profile", { client, currency: currency.trim().toUpperCase(), fiscal_year_start: Number(start), effective_from: from, reason: reason.trim(), rev: history[0]?.id ?? "" });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The profile could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form onSubmit={save}>
+      <fieldset disabled={busy}>
+        <label>
+          Currency
+          <input value={currency} maxLength={3} pattern="[A-Za-z]{3}" required onChange={(e) => setCurrency(e.target.value)} />
+        </label>
+        <label>
+          Fiscal year starts
+          <select value={start} onChange={(e) => setStart(e.target.value)}>
+            {Array.from({ length: 12 }, (_, i) => (
+              <option key={i + 1} value={i + 1}>
+                {fiscalMonth(i + 1)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          From
+          <input type="month" value={from} required onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label>
+          Reason
+          <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+        </label>
+        {history.length > 0 && (
+          <details>
+            <summary>Earlier confirmations</summary>
+            <ul>
+              {history.map((h) => (
+                <li key={h.id}>
+                  {h.currency}, year from {fiscalMonth(h.fiscal_year_start)}, from {monthName(h.effective_from)}: {h.reason} ({h.actor})
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {error && <p role="alert">{error}</p>}
+        <DialogActions>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" disabled={busy || !reason.trim() || !/^[A-Za-z]{3}$/.test(currency.trim()) || !from}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </DialogActions>
+      </fieldset>
+    </form>
+  );
+}
+
+// postingConnections is each connection a posting card is for: every listed connection, and any a grant is still on.
+function postingConnections(connections: string[], grants?: { connection_id: string }[]) {
+  return [...new Set([...connections, ...(grants ?? []).map((g) => g.connection_id)])];
+}
+
 // LedgerForm records or corrects the ledger a client keeps, with a reason, against the ledger as read; a catalog entry
 // shows the steps that export its books.
 function LedgerForm({ client, kept, onSaved, onCancel }: { client: string; kept: KeptLedger | null; onSaved: () => void; onCancel: () => void }) {
@@ -722,9 +854,4 @@ function LedgerForm({ client, kept, onSaved, onCancel }: { client: string; kept:
       </fieldset>
     </form>
   );
-}
-
-// postingConnections is each connection a posting card is for: every listed connection, and any a grant is still on.
-function postingConnections(connections: string[], grants?: { connection_id: string }[]) {
-  return [...new Set([...connections, ...(grants ?? []).map((g) => g.connection_id)])];
 }

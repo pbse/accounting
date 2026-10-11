@@ -70,8 +70,12 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		profile, err := preparation.ClientProfile(ctx, tx, r.PathValue("id"))
-		if err != nil || profile.State == "conflict" {
-			problem(w, 409, "This client's connected ledgers report different fiscal years or currencies; disconnect the wrong one first.")
+		if err != nil {
+			problem(w, 503, "The client's fiscal year is unavailable.")
+			return
+		}
+		if profile.Unsettled() {
+			problem(w, 409, profile.Question()+" first.")
 			return
 		}
 		from, year := fiscalYear(anchor, profile.FiscalStart)
