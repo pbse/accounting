@@ -540,6 +540,11 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Rent and marketing are each 500.00.", e("t69", 0, "/profit_and_loss/sections/0/lines/0/amount", "500.00"), e("t69", 0, "/profit_and_loss/sections/0/lines/1/amount", "500.00"))
 	rejected("In EUR, net income is 21,780.00.", "in EUR", e("t2", 0, ni+"/amount", "21780.00"))
 
+	// Round forty-three: another line named for the cited figure; a denial without a figure.
+	rejected("Wholesale sales were 100.00.", "to another line", e("t68", 0, "/profit_and_loss/sections/0/lines/0/amount", "100.00"))
+	ok("Retail sales were 100.00.", e("t68", 0, "/profit_and_loss/sections/0/lines/0/amount", "100.00"))
+	ok("Opening book cash of 64,120.00 is shown. Opening book cash is not available at the bank.", e("t30", 0, "/opening/amount", "64120.00"), e("t30", 1, "/opening/amount", "64120.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

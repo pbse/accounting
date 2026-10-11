@@ -1207,7 +1207,7 @@ func figurelessClaim(line string, c claim, got string, changes []claim) string {
 		return "the sentence says " + c.describe() + " moved the other way: the cited change is " + normalizeFigure(got)
 	case c.kind != "change" && (rise || fall) && !changeCited:
 		return "the sentence says " + c.describe() + " moved, but the cited field is an amount, not a change"
-	case c.keys["cash"] && claimAvailable.MatchString(lower):
+	case c.keys["cash"] && availableSaid(lower):
 		return "the sentence calls book cash available at the bank"
 	case c.stale && !claimStaleSaid.MatchString(lower):
 		return "the sentence states " + c.describe() + " as current, but the cited read is stale"
@@ -2252,8 +2252,8 @@ func lineBinds(line string, o occurrence, label string, labels map[string]bool) 
 		}
 	}
 	own := mentions(label)
-	if len(own) == 0 || label == "" {
-		return true
+	if label == "" {
+		own = nil
 	}
 	others := [][2]int{}
 	for l := range labels {
@@ -2266,6 +2266,8 @@ func lineBinds(line string, o occurrence, label string, labels map[string]bool) 
 		return true
 	}
 	figures := figuresIn(line)
+	// The cited line unnamed: the figure may not be another line's the sentence names for it ("Wholesale sales were
+	// 100.00" citing Retail sales).
 	between := func(a, b int) bool {
 		for _, f := range figures {
 			if f.start != o.start && f.start >= a && f.end <= b {
@@ -2289,7 +2291,15 @@ func lineBinds(line string, o occurrence, label string, labels map[string]bool) 
 			return true
 		}
 	}
-	return false
+	if len(own) > 0 {
+		return false
+	}
+	for _, m := range others {
+		if m[0] >= o.end && !between(o.end, m[0]) {
+			return false
+		}
+	}
+	return true
 }
 
 func isWordByte(b byte) bool {

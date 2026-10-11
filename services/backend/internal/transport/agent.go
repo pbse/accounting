@@ -821,6 +821,13 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		for _, m := range sentenceMoney[i] {
 			readLabels(reads[m.step].value, labels)
 		}
+		// A client's own name is who the figure is of, which the client checks hold, not another line.
+		for _, e := range entities {
+			delete(labels, strings.ToLower(strings.TrimSpace(e)))
+		}
+		for _, m := range sentenceMoney[i] {
+			delete(labels, strings.ToLower(strings.TrimSpace(m.claim.entity)))
+		}
 		var movedTo []movedLevel
 		totalAt, totalSeen := map[string]int{}, map[string]bool{}
 		remainderAt[i] = totalAt
