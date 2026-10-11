@@ -18,16 +18,18 @@ import (
 
 // importScope is a reviewer's attestation of a file's scope and basis.
 type importScope struct {
-	ID       string    `json:"id"`
-	LayoutID string    `json:"layout_id"`
-	Book     string    `json:"book"`
-	Filters  string    `json:"filters"`
-	Complete bool      `json:"complete"`
-	Missing  string    `json:"missing"`
-	Basis    string    `json:"basis"`
-	Reason   string    `json:"reason"`
-	Actor    string    `json:"actor"`
-	At       time.Time `json:"at"`
+	ID       string `json:"id"`
+	LayoutID string `json:"layout_id"`
+	Book     string `json:"book"`
+	Filters  string `json:"filters"`
+	Complete bool   `json:"complete"`
+	Missing  string `json:"missing"`
+	Basis    string `json:"basis"`
+	// Recalculated attests the file is a copy recalculated after every link was refreshed: it releases formula amounts.
+	Recalculated bool      `json:"recalculated"`
+	Reason       string    `json:"reason"`
+	Actor        string    `json:"actor"`
+	At           time.Time `json:"at"`
 }
 
 // basisLabels are the bases as a person reads them.
@@ -44,9 +46,9 @@ func onBasis(basis string) string {
 // latestImportScope is import id's latest attestation, or nil.
 func latestImportScope(ctx context.Context, q rowReader, org, name, id string) (*importScope, error) {
 	var s importScope
-	err := q.QueryRowContext(ctx, `SELECT s.id::text,s.layout_id::text,s.book,s.filters,s.complete,s.missing,s.basis,s.reason,s.actor,s.created_at FROM books_import_scopes s
+	err := q.QueryRowContext(ctx, `SELECT s.id::text,s.layout_id::text,s.book,s.filters,s.complete,s.missing,s.basis,s.recalculated,s.reason,s.actor,s.created_at FROM books_import_scopes s
  WHERE s.organization_id=$1 AND client_identity(s.organization_id,s.client_entity)=client_identity($1,$2) AND s.import_id::text=$3 ORDER BY s.id DESC LIMIT 1`, org, name, id).
-		Scan(&s.ID, &s.LayoutID, &s.Book, &s.Filters, &s.Complete, &s.Missing, &s.Basis, &s.Reason, &s.Actor, &s.At)
+		Scan(&s.ID, &s.LayoutID, &s.Book, &s.Filters, &s.Complete, &s.Missing, &s.Basis, &s.Recalculated, &s.Reason, &s.Actor, &s.At)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -101,12 +103,19 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 		if err == nil {
 			method, basisScope, err = approvedBasis(r.Context(), db, org, name)
 		}
+		// How many of the reading's month-end amounts are formula results: the attestation of a recalculated copy is
+		// asked only of a file that has them.
+		formulas := 0
+		if err == nil && layout != nil {
+			err = db.QueryRowContext(r.Context(), `SELECT count(*) FROM books_layouts l,jsonb_array_elements(COALESCE(l.reading->'lines','[]'::jsonb)) e
+ WHERE l.id::text=$1 AND e->>'kind'='posting' AND COALESCE(e->'formulas','[]'::jsonb) ?| ARRAY['debit','credit','balance']`, layout.ID).Scan(&formulas)
+		}
 		on, onErr := fileImportsOn(r.Context(), db, org)
 		if err != nil || onErr != nil {
 			problem(w, 503, "The file's scope is unavailable.")
 			return
 		}
-		out := map[string]any{"scope": scope, "confirmed": layout != nil, "current": scope != nil && layout != nil && scope.LayoutID == layout.ID,
+		out := map[string]any{"scope": scope, "confirmed": layout != nil, "formulas": formulas, "current": scope != nil && layout != nil && scope.LayoutID == layout.ID,
 			"approved_basis": nil, "note": scopeNote(scope, method), "on": on, "can_confirm": canReview(r) && on && layout != nil}
 		if method != "" {
 			out["approved_basis"] = map[string]string{"method": method, "scope": basisScope}
@@ -124,12 +133,13 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var in struct {
-			Book     string `json:"book"`
-			Filters  string `json:"filters"`
-			Complete bool   `json:"complete"`
-			Missing  string `json:"missing"`
-			Basis    string `json:"basis"`
-			Reason   string `json:"reason"`
+			Book         string `json:"book"`
+			Filters      string `json:"filters"`
+			Complete     bool   `json:"complete"`
+			Missing      string `json:"missing"`
+			Basis        string `json:"basis"`
+			Recalculated bool   `json:"recalculated"`
+			Reason       string `json:"reason"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -175,10 +185,10 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var attested string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO books_import_scopes(organization_id,client_entity,import_id,layout_id,book,filters,complete,missing,basis,reason,actor)
- SELECT $1,$2,l.import_id,l.id,$4,$5,$6,$7,$8,$9,$10 FROM books_layouts l WHERE l.id::text=$3 AND l.organization_id=$1
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO books_import_scopes(organization_id,client_entity,import_id,layout_id,book,filters,complete,missing,basis,reason,actor,recalculated)
+ SELECT $1,$2,l.import_id,l.id,$4,$5,$6,$7,$8,$9,$10,$11 FROM books_layouts l WHERE l.id::text=$3 AND l.organization_id=$1
   AND l.id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=l.import_id) RETURNING id::text`,
-			org, name, layout.ID, in.Book, in.Filters, in.Complete, in.Missing, in.Basis, in.Reason, reviewerName(r)).Scan(&attested)
+			org, name, layout.ID, in.Book, in.Filters, in.Complete, in.Missing, in.Basis, in.Reason, reviewerName(r), in.Recalculated).Scan(&attested)
 		if err == sql.ErrNoRows {
 			problem(w, 409, "The file's layout was confirmed again meanwhile: reopen it to attest that reading.")
 			return

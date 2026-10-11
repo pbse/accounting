@@ -213,6 +213,9 @@ type Line struct {
 	Unread []Meaning `json:"unread,omitempty"`
 	Cents  bool      `json:"cents"`
 	Hidden bool      `json:"hidden,omitempty"`
+	// Formulas are the amounts read from a formula's stored result, by meaning: the last calculation, which may not be
+	// the current one (docs/books-sources.md, Formulas).
+	Formulas []Meaning `json:"formulas,omitempty"`
 }
 
 // Label is what names the row: its account name, else its account number (a Trial Balance with codes alone writes its
@@ -472,6 +475,9 @@ func (l Layout) Read(t Table) Reading {
 			case AccountType:
 				line.Type = strings.TrimSpace(c.Value)
 			default:
+				if c.Formula != "" {
+					line.Formulas = append(line.Formulas, meaning)
+				}
 				a, err := cellAmount(c, l.Style)
 				if err != nil && (meaning == Debit || meaning == Credit || meaning == Balance) {
 					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is not an amount", c.Ref, c.Value))

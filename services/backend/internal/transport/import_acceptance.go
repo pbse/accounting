@@ -247,6 +247,23 @@ func fileChecks(s fileState, explained string) []importCheck {
 	default:
 		add(importCheck{Key: "currency", Title: "In the client's currency, to the cent", State: "passes", Detail: "In " + got + ", every amount exact to the cent."})
 	}
+	// Formula amounts are the last calculation, which the reader does not repeat: a values-only export has none, and a
+	// reviewer's attestation of a recalculated copy releases them.
+	var formulas []string
+	for _, a := range s.reading.Accounts {
+		if a.Formula {
+			formulas = append(formulas, strings.TrimSpace(a.Number+" "+a.Name))
+		}
+	}
+	switch {
+	case len(formulas) == 0:
+		add(importCheck{Key: "formulas", Title: "Amounts are stored values", State: "passes", Detail: "No month-end amount is a formula's result."})
+	case s.scope != nil && s.scope.Recalculated:
+		add(importCheck{Key: "formulas", Title: "Amounts are stored values", State: "note", Detail: fmt.Sprintf("%d account%s' amounts are formula results, released by the reviewer's attestation that the file is a recalculated copy.", len(formulas), suffix(len(formulas))), Items: formulas})
+	default:
+		add(importCheck{Key: "formulas", Title: "Amounts are stored values", State: "holds", Detail: fmt.Sprintf("%d account%s' amounts are formula results, the workbook's last calculation, which the reader does not repeat.", len(formulas), suffix(len(formulas))),
+			Holds: "Its use as the month's books, until a values-only export from the ledger replaces it, or a reviewer attests, with its scope, that it is a copy recalculated after every linked workbook was refreshed.", Items: formulas})
+	}
 	switch {
 	case s.scope == nil:
 		add(importCheck{Key: "basis", Title: "On the client's approved basis", State: "holds", Detail: "Attest the basis the export is on.", Holds: "Comparisons, roll-forwards and the statements built on the file."})
