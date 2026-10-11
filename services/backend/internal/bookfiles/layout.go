@@ -28,6 +28,10 @@ const (
 	Opening    Meaning = "opening"
 	Movement   Meaning = "movement"
 	YearToDate Meaning = "year_to_date"
+	// Dimension is the department, location or class a row's balance belongs to: an account repeated once per dimension
+	// is one account whose balance is the sum, the split kept on its lines (docs/books-sources.md, Hierarchy, dimensions
+	// and entities).
+	Dimension Meaning = "dimension"
 )
 
 // Layout is how to read one table as a Trial Balance: which row heads it, what each column means, how its amounts are
@@ -66,6 +70,7 @@ var headerWords = []struct {
 }{
 	{AccountNumber, regexp.MustCompile(`(?i)^(account\s*)?(no\.?|number|code|#|nominal code|acct\.?\s*(no|#)?)$`)},
 	{AccountType, regexp.MustCompile(`(?i)^(account\s*)?(type|class|category)$`)},
+	{Dimension, regexp.MustCompile(`(?i)^(department|dept\.?|location|division|tracking(\s*category)?|cost\s*cent(re|er)|segment|branch|region)$`)},
 	{AccountName, regexp.MustCompile(`(?i)^(account(\s*name)?|name|description|ledger|particulars|account title)$`)},
 	{Opening, regexp.MustCompile(`(?i)opening|beginning|brought forward|b/f`)},
 	{Movement, regexp.MustCompile(`(?i)movement|activity|net change|period|this month`)},
@@ -93,7 +98,7 @@ func ProposeLayout(t Table) (Layout, []string) {
 				if h.words.MatchString(text) {
 					// A header repeated (a multi-period export's Balance for each month) proposes its first column only,
 					// and asks which one is meant.
-					if len(repeated[h.meaning]) == 0 {
+					if len(repeated[h.meaning]) == 0 || h.meaning == Dimension {
 						columns[c.Column] = h.meaning
 					}
 					repeated[h.meaning] = append(repeated[h.meaning], c.Column)
@@ -148,6 +153,48 @@ func ProposeLayout(t Table) (Layout, []string) {
 			questions = append(questions, fmt.Sprintf("Does column %s name the account?", strings.TrimRight(cellRef(first, 1), "1")))
 		} else {
 			questions = append(questions, "Which column names the account?")
+		}
+	}
+	// Once the account column is known, a column headed "Class" is a class the rows are split by when an account appears under two of its values ("Sales"
+	// and "Marketing" alike), or when its values do not say a classification ("Retail", "East"); else it is the
+	// account's classification ("Asset", "Expense").
+	for column, m := range layout.Columns {
+		if m != AccountType || !strings.EqualFold(strings.TrimSpace(headerText(t, layout.HeaderRow, column)), "class") {
+			continue
+		}
+		said, classes := 0, 0
+		under := map[string]map[string]bool{}
+		for _, r := range t.Rows {
+			if r.Number <= layout.HeaderRow {
+				continue
+			}
+			account, value := "", ""
+			for _, c := range r.Cells {
+				switch v := strings.TrimSpace(c.Value); {
+				case c.Column == column:
+					value = v
+				case layout.Columns[c.Column] == AccountName || layout.Columns[c.Column] == AccountNumber:
+					account += "|" + strings.ToLower(v)
+				}
+			}
+			if value == "" {
+				continue
+			}
+			said++
+			if class, _, _ := classOf(value); class != "" {
+				classes++
+			}
+			if under[account] == nil {
+				under[account] = map[string]bool{}
+			}
+			under[account][strings.ToLower(value)] = true
+		}
+		split := false
+		for account, values := range under {
+			split = split || account != "" && len(values) > 1
+		}
+		if said > 0 && (split || classes*2 < said) {
+			layout.Columns[column] = Dimension
 		}
 	}
 	if !(has(Debit) && has(Credit)) && !has(Balance) {
@@ -213,6 +260,8 @@ type Line struct {
 	Unread []Meaning `json:"unread,omitempty"`
 	Cents  bool      `json:"cents"`
 	Hidden bool      `json:"hidden,omitempty"`
+	// Dimension is the department, location or class the row's balance belongs to, when the layout reads one.
+	Dimension string `json:"dimension,omitempty"`
 	// Formulas are the amounts read from a formula's stored result, by meaning: the last calculation, which may not be
 	// the current one (docs/books-sources.md, Formulas).
 	Formulas []Meaning `json:"formulas,omitempty"`
@@ -256,6 +305,21 @@ func TotalOf(label string) (of string, grand bool) {
 		return "", true
 	}
 	return strings.TrimSpace(totalLabel.ReplaceAllString(label, "")), false
+}
+
+// headerText is what the table's header row says over column.
+func headerText(t Table, headerRow, column int) string {
+	for _, r := range t.Rows {
+		if r.Number != headerRow {
+			continue
+		}
+		for _, c := range r.Cells {
+			if c.Column == column {
+				return c.Value
+			}
+		}
+	}
+	return ""
 }
 
 // grandTotal is a total of the whole table, never of a section.
@@ -384,6 +448,13 @@ func coveredFrom(lines []Line, i int) int {
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
 	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}, FormulasMarked: true}
+	var dimensionColumns []int
+	for column, m := range l.Columns {
+		if m == Dimension {
+			dimensionColumns = append(dimensionColumns, column)
+		}
+	}
+	sort.Ints(dimensionColumns)
 	// A layout reads the sheet it was confirmed for: another with the same columns is another sheet's figures.
 	if l.Table != "" && t.Name != l.Table {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("The layout reads the sheet %q, not %q", l.Table, t.Name))
@@ -395,7 +466,8 @@ func (l Layout) Read(t Table) Reading {
 	meanings := map[Meaning]bool{}
 	var twice []string
 	for _, m := range l.Columns {
-		if meanings[m] && !slices.Contains(twice, string(m)) {
+		// Dimensions alone may be several columns (department and location), read together as one split.
+		if m != Dimension && meanings[m] && !slices.Contains(twice, string(m)) {
 			twice = append(twice, string(m))
 		}
 		meanings[m] = true
@@ -440,6 +512,7 @@ func (l Layout) Read(t Table) Reading {
 			continue
 		}
 		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cells: map[Meaning]string{}, Cents: true}
+		dimensions := map[int]string{}
 		var debit, credit, balance *big.Rat
 		hasAmount, signed := false, false
 		// outside are the row's values in columns the layout does not name, and strays their columns: nothing is dropped
@@ -477,6 +550,8 @@ func (l Layout) Read(t Table) Reading {
 				line.Name = strings.TrimSpace(c.Value)
 			case AccountType:
 				line.Type = strings.TrimSpace(c.Value)
+			case Dimension:
+				dimensions[c.Column] = strings.TrimSpace(c.Value)
 			default:
 				if c.Formula != "" {
 					line.Formulas = append(line.Formulas, meaning)
@@ -547,6 +622,25 @@ func (l Layout) Read(t Table) Reading {
 				default:
 					line.Others[meaning] = exact(a.Value)
 				}
+			}
+		}
+		// The split: one dimension's value, or several named by their headers, a blank shown as one, so splits that
+		// differ by column stay apart.
+		if len(dimensionColumns) == 1 {
+			line.Dimension = dimensions[dimensionColumns[0]]
+		} else if len(dimensionColumns) > 1 {
+			parts, any := make([]string, len(dimensionColumns)), false
+			for i, column := range dimensionColumns {
+				v := dimensions[column]
+				if v != "" {
+					any = true
+				} else {
+					v = "—"
+				}
+				parts[i] = cmp.Or(strings.TrimSpace(headerText(t, l.HeaderRow, column)), strings.TrimRight(cellRef(column, 1), "1")) + ": " + v
+			}
+			if any {
+				line.Dimension = strings.Join(parts, " · ")
 			}
 		}
 		if line.Name == "" && line.Number == "" && !hasAmount {

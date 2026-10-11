@@ -83,6 +83,8 @@ As built (delivery step 6, checks and acceptance): once a file's layout is confi
 
 As built (delivery step 6, formulas): the reader marks each line whose month-end amount is a formula's stored result. The reader does not recalculate formulas, so a check holds the file's use as the month's books while any are, naming the accounts. A values-only export from the ledger has none. For a workbook the firm maintains, a reviewer attests with its scope that the file is a copy recalculated in a spreadsheet application after every linked workbook was refreshed from its confirmed version, its input cells matching the original's (migration 154); that releases its formula amounts, and the check says so. Recalculating over the workbook's own cells, and supplying linked workbooks as inputs, come later.
 
+As built (delivery step 6, dimensions): a column holding each row's department, location, division, tracking category, cost centre, segment, branch or region is proposed as a dimension, and any column can be confirmed as one (several, such as department and location, are read together as one split). Each line keeps its split; an account repeated once per split is one account whose balance is their sum in the account map and the checks, and the reading shows each line's split beside it. A dimension is kept apart from the account's classification. Splitting several entities in one workbook into one import per client, and parts of one import, come later.
+
 ### Size and parts
 
 At least 3,000 accounts and 100,000 ledger lines a month. A larger export, or a ledger that exports in pieces, can come as **parts of one import**. The parts declare the same client, month, basis and scope. Overlap is judged on what each part contains, not on account names:
