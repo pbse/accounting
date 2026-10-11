@@ -222,8 +222,9 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	call("user_a", append([]string{"close:signoff"}, partner...), "POST", "/v1/closes/"+birch+"/signoff", map[string]any{"digest": unbound["digest"], "expected_decision_id": unbound["decision_id"], "action": "sign", "note": "Read before the profile", "confirmed": true}, 409)
 	setup := call("user_a", partner, "GET", takeover, nil, 200)
 	content := setup["content"].(map[string]any)
-	if len(setup["problems"].([]any)) != 0 || content["books"] != "files" || content["profile"].(map[string]any)["currency"] != "GBP" {
-		t.Fatalf("a file-only client is taken over with its profile: %v", setup)
+	// Its books come as files, with its confirmed profile: the takeover waits for the month's file to be read.
+	if p := setup["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "come as files") || content["books"] != "files" || content["profile"].(map[string]any)["currency"] != "GBP" {
+		t.Fatalf("a file-only client is taken over with its profile, once its file is read: %v", setup)
 	}
 	// A ledger connected once and since disconnected is reconnected, not taken for books that come as files.
 	_, err = db.Exec(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_name) VALUES($1,$2,'Birch Ltd','fixture','disconnected',$3,now(),'Birch')`, birch, org, rand.Text())
