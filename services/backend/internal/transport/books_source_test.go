@@ -141,4 +141,13 @@ func TestTheBooksSourceIsChosenAndHonoured(t *testing.T) {
 	if step := booksStep(b, september, "Acme Co", "2026-09"); b.source != "none" || strings.Contains(step.Text, "QuickBooks") || !strings.Contains(step.Text, "Xero") {
 		t.Fatalf("September's plan: %s %+v", b.source, step)
 	}
+
+	// July gains an older Xero capture: going back to the newest capture still reads its QuickBooks one, so it stands;
+	// Xero alone would change signed-off July's books, so it waits.
+	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-07','d','{}','fixture',now()-interval '3 hours')`, july, xeroConnection)
+	must(err)
+	must(db.QueryRow(`SELECT max(id)::text FROM books_sources WHERE organization_id=$1`, org).Scan(&newest))
+	call("user_a", partner, map[string]any{"client": "Acme Co", "period": "", "source": "newest", "reason": "Back to the newest capture", "rev": newest}, 200)
+	must(db.QueryRow(`SELECT max(id)::text FROM books_sources WHERE organization_id=$1`, org).Scan(&newest))
+	call("user_a", partner, map[string]any{"client": "Acme Co", "period": "", "source": "xero", "reason": "Xero for every month", "rev": newest}, 409)
 }

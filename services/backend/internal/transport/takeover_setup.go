@@ -16,14 +16,14 @@ import (
 )
 
 // takeoverContent is what a reviewer confirms when taking a client over: the close, the ledger company its books are read
-// from (or, for books that come as files, none, with the confirmed profile), the firm procedures in force for it (client overrides are its exceptions, the basis among them), who is assigned to
+// from (of the month's books source, so a client with both ledgers connected is taken over from the chosen one) (or, for books that come as files, none, with the confirmed profile), the firm procedures in force for it (client overrides are its exceptions, the basis among them), who is assigned to
 // it, the account scope proposed from this month's capture, and the monthly hand-over. It holds no times.
 func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[string]any, string, []string, error) {
 	var raw []byte
 	err := tx.QueryRowContext(ctx, `SELECT jsonb_build_object('close',jsonb_build_object('id',c.id::text,'entity',c.entity,'period',c.period),
  'companies',(SELECT COALESCE(jsonb_agg(x ORDER BY x.provider),'[]'::jsonb) FROM (
-  SELECT 'QuickBooks' AS provider,q.company_name AS name,q.realm AS company,q.environment,q.state FROM quickbooks_connections q WHERE q.id=`+quickbooks.ReadingConnection("c.id")+`
-  UNION ALL SELECT 'Xero',x.tenant_name,COALESCE(x.tenant_id,''),'',x.state FROM xero_connections x WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state<>'disconnected') x),
+  SELECT 'QuickBooks' AS provider,q.company_name AS name,q.realm AS company,q.environment,q.state FROM quickbooks_connections q WHERE q.id=`+quickbooks.ReadingConnection("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+`
+  UNION ALL SELECT 'Xero',x.tenant_name,COALESCE(x.tenant_id,''),'',x.state FROM xero_connections x WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state<>'disconnected' AND `+sourceAllows("c.id", "xero")+`) x),
  'procedures',(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id::text,'kind',p.kind,'method',p.method,'enabled',p.enabled,'scope',CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END,'expense_account',p.expense_account,'prepaid_account',p.prepaid_account) ORDER BY p.kind),'[]'::jsonb)
   FROM (SELECT DISTINCT ON (p.kind) p.* FROM procedure_versions p WHERE p.organization_id=c.organization_id AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY p.kind,(p.client_entity<>'') DESC,p.id DESC) p),
  'assigned',(SELECT COALESCE(jsonb_agg(jsonb_build_object('subject',g.subject,'member',COALESCE(m.granted,false)) ORDER BY g.subject),'[]'::jsonb)
@@ -103,7 +103,7 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 	case len(check.Companies) == 0:
 		problems = append(problems, "Connect the client's QuickBooks or Xero company, or, if its books come as files, confirm its currency and fiscal year on the client's page: the takeover confirms where its books are read from.")
 	case len(check.Companies) > 1:
-		problems = append(problems, "More than one ledger company is connected for this client; disconnect the one its books are not kept in.")
+		problems = append(problems, "More than one ledger company is connected for this client: choose which its books come from on the client's page (Source), or disconnect the one its books are not kept in.")
 	case check.Companies[0].State != "active":
 		problems = append(problems, "Reconnect "+check.Companies[0].Provider+": its connection is "+strings.ReplaceAll(check.Companies[0].State, "_", " ")+".")
 	}

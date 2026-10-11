@@ -69,13 +69,14 @@ func clientSources(ctx context.Context, q interface {
 	return out, rows.Err()
 }
 
-// excluded is the provider a source leaves out, or "" for the newest capture.
-func excluded(source string) string {
-	switch source {
-	case "quickbooks":
-		return "xero"
-	case "xero":
+// readFrom is the provider whose capture a month reads under source, from when each provider's newest capture was
+// taken: the newer for the newest capture (a tie is QuickBooks', as the readers have it), else the source's own, if any.
+func readFrom(source string, quickbooksAt, xeroAt sql.NullTime) string {
+	switch {
+	case source == "quickbooks" && quickbooksAt.Valid, source == "newest" && quickbooksAt.Valid && (!xeroAt.Valid || !xeroAt.Time.After(quickbooksAt.Time)):
 		return "quickbooks"
+	case source == "xero" && xeroAt.Valid, source == "newest" && xeroAt.Valid:
+		return "xero"
 	}
 	return ""
 }
@@ -158,7 +159,7 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		rows, err := tx.QueryContext(ctx, `SELECT c.period,books_source(c.organization_id,c.entity,c.period),
- EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period'),EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id)
+ (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period'),(SELECT max(s.captured_at) FROM xero_snapshots s WHERE s.close_id=c.id)
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2)
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off'
  AND (($3<>'' AND c.period=$3) OR ($3='' AND NOT EXISTS(SELECT 1 FROM books_sources o WHERE o.organization_id=c.organization_id AND client_identity(o.organization_id,o.client_entity)=client_identity(c.organization_id,c.entity) AND o.period=c.period)))
@@ -170,12 +171,11 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 		var held []string
 		for rows.Next() {
 			var period, now string
-			var qbo, xero bool
+			var qbo, xero sql.NullTime
 			if err = rows.Scan(&period, &now, &qbo, &xero); err != nil {
 				break
 			}
-			has := map[string]bool{"quickbooks": qbo, "xero": xero}
-			if now != in.Source && (has[excluded(now)] || has[excluded(in.Source)]) {
+			if readFrom(now, qbo, xero) != readFrom(in.Source, qbo, xero) {
 				held = append(held, period)
 			}
 		}
