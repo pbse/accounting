@@ -532,6 +532,14 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Opening book cash of 64,120.00 is not available cash at the bank.", e("t30", 0, "/opening/amount", "64120.00"))
 	rejected("Opening book cash of 64,120.00 is available at the bank.", "available at the bank", e("t30", 0, "/opening/amount", "64120.00"))
 
+	// Round forty-two: equal figures of two lines; an introductory currency.
+	reads["t69"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"sections":[{"name":"Expense","lines":[{"name":"Rent","amount":"500.00"},{"name":"Marketing","amount":"500.00"}]}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Rent is 500.00 and marketing is 500.00.", "to another line", e("t69", 0, "/profit_and_loss/sections/0/lines/0/amount", "500.00"))
+	rejected("Marketing is 500.00 and rent is 500.00.", "to another line", e("t69", 0, "/profit_and_loss/sections/0/lines/0/amount", "500.00"))
+	ok("Rent is 500.00 and marketing is 500.00.", e("t69", 0, "/profit_and_loss/sections/0/lines/0/amount", "500.00"), e("t69", 0, "/profit_and_loss/sections/0/lines/1/amount", "500.00"))
+	ok("Rent and marketing are each 500.00.", e("t69", 0, "/profit_and_loss/sections/0/lines/0/amount", "500.00"), e("t69", 0, "/profit_and_loss/sections/0/lines/1/amount", "500.00"))
+	rejected("In EUR, net income is 21,780.00.", "in EUR", e("t2", 0, ni+"/amount", "21780.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

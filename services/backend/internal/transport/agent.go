@@ -816,6 +816,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		for _, c := range sentenceClaims[i] {
 			rows[strings.ToLower(c.label)] = true
 		}
+		// The names of every row the sentence's reads hold, so a figure is bound to the line named for it.
+		labels := map[string]bool{}
+		for _, m := range sentenceMoney[i] {
+			readLabels(reads[m.step].value, labels)
+		}
 		var movedTo []movedLevel
 		totalAt, totalSeen := map[string]int{}, map[string]bool{}
 		remainderAt[i] = totalAt
@@ -830,6 +835,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				}
 				candidates++
 				why := checkClaim(line, o, m.claim, m.got, entities, rows)
+				if why == "" && !lineBinds(line, o, m.claim.label, labels) {
+					why = "the sentence gives " + o.normalized + " to another line; the cited field is " + m.claim.describe()
+				}
 				if why == "" {
 					held, used[j] = true, true
 					if d := o.direction(); (d == "rise-to" || d == "fall-to") && m.claim.kind != "change" {

@@ -976,9 +976,9 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			return "the sentence gives " + o.normalized + " to " + others[0] + ", but the cited figure is " + c.entity + "'s"
 		}
 	}
-	// The currency and basis named are the field's.
+	// The currency and basis named are the field's, including a currency introducing the figure's clause ("In EUR, …").
 	if c.currency != "" {
-		for _, m := range claimCurrency.FindAllString(o.clause, -1) {
+		for _, m := range claimCurrency.FindAllString(figureClauses(line, o), -1) {
 			code := map[string]string{"€": "EUR", "£": "GBP", "₹": "INR", "¥": "JPY"}[m]
 			if code == "" {
 				code = strings.ToUpper(m)
@@ -2205,4 +2205,93 @@ func derivedMonthsNamed(line string, claims []claim) string {
 		}
 	}
 	return ""
+}
+
+// readLabels are the names of every row a read holds (its lines, payees, accounts), which a sentence may name.
+func readLabels(value any, into map[string]bool) {
+	switch t := value.(type) {
+	case map[string]any:
+		for _, key := range claimLabelKeys {
+			if name, ok := t[key].(string); ok && len(strings.TrimSpace(name)) >= 3 {
+				into[strings.ToLower(strings.TrimSpace(name))] = true
+			}
+		}
+		for _, v := range t {
+			readLabels(v, into)
+		}
+	case []any:
+		for _, v := range t {
+			readLabels(v, into)
+		}
+	}
+}
+
+// genericLabels are row names too general to say which line a figure is ("Total", "Other").
+var genericLabels = map[string]bool{"total": true, "other": true, "net": true, "amount": true, "balance": true, "change": true, "unattributed": true}
+
+// lineBinds says whether a figure the sentence states belongs to the cited line rather than to another line the
+// sentence names: in "Rent is 500.00 and marketing is 500.00" the second 500.00 is marketing's, while in "Rent and
+// marketing are each 500.00" it is both. A line binds the figure when it is named before it with no other figure
+// between, or, when no line is named before it so, after it the same way.
+func lineBinds(line string, o occurrence, label string, labels map[string]bool) bool {
+	lower := strings.ToLower(line)
+	label = strings.ToLower(strings.TrimSpace(label))
+	mentions := func(l string) [][2]int {
+		out := [][2]int{}
+		for from := 0; ; {
+			i := strings.Index(lower[from:], l)
+			if i < 0 {
+				return out
+			}
+			at := from + i
+			end := at + len(l)
+			if (at == 0 || !isWordByte(lower[at-1])) && (end == len(lower) || !isWordByte(lower[end])) {
+				out = append(out, [2]int{at, end})
+			}
+			from = end
+		}
+	}
+	own := mentions(label)
+	if len(own) == 0 || label == "" {
+		return true
+	}
+	others := [][2]int{}
+	for l := range labels {
+		if genericLabels[l] || l == label || strings.Contains(l, label) || strings.Contains(label, l) {
+			continue
+		}
+		others = append(others, mentions(l)...)
+	}
+	if len(others) == 0 {
+		return true
+	}
+	figures := figuresIn(line)
+	between := func(a, b int) bool {
+		for _, f := range figures {
+			if f.start != o.start && f.start >= a && f.end <= b {
+				return true
+			}
+		}
+		return false
+	}
+	for _, m := range own {
+		if m[1] <= o.start && !between(m[1], o.start) {
+			return true
+		}
+	}
+	for _, m := range others {
+		if m[1] <= o.start && !between(m[1], o.start) {
+			return false
+		}
+	}
+	for _, m := range own {
+		if m[0] >= o.end && !between(o.end, m[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b >= 0x80
 }
