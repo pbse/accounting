@@ -10,6 +10,7 @@ import { Aging } from "./Aging";
 import { BillCorrection } from "./BillCorrection";
 import { CreditApplications } from "./CreditApplications";
 import { Exceptions } from "./Exceptions";
+import { Journals } from "./Journals";
 import { Flux } from "./Flux";
 import type { Status } from "./Goal";
 import { Matching } from "./Matching";
@@ -229,6 +230,7 @@ const views: Record<string, string> = {
   "open-items": "Open invoices and bills",
   matching: "Documents against the ledger",
   corrections: "Corrections in QuickBooks",
+  journals: "Journals to enter in the ledger",
 };
 // The view a link asks for: by name, or by the anchor of a section inside it (links from the plan, search and the
 // exceptions still open the right one).
@@ -298,6 +300,7 @@ export function Books({ close, papers, needs, brief, briefRead, decisionsError, 
                 </>
               )}
               {view === "tie-out" && <TieOut key={`tie-out-${close.id}`} closeId={close.id} />}
+              {view === "journals" && <Journals key={`journals-${close.id}`} closeId={close.id} />}
               {view === "exceptions" && <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />}
               {view === "changes" && <Flux key={`flux-${close.id}`} closeId={close.id} />}
               {view === "aging" && <Aging key={`aging-${close.id}`} closeId={close.id} open />}
@@ -334,6 +337,8 @@ export function Books({ close, papers, needs, brief, briefRead, decisionsError, 
             { label: views["tie-out"], note: board?.unmatched.length ? `${board.unmatched.length} not compared` : undefined, to: to("tie-out") },
             { label: views.ledger, note: board?.snapshot ? `#${board.snapshot.id}` : undefined, to: to("ledger") },
             { label: views.corrections, to: to("corrections") },
+            // A month on files has no ledger to post to: its approved entries are journals to enter.
+            ...(board?.snapshot?.source === "files" ? [{ label: views.journals, to: to("journals") }] : []),
           ]}
         />
       </aside>
