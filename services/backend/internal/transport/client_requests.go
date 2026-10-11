@@ -362,7 +362,10 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			problem(w, 422, "Confirm that your reply is for this client and period.")
 			return
 		}
-		// A request for the month's books takes its books files; any other request takes documents.
+		// A request for the month's books takes its books files, which answer it; any other request takes documents.
+		if books && len(files) > 0 && len(answers) == 0 {
+			answers = []clientAnswer{{1, "document", ""}}
+		}
 		for _, f := range files {
 			if books && !validBooksFile(f.Name, f.Body) {
 				problem(w, 422, "Attach the books as a CSV or Excel workbook (.xlsx) of up to 5 MiB.")

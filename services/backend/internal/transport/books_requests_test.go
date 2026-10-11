@@ -95,6 +95,12 @@ func TestAClientSendsTheMonthsBooksThroughARequest(t *testing.T) {
 	reply("statement.pdf", "%PDF-1.4\nSynthetic\n%%EOF", 422)
 	trialBalance := "Account,Debit,Credit\nBusiness Checking,1500.00,\nOwner's Equity,,1500.00\n"
 	reply("April trial balance.csv", trialBalance, 200)
+	// The file answers the request: the reply is complete.
+	var complete bool
+	must(db.QueryRow(`SELECT complete FROM request_submissions WHERE request_id=$1::bigint ORDER BY id DESC LIMIT 1`, asked["id"]).Scan(&complete))
+	if !complete {
+		t.Fatal("a books file alone completes the request for the month's books")
+	}
 	// Scanned whole by the antivirus service's binary endpoint.
 	scanner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/scan-file" {
@@ -114,5 +120,13 @@ func TestAClientSendsTheMonthsBooksThroughARequest(t *testing.T) {
 	must(db.QueryRow(`SELECT i.period,i.name,a.import_id::text FROM client_attachments a JOIN books_imports i ON i.id=a.import_id WHERE a.id=$1::bigint AND a.state='released' AND a.source_id IS NULL`, attachment).Scan(&period, &name, &kept))
 	if period != "2027-04" || name != "April trial balance.csv" || kept != released["import_id"] {
 		t.Fatalf("the released file is the client's April file: %s %s %s %v", period, name, kept, released)
+	}
+	// Deleting the file deletes the attachment that held the same bytes.
+	_, err = db.Exec(`DELETE FROM books_imports WHERE id=$1::bigint`, kept)
+	must(err)
+	var left int
+	must(db.QueryRow(`SELECT count(*) FROM client_attachments WHERE id=$1::bigint`, attachment).Scan(&left))
+	if left != 0 {
+		t.Fatal("a deleted file's bytes are kept in its attachment")
 	}
 }

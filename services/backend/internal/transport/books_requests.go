@@ -70,13 +70,44 @@ func registerBooksRequests(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		org := organization(r)
-		var closeID string
-		switch err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE organization_id=$1 AND client_identity(organization_id,entity)=client_identity($1,$2) AND period=$3 ORDER BY id LIMIT 1 FOR UPDATE`, org, name, in.Period).Scan(&closeID); {
-		case err == sql.ErrNoRows:
-			problem(w, 409, name+" has no close for "+in.Period+" yet. Open the month, then ask for its books.")
+		// The month's close, under any of the client's names, that the member can open: a close opened under an alias is
+		// opened by its own name's access, as every close route checks it.
+		rows, err := tx.QueryContext(r.Context(), `SELECT id::text,entity FROM client_closes WHERE organization_id=$1 AND client_identity(organization_id,entity)=client_identity($1,$2) AND period=$3 ORDER BY id`, org, name, in.Period)
+		if err != nil {
+			problem(w, 503, "Request storage unavailable.")
 			return
+		}
+		var closes [][2]string
+		for rows.Next() {
+			var c [2]string
+			if err = rows.Scan(&c[0], &c[1]); err != nil {
+				break
+			}
+			closes = append(closes, c)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		var closeID string
+		for _, c := range closes {
+			if err != nil || closeID != "" {
+				break
+			}
+			var allowed bool
+			if allowed, err = clientAccess(db, r, c[1]); allowed {
+				closeID = c[0]
+			}
+		}
+		if err == nil && closeID != "" {
+			_, err = tx.ExecContext(r.Context(), `SELECT 1 FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID)
+		}
+		switch {
 		case err != nil:
 			problem(w, 503, "Request storage unavailable.")
+			return
+		case closeID == "":
+			problem(w, 409, name+" has no close for "+in.Period+" that you can open yet. Open the month, then ask for its books.")
 			return
 		}
 		var ledger string

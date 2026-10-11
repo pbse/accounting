@@ -313,7 +313,8 @@ function AskForm({ client, onClose }: { client: string; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [asked, setAsked] = useState<{ id: string; close_id: string; body: string; link_token: string; passcode: string; recipient: string; period: string }>();
-  const [queued, setQueued] = useState(false);
+  // Approving the email issues the request a new link, sent in it, and revokes the one shown before.
+  const [queued, setQueued] = useState<{ passcode: string }>();
   async function ask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -333,19 +334,24 @@ function AskForm({ client, onClose }: { client: string; onClose: () => void }) {
     return (
       <div className="stack">
         <pre>{asked.body}</pre>
-        <label>
-          Private link
-          <input readOnly value={`${window.location.origin}/request#${asked.link_token}`} onFocus={(e) => e.currentTarget.select()} />
-        </label>
-        <PasscodeNotice passcode={asked.passcode} />
         {queued ? (
-          <p role="status">The email to {asked.recipient} is queued.</p>
+          <>
+            <p role="status">The email to {asked.recipient} is queued with a new private link; the link shown before no longer works.</p>
+            <PasscodeNotice passcode={queued.passcode} />
+          </>
         ) : (
-          <SendRequestEmail closeId={asked.close_id} requestId={asked.id} recipient={asked.recipient} onQueued={() => setQueued(true)} />
+          <>
+            <label>
+              Private link
+              <input readOnly value={`${window.location.origin}/request#${asked.link_token}`} onFocus={(e) => e.currentTarget.select()} />
+            </label>
+            <PasscodeNotice passcode={asked.passcode} />
+            <SendRequestEmail closeId={asked.close_id} requestId={asked.id} recipient={asked.recipient} onQueued={(passcode) => setQueued({ passcode })} />
+          </>
         )}
         <p className="note">
-          Once the client sends the file and it passes scanning, release it from{" "}
-          <Link to={`/dashboard/closes/${asked.close_id}`}>{monthName(asked.period)}</Link>'s client requests (Overview, the agent's plan). It then appears among the files here.
+          Once the client sends the file and it passes scanning, release it under Client attachments on{" "}
+          <Link to={`/dashboard/closes/${asked.close_id}`}>{monthName(asked.period)}</Link>'s Overview (The agent's plan, documents and accounts). It then appears among the files here.
         </p>
         <DialogActions>
           <button type="button" onClick={onClose}>
