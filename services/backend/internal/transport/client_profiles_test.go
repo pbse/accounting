@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -227,5 +228,8 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	must(err)
 	if p := call("user_a", partner, "GET", takeover, nil, 200)["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "its connected ledger reports USD") {
 		t.Fatalf("a takeover waits on a ledger that differs: %v", p)
+	}
+	if b := call("user_a", partner, "GET", "/v1/closes/"+birch+"/readiness", nil, 200)["blockers"].([]any); !slices.ContainsFunc(b, func(x any) bool { return strings.Contains(x.(string), "its connected ledger reports USD") }) {
+		t.Fatalf("sign-off waits on a ledger that differs: %v", b)
 	}
 }

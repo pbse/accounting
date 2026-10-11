@@ -105,6 +105,11 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		bound, _ := json.Marshal(map[string]any{"snapshot": out.snapshotDigest, "currency": out.profile.Currency, "fiscal_year_start": out.profile.FiscalStart, "state": out.profile.State})
 		out.Digest = preparation.Digest(bound)
 	}
+	// A ledger that contradicts the confirmed profile, or another ledger, is answered before the month is signed off,
+	// and a month signed off since waits for it to be reopened.
+	if out.profile.Unsettled() {
+		out.Blockers = append(out.Blockers, "Client profile: "+out.profile.Question()+".")
+	}
 	var snapshot struct {
 		Scope *struct {
 			Scope closeScope `json:"scope"`
