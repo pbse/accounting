@@ -49,6 +49,47 @@ export function Procedures({
   const [impact, setImpact] = useState<Impact>();
   const [suggestion, setSuggestion] = useState<Suggestion>();
   const [publishImpact, setPublishImpact] = useState<PublishImpact>();
+  // Restoring an earlier version: the version and the closes publishing it again would affect, reviewed before confirming.
+  const [restoring, setRestoring] = useState<{ version: Version; impact: PublishImpact }>();
+  async function previewRestore(v: Version) {
+    setBusy(true);
+    setError("");
+    setRestoring(undefined);
+    try {
+      setRestoring({ version: v, impact: await workspaceRequest(`/procedures?impact_kind=${encodeURIComponent(v.kind)}&client_entity=${encodeURIComponent(v.client_entity)}`) });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Affected closes unavailable.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function restore(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!restoring) return;
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await workspaceRequest("/procedures", {
+        previous_id: restoring.impact.previous_id,
+        impact_digest: restoring.impact.impact_digest,
+        client_entity: restoring.version.client_entity,
+        kind: restoring.version.kind,
+        restore_id: restoring.version.id,
+        reason: data.get("reason"),
+        confirmed: data.get("confirmed") === "on",
+      });
+      setMessage(`Restored version #${restoring.version.id} as a new version. Existing close context stays pinned until explicitly updated.`);
+      setRestoring(undefined);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Restore failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // The first month a published version applies to ("" for every month); the impact preview is read for it.
   const [effectiveFrom, setEffectiveFrom] = useState("");
   async function load() {
@@ -394,13 +435,39 @@ export function Procedures({
             <ol>
               {versions.map((v) => (
                 <li key={v.id}>
-                  #{v.id} · {v.client_entity || "Firm default"} · {v.kind} ·{" "}
+                  #{v.id} · {v.client_entity || "Firm default"} · {v.kind}
+                  {v.method ? ` · method ${v.method}` : ""} ·{" "}
                   {v.enabled ? "enabled" : "disabled"}
                   <p>{v.instructions}</p>
                   {v.effective_from && <p>Applies to months from {v.effective_from}; earlier months keep the version in effect for them.</p>}
                   <p>
                     {v.reason} · {v.actor}
                   </p>
+                  {versions.find((p) => p.kind === v.kind && p.client_entity.toLowerCase() === v.client_entity.toLowerCase())?.id !== v.id && (!v.method || ["loan", "payroll", "basis", "owner"].includes(v.kind)) && (
+                    <button type="button" disabled={busy} onClick={() => void previewRestore(v)}>Restore this version</button>
+                  )}
+                  {restoring?.version.id === v.id && (
+                    <form onSubmit={(e) => void restore(e)}>
+                      <p>
+                        Publishing #{v.id} again affects {restoring.impact.total_closes} close{restoring.impact.total_closes === 1 ? "" : "s"}
+                        {restoring.impact.has_more ? " or more" : ""}; each keeps its pinned copy until it is updated.
+                      </p>
+                      {restoring.impact.closes.length > 0 && (
+                        <ul>
+                          {restoring.impact.closes.map((c) => (
+                            <li key={c.close_id}>
+                              {c.entity} · {c.period} · {c.draft_count} draft{c.draft_count === 1 ? "" : "s"}
+                              {c.pinned_source_id ? " · pinned to an earlier version" : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <label>Reason<input name="reason" required minLength={1} maxLength={2000} /></label>
+                      <label><input type="checkbox" name="confirmed" required /> Restore this version as the current one</label>
+                      <button disabled={busy}>Restore</button>
+                      <button type="button" onClick={() => setRestoring(undefined)}>Cancel</button>
+                    </form>
+                  )}
                 </li>
               ))}
             </ol>
