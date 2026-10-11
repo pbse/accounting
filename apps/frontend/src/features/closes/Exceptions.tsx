@@ -84,7 +84,12 @@ export function Exceptions({ closeId }: { closeId: string }) {
         )}
       </SectionHeader>
       {copied && <p role="status">{copied}</p>}
-      {!scan.capture ? (
+      {!scan.capture && balances.snapshot?.source === "files" ? (
+        <p className="empty">
+          This month's books are its accepted file, a Trial Balance without transactions: its balances are checked below. Its transactions are
+          checked once the month's ledger lines are read from a file.
+        </p>
+      ) : !scan.capture ? (
         <p className="empty">
           Capture this month's QuickBooks transactions or Xero books on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every
           transaction for possible duplicates, holding-account postings, payments without a payee and payees coded to different accounts, and

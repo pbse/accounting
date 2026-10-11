@@ -392,6 +392,19 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if row := tie["rows"].([]any)[0].(map[string]any); row["status"] != "ties" || row["account"] != "1000 Business Checking" || len(tie["unmatched"].([]any)) != 0 {
 		t.Fatalf("a reconciliation supports the file's bank: %v", tie)
 	}
+	// The brief says the books are read from the file, with no ledger certification.
+	ledgerLine := func() map[string]any {
+		t.Helper()
+		for _, raw := range call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/brief", nil, 200)["lines"].([]any) {
+			if line := raw.(map[string]any); line["area"] == "ledger" {
+				return line
+			}
+		}
+		return nil
+	}
+	if line := ledgerLine(); line["state"] != "done" || line["text"] != "Books read from the accepted file Acme 2027-01.csv, exported Oct 5." {
+		t.Fatalf("the brief reads January's books from its file: %v", line)
+	}
 	// Its exceptions check the file's balances, named as from the file.
 	exceptions := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/quickbooks/exceptions", nil, 200)["balances"].(map[string]any)
 	if snapshot := exceptions["snapshot"].(map[string]any); snapshot["source"] != "files" || snapshot["file"] != "Acme 2027-01.csv" || len(exceptions["items"].([]any)) != 0 {
@@ -455,6 +468,9 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	}
 	if exceptions = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/quickbooks/exceptions", nil, 200)["balances"].(map[string]any); !strings.Contains(fmt.Sprint(exceptions["error"]), "Debits equal credits") {
 		t.Fatalf("a held file's balances name its checks: %v", exceptions)
+	}
+	if line := ledgerLine(); line["state"] != "attention" || !strings.Contains(line["text"].(string), "Debits equal credits") {
+		t.Fatalf("the brief names a held file's checks: %v", line)
 	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
