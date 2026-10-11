@@ -31,7 +31,8 @@ var (
 func readDate(c Cell, order string) (string, error) {
 	// A workbook's date is stored as YYYY-MM-DD, with any time after it; anything else stored as a date is none.
 	if c.Kind == Date {
-		for _, form := range []string{"2006-01-02", "2006-01-02T15:04", "2006-01-02T15:04:05", "2006-01-02T15:04:05.999999999"} {
+		// A zone written with it leaves the date as written.
+		for _, form := range []string{"2006-01-02", "2006-01-02T15:04", "2006-01-02T15:04:05", "2006-01-02T15:04:05.999999999", time.RFC3339Nano, "2006-01-02T15:04Z07:00"} {
 			if d, err := time.Parse(form, c.Value); err == nil {
 				return d.Format("2006-01-02"), nil
 			}

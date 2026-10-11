@@ -940,7 +940,7 @@ func TestALedgerIsReadLineByLine(t *testing.T) {
 		cell  Cell
 		order string
 		want  string
-	}{{Cell{Kind: Date, Value: "2027-01-31T12:00:00"}, "", "2027-01-31"}, {Cell{Value: "27/01/31"}, YMD, "2027-01-31"}, {Cell{Value: "Jan 31, 2027"}, "", "2027-01-31"}} {
+	}{{Cell{Kind: Date, Value: "2027-01-31T12:00:00"}, "", "2027-01-31"}, {Cell{Value: "27/01/31"}, YMD, "2027-01-31"}, {Cell{Value: "Jan 31, 2027"}, "", "2027-01-31"}, {Cell{Kind: Date, Value: "2027-01-31T23:00:00-05:00"}, "", "2027-01-31"}, {Cell{Kind: Date, Value: "2027-01-31T12:00:00Z"}, "", "2027-01-31"}} {
 		if got, err := readDate(c.cell, c.order); err != nil || got != c.want {
 			t.Fatalf("%v read as %q (%v), not %s", c.cell, got, err, c.want)
 		}
