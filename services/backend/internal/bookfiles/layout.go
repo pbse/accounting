@@ -234,11 +234,14 @@ type Reading struct {
 	Notes []string `json:"notes"`
 }
 
-var totalName = regexp.MustCompile(`(?i)^(grand\s+)?total\b|\btotals?$`)
+var totalName = regexp.MustCompile(`(?i)^(grand\s+|sub[\s-]?)?totals?\b|\b(sub[\s-]?)?totals?$`)
 
 // totalLabel is what a total row totals: "Total Current Assets" and "Total for Current Assets" total "Current Assets";
-// "Total", "TOTAL" and "Grand total" total everything.
-var totalLabel = regexp.MustCompile(`(?i)^(grand\s+)?totals?\b(\s+for\b)?[\s:-]*|[\s:-]*\btotals?$`)
+// "Total", "TOTAL", "Subtotal" and "Grand total" total everything, or the section since the total before.
+var totalLabel = regexp.MustCompile(`(?i)^(grand\s+|sub[\s-]?)?totals?\b(\s+for\b)?[\s:-]*|[\s:-]*\b(sub[\s-]?)?totals?$`)
+
+// grandTotal is a total of the whole table, never of a section.
+var grandTotal = regexp.MustCompile(`(?i)^grand\s+totals?\b`)
 
 // checkTotal checks the total at lines[i] against what it covers, and says how it differs. A total named for a heading
 // or a parent account above it ("Total Current Assets" under "Current Assets") covers the posting rows from there,
@@ -258,10 +261,10 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 		return covered
 	}
 	if label == "" {
-		// An unlabeled total ("Total", "TOTAL") closes the whole file, or the section since the total before it: it
-		// checks when either holds.
+		// An unlabeled total ("Total", "TOTAL", "Subtotal") closes the whole file, or the section since the total before
+		// it: it checks when either holds. A grand total closes the whole file alone.
 		since := 0
-		for j := i - 1; j >= 0; j-- {
+		for j := i - 1; j >= 0 && !grandTotal.MatchString(strings.TrimSpace(t.Label())); j-- {
 			if lines[j].Kind == Total {
 				since = j + 1
 				break

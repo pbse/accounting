@@ -40,7 +40,18 @@ const maxDigits = 30
 var ErrNotAmount = errors.New("not an amount")
 
 // currencyMarks are a currency's mark, or its ISO code in capitals, beside an amount.
-var currencyMarks = regexp.MustCompile(`^(?:[A-Z]{3}\s*)?[$€£¥₹]?|[$€£¥₹]?(?:\s*[A-Z]{3})?$`)
+var currencyMarks = func() *regexp.Regexp {
+	var symbols strings.Builder
+	for r := range symbolCurrencies {
+		symbols.WriteString(regexp.QuoteMeta(string(r)))
+	}
+	var prefixed []string
+	for _, p := range prefixedDollars {
+		prefixed = append(prefixed, regexp.QuoteMeta(p.mark))
+	}
+	mark := `(?:` + strings.Join(prefixed, "|") + `|[` + symbols.String() + `])`
+	return regexp.MustCompile(`^(?:[A-Z]{3}\s*)?` + mark + `?|` + mark + `?(?:\s*[A-Z]{3})?$`)
+}()
 
 // ParseAmount reads text as an amount in style: negatives in parentheses, with a leading or trailing minus, or as a
 // Dr or Cr suffix (a debit is positive, a credit negative, as balances are kept); thousands separators (commas or
@@ -245,7 +256,10 @@ var (
 func GuessNumberStyle(samples []string) (NumberStyle, bool) {
 	comma, point, ambiguous := 0, 0, 0
 	for _, raw := range samples {
-		s := strings.Trim(strings.TrimSpace(raw), "()-+ DdRrCc$€£")
+		s := strings.TrimFunc(strings.TrimSpace(raw), func(r rune) bool {
+			_, symbol := symbolCurrencies[r]
+			return symbol || strings.ContainsRune("()-+ DdRrCc", r)
+		})
 		lastComma, lastPoint := strings.LastIndex(s, ","), strings.LastIndex(s, ".")
 		switch {
 		case lastComma >= 0 && lastPoint >= 0 && lastComma > lastPoint:

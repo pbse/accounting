@@ -749,3 +749,31 @@ func TestCurrencyMarksAgreeOnlyWhenKnown(t *testing.T) {
 		}
 	}
 }
+
+// Subtotal rows are totals, not accounts; a grand total covers every posting row, never the last section alone; text
+// amounts take every symbol the reader knows.
+func TestSubtotalsGrandTotalsAndSymbols(t *testing.T) {
+	read := func(csv string) Reading {
+		t.Helper()
+		file, err := Read("tb.csv", []byte(csv))
+		if err != nil {
+			t.Fatal(err)
+		}
+		layout, _ := ProposeLayout(file.Tables[0])
+		return layout.Read(file.Tables[0])
+	}
+	sub := read("Account,Debit,Credit\nCash,100.00,\nSubtotal,100.00,\nCapital,,100.00\nSub-total,,100.00\n")
+	if !sub.Balanced || sub.Debits != "100" || len(sub.Problems) != 0 {
+		t.Fatalf("subtotals are not accounts: %+v", sub)
+	}
+	grand := read("Account,Balance\nCash,100.00\nTotal,100.00\nCapital,-100.00\nGrand Total,-100.00\n")
+	if len(grand.Problems) != 1 || !strings.Contains(grand.Problems[0], "Grand Total") {
+		t.Fatalf("a grand total covers everything: %+v", grand)
+	}
+	if a, err := ParseAmount("₩1,000", NumberStyle{}); err != nil || a.Mark != "₩" || a.Value.Cmp(big.NewRat(1000, 1)) != 0 {
+		t.Fatalf("a won amount: %+v %v", a, err)
+	}
+	if a, err := ParseAmount("US$12.50", NumberStyle{}); err != nil || a.Mark != "US$" || !MarkAgrees(a.Mark, "USD") {
+		t.Fatalf("a prefixed dollar: %+v %v", a, err)
+	}
+}
