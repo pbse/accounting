@@ -154,9 +154,20 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Confirm how the file is read before attesting what it covers.")
 			return
 		}
-		// The attestation is of the reading confirmed now: one confirmed meanwhile is never attested unseen.
+		// The attestation is of the reading confirmed now: one confirmed meanwhile is never attested unseen. It takes the
+		// client's map lock, as an acceptance does, so none is given on an attestation this one replaces while it runs.
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The file's scope could not be saved.")
+			return
+		}
+		defer tx.Rollback()
+		if _, err = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('books_account_maps:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
+			problem(w, 503, "The file's scope could not be saved.")
+			return
+		}
 		var attested string
-		err = db.QueryRowContext(r.Context(), `INSERT INTO books_import_scopes(organization_id,client_entity,import_id,layout_id,book,filters,complete,missing,basis,reason,actor)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO books_import_scopes(organization_id,client_entity,import_id,layout_id,book,filters,complete,missing,basis,reason,actor)
  SELECT $1,$2,l.import_id,l.id,$4,$5,$6,$7,$8,$9,$10 FROM books_layouts l WHERE l.id::text=$3 AND l.organization_id=$1
   AND l.id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=l.import_id) RETURNING id::text`,
 			org, name, layout.ID, in.Book, in.Filters, in.Complete, in.Missing, in.Basis, in.Reason, reviewerName(r)).Scan(&attested)
@@ -164,7 +175,7 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "The file's layout was confirmed again meanwhile: reopen it to attest that reading.")
 			return
 		}
-		if err != nil {
+		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The file's scope could not be saved.")
 			return
 		}

@@ -145,17 +145,24 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	for _, a := range reading.Accounts {
 		here[a.Key] = true
 	}
-	seen := map[string]bool{}
+	// An account on several rows there (one per department, say) had the balance of their sum.
+	var order []string
+	balances, names := map[string]string{}, map[string]string{}
 	for _, l := range lines {
 		if l.Kind != bookfiles.Posting || strings.TrimSpace(l.Number) == "" && strings.TrimSpace(l.Name) == "" {
 			continue
 		}
 		key := bookfiles.AccountKey(l.Number, l.Name)
-		if here[key] || seen[key] || !nonZero(l.Amount) {
-			continue
+		if _, ok := balances[key]; !ok {
+			order = append(order, key)
+			balances[key], names[key] = "0", strings.TrimSpace(l.Number+" "+l.Name)
 		}
-		seen[key] = true
-		s.missing = append(s.missing, strings.TrimSpace(l.Number+" "+l.Name))
+		balances[key] = addAmounts(balances[key], l.Amount)
+	}
+	for _, key := range order {
+		if !here[key] && nonZero(balances[key]) {
+			s.missing = append(s.missing, names[key])
+		}
 	}
 	return s, true, nil
 }
@@ -343,7 +350,12 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 		}
 		out := map[string]any{"confirmed": found, "acceptance": accepted, "on": on, "can_accept": false, "checks": []importCheck{}}
 		if found {
-			checks := fileChecks(state, "")
+			// Checks shown beside a current acceptance are the ones it was given, its explanation included.
+			explained := ""
+			if accepted != nil && accepted.Current {
+				explained = accepted.Explained
+			}
+			checks := fileChecks(state, explained)
 			out["checks"], out["holds"], out["reading"], out["map_stamp"] = checks, holding(checks), state.reading.ID, state.mapStamp
 			out["period"], out["can_accept"] = state.reading.Period, canReview(r) && on && state.scope != nil
 			if state.scope != nil {
@@ -377,12 +389,14 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		in.System, in.Explained, in.Reason = strings.TrimSpace(in.System), strings.TrimSpace(in.Explained), strings.TrimSpace(in.Reason)
-		exported, dateErr := time.Parse("2006-01-02", in.ExportedOn)
+		// Not after today anywhere: the date at the earliest time zone, so a member ahead of UTC can name their today.
+		_, dateErr := time.Parse("2006-01-02", in.ExportedOn)
+		latest := time.Now().UTC().Add(14 * time.Hour).Format("2006-01-02")
 		switch {
 		case in.System == "" || utf8.RuneCountInString(in.System) > 200:
 			problem(w, 422, "Name the system the books were exported from (up to 200 characters).")
 			return
-		case dateErr != nil || exported.After(time.Now().AddDate(0, 0, 1)):
+		case dateErr != nil || in.ExportedOn > latest:
 			problem(w, 422, "Enter the date the books were exported, as YYYY-MM-DD, not after today.")
 			return
 		case utf8.RuneCountInString(in.Explained) > 1000:

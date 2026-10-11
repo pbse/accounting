@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"close.local/backend/internal/auth"
 	"github.com/golang-jwt/jwt/v5"
@@ -120,7 +121,8 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		return out
 	}
 
-	september := send1("2026-09", "Number,Account,Debit,Credit\n1000,Business Checking,1500.25,\n1100,Trade debtors,200.00,\n3000,Owner's Equity,,1000.00\n4000,Sales,,700.25\n")
+	// Suspense sits on two rows that net to nothing: October need not name it.
+	september := send1("2026-09", "Number,Account,Debit,Credit\n1000,Business Checking,1500.25,\n1100,Trade debtors,200.00,\n3000,Owner's Equity,,1000.00\n4000,Sales,,700.25\n5000,Suspense,100.00,\n5000,Suspense,,100.00\n")
 	path := "/v1/closes/client/import/acceptance?name=Acme%20Co&id=" + september
 	if read := call("user_b", preparer, "GET", path, nil, 200); read["confirmed"] != false || read["can_accept"] != false {
 		t.Fatalf("nothing to check before a confirmed reading: %v", read)
@@ -159,7 +161,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	}
 	// Only a reviewer accepts, naming the system and a past export date, on the reading, scope and map they saw.
 	call("user_b", preparer, "POST", path, with(read, nil), 403)
-	for _, bad := range []map[string]any{{"system": " "}, {"exported_on": "3 October"}, {"exported_on": "2999-01-01"}, {"reason": ""}} {
+	for _, bad := range []map[string]any{{"system": " "}, {"exported_on": "3 October"}, {"exported_on": time.Now().UTC().AddDate(0, 0, 2).Format("2006-01-02")}, {"reason": ""}} {
 		call("user_a", partner, "POST", path, with(read, bad), 422)
 	}
 	call("user_a", partner, "POST", path, with(read, map[string]any{"based_on": "1:stale"}), 409)
@@ -188,6 +190,10 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	kept := checksOf(out)
 	if kept["scope"]["state"] != "note" || kept["as_of"]["state"] != "holds" || out["holds"] != 1.0 {
 		t.Fatalf("the checks kept with the acceptance: %v", out)
+	}
+	// Reopened, the accepted file shows the checks it was accepted with, its explanation included.
+	if shown := checksOf(call("user_b", preparer, "GET", octoberPath, nil, 200)); shown["scope"]["state"] != "note" {
+		t.Fatalf("the accepted file's checks, reopened: %v", shown["scope"])
 	}
 	// A scope attested again leaves the acceptance on record, no longer current.
 	attest(october)
