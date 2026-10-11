@@ -18,6 +18,7 @@ import (
 // The subprocess has only a per-run proxy token. Provider credentials never
 // enter its environment, prompts, config files or tool results.
 type modelProxy struct {
+	account                  string // a static Codex subscription token's ChatGPT account, when known
 	ctx                      context.Context
 	token, key, model, agent string
 	effort, authMode         string
@@ -170,6 +171,9 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		req.Header.Set("Authorization", "Bearer "+p.key)
+		if p.account != "" {
+			req.Header.Set("ChatGPT-Account-Id", p.account)
+		}
 		if p.personal != nil {
 			auth, err := p.personal.read()
 			if err != nil || p.personal.save(false) != nil {

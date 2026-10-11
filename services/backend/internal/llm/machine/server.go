@@ -29,8 +29,10 @@ type Config struct {
 	Token, DatabaseURL, OpenAIKey, AnthropicKey, CodexModel, ClaudeModel                    string
 	CodexToken, ClaudeToken, CodexAuth, ClaudeAuth, CodexEffort, ClaudeEffort, DefaultAgent string
 	CodexAuthJSON, CodexAuthStateURL                                                        string
-	Models, Efforts                                                                         map[string]string
-	Profiles                                                                                []llm.Scope
+	// CodexAccount is the ChatGPT account a static Codex subscription token belongs to, sent with it as a managed login's is.
+	CodexAccount    string
+	Models, Efforts map[string]string
+	Profiles        []llm.Scope
 }
 
 func FromEnv() (http.Handler, error) {
@@ -40,6 +42,7 @@ func FromEnv() (http.Handler, error) {
 	cfg.CodexEffort, cfg.ClaudeEffort = os.Getenv("CODEX_REASONING_EFFORT"), os.Getenv("CLAUDE_REASONING_EFFORT")
 	cfg.DefaultAgent = os.Getenv("CONTEXT_MACHINE_MODEL")
 	cfg.CodexAuthJSON, cfg.CodexAuthStateURL = os.Getenv("CODEX_AUTH_JSON"), os.Getenv("CODEX_AUTH_STATE_URL")
+	cfg.CodexAccount = os.Getenv("CODEX_ACCOUNT_ID")
 	if raw := os.Getenv("CONTEXT_MACHINE_PROFILES"); raw != "" {
 		if json.Unmarshal([]byte(raw), &cfg.Profiles) != nil {
 			return nil, errors.New("CONTEXT_MACHINE_PROFILES must be a JSON array")
@@ -280,6 +283,9 @@ func (s *server) execute(ctx context.Context, in runRequest) (result llm.Respons
 	proxy := &modelProxy{images: in.CompletionImages, completion: completion, schema: in.CompletionSchema, ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: settings.credential, model: settings.model, effort: settings.effort, authMode: settings.mode}
 	if !completion && in.Model == "codex" {
 		proxy.researchTools = codexRecordTools()
+	}
+	if in.Model == "codex" && settings.mode == "subscription" {
+		proxy.account = s.cfg.CodexAccount
 	}
 	if settings.mode == "chatgpt" {
 		auth, err := restoreCodexAuth(ctx, s.cfg, dir)

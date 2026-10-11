@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -37,7 +38,8 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 			`DELETE FROM quickbooks_snapshots WHERE close_id IN (` + closes + `)`, `DELETE FROM quickbooks_entity_syncs WHERE close_id IN (` + closes + `)`,
 			`DELETE FROM quickbooks_connections WHERE close_id IN (` + closes + `)`, `DELETE FROM evidence WHERE close_id IN (` + closes + `)`,
 			`DELETE FROM client_closes WHERE id IN (` + closes + `)`, `DELETE FROM procedure_versions WHERE organization_id LIKE 'org_Acceptance%'`,
-			`DELETE FROM model_calls WHERE organization_id LIKE 'org_Acceptance%'`, `DELETE FROM organizations WHERE id LIKE 'org_Acceptance%' AND name LIKE 'Acceptance %'`} {
+			`DELETE FROM model_calls WHERE organization_id LIKE 'org_Acceptance%'`, `DELETE FROM client_access WHERE organization_id LIKE 'org_Acceptance%'`,
+			`DELETE FROM organization_member_access WHERE organization_id LIKE 'org_Acceptance%'`, `DELETE FROM organizations WHERE id LIKE 'org_Acceptance%' AND name LIKE 'Acceptance %'`} {
 			db.Exec(q)
 		}
 	})
@@ -137,5 +139,49 @@ func TestEveryProposedEntryIsObserved(t *testing.T) {
 		if err != nil || strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s: %v %v", paper, got, err)
 		}
+	}
+}
+
+// An evaluation's ceiling counts every model call in the database today: under it, the firm may make only what the run
+// has left; once it is spent, the next case is not run at all.
+func TestAnEvaluationStopsAtItsDailyModelCallCeiling(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	org := "org_EvalCeiling" + rand.Text()
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM model_calls WHERE organization_id=$1`, org)
+		db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
+	})
+	if _, err = db.Exec(`INSERT INTO organizations(id,name,max_model_calls_per_day) VALUES($1,'Ceiling',100000)`, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO model_calls(organization_id,day,calls) VALUES($1,(now() AT TIME ZONE 'UTC')::date,50)`, org); err != nil {
+		t.Fatal(err)
+	}
+	var used, limit int
+	if err = db.QueryRow(`SELECT sum(calls) FROM model_calls WHERE day=(now() AT TIME ZONE 'UTC')::date`).Scan(&used); err != nil {
+		t.Fatal(err)
+	}
+	if err = CapEvaluationCalls(ctx, db, org, used+1000); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT max_model_calls_per_day FROM organizations WHERE id=$1`, org).Scan(&limit); err != nil || limit <= 50 || limit > 50+1000+used {
+		t.Fatalf("the firm may make its 50 calls plus what the run has left, about 1,000: %d, %v", limit, err)
+	}
+	c := acceptance.Case{ID: "ceiling", Client: "Ceiling LLC", Period: "2026-09"}
+	if _, err = RunAcceptanceCase(ctx, db, c, AcceptanceFirm{Organization: org, Subject: "user_ceiling", ModelCalls: 50}, nil); !errors.Is(err, ErrEvaluationCeiling) {
+		t.Fatalf("a spent ceiling runs nothing: %v", err)
+	}
+	var closes int
+	if db.QueryRow(`SELECT count(*) FROM client_closes WHERE organization_id=$1`, org).Scan(&closes); closes != 0 {
+		t.Fatalf("no close is made once the ceiling is spent: %d", closes)
 	}
 }

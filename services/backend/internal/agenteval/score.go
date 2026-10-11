@@ -46,6 +46,8 @@ type Report struct {
 	OffScopePass  int      `json:"off_scope_passed"`
 	Rounds        int      `json:"model_rounds"`
 	Reads         int      `json:"reads"`
+	// NotRun are the questions left unrun because the evaluation's daily model-call ceiling was reached: unevaluated.
+	NotRun []string `json:"not_run,omitempty"`
 }
 
 // Score checks each observation against its question: the answer was kept, every expected tool ran, every fact is in
@@ -140,13 +142,16 @@ func Score(set Set, observed []Observed) Report {
 
 // Passed says the run meets the release bar.
 func (r Report) Passed() bool {
-	return r.OffScopePass == r.OffScope && r.Questions > 0 && r.QuestionsPass*10 >= r.Questions*9
+	return r.OffScopePass == r.OffScope && r.Questions > 0 && r.QuestionsPass*10 >= r.Questions*9 && len(r.NotRun) == 0
 }
 
 // Markdown renders the report for the validation log.
 func (r Report) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Agent golden set\n\nQuestions: %d of %d passed. Off-scope prompts: %d of %d refused without a card. Model rounds with tools: %d (each question makes one more request for its answer). Reads: %d. %s\n\n", r.QuestionsPass, r.Questions, r.OffScopePass, r.OffScope, r.Rounds, r.Reads, map[bool]string{true: "Passed.", false: "Failed."}[r.Passed()])
+	if len(r.NotRun) > 0 {
+		fmt.Fprintf(&b, "**Ceiling reached for today:** %d question(s) not run (%s). The evaluation's daily model-call ceiling was spent; they are unevaluated, not passed.\n\n", len(r.NotRun), strings.Join(r.NotRun, ", "))
+	}
 	b.WriteString("| Question | Result | Tools | Kind | Why |\n| --- | --- | --- | --- | --- |\n")
 	for _, result := range r.Results {
 		state := "pass"

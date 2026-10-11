@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -31,6 +32,7 @@ func main() {
 	reviewPath := flag.String("review", "", "write the accounting-review package (Markdown) for the independent accountant here")
 	organization := flag.String("organization", "", "run every case as a close of this firm, as the person -subject; for a live Context Machine run, the firm and person its access profile serves")
 	subject := flag.String("subject", "", "the person the cases are worked as, with -organization")
+	maxCalls := flag.Int("max-model-calls", 0, "the most model calls the run may make in this database today; cases left when it is spent are reported not run (exit 3)")
 	flag.Parse()
 	if *corpus == "" || *database == "" || (*model != "recorded" && *model != "live") || (*organization == "") != (*subject == "") {
 		flag.Usage()
@@ -43,7 +45,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	firm := transport.AcceptanceFirm{Organization: *organization, Subject: *subject}
+	firm := transport.AcceptanceFirm{Organization: *organization, Subject: *subject, ModelCalls: *maxCalls}
 	if err = oneFirm(firm, cases); err != nil {
 		log.Fatal(err)
 	}
@@ -79,20 +81,28 @@ func main() {
 	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM client_closes`).Scan(&closes); err != nil || closes > 0 {
 		log.Fatal("Use a fresh, migrated database: this one holds closes, and the run's queue steps would take their work.")
 	}
-	observed := []acceptance.CaseObserved{}
-	for _, c := range cases {
+	observed, notRun := []acceptance.CaseObserved{}, []string{}
+	for i, c := range cases {
 		o, err := transport.RunAcceptanceCase(ctx, db, c, firm, func(files map[string]string) (*llm.Client, error) {
 			if live != nil {
 				return live, nil
 			}
 			return c.Recorded(files)
 		})
+		if errors.Is(err, transport.ErrEvaluationCeiling) {
+			for _, rest := range cases[i:] {
+				notRun = append(notRun, rest.ID)
+			}
+			cases = cases[:i]
+			break
+		}
 		if err != nil {
 			log.Fatalf("case %s: %v", c.ID, err)
 		}
 		observed = append(observed, o)
 	}
 	report := acceptance.Score(cases, observed)
+	report.NotRun = notRun
 	fmt.Print(report.Markdown())
 	if *reportPath != "" {
 		raw, _ := json.MarshalIndent(report, "", " ")
@@ -105,6 +115,9 @@ func main() {
 		if err = os.WriteFile(*reviewPath, []byte(acceptance.ReviewPackage(cases, report, run)), 0o600); err != nil {
 			log.Fatal(err)
 		}
+	}
+	if len(notRun) > 0 {
+		os.Exit(3)
 	}
 	if !report.Passed() {
 		os.Exit(1)

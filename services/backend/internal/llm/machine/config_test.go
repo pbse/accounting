@@ -72,6 +72,9 @@ func TestUnconfiguredAgentRejectedBeforeDatabaseAccess(t *testing.T) {
 func TestProxyPinsReasoningAndSubscriptionCredentials(t *testing.T) {
 	for _, agent := range []string{"codex", "claude"} {
 		p := &modelProxy{ctx: context.Background(), token: "ephemeral", key: "private-token", model: "fixed", effort: "medium", authMode: "subscription", agent: agent, limit: 1, tokens: 2048}
+		if agent == "codex" {
+			p.account = "account-1"
+		}
 		calls := 0
 		p.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			calls++
@@ -81,7 +84,8 @@ func TestProxyPinsReasoningAndSubscriptionCredentials(t *testing.T) {
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)
 			if agent == "codex" {
-				if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" || body["reasoning"].(map[string]any)["effort"] != "medium" || body["reasoning"].(map[string]any)["summary"] != "auto" || body["max_output_tokens"] != nil {
+				// A static Codex token goes with its ChatGPT account, as a managed login's does.
+				if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" || body["reasoning"].(map[string]any)["effort"] != "medium" || body["reasoning"].(map[string]any)["summary"] != "auto" || body["max_output_tokens"] != nil || r.Header.Get("ChatGPT-Account-Id") != "account-1" {
 					t.Error("Codex subscription policy")
 				}
 			} else if r.URL.Host != "api.anthropic.com" || body["output_config"].(map[string]any)["effort"] != "medium" || body["thinking"].(map[string]any)["type"] != "adaptive" || !strings.Contains(r.Header.Get("Anthropic-Beta"), "oauth-2025-04-20") {

@@ -73,14 +73,18 @@ type Report struct {
 	Duplicates      int                          `json:"duplicates"`
 	Failures        []Failure                    `json:"failures"`
 	NotProcessed    []Failure                    `json:"not_processed"`
-	Observed        map[string]CaseObserved      `json:"observed"`
+	// NotRun are the cases left unrun because the evaluation's daily model-call ceiling was reached: unevaluated.
+	NotRun   []string                `json:"not_run,omitempty"`
+	Observed map[string]CaseObserved `json:"observed"`
 }
 
 // Critical is how many critical failures the run found.
 func (r Report) Critical() int { return len(r.Failures) }
 
 // Passed is a run with no critical failure in which every document was decided on.
-func (r Report) Passed() bool { return len(r.Failures) == 0 && len(r.NotProcessed) == 0 }
+func (r Report) Passed() bool {
+	return len(r.Failures) == 0 && len(r.NotProcessed) == 0 && len(r.NotRun) == 0
+}
 
 // Exceptions are the labeled problems the harness can score, each with the app's own sign that it found that problem.
 // A held document counts as a caught problem only when that sign shows: holding it for another reason (say a missing
@@ -250,6 +254,9 @@ func or(s, otherwise string) string {
 func (r Report) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Acceptance run\n\n%d case(s). Critical failures: %d. Not processed: %d.\n", r.Cases, r.Critical(), len(r.NotProcessed))
+	if len(r.NotRun) > 0 {
+		fmt.Fprintf(&b, "\n**Ceiling reached for today:** %d case(s) not run (%s). The evaluation's daily model-call ceiling was spent; they are unevaluated, not passed.\n", len(r.NotRun), strings.Join(r.NotRun, ", "))
+	}
 	for _, split := range []string{"development", "held_out"} {
 		byType := r.Tallies[split]
 		if len(byType) == 0 {
