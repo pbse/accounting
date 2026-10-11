@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/ledgers"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -101,6 +102,16 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/connector-pilot", `{"connector":"xero","enabled":false,"reason":"Pilot finished for now"}`, 200)
 	if connected := catalog(); connected["xero"] {
 		t.Fatalf("switched off again: %v", connected)
+	}
+	// Switched off for the firm, a connector the environment has on is off for it, in the catalog and where its routes
+	// and background reads ask.
+	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/connector-pilot", `{"connector":"quickbooks","enabled":false,"reason":"Firm asked to stop QuickBooks reads"}`, 200)
+	if connected := catalog(); connected["quickbooks_online"] {
+		t.Fatalf("an explicit off beats the environment's on: %v", connected)
+	}
+	var on, elsewhere bool
+	if err := db.QueryRow(`SELECT `+ledgers.SwitchedSQL("$1", "quickbooks")+`,`+ledgers.SwitchedSQL("$2", "quickbooks"), firm, other).Scan(&on, &elsewhere); err != nil || on || !elsewhere {
+		t.Fatalf("the routes' switch: %v %v %v", on, elsewhere, err)
 	}
 }
 

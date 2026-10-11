@@ -192,7 +192,8 @@ export default function ClientPage() {
   // The ledger the client keeps, as recorded, said first on the Books card; a ledger the firm cannot connect is served by
   // files once they reach the firm, with its export steps.
   const kept = client.ledger;
-  const canRecord = client.can_manage || client.can_connect;
+  // Recorded under the client's own name, so only by a reader who sees the client whole.
+  const canRecord = client.whole && (client.can_manage || client.can_connect);
   const keptName = kept?.entry?.name ?? (kept?.ledger === "other" ? kept.other_name : "");
   const keeps = !kept
     ? canRecord

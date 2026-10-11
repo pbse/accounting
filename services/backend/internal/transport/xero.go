@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/ledgers"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/secrets"
@@ -141,6 +142,9 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 		var entity, period string
 		if err := db.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id::text=$1 AND organization_id=$2`, r.PathValue("id"), a.Organization).Scan(&entity, &period); err != nil {
 			problem(w, 404, "Client close not found.")
+			return
+		}
+		if in.Action != "disconnect" && connectorOff(ctx, w, db, a.Organization, "xero", "Xero") {
 			return
 		}
 		if in.Action == "connect" {
@@ -466,7 +470,7 @@ func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 	}
 	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.organization_id,c.period,x.id::text FROM client_closes c
  JOIN xero_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.credential IS NOT NULL
- WHERE `+xeroDue+` ORDER BY c.id LIMIT 10`)
+ WHERE `+xeroDue+` AND `+ledgers.SwitchedSQL("c.organization_id", "xero")+` ORDER BY c.id LIMIT 10`)
 	if err != nil {
 		return err
 	}

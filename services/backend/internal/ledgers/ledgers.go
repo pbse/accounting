@@ -93,16 +93,22 @@ func Valid(ledger, otherName string) bool {
 	return ok && name == ""
 }
 
-// Switched says whether connector is switched on for this environment: LEDGER_CONNECTORS lists the connectors that are
-// (comma-separated; unset means quickbooks and xero, the two that have passed their acceptance), and only connectors
-// this build has can be. A firm piloting a connector has it switched on for that firm alone (pilot).
-func Switched(connector string, pilot bool) bool {
+// Switched says whether connector is switched on for a firm: as staff set it for the firm, when they did (pilot is the
+// firm's latest pilot, nil for none), else as this environment does. LEDGER_CONNECTORS lists the connectors the
+// environment switches on (comma-separated; unset means quickbooks and xero, the two that have passed their
+// acceptance). Only connectors this build has can be on.
+func Switched(connector string, pilot *bool) bool {
 	if connector == "" || !slices.Contains(connectors, connector) {
 		return false
 	}
-	if pilot {
-		return true
+	if pilot != nil {
+		return *pilot
 	}
+	return environment(connector)
+}
+
+// environment says whether this environment switches connector on.
+func environment(connector string) bool {
 	on, set := os.LookupEnv("LEDGER_CONNECTORS")
 	if !set {
 		return true
@@ -113,4 +119,14 @@ func Switched(connector string, pilot bool) bool {
 		}
 	}
 	return false
+}
+
+// SwitchedSQL is SQL saying whether connector is switched on for the firm whose ID is the SQL expression org: its
+// latest pilot, else this environment's switch. Background reads and connection routes check it, so a connector
+// switched off reads nothing and connects nothing.
+func SwitchedSQL(org, connector string) string {
+	if !slices.Contains(connectors, connector) {
+		return "false"
+	}
+	return fmt.Sprintf(`COALESCE((SELECT p.enabled FROM connector_pilots p WHERE p.organization_id=%s AND p.connector='%s' ORDER BY p.id DESC LIMIT 1),%t)`, org, connector, environment(connector))
 }

@@ -28,7 +28,8 @@ func TestTheCatalogAndItsSwitches(t *testing.T) {
 		}
 	}
 	t.Setenv("LEDGER_CONNECTORS", "quickbooks")
-	if !Switched("quickbooks", false) || Switched("xero", false) || !Switched("xero", true) || Switched("conductor", true) || Switched("", true) {
+	yes, no := true, false
+	if !Switched("quickbooks", nil) || Switched("xero", nil) || !Switched("xero", &yes) || Switched("quickbooks", &no) || Switched("conductor", &yes) || Switched("", &yes) {
 		t.Fatal("the environment's list switches connectors on; a pilot switches on one this build has, for its firm")
 	}
 }

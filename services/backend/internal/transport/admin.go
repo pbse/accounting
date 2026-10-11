@@ -396,7 +396,7 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	json.Unmarshal(pilots, &piloted)
 	for _, l := range ledgers.Catalog() {
 		if l.Connector != "" {
-			c := map[string]any{"environment": ledgers.Switched(l.Connector, false)}
+			c := map[string]any{"environment": ledgers.Switched(l.Connector, nil)}
 			if on, ok := piloted[l.Connector]; ok {
 				c["pilot"] = on
 			}

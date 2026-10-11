@@ -37,5 +37,6 @@ CREATE TABLE connector_pilots (
 CREATE INDEX connector_pilots_current ON connector_pilots(organization_id,connector,id DESC);
 ALTER TABLE connector_pilots ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON connector_pilots FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
-CREATE POLICY platform_add ON connector_pilots FOR INSERT WITH CHECK (current_setting('app.organization',true)='*');
+-- Staff write a pilot as the firm it is for (adminAct), as every audited staff action does; firms have no route to it.
+CREATE POLICY tenant_add ON connector_pilots FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
 COMMIT;

@@ -25,7 +25,8 @@ type catalogEntry struct {
 	Connected bool `json:"connected"`
 }
 
-// firmCatalog is the catalog with each connector's switch for firm org: the environment's, or the firm's own pilot.
+// firmCatalog is the catalog with each connector's switch for firm org: the firm's own pilot, on or off, else the
+// environment's.
 func firmCatalog(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, org string) ([]catalogEntry, error) {
@@ -34,14 +35,14 @@ func firmCatalog(ctx context.Context, q interface {
 		return nil, err
 	}
 	defer rows.Close()
-	pilots := map[string]bool{}
+	pilots := map[string]*bool{}
 	for rows.Next() {
 		var connector string
 		var enabled bool
 		if err = rows.Scan(&connector, &enabled); err != nil {
 			return nil, err
 		}
-		pilots[connector] = enabled
+		pilots[connector] = &enabled
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
@@ -92,6 +93,21 @@ func readClientLedger(ctx context.Context, q interface {
 		}
 	}
 	return &l, nil
+}
+
+// connectorOff answers 409 and says so when connector is switched off for firm org (or the switch cannot be read):
+// a connector switched off connects and reads nothing; disconnecting stays open.
+func connectorOff(ctx context.Context, w http.ResponseWriter, db *sql.DB, org, connector, name string) bool {
+	var on bool
+	if err := db.QueryRowContext(ctx, `SELECT `+ledgers.SwitchedSQL("$1", connector), org).Scan(&on); err != nil {
+		problem(w, 503, name+"'s switch is unavailable.")
+		return true
+	}
+	if !on {
+		problem(w, 409, name+" is switched off for your firm. Disconnecting still works; ask Krith support to switch it on.")
+		return true
+	}
+	return false
 }
 
 // canRecordLedger is a member who may record or correct a client's ledger: one who manages the roster (who adds
@@ -225,7 +241,7 @@ func adminLedgers(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				c.Name = "Not known yet"
 			default:
 				if entry, ok := ledgers.Find(c.Ledger); ok {
-					c.Name, c.Connector, c.Connected = entry.Name, entry.Connector, ledgers.Switched(entry.Connector, false)
+					c.Name, c.Connector, c.Connected = entry.Name, entry.Connector, ledgers.Switched(entry.Connector, nil)
 				}
 			}
 			counts = append(counts, c)

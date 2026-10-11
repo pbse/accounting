@@ -12,6 +12,7 @@ import (
 	"log"
 	"time"
 
+	"close.local/backend/internal/ledgers"
 	"close.local/backend/internal/secrets"
 )
 
@@ -43,7 +44,7 @@ func scheduleSync(ctx context.Context, db *sql.DB) error {
  JOIN quickbooks_connections x ON x.id=`+ReadingConnection("c.id")+`
  -- A change hint after the newest capture started makes the close due before its daily refresh.
  LEFT JOIN LATERAL (SELECT s.started_at FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period ORDER BY s.id DESC LIMIT 1) latest ON true
- WHERE x.state='active' AND x.credential IS NOT NULL
+ WHERE x.state='active' AND x.credential IS NOT NULL AND `+ledgers.SwitchedSQL("c.organization_id", "quickbooks")+`
  -- A close an agent works on is read whatever its month.
  AND (c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM') OR EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.state='active'))
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
