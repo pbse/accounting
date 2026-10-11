@@ -896,11 +896,44 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			if reason == "" {
 				straight = "Prepared without confirmation: every fact is one verified candidate, procedure v" + procedure.ID + " fixes the method and accounts, and one captured bill from its vendor expenses the amount."
 			}
+		} else if proposal.Kind == "reconciliation" && llm.IsModelEngine(proposal.Engine) && len(proposal.Lines) == 0 {
+			procedure, e := CurrentProcedure(persist, finish, closeID, "reconciliation")
+			if e != nil && e != sql.ErrNoRows {
+				return true, e
+			}
+			unread, e := OtherEvidence(persist, finish, closeID, id)
+			if e != nil {
+				return true, e
+			}
+			rule, e := ProcedureEvidence(persist, finish, closeID, procedure.ID)
+			if e != nil {
+				return true, e
+			}
+			home := ""
+			if profile.State == "detected" || profile.State == "confirmed" {
+				home = profile.Currency
+			}
+			// Evidence the agent left unused holds the reconciliation unless it is a capture, chart or procedure copy, or
+			// another job's own invoice, accrual, payroll or loan document.
+			account := ""
+			for _, f := range proposal.Facts {
+				if f.Field == "account" {
+					account = f.Value
+				}
+			}
+			other, e := ReconciliationOtherMatter(persist, finish, closeID, id, account)
+			if e != nil {
+				return true, e
+			}
+			plan, reason = StraightReconciliation(proposal, selected, procedure, rule, home, entity, period, unread, other)
+			if reason == "" {
+				straight = "Prepared without confirmation: every statement and ledger row matched exactly once, the balances tie, every page was read, and reconciliation procedure v" + procedure.ID + " authorizes it."
+			}
 		}
 		if reason == "" {
 			// The same policy check the preparation worker applies, so a draft the firm's basis or procedure refuses waits for a person instead of failing later.
 			body, _ := Calculate(plan, entity, period)
-			if e := CheckProcedureMethod(persist, finish, closeID, "prepaid", body); e != nil {
+			if e := CheckProcedureMethod(persist, finish, closeID, plan.Kind, body); e != nil {
 				reason = e.Error()
 			}
 		}
@@ -921,7 +954,12 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		}
 		if reason == "" {
 			var lineage string
-			if lineage, err = queueStraightThrough(persist, finish, closeID, id, primary, plan); err != nil {
+			if plan.Kind == "reconciliation" {
+				lineage, err = queueReconciliation(persist, finish, closeID, id, plan)
+			} else {
+				lineage, err = queueStraightThrough(persist, finish, closeID, id, primary, plan)
+			}
+			if err != nil {
 				return true, err
 			}
 			if lineage != "" {
