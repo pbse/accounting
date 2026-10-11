@@ -67,6 +67,7 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	var closeID, connection, evidence string
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
 	defer func() {
+		db.Exec(`DELETE FROM cash_obligation_matches WHERE client_entity=$1`, entity)
 		db.Exec(`DELETE FROM cash_obligations WHERE client_entity=$1`, entity)
 		db.Exec(`DELETE FROM cash_plan_reviews WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`, entity)
 		db.Exec(`DELETE FROM cash_scenarios WHERE client_entity=$1`, entity)
@@ -93,7 +94,7 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	euroBill["CurrencyRef"] = map[string]string{"value": "EUR"}
 	payload, _ := json.Marshal(map[string]any{"finished_at": "2026-10-05T09:00:00Z", "completeness": "All supported types were paged.", "open_items": map[string]any{
 		"Invoice": []any{invoice("1", "Acme", "2000.00", "2026-10-09"), invoice("2", "Beta", "800.00", "2026-09-20"), invoice("3", "Gamma", "600.00", "2026-10-20")},
-		"Bill":    []any{bill("9", "Landlord", "1500.00", "2026-10-07"), bill("10", "Supplies", "300.00", "2026-10-10"), euroBill},
+		"Bill":    []any{bill("9", "Landlord", "1500.00", "2026-10-07"), bill("10", "Supplies", "300.00", "2026-10-10"), euroBill, bill("12", "Cleaner", "250.00", "2026-10-3x")},
 	}})
 	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',now(),$3)`, closeID, connection, string(payload))
 	must(err)
@@ -150,25 +151,96 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 		Weeks       []cashWeek
 		PastDue     []cashItem          `json:"past_due"`
 		Unscheduled []map[string]string `json:"unscheduled"`
-		Covered     []map[string]string
+		Matches     []cashMatched
+		Questions   []cashQuestion
 		Pending     []cashObligation `json:"pending_obligations"`
+		Horizon     map[string]any
+		Readiness   struct {
+			State      string
+			Unresolved []cashGap
+		}
+		Review *struct{ State string }
 	}
+	plan.Readiness.Unresolved = nil
 	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
 	if plan.State != "ready" || plan.Start != "2026-10-05" || plan.Opening.Amount != "5000.00" || len(plan.Opening.LeftOut) != 1 || plan.OpenItems.Through != "2026-09-30" || !plan.OpenItems.MissingLater {
 		t.Fatalf("the plan opens on the capture's day at the ledger's home-currency bank balances, and says the September capture has nothing dated in October: %+v", plan)
 	}
+	// The landlord's bill due the week rent is scheduled is a question, not a silent replacement: until someone decides,
+	// both count, the plan is not reviewable, and its readiness names the decision.
+	if w1 := plan.Weeks[0]; len(plan.Questions) != 1 || plan.Questions[0].Name != "Rent" || plan.Questions[0].On != "2026-10-07" || len(plan.Questions[0].Bills) != 1 || plan.Questions[0].Bills[0].Document != "bill:9" ||
+		w1.Disbursements != "7000.00" || len(plan.Matches) != 0 || plan.Horizon["end"] != "2027-01-03" || plan.Review != nil {
+		t.Fatalf("the rent and its landlord's bill both count until decided: %+v %+v %+v", plan.Questions, plan.Weeks[0], plan.Horizon)
+	}
+	asked := false
+	for _, g := range plan.Readiness.Unresolved {
+		asked = asked || g.Kind == "decision" && strings.HasPrefix(g.Text, "Rent on 2026-10-07: Landlord has an undecided bill that week")
+	}
+	if plan.Readiness.State != "incomplete" || !asked {
+		t.Fatalf("readiness names the open decision and the missing sources: %+v", plan.Readiness)
+	}
+	var early struct{ Digest string }
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &early))
+	if body := string(call("POST", "/cash-plan/reviews", map[string]any{"digest": early.Digest, "assumptions": "Rent per the lease", "confirmed": true}, 409)); !strings.Contains(body, "may count a payment twice") {
+		t.Fatalf("a plan with an open question cannot be reviewed: %s", body)
+	}
+	// Deciding: only a standing approved schedule's real date, a part within the schedule, and the decision in view.
+	var rentID string
+	for _, o := range list.Obligations {
+		if o.Name == "Rent" {
+			rentID = o.ID
+		}
+	}
+	// A decision names the capture the person saw: the latest, unless a test says otherwise.
+	decide := func(fields map[string]any, want int) []byte {
+		t.Helper()
+		if _, ok := fields["action"]; !ok {
+			fields["action"] = "decide"
+		}
+		if _, ok := fields["capture_id"]; !ok {
+			var seen struct {
+				CaptureID string `json:"capture_id"`
+			}
+			must(json.Unmarshal(call("GET", "/open-items", nil, 200), &seen))
+			fields["capture_id"] = seen.CaptureID
+		}
+		return call("POST", "/cash-matches", fields, want)
+	}
+	decide(map[string]any{"obligation_id": rentID, "on": "2026-10-07", "document": "bill:9", "relation": "replaces", "capture_id": "0"}, 409)
+	decide(map[string]any{"obligation_id": rentID, "on": "2026-10-08", "document": "bill:9", "relation": "replaces"}, 409)
+	decide(map[string]any{"obligation_id": rentID, "on": "2026-10-07", "document": "bill:404", "relation": "replaces"}, 409)
+	decide(map[string]any{"obligation_id": rentID, "on": "2026-10-07", "document": "bill:9", "relation": "part", "amount": "1600.00"}, 422)
+	decide(map[string]any{"obligation_id": rentID, "on": "2026-10-07", "document": "bill:9", "relation": "guess"}, 422)
+	var first struct{ ID string }
+	must(json.Unmarshal(decide(map[string]any{"obligation_id": rentID, "on": "2026-10-07", "document": "bill:9", "relation": "separate"}, 200), &first))
+	decide(map[string]any{"obligation_id": rentID, "on": "2026-10-07", "document": "bill:9", "relation": "replaces"}, 409)
+	decide(map[string]any{"obligation_id": rentID, "on": "2026-10-07", "document": "bill:9", "relation": "replaces", "previous_id": first.ID}, 200)
+	// The same bill cannot also pay November's rent.
+	decide(map[string]any{"obligation_id": rentID, "on": "2026-11-07", "document": "bill:9", "relation": "replaces"}, 409)
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
 	w1, w2, w3 := plan.Weeks[0], plan.Weeks[1], plan.Weeks[2]
-	if w1.Receipts != "2000.00" || w1.Disbursements != "5500.00" || w1.Closing != "1500.00" || w1.Lowest != "-500.00" || w1.LowestOn != "2026-10-07" {
-		t.Fatalf("Wednesday's rent bill and payroll take the account 500.00 short before Friday's receipt; the rent estimate is the bill, not counted twice: %+v", w1)
+	if w1.Receipts != "2000.00" || w1.Disbursements != "5500.00" || w1.Closing != "1500.00" || w1.Lowest != "-500.00" || w1.LowestOn != "2026-10-07" || len(plan.Questions) != 0 ||
+		len(plan.Matches) != 1 || plan.Matches[0].Counted != "0.00" || plan.Matches[0].Bills[0].Relation != "replaces" || plan.Matches[0].Bills[0].State != "counted" {
+		t.Fatalf("decided, Wednesday's rent bill is the rent, counted once, and payroll takes the account 500.00 short before Friday's receipt: %+v %+v", w1, plan.Matches)
 	}
 	if w2.Receipts != "600.00" || w2.Closing != "2100.00" || w3.Disbursements != "4000.00" || w3.Closing != "-1900.00" {
 		t.Fatalf("the promised invoice lands on its promised date and payroll recurs every two weeks: %+v %+v", w2, w3)
 	}
-	if len(plan.PastDue) != 1 || plan.PastDue[0].Label != "Invoice INV-2 · Beta" || len(plan.Unscheduled) != 1 || !strings.Contains(plan.Unscheduled[0]["reason"], "disputed") {
-		t.Fatalf("a past-due invoice is not given a date and a disputed bill is not scheduled: %+v %+v", plan.PastDue, plan.Unscheduled)
+	reasons := map[string]string{}
+	for _, u := range plan.Unscheduled {
+		reasons[u["label"]] = u["reason"]
 	}
-	if len(plan.Covered) != 1 || plan.Covered[0]["on"] != "2026-10-07" || len(plan.Pending) != 1 || plan.Pending[0].Name != "Sales tax" || plan.Weeks[4].Disbursements != "5500.00" {
-		t.Fatalf("the week's landlord bill covers the rent estimate, and an unapproved obligation does not count: %+v %+v", plan.Covered, plan.Pending)
+	if len(plan.PastDue) != 1 || plan.PastDue[0].Label != "Invoice INV-2 · Beta" || len(plan.Unscheduled) != 2 || !strings.Contains(reasons["Bill B-10 · Supplies"], "disputed") ||
+		reasons["Bill B-12 · Cleaner"] != "Its date (2026-10-3x) could not be read, so it is not placed." {
+		t.Fatalf("a past-due invoice is not given a date, and a disputed bill and one with an unreadable date are not scheduled: %+v %+v", plan.PastDue, plan.Unscheduled)
+	}
+	proposed := false
+	for _, g := range plan.Readiness.Unresolved {
+		proposed = proposed || g.Kind == "decision" && strings.HasPrefix(g.Text, "Sales tax is proposed but not approved") && g.Amount == "999.00"
+	}
+	if len(plan.Pending) != 1 || plan.Pending[0].Name != "Sales tax" || plan.Weeks[4].Disbursements != "5500.00" || !proposed {
+		t.Fatalf("an unapproved obligation does not count and readiness names it; November's rent is not paid by a euro bill: %+v %+v", plan.Pending, plan.Readiness)
 	}
 	// An executive's plan leaves the draft schedule (its amount, vendor and notes) with the firm, saying only how many.
 	executive := "user_ceo_" + rand.Text()
@@ -252,8 +324,15 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	call("POST", "/cash-scenarios", map[string]any{"action": "retire", "id": id}, 200)
 	call("GET", "/cash-plan?scenario="+id, nil, 404)
 
-	// A person reviews the plan they see; the review stays current until a figure changes.
+	// The October close's capture covers the month and reads every bill's date: the sources are complete. What is left
+	// (a past-due invoice, a disputed bill, a euro bill, a proposed tax) are assumptions, so the plan is a draft.
 	var digest struct{ Digest string }
+	_, err = db.Exec(`UPDATE client_closes SET period='2026-10' WHERE id::text=$1`, closeID)
+	must(err)
+	_, err = db.Exec(`UPDATE quickbooks_entity_syncs SET period='2026-10',payload=jsonb_set(payload,'{open_items,Bill}',(SELECT jsonb_agg(b) FROM jsonb_array_elements(payload->'open_items'->'Bill') b WHERE b->>'Id'<>'12')) WHERE close_id::text=$1`, closeID)
+	must(err)
+	// A person reviews the plan they see; the review holds until a figure or an assumption changes, and a draft is
+	// reviewed as a draft, never current.
 	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &digest))
 	call("POST", "/cash-plan/reviews", map[string]any{"digest": digest.Digest, "assumptions": "ok", "confirmed": true}, 422)
 	call("POST", "/cash-plan/reviews", map[string]any{"digest": "stale", "assumptions": "Promised dates as recorded", "confirmed": true}, 409)
@@ -267,16 +346,66 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	}
 	var reviews reviewed
 	must(json.Unmarshal(call("GET", "/cash-plan/reviews", nil, 200), &reviews))
-	if len(reviews.Reviews) != 1 || reviews.Reviews[0].State != "current" || len(reviews.Reviews[0].Actuals) != 0 {
+	if len(reviews.Reviews) != 1 || reviews.Reviews[0].State != "draft_reviewed" || len(reviews.Reviews[0].Actuals) != 0 {
 		t.Fatalf("the reviewed plan is current, with nothing to compare yet: %+v", reviews)
 	}
 
-	// Handing the landlord's bill to bill pay for next week moves the payment, and the estimate stays covered by it.
-	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "handed_to_bill_pay", "expected_on": "2026-10-14"}, 200)
-	plan.Covered = nil
+	plan.Readiness.Unresolved = nil
 	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
-	if w1, w2 := plan.Weeks[0], plan.Weeks[1]; len(plan.Covered) != 1 || w1.Disbursements != "4000.00" || w1.Lowest != "1000.00" || w2.Disbursements != "1500.00" || w2.Closing != "2100.00" {
-		t.Fatalf("the bill moves to its bill-pay date and the rent estimate is still not counted: %+v %+v %+v", plan.Covered, w1, w2)
+	// Every week reconciles: opening plus receipts less payments is its closing, and each total is the sum of the items
+	// listed under it; the next week opens at this one's close.
+	for i, week := range plan.Weeks {
+		rat := func(v string) *big.Rat { r, _ := new(big.Rat).SetString(v); return r }
+		in, out := new(big.Rat), new(big.Rat)
+		for _, item := range week.Items {
+			if v := rat(item.Amount); v.Sign() > 0 {
+				in.Add(in, v)
+			} else {
+				out.Sub(out, v)
+			}
+		}
+		closing := new(big.Rat).Sub(new(big.Rat).Add(rat(week.Opening), rat(week.Receipts)), rat(week.Disbursements))
+		if in.Cmp(rat(week.Receipts)) != 0 || out.Cmp(rat(week.Disbursements)) != 0 || closing.Cmp(rat(week.Closing)) != 0 || i > 0 && plan.Weeks[i-1].Closing != week.Opening {
+			t.Fatalf("week %d does not reconcile to its items: %+v", i, week)
+		}
+	}
+	// The past-due invoice is named as unplaced, with its amount.
+	unplaced := false
+	for _, g := range plan.Readiness.Unresolved {
+		unplaced = unplaced || g.Kind == "decision" && g.Text == "Invoice INV-2 · Beta is past due with no agreed date." && g.Amount == "800.00"
+	}
+	if !unplaced {
+		t.Fatalf("a past-due invoice is named in readiness: %+v", plan.Readiness)
+	}
+	if plan.Review == nil || plan.Review.State != "draft_reviewed" || plan.Readiness.State != "draft" {
+		t.Fatalf("the plan says its newest review holds, as a draft: %+v %+v", plan.Review, plan.Readiness)
+	}
+	// A new proposal changes what the reviewer accepted: the review no longer holds, though no figure moved.
+	add(map[string]any{"name": "Year-end bonus", "category": "payroll", "direction": "out", "amount": "18000.00", "first_on": "2026-12-15", "every": "once", "basis": "Suggested from last December's bonus"}, 200)
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	if plan.Review == nil || plan.Review.State != "inputs_changed" || plan.Readiness.State == "complete" {
+		t.Fatalf("a newly proposed schedule leaves the review changed: %+v %+v", plan.Review, plan.Readiness)
+	}
+	// A promise whose date has passed without payment is broken: the invoice stays open, unplaced, and named so.
+	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Invoice", "item_id": "2", "status": "promised", "expected_on": "2026-10-01"}, 200)
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	broken := false
+	for _, g := range plan.Readiness.Unresolved {
+		broken = broken || g.Text == "Invoice INV-2 · Beta: the promised date 2026-10-01 passed without payment, so it is not placed." && g.Amount == "800.00"
+	}
+	if !broken || len(plan.PastDue) != 1 || plan.Weeks[0].Receipts != "2000.00" {
+		t.Fatalf("a broken promise adds no receipt and is named: %+v %+v", plan.Readiness, plan.Weeks[0])
+	}
+	// Handing the landlord's bill to bill pay for next week moves the payment; the decision keeps the bill as the rent.
+	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "handed_to_bill_pay", "expected_on": "2026-10-14"}, 200)
+	plan.Matches = nil
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	if w1, w2 := plan.Weeks[0], plan.Weeks[1]; len(plan.Matches) != 1 || plan.Matches[0].Bills[0].On != "2026-10-14" || len(plan.Questions) != 0 || w1.Disbursements != "4000.00" || w1.Lowest != "1000.00" || w2.Disbursements != "1500.00" || w2.Closing != "2100.00" ||
+		plan.Review == nil || plan.Review.State != "inputs_changed" {
+		t.Fatalf("the bill moves to its bill-pay date, still pays the rent, and the review shows its inputs changed: %+v %+v %+v %+v", plan.Matches, w1, w2, plan.Review)
 	}
 	// A disputed bill is left out of the payments, so it no longer stands in for the week's rent: the estimate counts.
 	decided := func() string {
@@ -285,12 +414,101 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 		return id
 	}
 	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "disputed", "note": "Overcharged", "previous_id": decided()}, 200)
-	plan.Covered = nil
+	plan.Matches = nil
+	plan.Readiness.Unresolved = nil
 	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
-	if w1 := plan.Weeks[0]; len(plan.Covered) != 0 || w1.Disbursements != "5500.00" {
-		t.Fatalf("an excluded bill does not cover the rent estimate: %+v %+v", plan.Covered, w1)
+	if w1 := plan.Weeks[0]; len(plan.Matches) != 1 || plan.Matches[0].Counted != "1500.00" || !strings.Contains(plan.Matches[0].Bills[0].State, "disputed") || w1.Disbursements != "5500.00" {
+		t.Fatalf("a disputed bill does not stand in for the rent: the estimate counts: %+v %+v", plan.Matches, w1)
 	}
 	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "handed_to_bill_pay", "expected_on": "2026-10-14", "previous_id": decided()}, 200)
+	// Retiring the rent schedule retires the decisions made against it: its bill is a plain bill again.
+	call("POST", "/cash-obligations", map[string]any{"action": "retire", "id": rentID, "reason": "Lease renegotiated"}, 200)
+	plan.Matches = nil
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	var standingDecisions int
+	must(db.QueryRow(`SELECT count(*) FROM cash_obligation_matches WHERE client_entity=$1 AND retired_at IS NULL`, entity).Scan(&standingDecisions))
+	if standingDecisions != 0 || len(plan.Matches) != 0 || plan.Weeks[1].Disbursements != "1500.00" {
+		t.Fatalf("a retired schedule takes its decisions with it, and its bill still counts: %d %+v", standingDecisions, plan.Weeks[1])
+	}
+	// A decision whose schedule stops counting some other way lapses visibly and can be cleared.
+	add(map[string]any{"name": "Rent", "category": "rent", "direction": "out", "amount": "1500.00", "first_on": "2026-10-07", "every": "month", "vendor": "Landlord", "basis": "Renegotiated lease"}, 200)
+	must(json.Unmarshal(call("GET", "/cash-obligations", nil, 200), &list))
+	newRent := ""
+	for _, o := range list.Obligations {
+		if o.Name == "Rent" && o.RetiredAt == nil {
+			newRent = o.ID
+		}
+	}
+	call("POST", "/cash-obligations", map[string]any{"action": "approve", "id": newRent}, 200)
+	var lapse struct{ ID string }
+	must(json.Unmarshal(decide(map[string]any{"obligation_id": newRent, "on": "2026-10-07", "document": "bill:9", "relation": "replaces"}, 200), &lapse))
+	// A bill still open cannot be confirmed paid. Once a later capture no longer lists it (paid, voided or credited),
+	// the rent counts again until someone confirms it was paid; then the date is settled and its decision stays.
+	decide(map[string]any{"action": "paid", "obligation_id": newRent, "on": "2026-10-07", "document": "bill:9", "previous_id": lapse.ID}, 409)
+	// A capture taken before the decision cannot say the bill left the open items: nothing is asked or confirmed.
+	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at,payload) SELECT close_id,connection_id,period,requested_by,state,now(),
+ jsonb_set(payload,'{open_items,Bill}',(SELECT jsonb_agg(b) FROM jsonb_array_elements(payload->'open_items'->'Bill') b WHERE b->>'Id'<>'9')) FROM quickbooks_entity_syncs WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, closeID)
+	must(err)
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	unknown := false
+	for _, g := range plan.Readiness.Unresolved {
+		unknown = unknown || g.Kind == "source" && strings.Contains(g.Text, "cannot say whether it is still open")
+	}
+	if len(plan.Matches) != 1 || plan.Matches[0].Bills[0].Confirm || plan.Matches[0].Counted != "1500.00" || !unknown || plan.Readiness.State != "incomplete" {
+		t.Fatalf("an earlier capture says nothing about the bill, and the plan says it is incomplete: %+v %+v", plan.Matches, plan.Readiness)
+	}
+	decide(map[string]any{"action": "paid", "obligation_id": newRent, "on": "2026-10-07", "document": "bill:9", "previous_id": lapse.ID}, 409)
+	// A capture taken after the decision, reading every open item of the bill's month, shows it left them.
+	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at,payload) SELECT close_id,connection_id,period,requested_by,state,now(),
+ jsonb_set(payload,'{finished_at}',to_jsonb(to_char((now()+interval '1 minute') AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'))) FROM quickbooks_entity_syncs WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, closeID)
+	must(err)
+	plan.Matches = nil
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	asksPaid := false
+	for _, g := range plan.Readiness.Unresolved {
+		asksPaid = asksPaid || g.Kind == "decision" && strings.Contains(g.Text, "confirm whether it was paid")
+	}
+	if len(plan.Matches) != 1 || !plan.Matches[0].Bills[0].Confirm || plan.Matches[0].Counted != "1500.00" || !asksPaid {
+		t.Fatalf("a bill that left the open items settles nothing until confirmed paid: %+v %+v", plan.Matches, plan.Readiness)
+	}
+	must(json.Unmarshal(decide(map[string]any{"action": "paid", "obligation_id": newRent, "on": "2026-10-07", "document": "bill:9", "previous_id": lapse.ID}, 200), &lapse))
+	plan.Matches = nil
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	if len(plan.Matches) != 1 || plan.Matches[0].Bills[0].State != "paid" || plan.Matches[0].Counted != "0.00" {
+		t.Fatalf("confirmed paid, the bill settles the rent: %+v", plan.Matches)
+	}
+	decide(map[string]any{"action": "clear", "obligation_id": newRent, "on": "2026-10-07", "document": "bill:9", "previous_id": lapse.ID}, 409)
+	// Correcting a paid bill's relation keeps its payment: as a part of 1,000.00 it leaves a 500.00 residual, not 1,500.00.
+	must(json.Unmarshal(decide(map[string]any{"obligation_id": newRent, "on": "2026-10-07", "document": "bill:9", "relation": "part", "amount": "1000.00", "previous_id": lapse.ID}, 200), &lapse))
+	plan.Matches = nil
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	if len(plan.Matches) != 1 || plan.Matches[0].Bills[0].State != "paid" || plan.Matches[0].Counted != "500.00" {
+		t.Fatalf("a corrected relation keeps the confirmed payment: %+v", plan.Matches)
+	}
+	_, err = db.Exec(`UPDATE cash_obligations SET currency='EUR' WHERE id::text=$1`, newRent)
+	must(err)
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	lapsed := false
+	for _, g := range plan.Readiness.Unresolved {
+		lapsed = lapsed || g.Kind == "decision" && strings.Contains(g.Text, "no longer applies (2026-10-07)")
+	}
+	if !lapsed || len(plan.Matches) != 0 {
+		t.Fatalf("a decision for a date that no longer counts is named, not applied: %+v", plan.Readiness)
+	}
+	decide(map[string]any{"action": "clear", "obligation_id": newRent, "on": "2026-10-07", "document": "bill:9", "previous_id": lapse.ID}, 200)
+	plan.Readiness.Unresolved = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	for _, g := range plan.Readiness.Unresolved {
+		if strings.Contains(g.Text, "no longer applies") {
+			t.Fatalf("a cleared lapsed decision is no longer named: %+v", plan.Readiness)
+		}
+	}
 	// The handoff changed the plan: the review is kept and says so. A capture three days later is compared with what
 	// the reviewed plan expected that day: 5,000 opening less the rent bill and payroll on the 7th is -500.00.
 	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) SELECT close_id,connection_id,realm,'later',payload,now(),captured_at+interval '3 days','fixture' FROM quickbooks_snapshots WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID)

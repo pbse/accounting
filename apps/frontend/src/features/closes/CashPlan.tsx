@@ -35,19 +35,47 @@ type Plan =
       currency: string;
       start: string;
       opening: { amount: string; as_of: string; stale: boolean; accounts: { name: string; balance: string }[]; left_out: string[] };
-      open_items: { captured_at: string; complete: boolean; hours_apart: number; through: string; missing_later: boolean };
+      open_items: { captured_at: string; capture_id: string; complete: boolean; hours_apart: number; through: string; missing_later: boolean };
       weeks: Week[];
       lowest: { amount: string; on: string };
       past_due: Item[];
       after_horizon: Item[];
       unscheduled: { label: string; amount: string; reason: string }[];
       other_currency: string[];
-      covered: { obligation: string; on: string; vendor: string }[];
+      horizon: { start: string; end: string; weeks: number };
+      readiness: { state: "complete" | "draft" | "incomplete"; unresolved: { kind: "source" | "decision"; text: string; amount?: string }[] };
+      matches: Matched[];
+      questions: Question[];
+      lapsed: { id: string; obligation_id: string; on: string; document: string; label: string; relation: Relation }[];
+      review: { id: string; reviewed_by: string; reviewed_at: string; state: "current" | "draft_reviewed" | "inputs_changed" } | null;
       note: string;
       unapproved_schedules?: number;
       digest: string;
       scenario: (Scenario & { missing: string[]; base_lowest: { amount: string; on: string } }) | null;
     };
+
+type Matched = {
+  obligation_id: string;
+  obligation: string;
+  on: string;
+  amount: string;
+  counted: string;
+  note: string;
+  bills: { id: string; document: string; label: string; relation: Relation; amount: string; state: string; on?: string; confirm?: boolean; unknown?: boolean }[];
+};
+type Question = { obligation_id: string; obligation: string; on: string; amount: string; vendor: string; effect: string; bills: { document: string; label: string; amount: string; on: string; due: string }[] };
+type Relation = "replaces" | "part" | "separate" | "duplicate";
+const relations: Record<Relation, string> = {
+  replaces: "pays all of it",
+  part: "invoices part of it",
+  separate: "is a separate payment",
+  duplicate: "repeats a payment already counted",
+};
+const readinessLabel = {
+  complete: ["status ok", "Complete forecast"],
+  draft: ["status warn", "Draft forecast"],
+  incomplete: ["status warn", "Incomplete forecast"],
+} as const;
 
 const every: Record<string, string> = { once: "once", week: "every week", two_weeks: "every two weeks", month: "every month" };
 const negative = (value: string) => value.startsWith("-");
@@ -107,8 +135,40 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
         {dates.dateTime(plan.opening.as_of)}
       </p>
       <p className={negative(plan.lowest.amount) ? undefined : "note"} role={negative(plan.lowest.amount) ? "alert" : undefined}>
-        Lowest end-of-day book cash: <strong>{show(plan.lowest.amount)}</strong> on {plan.lowest.on}.
+        <span className={readinessLabel[plan.readiness.state][0]}>{readinessLabel[plan.readiness.state][1]}</span> Lowest projected end-of-day book cash:{" "}
+        <strong>{show(plan.lowest.amount)}</strong> on {plan.lowest.on}, over {plan.horizon.weeks} weeks to {plan.horizon.end}.
+        {plan.readiness.state !== "complete" && " It is not a conclusion until the items below are settled."}
       </p>
+      {plan.review && (
+        <p className="note">
+          {plan.review.state === "current" ? (
+            <span className="status ok">Reviewed</span>
+          ) : plan.review.state === "draft_reviewed" ? (
+            <span className="status info">Reviewed as a draft</span>
+          ) : (
+            <span className="status warn">Changed since reviewed</span>
+          )}{" "}
+          by {plan.review.reviewed_by} {dates.dateTime(plan.review.reviewed_at)}
+          {plan.review.state === "draft_reviewed" && ", with the unresolved items above accepted as assumptions"}
+          {plan.review.state === "inputs_changed" && "; the reviewed version is kept under Reviewed versions."}
+        </p>
+      )}
+      {plan.readiness.unresolved.length > 0 && (
+        <details open={plan.readiness.unresolved.length <= 5}>
+          <summary>
+            {plan.readiness.unresolved.length} unresolved {plan.readiness.unresolved.length === 1 ? "item" : "items"}
+          </summary>
+          <ul>
+            {plan.readiness.unresolved.map((g, i) => (
+              <li key={i}>
+                {g.kind === "decision" ? <span className="status info">Decision</span> : <span className="status warn">Source</span>} {g.text}
+                {g.amount && <> · {show(g.amount)}</>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {!readOnly && plan.questions.length > 0 && <Questions closeId={closeId} capture={plan.open_items.capture_id} questions={plan.questions} show={show} onDecided={() => void view.refetch()} />}
       {notice && <p role="alert">{notice}</p>}
       {readOnly && error && <p role="alert">{error}</p>}
       <Scenarios
@@ -215,18 +275,16 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
           </ul>
         </>
       )}
-      {plan.covered.length > 0 && (
-        <p className="note">
-          Not counted twice: {plan.covered.map((c) => `${c.obligation} on ${c.on} is ${c.vendor}'s open bill due that week`).join("; ")}.
-        </p>
-      )}
+      {plan.matches.length > 0 && <Matches closeId={closeId} capture={plan.open_items.capture_id} matches={plan.matches} show={show} readOnly={readOnly} onDecided={() => void view.refetch()} />}
+      {!readOnly && plan.lapsed.length > 0 && <Lapsed closeId={closeId} capture={plan.open_items.capture_id} lapsed={plan.lapsed} onCleared={() => void view.refetch()} />}
       {plan.after_horizon.length > 0 && <p className="note">{plan.after_horizon.length} open items fall after the 13 weeks.</p>}
       {plan.other_currency.length > 0 && <p className="note">Left out (another currency): {plan.other_currency.join(", ")}.</p>}
       {!readOnly && <>
       <SectionHeader title="Payroll, tax, debt and other schedules" />
       <p className="note">
         Commitments the open items do not show, from the client's own schedules (payroll provider, tax calendar, loan agreement, lease). Each counts once a person
-        approves it; nothing here runs payroll or files tax. Name the vendor whose bills pay it so a week with that bill does not count the payment twice.
+        approves it; nothing here runs payroll or files tax. Name the vendor whose bills pay it: when one of their bills falls in a payment's week, you decide whether it pays it, so
+        nothing is counted twice or dropped on a guess.
       </p>
       {saved && <p role="status">{saved}</p>}
       {error && <p role="alert">{error}</p>}
@@ -479,13 +537,14 @@ type Review = {
   reviewed_at: string;
   start: string;
   lowest: { amount: string; on: string };
-  state: "current" | "inputs_changed" | "superseded" | "unverified";
+  state: "current" | "draft_reviewed" | "inputs_changed" | "superseded" | "unverified";
   currency: string;
   calculation: string;
   actuals: { captured_at: string; on: string; forecast: string; actual?: string; difference?: string; unreadable?: string[] }[];
 };
 const reviewStates = {
   current: ["status ok", "Current"],
+  draft_reviewed: ["status info", "Reviewed as a draft"],
   inputs_changed: ["status warn", "Inputs changed since review"],
   superseded: ["status info", "Superseded"],
   unverified: ["status warn", "Cannot confirm it is current"],
@@ -512,7 +571,13 @@ function Reviews({ closeId, plan, scenario, readOnly }: { closeId: string; plan:
       live = false;
     };
   }, [closeId, version, plan.digest]);
-  const reviewable = loadedFor === plan.digest && !plan.opening.stale && plan.open_items.complete && !list.some((r) => r.scenario === scenario && r.state === "current");
+  const reviewable =
+    loadedFor === plan.digest &&
+    !plan.opening.stale &&
+    plan.open_items.complete &&
+    plan.questions.length === 0 &&
+    !plan.matches.some((m) => m.bills.some((b) => b.confirm || b.unknown)) &&
+    !list.some((r) => r.scenario === scenario && (r.state === "current" || r.state === "draft_reviewed"));
   function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const element = event.currentTarget;
@@ -606,3 +671,192 @@ function Reviews({ closeId, plan, scenario, readOnly }: { closeId: string; plan:
   );
 }
 
+// One focused decision per schedule date with undecided bills from its vendor that week: what each bill is to that
+// date's payment. Until then both count, which the effect states.
+function Questions({ closeId, capture, questions, show, onDecided }: { closeId: string; capture: string; questions: Question[]; show: (v: string) => string; onDecided: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [chosen, setChosen] = useState<Record<string, Relation>>({});
+  async function decide(body: Record<string, unknown>) {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/cash-matches`, { action: "decide", capture_id: capture, ...body });
+      onDecided();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The decision could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <SectionHeader title="Needs your decision: bills against schedules" />
+      {error && <p role="alert">{error}</p>}
+      {questions.map((q) => (
+        <fieldset key={`${q.obligation_id}-${q.on}`} disabled={busy}>
+          <legend>
+            {q.obligation} on {q.on} · {show(q.amount)}
+          </legend>
+          <p className="note">{q.effect}</p>
+          <ul>
+            {q.bills.map((b) => {
+              const key = `${q.obligation_id}-${q.on}-${b.document}`;
+              // On a date another bill already pays, the likely answer is a separate payment, never a second full one.
+              const relation = chosen[key] ?? (Number(q.amount) === 0 ? "separate" : "replaces");
+              return (
+                <li key={key}>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const amount = String(new FormData(e.currentTarget).get("amount") ?? "").trim();
+                      void decide({ obligation_id: q.obligation_id, on: q.on, document: b.document, relation, ...(relation === "part" ? { amount } : {}) });
+                    }}
+                  >
+                    <strong>{b.label}</strong> · {show(b.amount)} · due {b.due || "undated"}
+                    {b.on !== b.due && ` · paid ${b.on}`}{" "}
+                    <select style={{ width: "auto", display: "inline-block" }} aria-label={`What ${b.label} is to ${q.obligation} on ${q.on}`} value={relation} onChange={(e) => setChosen({ ...chosen, [key]: e.target.value as Relation })}>
+                      {(Object.keys(relations) as Relation[]).map((r) => (
+                        <option key={r} value={r}>
+                          {relations[r]}
+                        </option>
+                      ))}
+                    </select>
+                    {relation === "part" && (
+                      <label>
+                        {" "}of which it invoices{" "}
+                        <input style={{ width: "8rem", display: "inline-block" }} name="amount" required inputMode="decimal" pattern="[0-9]{1,16}(\.[0-9]{1,2})?" defaultValue={b.amount} />
+                      </label>
+                    )}{" "}
+                    <button className="primary">Decide</button>
+                  </form>
+                </li>
+              );
+            })}
+          </ul>
+        </fieldset>
+      ))}
+    </>
+  );
+}
+
+// Decisions already made: each schedule date with its bills and what the plan still counts from the schedule. A decision
+// is changed by naming the one it replaces; a paid bill's decision can be changed but not cleared.
+function Matches({ closeId, capture, matches, show, readOnly, onDecided }: { closeId: string; capture: string; matches: Matched[]; show: (v: string) => string; readOnly: boolean; onDecided: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [chosen, setChosen] = useState<Record<string, Relation>>({});
+  async function send(body: Record<string, unknown>) {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/cash-matches`, { capture_id: capture, ...body });
+      onDecided();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The decision could not be changed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const state = (bill: Matched["bills"][number]) => (bill.state === "counted" ? `counted on ${bill.on}` : bill.state === "paid" ? "paid: no longer open" : bill.state);
+  return (
+    <>
+      <SectionHeader title="Bills against schedules" />
+      {error && <p role="alert">{error}</p>}
+      <ul>
+        {matches.map((m) => (
+          <li key={`${m.obligation_id}-${m.on}`}>
+            <strong>{m.obligation}</strong> on {m.on} ({show(m.amount)}): the plan counts {show(m.counted)} from the schedule. {m.note}
+            <ul>
+              {m.bills.map((b) => {
+                const relation = chosen[b.id] ?? b.relation;
+                const base = { obligation_id: m.obligation_id, on: m.on, document: b.document, previous_id: b.id };
+                return (
+                  <li key={b.id}>
+                    {b.label} {relations[b.relation]} ({show(b.amount)}) · {state(b)}
+                    {!readOnly && (
+                      <form
+                        style={{ display: "inline" }}
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const amount = String(new FormData(e.currentTarget).get("amount") ?? "").trim();
+                          void send({ action: "decide", ...base, relation, ...(relation === "part" ? { amount } : {}) });
+                        }}
+                      >
+                        <fieldset disabled={busy} style={{ display: "inline", border: 0, padding: 0, margin: 0 }}>
+                          {" "}
+                          <select style={{ width: "auto", display: "inline-block" }} aria-label={`Change what ${b.label} is to ${m.obligation} on ${m.on}`} value={relation} onChange={(e) => setChosen({ ...chosen, [b.id]: e.target.value as Relation })}>
+                            {(Object.keys(relations) as Relation[]).map((r) => (
+                              <option key={r} value={r}>
+                                {relations[r]}
+                              </option>
+                            ))}
+                          </select>
+                          {relation === "part" && (
+                            <input style={{ width: "8rem", display: "inline-block" }} aria-label="Amount it invoices" name="amount" required inputMode="decimal" pattern="[0-9]{1,16}(\.[0-9]{1,2})?" defaultValue={b.amount} />
+                          )}{" "}
+                          <button disabled={relation === b.relation && relation !== "part"}>Change</button>
+                          {b.confirm && (
+                            <>
+                              {" "}
+                              <button type="button" className="primary" onClick={() => void send({ action: "paid", ...base })}>
+                                It was paid
+                              </button>
+                            </>
+                          )}
+                          {b.state !== "paid" && (
+                            <>
+                              {" "}
+                              <button type="button" onClick={() => void send({ action: "clear", ...base })}>
+                                Clear
+                              </button>
+                            </>
+                          )}
+                        </fieldset>
+                      </form>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+// Decisions made for a schedule date that no longer applies: they move nothing, and clearing one lets the bill be decided
+// against what applies now.
+function Lapsed({ closeId, capture, lapsed, onCleared }: { closeId: string; capture: string; lapsed: Extract<Plan, { state: "ready" }>["lapsed"]; onCleared: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function clear(d: (typeof lapsed)[number]) {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/cash-matches`, { action: "clear", capture_id: capture, obligation_id: d.obligation_id, on: d.on, document: d.document, previous_id: d.id });
+      onCleared();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The decision could not be cleared.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <SectionHeader title="Decisions that no longer apply" />
+      {error && <p role="alert">{error}</p>}
+      <ul>
+        {lapsed.map((d) => (
+          <li key={d.id}>
+            {d.label} {relations[d.relation]} on {d.on}, but that schedule's date no longer counts.{" "}
+            <button type="button" disabled={busy} onClick={() => void clear(d)}>
+              Clear
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
