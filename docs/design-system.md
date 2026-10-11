@@ -69,7 +69,13 @@ Books (`Books.tsx`):
   - documents against the ledger;
   - corrections in QuickBooks.
 
-A view opens with `?tab=books&view=…` or with the anchor of a section inside it (`#quickbooks-ledger`, `#xero`, `#correct-…`, `#apply-…`), so existing links still land on it. A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
+A view opens with `?tab=books&view=…` or with the anchor of a section inside it (`#quickbooks-ledger`, `#xero`, `#correct-…`, `#apply-…`), so existing links still land on it.
+
+Workpapers (`Workpapers.tsx`):
+- **Lede:** how many drafts are ready for review, or need another look, or that every draft is approved. Under it: the current drafts, how many are approved, and that approval is not posting.
+- **Left column:** the decisions on Workpapers; drafts ready for approval open in place, as on Overview. Then the drafts as one table: the current versions, newest first, then the documents the agent is still preparing, waiting on the client for, or needing a decision on. Each row has its status and the amount of its adjustment, with a filter: Ready for review, Preparing, Waiting for client, Needs your decision, Needs another look, Approved. The old `?filter=ready|attention|approved` links still choose their filter.
+- **Rail:** what waits for approval and what is approved, summed only within one currency, schedules carried from last month and earlier versions.
+- **More on Workpapers:** recurring schedules, recurring accruals, every saved draft (earlier versions included) and carrying work into the next month, each its existing section. A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
 
 Below 860px the sidebar is a sheet opened from the brand button, the composer spans the width, and the stage's positions become flow.
 

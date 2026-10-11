@@ -5,7 +5,7 @@ type Item = { id: string; digest: string; review_id: string; amount: string; rul
 type Evidence = { id: string; name: string; extraction_state: string; superseded_by: string | null };
 type Preview = { snapshot: { id?: string; period?: string; captured_at?: string; source_id?: string }; items: Item[] };
 
-export function RecurringAccruals({ closeId, currency, onPrepared }: { closeId: string; currency: string; onPrepared: () => void }) {
+export function RecurringAccruals({ closeId, currency, onPrepared, open }: { closeId: string; currency: string; onPrepared: () => void; open?: boolean }) {
   const [preview, setPreview] = useState<Preview>();
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [busy, setBusy] = useState(false);
@@ -36,7 +36,7 @@ export function RecurringAccruals({ closeId, currency, onPrepared }: { closeId: 
     } catch (e) { setError(e instanceof Error ? e.message : "Could not queue the accrual."); }
     finally { setBusy(false); }
   }
-  return <details><summary>Refresh recurring accruals</summary>
+  return <details open={open}><summary>Refresh recurring accruals</summary>
     <p>Start from an approved prior-month fixed recurring rule. Upload proof that this month’s service was incurred, capture current QuickBooks reports, and confirm the current booked liability. The prior approval never approves this month’s draft.</p>
     <button disabled={busy} onClick={() => void load()}>Compare recurring accruals</button>
     {error && <p role="alert">{error}</p>}{queued && <p role="status">{queued}</p>}

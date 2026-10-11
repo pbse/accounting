@@ -4564,3 +4564,22 @@ Tests and checks, on local PostgreSQL:
 - Screenshots of Books with a seeded QuickBooks trial balance and of the exceptions view.
 - In the browser: the menu opens the ledger view; `#quickbooks-ledger` and `#correct-bills-…` open their views; a balance-sheet row opens the full tie-out at its account.
 
+## 2026-10-11 — Close page Workpapers from the canvas (B02–B10)
+
+Workpapers is the third tab, board 3.
+- **Header:**
+  - The tab's lede: N drafts ready for review, need another look, every draft approved, or none yet.
+  - A fact line: the current drafts, how many are approved, and that approval is not posting.
+  - Its actions in the ⋯ menu: recurring schedules, recurring accruals, carrying work forward.
+- **Body:**
+  - The decisions on Workpapers, with approvals opening in place.
+  - The drafts as one table: current versions and the documents still in preparation, with the client or awaiting a decision. Each row shows its status and adjustment amount, with a status filter that honours the old `?filter=` links.
+  - The rail: amounts waiting for approval and approved, carried schedules, earlier versions.
+- **Views:** recurring schedules, recurring accruals, every saved draft (the list the tab showed before, earlier versions included) and carry forward, each its existing component, opened when shown.
+- **Removed:** the old stat tiles and draft list, their filter table and the imports only they used. `needsAttention` is reused, not duplicated.
+
+Tests and checks, on local PostgreSQL:
+- `tsc` passes.
+- The layout check passes.
+- Screenshots of Workpapers with two drafts ready for review, two documents in preparation and one awaiting a decision.
+

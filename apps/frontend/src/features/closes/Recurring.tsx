@@ -34,7 +34,7 @@ const difference = (scheduled: string, entered: string, currency: string) => {
   return `Difference: ${show(money(actual > expected ? actual - expected : expected - actual), currency)} ${actual > expected ? "booked above schedule" : actual < expected ? "schedule above booked" : "matched"}.`;
 };
 
-export function Recurring({ closeId, currency, onPrepared }: { closeId: string; currency: string; onPrepared: () => void }) {
+export function Recurring({ closeId, currency, onPrepared, open }: { closeId: string; currency: string; onPrepared: () => void; open?: boolean }) {
   const dates = useDates();
   const [preview, setPreview] = useState<Preview>();
   const [error, setError] = useState("");
@@ -62,7 +62,7 @@ export function Recurring({ closeId, currency, onPrepared }: { closeId: string; 
     } catch (e) { setError(e instanceof Error ? e.message : "Could not prepare recurring work."); }
     finally { setBusy(false); }
   }
-  return <details>
+  return <details open={open}>
     <summary>Refresh recurring schedules</summary>
     <p>Capture this month’s QuickBooks period reports above, then compare carried prepaid, deferred revenue and depreciation schedules with each schedule's exact Trial Balance account. When a schedule's Trial Balance row is unambiguous and on its normal side, the agent prepares the comparison itself; its draft's ledger reference says the balance was read by the agent, and a person confirms the balance, method and entry when approving it. Otherwise enter the booked balance here. Nothing is posted without a person's separate posting approval.</p>
     <button disabled={busy} onClick={() => void load()}>Compare current period</button>

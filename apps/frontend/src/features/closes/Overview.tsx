@@ -302,7 +302,7 @@ type Effect = { entry: Entry; role: string };
 
 // The journal entries a draft proposes, whatever its kind, each with its date and what it is: an accrual's reversal
 // and a disposal fall in another month than the adjustment. A reconciliation proposes none.
-function entriesOf(p: Paper): Effect[] {
+export function entriesOf(p: Paper): Effect[] {
   const one = (entry: Entry | null | undefined, role = "") => (entry ? [{ entry, role }] : []);
   switch (p.kind) {
     case "prepaid":
