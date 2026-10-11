@@ -1,0 +1,887 @@
+package transport
+
+import (
+	"math/big"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+	"unicode"
+)
+
+// A figure in an answer is a claim about one measure: what it measures (a named metric or a row's line), whether it is
+// a balance, a change, a prior month's amount, a budget or a forecast, and for which client, month, currency and
+// basis, from a current or a stale read. claimOf reads that from where the cited field sits in its read; checkClaim
+// holds the sentence to it. Equal numbers are not enough: a receivables amount never supports a sentence about net
+// income, a balance never supports a stated change, and a forecast is never stated as an actual.
+
+// metricTerm is a phrase people use for a measure, and the measures it may mean ("profit" may be any of three).
+type metricTerm struct {
+	term string
+	keys []string
+	re   *regexp.Regexp
+}
+
+var agentMetricTerms = func() []metricTerm {
+	raw := []struct {
+		keys  []string
+		terms []string
+	}{
+		{[]string{"net_income"}, []string{"net income", "net profit", "net loss", "net earnings", "bottom line"}},
+		{[]string{"operating_profit"}, []string{"operating profit", "operating income", "net operating income", "operating loss"}},
+		{[]string{"gross_profit"}, []string{"gross profit", "gross margin", "gross loss"}},
+		{[]string{"net_income", "operating_profit", "gross_profit"}, []string{"profit", "profits", "earnings", "loss"}},
+		{[]string{"cash_change"}, []string{"net change in cash", "change in cash", "cash flow", "net cash"}},
+		{[]string{"revenue"}, []string{"total income", "revenue", "revenues", "sales", "turnover"}},
+		{[]string{"revenue", "net_income", "operating_profit"}, []string{"income"}},
+		{[]string{"cogs"}, []string{"cost of goods sold", "total cost of goods sold", "cost of sales", "cogs"}},
+		{[]string{"expenses"}, []string{"total expense", "total expenses", "operating expenses", "expenses", "expense", "costs", "spending", "overheads"}},
+		{[]string{"receivables"}, []string{"accounts receivable", "receivables", "receivable", "a/r", "ar", "debtors"}},
+		{[]string{"payables"}, []string{"accounts payable", "payables", "payable", "a/p", "ap", "creditors"}},
+		{[]string{"working_capital"}, []string{"working capital"}},
+		{[]string{"assets"}, []string{"total assets", "assets"}},
+		{[]string{"liabilities"}, []string{"total liabilities", "liabilities"}},
+		{[]string{"equity"}, []string{"total equity", "equity"}},
+		{[]string{"cash"}, []string{"cash balance", "book cash", "cash", "checking"}},
+		{[]string{"receipts"}, []string{"receipts", "collections", "inflows", "money in", "cash in"}},
+		{[]string{"disbursements"}, []string{"disbursements", "payments", "outflows", "money out", "cash out"}},
+		{[]string{"payroll"}, []string{"payroll", "wages", "salaries"}},
+	}
+	out := []metricTerm{}
+	for _, group := range raw {
+		for _, term := range group.terms {
+			out = append(out, metricTerm{term, group.keys, regexp.MustCompile(`(?:^|[^\p{L}\p{N}/])` + regexp.QuoteMeta(term) + `(?:$|[^\p{L}\p{N}/])`)})
+		}
+	}
+	// Longer phrases first, so "net income" is taken before "income" and "cash flow" before "cash".
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i].term) > len(out[j].term) })
+	return out
+}()
+
+// metricsIn is the measures a text names, each phrase taken once at its longest.
+func metricsIn(text string) map[string]bool {
+	lower := []byte(strings.ToLower(text))
+	found := map[string]bool{}
+	for _, m := range agentMetricTerms {
+		for _, at := range m.re.FindAllIndex(lower, -1) {
+			for _, k := range m.keys {
+				found[k] = true
+			}
+			// Blank the phrase so a shorter one inside it is not read again.
+			for i := at[0]; i < at[1]; i++ {
+				if lower[i] != ' ' {
+					lower[i] = '#'
+				}
+			}
+		}
+	}
+	return found
+}
+
+// moneyEntry is a cited money field of a sentence: what it measures, its value and the value normalized.
+type moneyEntry struct {
+	claim claim
+	got   string
+	n     string
+}
+
+// claim is what a cited field measures.
+type claim struct {
+	label    string
+	field    string // the field's own words (ledger balance, amount)
+	keys     map[string]bool
+	kind     string // "level", "change", "prior", "budget" or "percent"
+	forecast bool
+	scenario bool
+	ytd      bool
+	period   string // the month the figure is for, YYYY-MM, when known
+	entity   string
+	currency string
+	basis    string
+	stale    bool
+	cause    bool
+	money    bool
+}
+
+var (
+	claimChangeKeys  = map[string]bool{"change": true, "variance": true, "difference": true, "delta": true, "movement": true, "net_change": true, "increase": true, "decrease": true, "unexplained": true}
+	claimPriorKeys   = map[string]bool{"prior": true, "prior_month": true, "previous": true, "prior_amount": true}
+	claimPercentKeys = map[string]bool{"percent": true, "ratio": true, "margin_percent": true}
+	claimMoneyKeys   = map[string]bool{"amount": true, "balance": true, "ledger_balance": true, "statement_balance": true, "supported": true, "trial_balance": true, "total": true, "actual": true, "budget": true, "opening": true, "closing": true, "lowest": true, "receipts": true, "disbursements": true, "net": true, "open": true, "due": true}
+	// A cash plan's week fields name what they measure.
+	claimKeyMetrics = map[string]string{"opening": "cash", "closing": "cash", "lowest": "cash", "receipts": "receipts", "disbursements": "disbursements"}
+	claimLabelKeys  = []string{"name", "account", "label", "line", "title", "customer", "vendor"}
+	claimCauseRe    = regexp.MustCompile(`driver|cause|reason|explanation|because|why|note`)
+	claimMoneyValue = regexp.MustCompile(`^[(−-]?\$?\d[\d,]*\.\d{2}\)?$`)
+)
+
+// claimOf reads what the field at path measures from the field's key and the objects that hold it.
+func claimOf(read agentRead, path string) claim {
+	c := claim{keys: map[string]bool{}, kind: "level", period: read.period, entity: read.entity}
+	keys := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i, k := range keys {
+		keys[i] = strings.ReplaceAll(strings.ReplaceAll(k, "~1", "/"), "~0", "~")
+	}
+	last := keys[len(keys)-1]
+	// Walk from the read's root to the field, the nearest object's facts winning.
+	value := read.value
+	ancestors := []map[string]any{}
+	for _, k := range keys {
+		if object, ok := value.(map[string]any); ok {
+			ancestors = append(ancestors, object)
+			value = object[k]
+		} else if list, ok := value.([]any); ok {
+			n := 0
+			for _, r := range k {
+				if r < '0' || r > '9' {
+					n = -1
+					break
+				}
+				n = n*10 + int(r-'0')
+			}
+			if n < 0 || n >= len(list) {
+				break
+			}
+			value = list[n]
+		} else {
+			break
+		}
+	}
+	text := func(o map[string]any, key string) string {
+		s, _ := o[key].(string)
+		return strings.TrimSpace(s)
+	}
+	for _, o := range ancestors {
+		if s := text(o, "period"); len(s) == 7 {
+			c.period = s
+		}
+		for _, key := range []string{"entity", "client_entity"} {
+			if s := text(o, key); s != "" {
+				c.entity = s
+			}
+		}
+		if s := text(o, "currency"); s != "" {
+			c.currency = strings.ToUpper(s)
+		}
+		if s := text(o, "basis"); s != "" {
+			c.basis = strings.ToLower(s)
+		}
+		if stale, _ := o["stale"].(bool); stale {
+			c.stale = true
+		}
+		for _, key := range []string{"state", "status"} {
+			if s := strings.ToLower(text(o, key)); s == "stale" || s == "superseded" || s == "outdated" {
+				c.stale = true
+			}
+		}
+	}
+	// A published report's figures are not current when the publication was superseded, the books changed after it,
+	// or its sign-off lapsed; the publication sits beside the pack, not above the figure.
+	if root, ok := read.value.(map[string]any); ok {
+		if pub, ok := root["publication"].(map[string]any); ok {
+			switch strings.ToLower(text(pub, "state")) {
+			case "superseded", "needs_correction", "signoff_lapsed":
+				c.stale = true
+			}
+		}
+	}
+	// The row's own line names it, from the nearest object that has one.
+	for i := len(ancestors) - 1; i >= 0 && c.label == ""; i-- {
+		for _, key := range claimLabelKeys {
+			if s := text(ancestors[i], key); s != "" {
+				c.label = s
+				break
+			}
+		}
+	}
+	for k := range metricsIn(c.label) {
+		c.keys[k] = true
+	}
+	words := strings.ReplaceAll(last, "_", " ")
+	if len(c.keys) == 0 {
+		for k := range metricsIn(words) {
+			c.keys[k] = true
+		}
+	}
+	if m, ok := claimKeyMetrics[last]; ok && len(c.keys) == 0 {
+		c.keys[m] = true
+	}
+	// A generic field (amount, change) under a named object (/lowest/amount, /working_capital/amount) is that object's.
+	if len(c.keys) == 0 && c.label == "" && len(keys) > 1 {
+		parent := keys[len(keys)-2]
+		for k := range metricsIn(strings.ReplaceAll(parent, "_", " ")) {
+			c.keys[k] = true
+		}
+		if m, ok := claimKeyMetrics[parent]; ok && len(c.keys) == 0 {
+			c.keys[m] = true
+		}
+	}
+	c.field = words
+	if c.label == "" {
+		c.label = words
+	}
+	switch {
+	case claimChangeKeys[last]:
+		c.kind = "change"
+	case claimPriorKeys[last]:
+		c.kind = "prior"
+	case last == "budget":
+		c.kind = "budget"
+	case claimPercentKeys[last]:
+		c.kind = "percent"
+	}
+	for i, k := range keys {
+		switch {
+		case k == "weeks" || k == "forecast" || k == "projection":
+			c.forecast = true
+		case strings.Contains(k, "scenario"):
+			c.forecast, c.scenario = true, true
+		case k == "ytd":
+			c.ytd = true
+		case k == "prior_month" && i == len(keys)-1:
+			c.kind = "prior"
+		}
+		if claimCauseRe.MatchString(k) {
+			c.cause = true
+		}
+	}
+	// A cash plan is a forecast, except the captured opening balance it starts from.
+	if read.tool == "cash_plan" && keys[0] != "opening" && keys[0] != "open_items" {
+		c.forecast = true
+	}
+	if c.kind == "prior" && len(c.period) == 7 {
+		if m, err := time.Parse("2006-01", c.period); err == nil {
+			c.period = m.AddDate(0, -1, 0).Format("2006-01")
+		}
+	}
+	got, _ := valueAt(read.value, path)
+	c.money = claimMoneyKeys[last] || claimChangeKeys[last] || claimPriorKeys[last] || claimMoneyValue.MatchString(strings.TrimSpace(got)) || len(c.keys) > 0 && c.kind != "percent"
+	return c
+}
+
+// describe is how a citation names the field: its line and what of it, from the typed facts rather than the path.
+func (c claim) describe() string {
+	what := map[string]string{"change": "change", "prior": "prior month", "budget": "budget", "percent": "percent"}[c.kind]
+	parts := []string{c.label}
+	if what == "" && c.field != "" && c.field != c.label && c.field != "amount" && c.field != "value" && c.field != "total" && !strings.Contains(strings.ToLower(c.label), c.field) {
+		what = c.field
+	}
+	if what != "" && !strings.Contains(strings.ToLower(c.label), what) {
+		parts = append(parts, what)
+	}
+	if c.ytd {
+		parts = append(parts, "year to date")
+	}
+	if c.scenario {
+		parts = append(parts, "scenario")
+	} else if c.forecast {
+		parts = append(parts, "forecast")
+	}
+	if c.stale {
+		parts = append(parts, "stale")
+	}
+	return strings.Join(parts, " · ")
+}
+
+var (
+	claimRise      = map[string]bool{"rose": true, "risen": true, "rises": true, "rising": true, "increased": true, "increases": true, "grew": true, "grown": true, "grows": true, "climbed": true, "jumped": true, "gained": true, "improved": true, "up": true, "higher": true, "more": true, "above": true, "ahead": true, "better": true, "increase": true}
+	claimFall      = map[string]bool{"fell": true, "fallen": true, "falls": true, "falling": true, "decreased": true, "decreases": true, "dropped": true, "drops": true, "declined": true, "declines": true, "slipped": true, "lost": true, "worsened": true, "down": true, "lower": true, "less": true, "below": true, "behind": true, "worse": true, "decrease": true, "short": true}
+	claimNeutral   = map[string]bool{"changed": true, "moved": true, "swung": true, "change": true, "movement": true, "swing": true, "variance": true, "difference": true, "differs": true, "differ": true, "off": true, "gap": true, "exceeds": true, "exceed": true, "over": true, "under": true}
+	claimBefore    = map[string]bool{"from": true, "versus": true, "vs": true, "against": true, "than": true}
+	claimForecast  = regexp.MustCompile(`\b(forecast|forecasts|projected|projection|projects|expected|expect|expects|plan|planned|plans|will|would|could|estimate|estimated|scenario|if|likely|assumes|assumed|assumption)\b`)
+	claimActual    = regexp.MustCompile(`\b(actual|actually|recorded|booked|posted|was|were|ended|closed)\b`)
+	claimBudget    = regexp.MustCompile(`\b(budget|budgets|budgeted|plan|planned|target)\b`)
+	claimYTD       = regexp.MustCompile(`\b(year to date|year-to-date|ytd|so far this year)\b`)
+	claimStaleSaid = regexp.MustCompile(`\b(stale|superseded|out of date|not current|no longer current|earlier|older|last captured|as of|before the latest|needs correction|needs a correction|as published|sign-off lapsed|lapsed)\b`)
+	claimAvailable = regexp.MustCompile(`\b(available|in the bank|spendable|on hand at the bank)\b`)
+	claimCausal    = regexp.MustCompile(`\b(because|due to|driven by|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|led by|on the back of)\b`)
+	claimHedge     = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
+	claimRemainder = regexp.MustCompile(`\b(remainder|rest|other|others|unexplained|remaining|partly|in part|including|among|largely|mostly|mainly|part of)\b`)
+	claimMonth     = regexp.MustCompile(`\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b(?:\s+(\d{4}))?|\b(\d{4})-(\d{2})\b(?:-\d{2})?`)
+	claimCurrency  = regexp.MustCompile(`\b(USD|EUR|GBP|CAD|AUD|NZD|INR|JPY|CHF|SGD|HKD|MXN|SEK|NOK|DKK|ZAR)\b|[€£₹¥$]`)
+	claimBasis     = regexp.MustCompile(`\b(cash|accrual|modified cash)[ -]basis\b`)
+	claimClause    = regexp.MustCompile(`[;,:]\s+|\s+(?:and|but|while|whereas|with)\s+`)
+	monthNumbers   = map[string]int{"january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3, "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7, "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12}
+	dollarFamily   = map[string]bool{"USD": true, "CAD": true, "AUD": true, "NZD": true, "SGD": true, "HKD": true, "MXN": true}
+)
+
+// occurrence is where a figure sits in its sentence: its clause, the words just before it and just after.
+type occurrence struct {
+	clause         string
+	before, after  []string
+	start, end     int
+	normalized     string
+	value          *big.Rat
+	sentenceClause int
+}
+
+func wordsOf(text string) []string {
+	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && r != '-' && r != '/' })
+}
+
+// figuresIn finds every figure of a sentence with its context.
+func figuresIn(line string) []occurrence {
+	out := []occurrence{}
+	bounds := claimClause.FindAllStringIndex(line, -1)
+	for _, at := range agentFigure.FindAllStringIndex(line, -1) {
+		raw := line[at[0]:at[1]]
+		n := normalizeFigure(raw)
+		if n == "" {
+			continue
+		}
+		start, end, clauseIndex := 0, len(line), 0
+		for i, b := range bounds {
+			if b[1] <= at[0] {
+				start, clauseIndex = b[1], i+1
+			}
+			if b[0] >= at[1] && end == len(line) {
+				end = b[0]
+			}
+		}
+		before := wordsOf(line[start:at[0]])
+		if len(before) > 4 {
+			before = before[len(before)-4:]
+		}
+		after := wordsOf(line[at[1]:end])
+		if len(after) > 2 {
+			after = after[:2]
+		}
+		o := occurrence{clause: line[start:end], before: before, after: after, start: at[0], end: at[1], normalized: n, sentenceClause: clauseIndex}
+		if r, ok := new(big.Rat).SetString(strings.TrimSuffix(n, "%")); ok {
+			o.value = r
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// direction is how the words around a figure state it: "rise", "fall", "change" (a change of no stated direction),
+// "before" (another period's amount) or "" (a level).
+func (o occurrence) direction() string {
+	last := func(n int) string {
+		if len(o.before) >= n {
+			return o.before[len(o.before)-n]
+		}
+		return ""
+	}
+	// After a figure: "1,840 higher", "540 over budget", "500 more than"; "128,400 less expenses" is arithmetic.
+	if len(o.after) > 0 {
+		next := ""
+		if len(o.after) > 1 {
+			next = o.after[1]
+		}
+		switch w := o.after[0]; {
+		case w == "higher" || w == "up" || w == "above" || w == "ahead" || w == "better" || w == "more" && next == "than":
+			return "rise"
+		case w == "lower" || w == "down" || w == "below" || w == "behind" || w == "worse" || w == "less" && next == "than":
+			return "fall"
+		case w == "over" || w == "under":
+			return "change"
+		}
+	}
+	w1, w2, w3 := last(1), last(2), last(3)
+	switch {
+	case claimRise[w1]:
+		return "rise"
+	case claimFall[w1]:
+		return "fall"
+	case claimNeutral[w1] && w1 != "over" && w1 != "under":
+		return "change"
+	case w1 == "by" || w1 == "of":
+		// "rose by", "an increase of", "differs by": the word the preposition hangs on, not one further back
+		// ("128,400 less expenses of 106,620" is an amount of expenses).
+		w := w2
+		if w == "a" || w == "an" || w == "the" {
+			w = w3
+		}
+		switch {
+		case claimRise[w]:
+			return "rise"
+		case claimFall[w]:
+			return "fall"
+		case claimNeutral[w]:
+			return "change"
+		}
+	case claimBefore[w1]:
+		return "before"
+	}
+	if w2 == "last" && w1 == "month" || w2 == "prior" && w1 == "month" || w2 == "previous" && w1 == "month" {
+		return "before"
+	}
+	return ""
+}
+
+// namedMonths is the months a text names, as month numbers with the year when given (0 when not).
+func namedMonths(text string) [][2]int {
+	out := [][2]int{}
+	for _, m := range claimMonth.FindAllStringSubmatch(text, -1) {
+		if m[1] != "" {
+			year := 0
+			if m[2] != "" {
+				year = atoiSafe(m[2])
+			}
+			out = append(out, [2]int{monthNumbers[strings.ToLower(m[1])], year})
+		} else if m[3] != "" {
+			out = append(out, [2]int{atoiSafe(m[4]), atoiSafe(m[3])})
+		}
+	}
+	return out
+}
+
+func atoiSafe(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}
+
+func keysNamed(keys map[string]bool) string {
+	out := []string{}
+	for k := range keys {
+		out = append(out, strings.ReplaceAll(k, "_", " "))
+	}
+	sort.Strings(out)
+	return strings.Join(out, " or ")
+}
+
+func overlaps(a, b map[string]bool) bool {
+	for k := range a {
+		if b[k] {
+			return true
+		}
+	}
+	return false
+}
+
+// labelNamed says whether a text names a row's line: one of its words of four letters or more that is not filler.
+func labelNamed(text, label string) bool {
+	in := map[string]bool{}
+	for _, w := range wordsOf(text) {
+		in[strings.Trim(w, "-")] = true
+	}
+	for _, w := range wordsOf(label) {
+		w = strings.Trim(w, "-")
+		if len(w) >= 4 && !agentStopWords[w] && w != "total" && in[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// checkClaim holds one figure of a sentence to the field it cites. It returns why the sentence misstates the field,
+// or "" when the sentence says what the field measures. got is the field's value; o is where the sentence states it.
+func checkClaim(line string, o occurrence, c claim, got string, entities []string) string {
+	lowerLine, lowerClause := strings.ToLower(line), strings.ToLower(o.clause)
+	// What it measures: the metric named next to the figure, else in the sentence, must be the field's.
+	named := metricsIn(o.clause)
+	if len(named) == 0 {
+		named = metricsIn(line)
+	}
+	if len(c.keys) > 0 {
+		if len(named) > 0 && !overlaps(named, c.keys) && !labelNamed(o.clause, c.label) {
+			return "the sentence calls " + o.normalized + " " + keysNamed(named) + ", but the cited field is " + c.describe()
+		}
+		if len(named) == 0 && !labelNamed(line, c.label) {
+			return "the sentence does not say what " + o.normalized + " measures; the cited field is " + c.describe()
+		}
+	} else if c.money {
+		if !labelNamed(line, c.label) {
+			if len(named) > 0 {
+				return "the sentence calls " + o.normalized + " " + keysNamed(named) + ", but the cited field is " + c.describe()
+			}
+			return "the sentence does not say what " + o.normalized + " measures; the cited field is " + c.describe()
+		}
+	}
+	// A balance is not a change, a change is not a balance, and the change's direction is its sign.
+	direction := o.direction()
+	field, _ := new(big.Rat).SetString(strings.TrimSuffix(normalizeFigure(got), "%"))
+	switch c.kind {
+	case "change":
+		if direction == "" || direction == "before" {
+			return "the sentence states " + o.normalized + " as an amount, but the cited field is a change (" + c.describe() + ")"
+		}
+		if field != nil {
+			if direction == "rise" && field.Sign() < 0 || direction == "fall" && field.Sign() > 0 {
+				return "the sentence states a " + direction + " of " + o.normalized + ", but the cited change is " + normalizeFigure(got)
+			}
+		}
+	case "level", "budget", "percent":
+		if direction == "rise" || direction == "fall" || direction == "change" {
+			return "the sentence states " + o.normalized + " as a change, but the cited field is an amount (" + c.describe() + ")"
+		}
+	case "prior":
+		if direction == "rise" || direction == "fall" || direction == "change" {
+			return "the sentence states " + o.normalized + " as a change, but the cited field is the prior month's amount"
+		}
+		if direction != "before" && len(namedMonths(line)) == 0 && !strings.Contains(lowerLine, "prior") && !strings.Contains(lowerLine, "last month") && !strings.Contains(lowerLine, "previous") {
+			return "the sentence states the prior month's " + o.normalized + " as current"
+		}
+	}
+	// A budget is said to be one; an actual is not called a budget.
+	if c.kind == "budget" && !claimBudget.MatchString(lowerClause) {
+		return "the sentence states the budget " + o.normalized + " without saying it is the budget"
+	}
+	if c.kind != "budget" && len(o.before) > 0 && claimBudget.MatchString(strings.Join(o.before, " ")) {
+		return "the sentence calls " + o.normalized + " a budget, but the cited field is " + c.describe()
+	}
+	// A forecast is said to be one; an actual is never said to be forecast.
+	if c.forecast && !claimForecast.MatchString(lowerLine) {
+		return "the sentence states the forecast " + o.normalized + " as an actual (" + c.describe() + ")"
+	}
+	if c.scenario && !strings.Contains(lowerLine, "scenario") && !strings.Contains(lowerLine, "if ") && !strings.Contains(lowerLine, "what-if") {
+		return "the sentence states the scenario's " + o.normalized + " without saying it is a scenario"
+	}
+	if !c.forecast && claimForecast.MatchString(lowerClause) && !claimActual.MatchString(lowerClause) && (strings.Contains(lowerClause, "forecast") || strings.Contains(lowerClause, "projected") || strings.Contains(lowerClause, "will be") || strings.Contains(lowerClause, "expected")) {
+		return "the sentence states " + o.normalized + " as a forecast, but the cited field is an actual (" + c.describe() + ")"
+	}
+	if c.ytd != claimYTD.MatchString(lowerLine) {
+		if c.ytd {
+			return "the sentence states the year-to-date " + o.normalized + " as a month's"
+		}
+		return "the sentence states the month's " + o.normalized + " as year to date"
+	}
+	// Book cash is the ledger's, not money available at the bank.
+	if c.keys["cash"] && claimAvailable.MatchString(lowerClause) {
+		return "the sentence calls book cash of " + o.normalized + " available at the bank"
+	}
+	// The month named is the field's month.
+	if !c.forecast && len(c.period) == 7 {
+		if months := namedMonths(o.clause); len(months) > 0 || len(namedMonths(line)) > 0 {
+			if len(months) == 0 {
+				months = namedMonths(line)
+			}
+			p, _ := time.Parse("2006-01", c.period)
+			before := p.AddDate(0, -1, 0)
+			match := false
+			for _, m := range months {
+				if m[0] == int(p.Month()) && (m[1] == 0 || m[1] == p.Year()) {
+					match = true
+				}
+				// A change runs from the month before: naming either month places it.
+				if c.kind == "change" && m[0] == int(before.Month()) && (m[1] == 0 || m[1] == before.Year()) {
+					match = true
+				}
+			}
+			if !match {
+				return "the sentence puts " + o.normalized + " in another month; the cited field is for " + p.Format("January 2006")
+			}
+		}
+	}
+	// The client named is the field's client.
+	if c.entity != "" {
+		inClause, inLine := []string{}, []string{}
+		for _, e := range entities {
+			if len(e) < 3 {
+				continue
+			}
+			if strings.Contains(lowerClause, strings.ToLower(e)) {
+				inClause = append(inClause, e)
+			}
+			if strings.Contains(lowerLine, strings.ToLower(e)) {
+				inLine = append(inLine, e)
+			}
+		}
+		if len(inClause) == 0 {
+			inClause = inLine
+		}
+		if len(inClause) > 0 {
+			match := false
+			for _, e := range inClause {
+				le, lc := strings.ToLower(e), strings.ToLower(c.entity)
+				if le == lc || strings.Contains(lc, le) || strings.Contains(le, lc) {
+					match = true
+				}
+			}
+			if !match {
+				return "the sentence gives " + o.normalized + " to " + inClause[0] + ", but the cited figure is " + c.entity + "'s"
+			}
+		}
+	}
+	// The currency and basis named are the field's.
+	if c.currency != "" {
+		for _, m := range claimCurrency.FindAllString(o.clause, -1) {
+			code := map[string]string{"€": "EUR", "£": "GBP", "₹": "INR", "¥": "JPY"}[m]
+			if code == "" {
+				code = m
+			}
+			if code == "$" && !dollarFamily[c.currency] || code != "$" && code != c.currency {
+				return "the sentence states " + o.normalized + " in " + m + ", but the cited figure is in " + c.currency
+			}
+		}
+	}
+	if c.basis != "" {
+		for _, m := range claimBasis.FindAllStringSubmatch(lowerLine, -1) {
+			if !strings.HasPrefix(strings.ReplaceAll(c.basis, "_", " "), m[1]) {
+				return "the sentence states " + o.normalized + " on the " + m[1] + " basis, but the cited figure is on the " + c.basis + " basis"
+			}
+		}
+	}
+	// A stale read is said to be one.
+	if c.stale && !claimStaleSaid.MatchString(lowerLine) {
+		return "the sentence states " + o.normalized + " as current, but the cited read is stale"
+	}
+	return ""
+}
+
+// checkCauses holds a sentence's stated cause to its support: a cause must be cited (a driver, a reason, a document's
+// words) or said as a possibility, never asserted from an amount alone.
+func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim) string {
+	lower := strings.ToLower(line)
+	if !claimCausal.MatchString(lower) || claimHedge.MatchString(lower) {
+		return ""
+	}
+	for i, s := range entries {
+		if s.quote != "" || claims[i].cause {
+			return ""
+		}
+	}
+	return "the sentence states a cause the reads do not show; cite it, or say it as a possibility"
+}
+
+// checkRemainder holds a stated movement and its drivers together: when a sentence attributes a change to drivers
+// whose changes do not add up to it, it must say what remains.
+func checkRemainder(line string, changes []*big.Rat) string {
+	lower := strings.ToLower(line)
+	if len(changes) < 2 || !claimCausal.MatchString(lower) && !strings.Contains(lower, " from ") && !strings.Contains(lower, "of which") {
+		return ""
+	}
+	total, rest := new(big.Rat).Abs(changes[0]), new(big.Rat)
+	largest := 0
+	for i, c := range changes {
+		if new(big.Rat).Abs(c).Cmp(new(big.Rat).Abs(changes[largest])) > 0 {
+			largest = i
+		}
+	}
+	total = new(big.Rat).Set(changes[largest])
+	for i, c := range changes {
+		if i != largest {
+			rest.Add(rest, c)
+		}
+	}
+	if rest.Cmp(total) == 0 || claimRemainder.MatchString(lower) {
+		return ""
+	}
+	gap := new(big.Rat).Sub(total, rest)
+	return "the drivers stated account for " + rest.FloatString(2) + " of " + total.FloatString(2) + "; say what the remaining " + gap.FloatString(2) + " is"
+}
+
+// derive computes a figure the answer states from fields it names: their sum, the first less the others, or the first
+// as a percentage of the second, exactly. ok is false when an input is not a figure or the operation cannot apply.
+func derive(op string, inputs []string) (*big.Rat, bool) {
+	values := []*big.Rat{}
+	for _, in := range inputs {
+		n := normalizeFigure(in)
+		if n == "" || strings.HasSuffix(n, "%") || strings.Count(n, "-") > 1 {
+			return nil, false
+		}
+		r, ok := new(big.Rat).SetString(n)
+		if !ok {
+			return nil, false
+		}
+		values = append(values, r)
+	}
+	switch op {
+	case "sum":
+		out := new(big.Rat)
+		for _, v := range values {
+			out.Add(out, v)
+		}
+		return out, len(values) >= 2
+	case "difference":
+		if len(values) < 2 {
+			return nil, false
+		}
+		out := new(big.Rat).Set(values[0])
+		for _, v := range values[1:] {
+			out.Sub(out, v)
+		}
+		return out, true
+	case "ratio":
+		if len(values) != 2 || values[1].Sign() == 0 {
+			return nil, false
+		}
+		out := new(big.Rat).Quo(values[0], values[1])
+		return out.Mul(out, big.NewRat(100, 1)), true
+	}
+	return nil, false
+}
+
+// derivedMatches says whether a stated figure is the derived value: exactly for amounts, and for a percentage at the
+// precision it is stated to.
+func derivedMatches(op, stated string, value *big.Rat) bool {
+	n := normalizeFigure(stated)
+	if op == "ratio" {
+		if !strings.HasSuffix(n, "%") {
+			return false
+		}
+		n = strings.TrimSuffix(n, "%")
+		decimals := 0
+		if i := strings.Index(n, "."); i >= 0 {
+			decimals = len(n) - i - 1
+		}
+		want, ok := new(big.Rat).SetString(n)
+		if !ok {
+			return false
+		}
+		// Round half away from zero at the stated precision.
+		scale := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
+		scaled := new(big.Rat).Mul(value, scale)
+		half := big.NewRat(1, 2)
+		if scaled.Sign() < 0 {
+			scaled.Sub(scaled, half)
+		} else {
+			scaled.Add(scaled, half)
+		}
+		whole := new(big.Int).Quo(scaled.Num(), scaled.Denom())
+		return new(big.Rat).SetFrac(whole, scale.Num()).Cmp(want) == 0
+	}
+	want, ok := new(big.Rat).SetString(n)
+	return ok && !strings.HasSuffix(n, "%") && want.Cmp(value) == 0
+}
+
+// entitiesIn collects the client names the reads carry, so a sentence naming another client is caught.
+func entitiesIn(reads map[string]agentRead) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	var walk func(v any, depth int)
+	walk = func(v any, depth int) {
+		if depth > 8 {
+			return
+		}
+		switch t := v.(type) {
+		case map[string]any:
+			for key, value := range t {
+				if s, ok := value.(string); ok && (key == "entity" || key == "client_entity") && strings.TrimSpace(s) != "" && !seen[s] {
+					seen[s] = true
+					out = append(out, s)
+				} else {
+					walk(value, depth+1)
+				}
+			}
+		case []any:
+			for i, value := range t {
+				if i >= 500 {
+					break
+				}
+				walk(value, depth+1)
+			}
+		}
+	}
+	for _, read := range reads {
+		if read.entity != "" && !seen[read.entity] {
+			seen[read.entity] = true
+			out = append(out, read.entity)
+		}
+		walk(read.value, 0)
+	}
+	return out
+}
+
+var calendarFigure = regexp.MustCompile(`^\d{4}-\d{2}(?:-\d{2})?$`)
+
+// isCalendar says whether a normalized figure is a month or a day rather than an amount.
+func isCalendar(n string) bool { return calendarFigure.MatchString(n) }
+
+// deriveSupport checks a figure the answer computed from fields: the server computes it exactly from the fields named,
+// the sentence states that figure and names every field it is computed from, and the fields agree in kind, currency,
+// forecast and freshness. It binds the figure and cites each field.
+func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead, entities []string, bound map[string]bool, cite func(label, href string)) string {
+	if s.path != "" || s.quote != "" {
+		return "a derived figure cites its fields in of, not a path or quote of its own"
+	}
+	if s.derive != "sum" && s.derive != "difference" && s.derive != "ratio" {
+		return "a derived figure's operation is not sum, difference or ratio"
+	}
+	if len(s.of) < 2 || len(s.of) > 8 || s.derive == "ratio" && len(s.of) != 2 {
+		return "a derived figure names too few or too many fields"
+	}
+	values, claims := []string{}, []claim{}
+	for _, in := range s.of {
+		read, ok := reads[in.step]
+		if !ok {
+			return "a derived figure names a read that did not run"
+		}
+		got, found := valueAt(read.value, in.path)
+		if read.doc || !found {
+			return "a derived figure names a field that does not exist"
+		}
+		if n := normalizeFigure(got); n == "" || isCalendar(n) || strings.HasSuffix(n, "%") {
+			return "a derived figure names a field that is not an amount"
+		}
+		values = append(values, got)
+		c := claimOf(read, in.path)
+		claims = append(claims, c)
+		cite(read.title+" › "+c.describe(), read.link.Href)
+	}
+	computed, ok := derive(s.derive, values)
+	if !ok {
+		return "a derived figure cannot be computed from its fields"
+	}
+	if !derivedMatches(s.derive, s.value, computed) {
+		return "the " + s.derive + " of the cited fields is " + computed.FloatString(2) + ", not " + s.value
+	}
+	stated := normalizeFigure(s.value)
+	found := false
+	for _, o := range figuresIn(line) {
+		if o.normalized == stated {
+			found = true
+		}
+	}
+	if !found {
+		return "a derived figure is not in its sentence"
+	}
+	named := metricsIn(line)
+	lower := strings.ToLower(line)
+	for i, c := range claims {
+		if len(c.keys) > 0 && overlaps(named, c.keys) || labelNamed(line, c.label) {
+		} else {
+			return "the sentence does not name " + c.describe() + ", which its figure is computed from"
+		}
+		if (c.kind == "change") != (claims[0].kind == "change") {
+			return "a derived figure mixes changes and amounts"
+		}
+		if c.currency != "" && claims[0].currency != "" && c.currency != claims[0].currency {
+			return "a derived figure mixes currencies"
+		}
+		if c.forecast && !claimForecast.MatchString(lower) {
+			return "the sentence computes from a forecast without saying so"
+		}
+		if c.stale && !claimStaleSaid.MatchString(lower) {
+			return "the sentence computes from a stale read without saying so"
+		}
+		if !c.forecast && len(c.period) == 7 {
+			if months := namedMonths(line); len(months) > 0 {
+				p, _ := time.Parse("2006-01", c.period)
+				match := false
+				for _, m := range months {
+					match = match || m[0] == int(p.Month()) && (m[1] == 0 || m[1] == p.Year())
+				}
+				if !match {
+					return "the sentence puts a figure it computes from in another month; field " + strconvItoa(i) + " is for " + p.Format("January 2006")
+				}
+			}
+		}
+		if c.entity != "" {
+			for _, e := range entities {
+				le := strings.ToLower(e)
+				if len(e) >= 3 && strings.Contains(lower, le) && !strings.Contains(strings.ToLower(c.entity), le) && !strings.Contains(le, strings.ToLower(c.entity)) {
+					inputs := false
+					for _, other := range claims {
+						inputs = inputs || strings.EqualFold(other.entity, e)
+					}
+					if !inputs {
+						return "the sentence names " + e + ", but its figure is computed from " + c.entity + "'s"
+					}
+				}
+			}
+		}
+	}
+	bound[stated] = true
+	return ""
+}
+
+func strconvItoa(n int) string { return big.NewInt(int64(n)).String() }

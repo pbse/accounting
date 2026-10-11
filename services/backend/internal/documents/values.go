@@ -21,7 +21,20 @@ var writtenDates = []*regexp.Regexp{
 
 // AmountIn reports whether text prints the amount, ignoring its sign, currency signs and
 // thousands separators. A printed 1,200.00 shows 1200 or 1200.00, never 12000.00 or 1200.99.
-func AmountIn(text, amount string) bool {
+func AmountIn(text, amount string) bool { return amountIn(text, amount, false) }
+
+// MoneyIn reports whether text prints the amount as money: as AmountIn, except that a number printed as something
+// else does not count. "12 months", "5.25%", "#1200" and "page 3" are a term, a rate, a reference and a page, so
+// a matching number alone never establishes an amount's meaning.
+func MoneyIn(text, amount string) bool { return amountIn(text, amount, true) }
+
+// A number followed by one of these is a quantity, rate or term, not money; one preceded by these is a reference.
+var (
+	notMoneyAfter  = regexp.MustCompile(`(?i)^\s*(?:%|per\s?cent\b|months?\b|mos?\b\.?|years?\b|yrs?\b|days?\b|weeks?\b|hours?\b|hrs?\b|units?\b|pcs\b|pieces\b|items\b|qty\b|employees\b|people\b|shares\b|sq\.?\s?ft\b|feet\b|miles\b|kg\b|lbs?\b|x\b)`)
+	notMoneyBefore = regexp.MustCompile(`(?i)(?:#|\bno\.?|\bnumber|\bpage|\bp\.|\bref\.?|\binvoice|\bpolicy|\baccount|\bacct\.?|\bid|\bline)\s*:?\s*$`)
+)
+
+func amountIn(text, amount string, money bool) bool {
 	want, ok := new(big.Rat).SetString(strings.TrimPrefix(amount, "-"))
 	if !ok || strings.ContainsAny(amount, "eE/") {
 		return false
@@ -54,6 +67,9 @@ func AmountIn(text, amount string) bool {
 			(after == '-' || after == '/' || after == '.') && digitAt(at[1]+1),
 			// 09 is a day or month, not an amount.
 			len(token) > 1 && token[0] == '0' && token[1] != '.':
+			continue
+		}
+		if money && (notMoneyAfter.MatchString(text[at[1]:]) || notMoneyBefore.MatchString(text[:at[0]])) {
 			continue
 		}
 		got, _ := new(big.Rat).SetString(strings.ReplaceAll(token, ",", ""))

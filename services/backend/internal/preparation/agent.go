@@ -250,8 +250,11 @@ var quotedDates = []string{"date", "service_start", "service_end", "transaction_
 
 func valueShown(field, value, quote string) bool {
 	switch {
-	case slices.Contains(quotedAmounts, field):
+	case field == "annual_rate":
 		return documents.AmountIn(quote, value)
+	case slices.Contains(quotedAmounts, field):
+		// Money is shown as money: a matching number that is a term, a rate or a reference does not establish it.
+		return documents.MoneyIn(quote, value)
 	case slices.Contains(quotedDates, field):
 		return documents.DateIn(quote, value, false)
 	}

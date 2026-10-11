@@ -55,3 +55,30 @@ func TestDateIn(t *testing.T) {
 		}
 	}
 }
+
+// MoneyIn is AmountIn for money: a term, a rate, a count or a reference that prints the same digits is not the amount.
+func TestMoneyIn(t *testing.T) {
+	for _, c := range []struct {
+		text, amount string
+		want         bool
+	}{
+		{"Total due: USD 1,200.00", "1200.00", true},
+		{"Total due: USD 1,200.00", "12000.00", false},
+		{"Term: 12 months, premium 1,200.00", "12", false},
+		{"Term: 12 months, premium 1,200.00", "1200", true},
+		{"Rate 5.25% per annum", "5.25", false},
+		{"Rate 5.25 percent", "5.25", false},
+		{"Invoice #1200", "1200", false},
+		{"Invoice #1200 total 1,200.00", "1200", true},
+		{"Invoice no. 4471", "4471", false},
+		{"See page 3", "3", false},
+		{"Policy 3300 premium 3,300.00", "3300", true},
+		{"Fee (5.00)", "-5.00", true},
+		{"40 hours at 25.00", "40", false},
+		{"40 hours at 25.00", "25", true},
+	} {
+		if MoneyIn(c.text, c.amount) != c.want {
+			t.Errorf("MoneyIn(%q, %q) = %v", c.text, c.amount, !c.want)
+		}
+	}
+}

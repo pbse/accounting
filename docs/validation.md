@@ -4040,3 +4040,38 @@ The operator explicitly approved moving supplied-data authorization to the appli
 Local proof: migrated disposable PostgreSQL gateway/runtime race, scoped transport/replay/evaluator/preparation, document-current-grant tests and vet passed; 62 Node tests and TypeScript passed. The actual completion handler/subprocess/proxy succeeded across two firms and with no identity against an unreachable database, refused missing/wrong service authentication, enforced the configured model/medium effort despite contrary CLI input, denied MCP access and denied unconfigured research. Resumed-firm OCR and scheduled replay retain current grant checks and accept enabled firms with historical suspension timestamps. All ten purposes switch through the same gateway without profiles. Deployment tests accept absent/empty profiles while retaining personal research profile restrictions. Claude Opus 5.5 (`claude-opus-5-5`) at medium reviewed the complete change twice and found no blocking code defects after corrections. Its remaining documentation findings were corrected, including the local evaluation link and sole-human activation condition for personal subscriptions. CI is pending; its exact-tree proof must pass before merge. No subscription activation is claimed: `gpt-6.1-sol`/medium remains staged, with subscription AI disabled until account support and hosted inference acceptance.
 
 Commands: `go test -count=1 -race ./internal/llm/...`; focused transport (`TestAgent|TestAssistant|TestChatAction|TestStatement|TestProcedureLearning|TestWork|TestPlanner|Test.*Replay`), preparation/agenteval/cmd/agent-eval and document image/current-grant suites against migrated local PostgreSQL 18; `go vet ./internal/llm/... ./internal/documents ./internal/transport ./cmd/agent-eval`; `npm test`; `npm run check`; `git diff --check`. No hosted model calls were made for this proof.
+
+## 2026-10-10 — Financial claim support (B04/B07/B08/B09)
+
+Handoff slice 1 ([financial answers that support the actual claim](agent-first-implementation-handoff.md#b04b07b08b09--financial-answers-that-support-the-actual-claim)), on the branch after `54cf4a39`.
+
+Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose value's number appeared in the sentence, so `{"receivables":"8000.00"}` supported "Net income is 8,000.00." (the maturity review's probe). The fix reads each cited field's identity from its read (`internal/transport/agent_claims.go`) and holds each stated money figure to it; a `derive` support form lets the server recompute a total, difference or percentage exactly.
+
+- **`TestAgentClaimsBindWhatAFigureMeasures` (new), 27 rejections and 18 acceptances.** The rejections are:
+  - the reproduction itself;
+  - a figure with no named metric;
+  - gross profit or an expense line called net income or revenue;
+  - the right metric for the wrong client (Birch vs Bluegrass) or month (September vs October);
+  - euro for a USD figure, and the cash basis for an accrual one;
+  - a rise stated for a negative change;
+  - an amount stated as a change, and a change as an amount;
+  - the prior month stated as current;
+  - a forecast week stated as actual, and a scenario stated without saying so;
+  - book cash called available;
+  - a stale capture, and a superseded publication, stated as current;
+  - an actual called a budget, and a budget not said to be one;
+  - year to date stated as a month;
+  - drivers summing to 4,000.00 of a 4,940.00 change with no remainder named;
+  - an unhedged, uncited cause;
+  - a wrong derived sum or ratio, an uncited input, a ratio to a zero base, and amounts mixed with changes.
+
+  The acceptances include the same claims correctly worded, a multi-period comparison, a zero-base budget line where 540.00 is both the actual and the variance, a source-linked difference and sum, and a ratio at its stated precision. Citations name fields from typed facts (`Management pack › Net income · change`).
+- **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
+- **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
+- **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.
+
+Not verified:
+- an actual-model golden-set replay with the new answer schema (`derive`, `of`) and instructions; the changed rules may raise the rate of withheld answers until the model follows them, which only a replay against the configured provider can measure;
+- exported/published equivalents: chat answers are not exported, and report exports render from typed pack fields, not model text;
+- the ambiguous numeric date (09/01/2026 accepted as either order), recorded as a known limit.
+

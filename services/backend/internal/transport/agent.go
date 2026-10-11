@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/url"
 	"regexp"
 	"slices"
@@ -337,9 +338,9 @@ func agentScope(today, firm, entity, period, paperID string, permissions []strin
 }
 
 // agentAnswerSchema is the final answer: its kind, its text and, for each figure, where it came from.
-const agentAnswerSchema = `{"type":"object","additionalProperties":false,"required":["kind","answer","support"],"properties":{"kind":{"type":"string","enum":["facts","help","refusal","card"]},"answer":{"type":"string"},"support":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["step","sentence","path","value","quote"],"properties":{"step":{"type":"string"},"sentence":{"type":"integer"},"path":{"type":"string"},"value":{"type":"string"},"quote":{"type":"string"}}}}}}`
+const agentAnswerSchema = `{"type":"object","additionalProperties":false,"required":["kind","answer","support"],"properties":{"kind":{"type":"string","enum":["facts","help","refusal","card"]},"answer":{"type":"string"},"support":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["step","sentence","path","value","quote","derive","of"],"properties":{"step":{"type":"string"},"sentence":{"type":"integer"},"path":{"type":"string"},"value":{"type":"string"},"quote":{"type":"string"},"derive":{"type":"string","enum":["","sum","difference","ratio"]},"of":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["step","path"],"properties":{"step":{"type":"string"},"path":{"type":"string"}}}}}}}}}`
 
-const agentAnswerInstructions = `Write the answer to the member's last message from the tool results in this conversation, in plain prose of at most 1,500 characters, no markdown headings. kind is facts when the answer states anything about the firm's work; help when it only says what you can do here; refusal when the request is outside what you do; card when you proposed an action and the answer only introduces it. For a facts answer, every sentence (numbered from 0) must carry at least one support entry, and every amount, count, percentage or date in the text must be the value of a support entry: step is the tool result's id (t1, t2, ...), path is a JSON pointer into that result (for example /rows/3/ledger_balance) and value is the exact value there; for a document's text, leave path empty and give a verbatim quote of at least 8 characters containing the figure. A help or refusal answer carries no figures, no client, account or document names and no state of a close or draft. Use the person's words for what they asked; cite nothing you did not read.`
+const agentAnswerInstructions = `Write the answer to the member's last message from the tool results in this conversation, in plain prose of at most 1,500 characters, no markdown headings. kind is facts when the answer states anything about the firm's work; help when it only says what you can do here; refusal when the request is outside what you do; card when you proposed an action and the answer only introduces it. For a facts answer, every sentence (numbered from 0) must carry at least one support entry, and every amount, count, percentage or date in the text must be the value of a support entry: step is the tool result's id (t1, t2, ...), path is a JSON pointer into that result (for example /rows/3/ledger_balance) and value is the exact value there; for a document's text, leave path empty and give a verbatim quote of at least 8 characters containing the figure. Leave derive empty and of [] for these. A figure you computed from fields (a total, a difference, one as a percentage of another) is cited with derive "sum", "difference" (the first less the rest) or "ratio" (the first as a percentage of the second), of listing each field's step and path, path and quote empty and value the figure you state; it is recomputed exactly and must match. Name what each figure measures in its sentence, with the words of its field or line (net income, receivables, the account's name): a figure is never relabelled. A change is stated as a change (up, down, by) and a balance as a balance; the prior month's amount is said to be the prior month's; a forecast or scenario figure is said to be forecast, and a budget to be the budget; book cash is never called available cash; a stale read is said to be stale. State a cause only when a read gives it (cite it), otherwise as a possibility (may, could), and when drivers explain part of a change, say what remains unexplained. A help or refusal answer carries no figures, no client, account or document names and no state of a close or draft. Use the person's words for what they asked; cite nothing you did not read.`
 
 // A calendar day or a close month is matched before its digits could be taken for separate numbers.
 var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b|[(−-]?\$?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?\)?`)
@@ -417,6 +418,10 @@ func normalizeFigure(s string) string {
 	}
 	if negative {
 		f = -f
+	}
+	// Zero has no sign: (0.00) is the same zero as 0.00.
+	if f == 0 {
+		f = 0
 	}
 	return strconv.FormatFloat(f, 'f', -1, 64) + unit
 }
@@ -561,6 +566,8 @@ type agentRead struct {
 	tool  string
 	// executive says the read was an executive's: a row's own page is their reports page, never a close's.
 	executive bool
+	// entity and period are the close the read was made in, when it was close-scoped; a row's own fields win.
+	entity, period string
 }
 
 // agentSupport checks an answer against the reads: every support step ran, every pointer or quote resolves to its
@@ -619,7 +626,33 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	}
 	cited := []chatCitation{}
 	seen := map[string]bool{}
+	entities := entitiesIn(reads)
+	// Per sentence: the claims its entries cite, and the signed changes it states, for the cause and remainder checks.
+	sentenceClaims := make([]map[int]claim, len(lines))
+	sentenceEntries := make([][]agentSupportEntry, len(lines))
+	sentenceChanges := make([][]*big.Rat, len(lines))
+	sentenceMoney := make([][]moneyEntry, len(lines))
+	for i := range lines {
+		sentenceClaims[i] = map[int]claim{}
+	}
+	cite := func(label, href string) {
+		key := label + "|" + href
+		if !seen[key] && len(cited) < 12 {
+			seen[key] = true
+			cited = append(cited, chatCitation{label, href})
+		}
+	}
 	for _, s := range support {
+		if s.derive != "" {
+			if s.sentence < 0 || s.sentence >= len(lines) {
+				return nil, "support names a sentence the answer does not have"
+			}
+			if why := deriveSupport(s, lines[s.sentence], reads, entities, bound[s.sentence], cite); why != "" {
+				return nil, why
+			}
+			covered[s.sentence] = true
+			continue
+		}
 		read, ok := reads[s.step]
 		if !ok {
 			return nil, "support names a read that did not run"
@@ -627,6 +660,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		if s.sentence < 0 || s.sentence >= len(lines) {
 			return nil, "support names a sentence the answer does not have"
 		}
+		var fieldClaim claim
 		switch {
 		case s.path != "":
 			got, found := valueAt(read.value, s.path)
@@ -642,8 +676,14 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 			// The cited field must substantiate its sentence: a figure of the sentence, the value's own words, or the
 			// field's name must appear in it, so an unrelated field never covers a claim.
-			if !substantiates(lines[s.sentence], got, s.path) {
+			// The field bears on its sentence by its value, its words, or the line or metric it is of (Lab fees, net
+			// income); a money figure is then held to what the field measures, below, once every entry is in.
+			fieldClaim = claimOf(read, s.path)
+			if !substantiates(lines[s.sentence], got, s.path) && !labelNamed(lines[s.sentence], fieldClaim.label) && !overlaps(metricsIn(lines[s.sentence]), fieldClaim.keys) {
 				return nil, "a cited field does not bear on its sentence"
+			}
+			if n := normalizeFigure(got); n != "" && fieldClaim.money && !isCalendar(n) {
+				sentenceMoney[s.sentence] = append(sentenceMoney[s.sentence], moneyEntry{fieldClaim, got, n})
 			}
 		case s.quote != "":
 			// A quote binds a document's text only; a JSON read is cited by the field that holds the value.
@@ -663,10 +703,13 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			return nil, "a support entry cites neither a field nor a quote"
 		}
 		covered[s.sentence] = true
+		sentenceClaims[s.sentence][len(sentenceEntries[s.sentence])] = fieldClaim
+		sentenceEntries[s.sentence] = append(sentenceEntries[s.sentence], s)
 		label := read.title
 		href := read.link.Href
 		if s.path != "" {
-			label += " › " + strings.TrimPrefix(s.path, "/")
+			// The citation names the field from its typed facts (Cash · change), not its path.
+			label += " › " + fieldClaim.describe()
 			// A row that carries its own page (a search hit, a queue item, a listed close) links there, not to the read's.
 			idKey := "close_id"
 			if read.tool == "list_closes" {
@@ -690,10 +733,55 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				}
 			}
 		}
-		key := label + "|" + href
-		if !seen[key] && len(cited) < 12 {
-			seen[key] = true
-			cited = append(cited, chatCitation{label, href})
+		cite(label, href)
+	}
+	// Each stated money figure is bound by a cited field that measures it: the same number may be an amount in one
+	// place and a variance in another, so each place needs a field that fits it, and each money field must fit one.
+	for i, line := range lines {
+		used := make([]bool, len(sentenceMoney[i]))
+		reasons := make([]string, len(sentenceMoney[i]))
+		for _, o := range figuresIn(line) {
+			candidates, held := 0, false
+			first := ""
+			for j, m := range sentenceMoney[i] {
+				if o.normalized != m.n && !(m.claim.kind == "change" && o.normalized == strings.TrimPrefix(m.n, "-")) {
+					continue
+				}
+				candidates++
+				why := checkClaim(line, o, m.claim, m.got, entities)
+				if why == "" {
+					held, used[j] = true, true
+					if m.claim.kind == "change" {
+						if r, ok := new(big.Rat).SetString(m.n); ok {
+							sentenceChanges[i] = append(sentenceChanges[i], r)
+						}
+					}
+				} else {
+					reasons[j] = why
+					if first == "" {
+						first = why
+					}
+				}
+			}
+			if candidates > 0 && !held {
+				return nil, first
+			}
+			if held {
+				bound[i][o.normalized] = true
+			}
+		}
+		for j := range sentenceMoney[i] {
+			if !used[j] && reasons[j] != "" {
+				return nil, reasons[j]
+			}
+		}
+	}
+	for i := range lines {
+		if why := checkCauses(lines[i], sentenceEntries[i], sentenceClaims[i]); why != "" {
+			return nil, why
+		}
+		if why := checkRemainder(lines[i], sentenceChanges[i]); why != "" {
+			return nil, why
 		}
 	}
 	for i, c := range covered {
@@ -702,8 +790,13 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 		// A state the sentence asserts ("is reconciled", "ties") must be the cited value itself, or in the quote,
 		// of one of its own support entries: an amount never supports a state.
+		staleCited := false
+		for _, c := range sentenceClaims[i] {
+			staleCited = staleCited || c.stale
+		}
 		for _, state := range agentStatesIn(lines[i]) {
-			held := false
+			// A read the gate knows to be stale may be said to be stale or superseded.
+			held := staleCited && (state == "stale" || state == "superseded")
 			for _, s := range support {
 				if s.sentence != i {
 					continue
@@ -836,7 +929,14 @@ type agentSupportEntry struct {
 	path     string
 	value    string
 	quote    string
+	// derive is "sum", "difference" or "ratio" when the figure is computed from the fields in of; the server computes
+	// it exactly, so arithmetic across fields is possible without trusting the model's.
+	derive string
+	of     []agentInput
 }
+
+// agentInput is one field a derived figure is computed from.
+type agentInput struct{ step, path string }
 
 // runAgent handles one message: tool rounds, the proposal if any, then the answer, all within the request's deadline.
 // read replays a route under the member; emit sends events; history is the conversation so far, already redacted.
@@ -967,7 +1067,11 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		if executive {
 			link = executiveLink(t, args)
 		}
-		reads[step.ID] = agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title, tool: t.name, executive: executive}
+		scoped := agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title, tool: t.name, executive: executive}
+		if closeID != "" && strings.Contains(t.path, "{close_id}") {
+			scoped.entity, scoped.period = entity, period
+		}
+		reads[step.ID] = scoped
 		step.Status, step.Size, step.Truncated, step.Link = "ok", len(capped), truncated, &link
 		return step.ID + ": " + string(capped)
 	}
@@ -1239,6 +1343,11 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			Path     string `json:"path"`
 			Value    string `json:"value"`
 			Quote    string `json:"quote"`
+			Derive   string `json:"derive"`
+			Of       []struct {
+				Step string `json:"step"`
+				Path string `json:"path"`
+			} `json:"of"`
 		} `json:"support"`
 	}
 	if preparation.Strict([]byte(response.Text), &answer) != nil || strings.TrimSpace(answer.Answer) == "" || len(answer.Answer) > 2000 || len(answer.Support) > 40 {
@@ -1248,7 +1357,11 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 	text, _ := documents.Redact(strings.TrimSpace(answer.Answer))
 	entries := make([]agentSupportEntry, 0, len(answer.Support))
 	for _, s := range answer.Support {
-		entries = append(entries, agentSupportEntry{s.Step, s.Sentence, s.Path, s.Value, s.Quote})
+		entry := agentSupportEntry{step: s.Step, sentence: s.Sentence, path: s.Path, value: s.Value, quote: s.Quote, derive: s.Derive}
+		for _, in := range s.Of {
+			entry.of = append(entry.of, agentInput{in.Step, in.Path})
+		}
+		entries = append(entries, entry)
 	}
 	citations, rejected := agentSupport(answer.Kind, text, entries, reads, names)
 	if rejected != "" {
