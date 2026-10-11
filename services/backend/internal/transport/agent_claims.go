@@ -1926,6 +1926,10 @@ func oneFact(a, b claim) bool {
 	if !same {
 		return false
 	}
+	// One stable account is one fact, even renamed between versions ("Sales", then "Revenue").
+	if a.account != "" && a.account == b.account {
+		return true
+	}
 	// A named measure (net income) is one fact however it is read (an overview's net_income, a pack's measure),
 	// unless two different accounts are cited.
 	if len(a.keys) > 0 && len(a.keys) == len(b.keys) && overlaps(a.keys, b.keys) {
@@ -2051,4 +2055,59 @@ func comparedMonth(line string, month time.Time) bool {
 		}
 	}
 	return false
+}
+
+// proseFigure is a figure written in a cited prose field or quote, with the measure the prose names nearest it.
+type proseFigure struct {
+	n    string
+	keys map[string]bool
+	// field is true for a read's prose field (commentary), which must name the sentence's measure to support its
+	// figure; a document quote naming no measure ("Total due 8,000.00") supports it as printed.
+	field bool
+}
+
+// proseFigures are the figures a prose text holds, each with the measure named nearest it.
+func proseFigures(text string, field bool) []proseFigure {
+	out := []proseFigure{}
+	seen := map[string]bool{}
+	for _, o := range figuresIn(text) {
+		keys, _ := nearestMetric(text, o)
+		out = append(out, proseFigure{o.normalized, keys, field})
+		seen[o.normalized] = true
+	}
+	for _, f := range agentFigures(text) {
+		if !seen[f] {
+			out = append(out, proseFigure{f, nil, field})
+		}
+	}
+	return out
+}
+
+// proseHolds says whether cited prose supports each place a sentence states a figure: where the sentence names a
+// measure for it, the prose must name that measure for the same figure ("Receivables were 8,000.00" never supports
+// "net income is 8,000.00").
+func proseHolds(line, f string, prose []proseFigure) bool {
+	places := []map[string]bool{}
+	for _, o := range figuresIn(line) {
+		if o.normalized == f {
+			keys, _ := nearestMetric(line, o)
+			places = append(places, keys)
+		}
+	}
+	if len(places) == 0 {
+		places = append(places, nil)
+	}
+	for _, keys := range places {
+		held := false
+		for _, p := range prose {
+			if p.n != f {
+				continue
+			}
+			held = held || len(keys) == 0 || overlaps(keys, p.keys) || !p.field && len(p.keys) == 0
+		}
+		if !held {
+			return false
+		}
+	}
+	return true
 }

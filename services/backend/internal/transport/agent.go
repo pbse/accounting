@@ -648,6 +648,8 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	sentenceClaims := make([]map[int]claim, len(lines))
 	sentenceEntries := make([][]agentSupportEntry, len(lines))
 	sentenceMoney := make([][]moneyEntry, len(lines))
+	// The figures cited prose and quotes hold, each with the measure they name for it.
+	sentenceProse := make([][]proseFigure, len(lines))
 	// The stale fields a sentence's derived figures are computed from, which it may say are stale.
 	sentenceStaleClaims := make([][]claim, len(lines))
 	// The fields each sentence's derived figures are computed from.
@@ -746,10 +748,10 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			if fieldClaim.kind != "percent" && !isObject && !isList {
 				if n := normalizeFigure(s.value); n != "" {
 					bound[s.sentence][n] = true
-				}
-				// A cited field that is prose ("2 things need you: …") supports each figure it holds.
-				for _, f := range agentFigures(got) {
-					bound[s.sentence][f] = true
+				} else {
+					// A cited field that is prose ("2 things need you: …") supports each figure it holds, as the measure
+					// it names for it.
+					sentenceProse[s.sentence] = append(sentenceProse[s.sentence], proseFigures(got, true)...)
 				}
 			}
 			// The cited field must substantiate its sentence: a figure of the sentence, the value's own words, or the
@@ -786,9 +788,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			if !substantiates(lines[s.sentence], s.quote, "") {
 				return nil, "a quote does not bear on its sentence"
 			}
-			for _, f := range agentFigures(s.quote) {
-				bound[s.sentence][f] = true
-			}
+			sentenceProse[s.sentence] = append(sentenceProse[s.sentence], proseFigures(s.quote, false)...)
 		default:
 			return nil, "a support entry cites neither a field nor a quote"
 		}
@@ -1028,7 +1028,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	}
 	for i, line := range lines {
 		for _, f := range agentFigures(line) {
-			if !bound[i][f] {
+			if !bound[i][f] && !proseHolds(line, f, sentenceProse[i]) {
 				return nil, "the figure " + f + " is bound to no read in its sentence"
 			}
 		}

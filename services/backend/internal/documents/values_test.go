@@ -79,6 +79,10 @@ func TestMoneyIn(t *testing.T) {
 		{"Term: 12-month policy", "12", false},
 		{"Refund 120.00-", "-120.00", true},
 		{"Balance: 100.00\nMonths remaining: 12", "100.00", true},
+		{"Qty 12", "12", false},
+		{"Quantity: 12  Price 40.00", "12", false},
+		{"Quantity: 12  Price 40.00", "40.00", true},
+		{"Term: 12", "12", false},
 		{"Policy\n3300\npremium", "3300", true},
 	} {
 		if MoneyIn(c.text, c.amount) != c.want {

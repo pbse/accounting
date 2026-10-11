@@ -511,6 +511,13 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Net income rose 1,840.00 in September.", "in another month", e("t2", 0, ni+"/change", "1840.00"))
 	ok("Net income rose 1,840.00 from September.", e("t2", 0, ni+"/change", "1840.00"))
 
+	// Round thirty-nine: prose names its figures' measures; one account renamed is one fact.
+	reads["t65"] = read(`{"publication":{"id":"21","commentary":"Receivables were 8,000.00 at month end."}}`, "Published report", "read_publication", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Net income is 8,000.00.", "bound to no read", e("t65", 0, "/publication/commentary", "Receivables were 8,000.00 at month end."))
+	ok("Receivables were 8,000.00 at month end.", e("t65", 0, "/publication/commentary", "Receivables were 8,000.00 at month end."))
+	reads["t66"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","versions":[{"lines":[{"account_id":"4000","name":"Sales","amount":"100.00"}]},{"lines":[{"account_id":"4000","name":"Revenue","amount":"100.00"}]}]}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Revenue totals 200.00.", "counts the same figure twice", derived(0, "sum", "200.00", "t66", "/versions/0/lines/0/amount", "t66", "/versions/1/lines/0/amount"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }
