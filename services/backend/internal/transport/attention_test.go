@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -199,6 +200,32 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 	if _, snoozed := mine("?view=snoozed"); snoozed["approve"].SnoozedUntil == nil {
 		t.Fatalf("snoozed events are listed on their own: %+v", snoozed)
 	}
+	// The close itself still lists the snoozed decision, and only its own: snoozing a notice leaves the work on the close.
+	decisions := func(closeID string, want int) []attentionEvent {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/"+closeID+"/decisions", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: acting}))
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		var out struct{ Events []attentionEvent }
+		if w.Code != want || want == 200 && json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("decisions of close %s: %d %s", closeID, w.Code, w.Body.String())
+		}
+		return out.Events
+	}
+	if listed := decisions(alpha, 200); !slices.ContainsFunc(listed, func(e attentionEvent) bool { return e.Key == approve && e.SnoozedUntil != nil }) {
+		t.Fatalf("a snoozed decision stays on its close: %+v", listed)
+	}
+	decisions(beta, 404)
+	// Facts to confirm name their document's work, so a decision opens it (Overview, Home and the notices alike).
+	var was string
+	must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&was))
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id=$1`, job)
+	must(err)
+	if listed := decisions(alpha, 200); !slices.ContainsFunc(listed, func(e attentionEvent) bool { return e.Kind == "confirm" && e.JobID == job }) {
+		t.Fatalf("facts to confirm carry their job: %+v", listed)
+	}
+	_, err = db.Exec(`UPDATE preparation_jobs SET state=$2 WHERE id=$1`, job, was)
+	must(err)
 	call("user_a", nil, "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"approve"}, "browser": true}, 200)
 	call("user_a", nil, "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"everything"}}, 422)
 	if got, _ = mine(""); got.Unread != 0 {

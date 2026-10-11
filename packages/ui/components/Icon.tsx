@@ -43,6 +43,7 @@ const icons = {
   up: [["path", { d: "M12 19V5M6 11l6-6 6 6", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2" }]],
   stop: [["rect", { x: "7", y: "7", width: "10", height: "10", rx: "2", fill: "currentColor", stroke: "none" }]],
   check: [["path", { d: "M5 12.5l4.5 4.5L19 7.5", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }]],
+  more: [["path", { d: "M5 12h.01M12 12h.01M19 12h.01", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2.5" }]],
   tax: [["path", { d: "M6 3h9l4 4v14H6z", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }], ["path", { d: "M9 12h6M9 16h6", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "1.5" }]],
 } as const satisfies Record<string, readonly (readonly [string, Readonly<Record<string, string>>])[]>;
 

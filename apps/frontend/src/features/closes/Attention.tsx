@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { workspaceQuery } from "../../data/queries";
 import { useNavigate } from "react-router";
 
-export type AttentionEvent = { key: string; kind: string; yours: boolean; text: string; at: string; workpaper_id?: string; job_id?: string; account_id?: string; read: boolean; snoozed_until?: string; info?: boolean };
+export type AttentionEvent = { key: string; kind: string; yours: boolean; text: string; at: string; workpaper_id?: string; job_id?: string; account_id?: string; read: boolean; snoozed_until?: string; info?: boolean; decisions?: number };
 export type AttentionGroup = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: AttentionEvent[] };
 export type AttentionInbox = { groups: AttentionGroup[]; unread: number; unread_keys: string[]; page: number; has_more: boolean; kinds: string[]; preferences: { kinds: string[]; browser: boolean }; version?: string };
 

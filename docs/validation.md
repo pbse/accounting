@@ -4486,3 +4486,26 @@ Run here (local PostgreSQL, a local context machine with a placeholder login, so
 
 A real model run waits on the user's one-time Codex login. Whether the ChatGPT backend accepts a static subscription token is verified only then.
 
+## 2026-10-11 — Close page Overview from the canvas (B02/B06)
+
+The user chose to build the close-page canvas (https://claude.ai/artifact/9kJ14xr1tot7UiGqwvGXVD) a tab at a time, Overview first. This is Overview's first part; opening a decision in place to approve or return it (board 1c) is the next change, and the composer's band shipped in #430.
+- **Header (every tab):**
+  - the agent chip while it prepares, Sign off, and a ⋯ menu holding the plan, preparing by hand and stopping the agent;
+  - the lede counting decisions and blockers in their own units, or saying the month is ready to hand over;
+  - a fact line with no repeated counter;
+  - tab badges counting the decisions whose action is on each tab, with Evidence renamed Documents.
+- **Overview, left column:**
+  - Needs your decision: the close's decisions from the new `GET /v1/closes/{id}/decisions` (the inbox's events for one close, read or snoozed included), with approvals as one review counted one each, then the brief's blockers, and the hand-over before it happens;
+  - the agent's work as one table with a status filter;
+  - the goal panel, coordinator and work list one fold away, opened by `?job=`, `#coverage-work` and `#close-work` links.
+- **Overview, rail:** figures, the agent's line with its activity in a dialog, and links.
+- **Attention events:** facts to confirm and failed preparation now carry their job id, so Overview, Home and the notices open the document's work. Before, they opened the close's top.
+- **Not built:** the canvas's estimates ("about 25 minutes") are omitted, as the handoff requires without a measured basis, and so are the procedure version and the previous close's sign-off date, which have no source.
+
+Tests and checks, all on local PostgreSQL:
+- `TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState` now covers a snoozed decision staying on its close, a close the member cannot see answering 404, and facts to confirm carrying their job. The last assertion fails without the fix.
+- The `internal/transport` package passes, except the known Poppler-only export test.
+- `tsc` passes.
+- The layout check passes: 95 page views at desktop and phone width, in Edge.
+- Screenshots of a close before and after hand-over, with two approvals, a document to confirm and a ledger blocker, at 1440 and 390; the ⋯ menu's focus and Escape; a confirm link opening the document's work.
+

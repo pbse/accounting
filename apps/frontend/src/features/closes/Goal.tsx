@@ -10,7 +10,7 @@ import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { ProposedRequest } from "./ProposedRequest";
 
-type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
+export type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
 type Handoff = { id: string; job_id: string; account_id?: string; name: string; note: string; by: string; at: string; mine: boolean; handed: string };
 type Account = { account_id: string; name: string; state: string };
 type Person = { subject: string; name: string };
@@ -18,8 +18,8 @@ type Finish = "review" | "signoff";
 type Goal = { id: string; author: string; due_on: string; state: "active" | "reached" | "stopped"; finish: Finish; created_at: string; reached_at: string | null; ready_at: string | null; finished_at: string | null; events: { actor: string; text: string; at: string }[] };
 type Signoff = { state: "open" | "signed_off" | "reopen_required"; signer: string; needs: string[]; entries: { draft: string; text: string }[]; next_close: string };
 type Routine = { author: string; finish: Finish; due_days: number | null; next_period: string; waiting: string };
-type Step = { key: string; title: string; state: "done" | "agent" | "you" | "client" | "waits" | "none" | "unknown"; text: string; lines?: string[]; link?: string };
-type Status = {
+export type Step = { key: string; title: string; state: "done" | "agent" | "you" | "client" | "waits" | "none" | "unknown"; text: string; lines?: string[]; link?: string };
+export type Status = {
   goal: Goal | null;
   progress: { items: Item[]; needs: string[]; ready: boolean; signoff?: Signoff; coverage?: { total: number; open: number }; plan: Step[] };
   activity: { at: string; actor: string; text: string }[];
@@ -38,8 +38,8 @@ const sections: [Item["status"], string][] = [
   ["prepared", "Ready for review"],
   ["stopped", "Left out"],
 ];
-const handOver = "Get this close ready for review";
-const stepWords: Record<Step["state"], [string, string]> = {
+export const handOver = "Get this close ready for review";
+export const stepWords: Record<Step["state"], [string, string]> = {
   done: ["status ok", "Done"],
   agent: ["status info", "I'm on it"],
   you: ["status warn", "Needs you"],
@@ -75,7 +75,7 @@ export function localDate(d = new Date()) {
 }
 
 // due words a due date from today (both YYYY-MM-DD) with day, a calendar-day formatter (useDates().calendarDay).
-function due(on: string, today: string, format: (value: string) => string) {
+export function due(on: string, today: string, format: (value: string) => string) {
   const days = daysBetween(today, on);
   const day = format(on);
   if (days < 0) return `Due ${day}, ${-days} day${days === -1 ? "" : "s"} overdue`;
@@ -257,7 +257,7 @@ function RoutineLine({ closeId, status, refresh }: { closeId: string; status: St
 }
 
 // headline says, first, where the goal stands, from the live progress where the stored goal may lag a sweep behind.
-function headline(goal: Goal, progress: Status["progress"], needs: number) {
+export function headline(goal: Goal, progress: Status["progress"], needs: number) {
   const signoff = progress.signoff;
   if (goal.state === "stopped") return goal.events[goal.events.length - 1]?.text;
   if (signoff?.state === "reopen_required") return "Something changed after the sign-off. Reopen the close on its sign-off tab to continue.";
@@ -270,7 +270,16 @@ function headline(goal: Goal, progress: Status["progress"], needs: number) {
 
 // useGoal reads the close's goal and live progress, polling while shown. The plan's checks are heavier, so they are read
 // about once a minute and kept between polls.
-function useGoal(closeId: string, live: boolean, every: number) {
+// goalNeeds counts what the goal waits on a person for, once each: documents that need a person or that the agent cannot
+// prepare, the goal's own needs, sign-off's, and (when the finish line is sign-off) every captured account still to be
+// covered or excluded, one decision.
+export function goalNeeds({ goal, progress }: Status) {
+  const signoff = goal?.finish === "signoff" ? progress.signoff : undefined;
+  const coverage = progress.coverage?.total ? progress.coverage : undefined;
+  return progress.items.filter((i) => i.status === "needs_you" || i.status === "unsupported").length + progress.needs.length + (signoff?.needs.length ?? 0) + (goal?.finish === "signoff" && coverage?.open ? 1 : 0);
+}
+
+export function useGoal(closeId: string, live: boolean, every: number) {
   const queryClient = useQueryClient();
   // The plan's checks are read about once a minute (verify=1, as the page's loader reads them); the progress between
   // them is read every few seconds and keeps the last checked plan step. The light read starts from the checked one,
@@ -309,8 +318,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
   const stopped = goal.state === "stopped";
   const signoff = goal.finish === "signoff" ? progress.signoff : undefined;
   const coverage = progress.coverage?.total ? progress.coverage : undefined;
-  // Sign-off needs every captured account covered or excluded, one decision the card counts once.
-  const needs = progress.items.filter((i) => i.status === "needs_you" || i.status === "unsupported").length + progress.needs.length + (signoff?.needs.length ?? 0) + (goal.finish === "signoff" && coverage?.open ? 1 : 0);
+  const needs = goalNeeds(status);
   const signoffTab = `/dashboard/closes/${closeId}?tab=signoff`;
   async function stop() {
     setBusy(true);

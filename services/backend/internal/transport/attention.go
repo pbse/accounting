@@ -135,7 +135,7 @@ const attentionQuery = `WITH scope AS (
  SELECT 'handoff-owner:'||h.id,'goal',g.close_id,` + handoffEscalated + `,` + handoffStall + `,''
   FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE g.close_id IN (SELECT id FROM scope) AND g.author=$3 AND h.assignee<>$3 AND h.closed_at IS NULL AND ` + handoffEscalated + `<=now()
 )
-SELECT v.key,v.kind,v.close_id::text,v.at,v.text,v.workpaper,COALESCE(h.job_id::text,CASE WHEN uq.coverage_scope IS NULL THEN (SELECT min(job_id)::text FROM request_jobs WHERE request_id=uq.id) END,''),COALESCE(h.account_id,''),s.entity,s.period,s.due_on,s.priority,s.owner,mk.read_at IS NOT NULL,mk.snoozed_until
+SELECT v.key,v.kind,v.close_id::text,v.at,v.text,v.workpaper,COALESCE(h.job_id::text,CASE WHEN uq.coverage_scope IS NULL THEN (SELECT min(job_id)::text FROM request_jobs WHERE request_id=uq.id) END,CASE WHEN v.kind IN ('confirm','failed') THEN split_part(v.key,':',2) END,''),COALESCE(h.account_id,''),s.entity,s.period,s.due_on,s.priority,s.owner,mk.read_at IS NOT NULL,mk.snoozed_until
 FROM events v JOIN scope s ON s.id=v.close_id LEFT JOIN attention_marks mk ON mk.organization_id=$1 AND mk.subject=$3 AND mk.key=v.key
 LEFT JOIN goal_handoffs h ON h.id=CASE WHEN v.key LIKE 'handoff:%' THEN split_part(v.key,':',2)::bigint END
 LEFT JOIN work_requests uq ON uq.id=CASE WHEN v.key LIKE 'unanswered:%' THEN split_part(v.key,':',2)::bigint END
@@ -294,6 +294,22 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 		}
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 		jsonReply(w, 200, attentionInbox(events, kinds, browser, r.URL.Query().Get("view"), page, r.URL.Query().Get("order") == "priority"))
+	})
+	// One close's decisions, for its Overview and its tabs' counts: the inbox's events for this close alone, read or not
+	// and snoozed or not, since reading or snoozing a notice never takes the work behind it off the close (B02/B06).
+	mux.HandleFunc("GET /v1/closes/{id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		events, err := attentionEvents(r.Context(), db, r)
+		if err != nil {
+			problem(w, 503, "This close's decisions are unavailable.")
+			return
+		}
+		shown := []attentionEvent{}
+		for _, e := range events {
+			if e.group.CloseID == r.PathValue("id") {
+				shown = append(shown, e)
+			}
+		}
+		jsonReply(w, 200, map[string]any{"events": shown})
 	})
 	// The inbox as it changes: one long-lived request that says, as NDJSON, when the person's unread items change
 	// (their count and keys, or the order and state of what the sidebar shows), read again every attentionStreamEvery;
