@@ -652,6 +652,8 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	sentenceStale := make([]bool, len(lines))
 	// The fields each sentence's derived figures are computed from.
 	sentenceDerived := make([][]claim, len(lines))
+	// Whether a sentence states a cited number at all (money or a count).
+	sentenceFigured := make([]bool, len(lines))
 	// The clients each sentence's cited fields are of, so a client it names without a cited field is caught.
 	sentenceClients := make([]map[string]bool, len(lines))
 	for i := range lines {
@@ -752,6 +754,12 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 			if !substantiates(lines[s.sentence], got, s.path) && !labelNamed(lines[s.sentence], fieldClaim.label) && !overlaps(metricsIn(lines[s.sentence]), fieldClaim.keys) {
 				return nil, "a cited field does not bear on its sentence"
+			}
+			// A count stated in the sentence still makes it a figure sentence, whose named measures must be cited.
+			if n := normalizeFigure(got); n != "" && !isCalendar(n) {
+				for _, o := range figuresIn(lines[s.sentence]) {
+					sentenceFigured[s.sentence] = sentenceFigured[s.sentence] || o.normalized == n
+				}
 			}
 			if n := normalizeFigure(got); n != "" && (fieldClaim.money || fieldClaim.kind == "percent" || strings.HasSuffix(n, "%")) && !isCalendar(n) {
 				if fieldClaim.kind == "percent" && !strings.HasSuffix(n, "%") {
@@ -871,7 +879,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	for i := range lines {
 		// Every measure a financial sentence names is one its cited fields measure: "net income and receivables are
 		// each 8,000.00" needs net income cited too.
-		if len(sentenceMoney[i]) > 0 || len(sentenceDerived[i]) > 0 {
+		if len(sentenceMoney[i]) > 0 || len(sentenceDerived[i]) > 0 || sentenceFigured[i] {
 			covered := map[string]bool{}
 			for _, m := range sentenceMoney[i] {
 				for k := range m.claim.keys {

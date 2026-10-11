@@ -432,6 +432,12 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("The published report shows net income of 21,780.00.", e("t23", 0, "/published/0/net_income", "21780.00"))
 	rejected("Net income totals 41,880.00.", "from two revisions", derived(0, "sum", "41880.00", "t2", ni+"/amount", "t7", "/pack/profit_and_loss/measures/0/amount"))
 
+	// Round twenty-four: a cross-client total is not each client's; a count is not net income.
+	reads["t52"] = read(`{"closes":[{"id":"15","entity":"Birch Dental","period":"2026-10","currency":"USD","net_income":"200.00"},{"id":"16","entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","net_income":"100.00"}]}`, "List client closes", "list_closes", "", "")
+	rejected("Bluegrass Dental PLLC and Birch Dental each had net income of 300.00.", "stated as each client's", derived(0, "sum", "300.00", "t52", "/closes/0/net_income", "t52", "/closes/1/net_income"))
+	ok("Bluegrass Dental PLLC and Birch Dental together had net income of 300.00.", derived(0, "sum", "300.00", "t52", "/closes/0/net_income", "t52", "/closes/1/net_income"))
+	rejected("Net income is 3.", "nothing it cites measures it", e("t51", 0, "/coverage/total", "3"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

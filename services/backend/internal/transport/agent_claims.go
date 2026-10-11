@@ -462,6 +462,7 @@ var (
 	claimVarianceNamed = regexp.MustCompile(`\b(variance|difference|change|movement|swing|gap)\b`)
 	// Verbs that state a cause acting on a measure ("marketing raised revenue").
 	claimCausalVerb     = regexp.MustCompile(`\b(raised|drove|boosted|lifted|caused|pushed up|pushed down|cut|reduced|lowered|led to|resulted in|brought down|brought up|hurt|dragged down|weighed on|increased|decreased)\b`)
+	claimDistributive   = regexp.MustCompile(`\b(each|both|apiece|respectively|every one)\b`)
 	claimPublishedSaid  = regexp.MustCompile(`\b(published|publication|report|pack)\b`)
 	claimContrast       = regexp.MustCompile(`\b(but|however|yet|although|though|now|currently|today)\b`)
 	claimScenario       = regexp.MustCompile(`\b(scenario|what-if|if)\b`)
@@ -1381,6 +1382,10 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 				return "a derived figure combines a figure of unknown currency with one in " + slices.Sorted(maps.Keys(currencies))[0]
 			}
 		}
+	}
+	// A total across clients is never each client's ("Bluegrass and Birch each had 300.00").
+	if len(clientsOf) > 1 && claimDistributive.MatchString(lower) {
+		return "a total across clients is stated as each client's"
 	}
 	if len(clientsOf) > 1 {
 		named := map[string]bool{}
