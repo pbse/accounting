@@ -235,6 +235,13 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Revenue rose 4,940.00, including new patients up 3,000.00 and hygiene fees up 1,000.00.", "account for 4000.00 of 4940.00",
 		e("t6", 0, "/rows/0/change", "4940.00"), e("t6", 0, "/rows/0/drivers/0/change", "3000.00"), e("t6", 0, "/rows/0/drivers/1/change", "1000.00"))
 
+	// Round five: "rose to" needs the rise shown; one field is never counted twice.
+	rejected("Net income rose to 21,780.00.", "nothing cited shows it rose", e("t2", 0, ni+"/amount", "21780.00"))
+	ok("Net income rose to 21,780.00, up 1,840.00.", e("t2", 0, ni+"/amount", "21780.00"), e("t2", 0, ni+"/change", "1840.00"))
+	ok("Net income rose to 21,780.00 from 19,940.00.", e("t2", 0, ni+"/amount", "21780.00"), e("t2", 0, ni+"/prior", "19940.00"))
+	rejected("Net income fell to 21,780.00 from 19,940.00.", "nothing cited shows it fell", e("t2", 0, ni+"/amount", "21780.00"), e("t2", 0, ni+"/prior", "19940.00"))
+	rejected("Net income totals 43,560.00.", "same field twice", derived(0, "sum", "43560.00", "t2", ni+"/amount", "t2", ni+"/amount"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

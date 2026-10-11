@@ -768,6 +768,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	// Each stated money figure is bound by a cited field that measures it: the same number may be an amount in one
 	// place and a variance in another, so each place needs a field that fits it, and each money field must fit one.
 	for i, line := range lines {
+		var movedTo []movedLevel
 		used := make([]bool, len(sentenceMoney[i]))
 		reasons := make([]string, len(sentenceMoney[i]))
 		for _, o := range figuresIn(line) {
@@ -781,6 +782,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				why := checkClaim(line, o, m.claim, m.got, entities)
 				if why == "" {
 					held, used[j] = true, true
+					if d := o.direction(); (d == "rise-to" || d == "fall-to") && m.claim.kind != "change" {
+						movedTo = append(movedTo, movedLevel{m.claim, m.got, d})
+					}
 					if m.claim.kind == "change" {
 						if r, ok := new(big.Rat).SetString(m.n); ok {
 							group := rowGroup(m.step, m.path)
@@ -808,6 +812,13 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		changeCited := false
 		for _, m := range sentenceMoney[i] {
 			changeCited = changeCited || m.claim.kind == "change"
+		}
+		// "Net income rose to 21,780.00" states a level and a rise: a cited change or prior month of the same line
+		// must show the rise.
+		for _, mv := range movedTo {
+			if why := movementShown(mv.claim, mv.got, mv.direction, sentenceMoney[i]); why != "" {
+				return nil, why
+			}
 		}
 		for j, m := range sentenceMoney[i] {
 			if !used[j] && reasons[j] != "" {
@@ -1121,6 +1132,9 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		scoped := agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title, tool: t.name, executive: executive}
 		if closeID != "" && strings.Contains(t.path, "{close_id}") {
 			scoped.entity, scoped.period = entity, period
+		} else if named, ok := args["close_id"].(string); ok && named != "" && strings.Contains(t.path, "{close_id}") {
+			// A firm-wide or executive read of one close is that close's client and month, read under the member.
+			db.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id::text=$1 AND organization_id=$2`, named, org).Scan(&scoped.entity, &scoped.period)
 		}
 		reads[step.ID] = scoped
 		step.Status, step.Size, step.Truncated, step.Link = "ok", len(capped), truncated, &link

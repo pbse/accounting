@@ -463,6 +463,13 @@ func (o occurrence) direction() string {
 		}
 	}
 	w1, w2, w3 := last(1), last(2), last(3)
+	// "rose to 21,780.00": the figure is the level after the movement.
+	if w1 == "to" && (claimRiseVerb[w2] || w2 == "up") {
+		return "rise-to"
+	}
+	if w1 == "to" && (claimFallVerb[w2] || w2 == "down") {
+		return "fall-to"
+	}
 	switch {
 	case claimRise[w1]:
 		return "rise"
@@ -603,7 +610,7 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 	field, _ := new(big.Rat).SetString(strings.TrimSuffix(normalizeFigure(got), "%"))
 	switch c.kind {
 	case "change":
-		if direction == "" || direction == "before" {
+		if direction == "" || direction == "before" || direction == "rise-to" || direction == "fall-to" {
 			return "the sentence states " + o.normalized + " as an amount, but the cited field is a change (" + c.describe() + ")"
 		}
 		if field != nil {
@@ -616,7 +623,7 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			return "the sentence states " + o.normalized + " as a change, but the cited field is an amount (" + c.describe() + ")"
 		}
 	case "prior":
-		if direction == "rise" || direction == "fall" || direction == "change" {
+		if direction == "rise" || direction == "fall" || direction == "change" || direction == "rise-to" || direction == "fall-to" {
 			return "the sentence states " + o.normalized + " as a change, but the cited field is the prior month's amount"
 		}
 		if direction != "before" && len(namedMonths(line)) == 0 && !strings.Contains(lowerLine, "prior") && !strings.Contains(lowerLine, "last month") && !strings.Contains(lowerLine, "previous") {
@@ -997,7 +1004,13 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		return "a derived figure names too few or too many fields"
 	}
 	values, claims := []string{}, []claim{}
+	seenInputs := map[string]bool{}
 	for _, in := range s.of {
+		// A field counted twice is not a second figure.
+		if seenInputs[in.step+in.path] {
+			return "a derived figure names the same field twice"
+		}
+		seenInputs[in.step+in.path] = true
 		read, ok := reads[in.step]
 		if !ok {
 			return "a derived figure names a read that did not run"
@@ -1226,4 +1239,41 @@ func derivedResult(op string, o occurrence, claims []claim, computed *big.Rat) s
 		}
 	}
 	return ""
+}
+
+// movedLevel is a level a sentence states as the result of a movement ("rose to"), awaiting the movement's evidence.
+type movedLevel struct {
+	claim     claim
+	got       string
+	direction string
+}
+
+// movementShown says whether the sentence's other cited fields show the movement a level is said to be the result of:
+// a change of the same line in that direction, or its prior month's amount on the right side of it.
+func movementShown(c claim, got, direction string, cited []moneyEntry) string {
+	level, ok := new(big.Rat).SetString(strings.TrimSuffix(normalizeFigure(got), "%"))
+	if !ok {
+		return ""
+	}
+	for _, m := range cited {
+		if !strings.EqualFold(m.claim.label, c.label) {
+			continue
+		}
+		v, ok := new(big.Rat).SetString(strings.TrimSuffix(m.n, "%"))
+		if !ok {
+			continue
+		}
+		switch m.claim.kind {
+		case "change":
+			if direction == "rise-to" && v.Sign() > 0 || direction == "fall-to" && v.Sign() < 0 {
+				return ""
+			}
+		case "prior":
+			if direction == "rise-to" && level.Cmp(v) > 0 || direction == "fall-to" && level.Cmp(v) < 0 {
+				return ""
+			}
+		}
+	}
+	verb := map[string]string{"rise-to": "rose", "fall-to": "fell"}[direction]
+	return "the sentence says " + c.describe() + " " + verb + " to " + normalizeFigure(got) + ", but nothing cited shows it " + verb
 }
