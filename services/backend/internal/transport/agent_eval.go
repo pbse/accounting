@@ -134,7 +134,7 @@ func agentEvalValue(ctx context.Context, db *sql.DB, closeID string, value any) 
 	case s == "$close":
 		return closeID, nil
 	case strings.HasPrefix(s, "$evidence:"):
-		err := db.QueryRowContext(ctx, `SELECT id::text FROM evidence WHERE close_id::text=$1 AND name=$2 ORDER BY id LIMIT 1`, closeID, strings.TrimPrefix(s, "$evidence:")).Scan(&id)
+		err := db.QueryRowContext(ctx, `SELECT id::text FROM evidence WHERE close_id::text=$1 AND name=$2 ORDER BY evidence.id LIMIT 1`, closeID, strings.TrimPrefix(s, "$evidence:")).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("%s: no such document on the close", s)
 		}
@@ -144,7 +144,7 @@ func agentEvalValue(ctx context.Context, db *sql.DB, closeID string, value any) 
 		if err != nil || n < 1 {
 			return nil, fmt.Errorf("%s: the draft number must be 1 or more", s)
 		}
-		if err = db.QueryRowContext(ctx, `SELECT id::text FROM workpapers WHERE close_id::text=$1 ORDER BY id OFFSET $2 LIMIT 1`, closeID, n-1).Scan(&id); err != nil {
+		if err = db.QueryRowContext(ctx, `SELECT id::text FROM workpapers WHERE close_id::text=$1 ORDER BY workpapers.id OFFSET $2 LIMIT 1`, closeID, n-1).Scan(&id); err != nil {
 			return nil, fmt.Errorf("%s: the close has no such draft", s)
 		}
 		return id, nil

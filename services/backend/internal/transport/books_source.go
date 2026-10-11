@@ -51,7 +51,7 @@ func clientSources(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, org, name string) ([]chosenSource, error) {
 	rows, err := q.QueryContext(ctx, `SELECT DISTINCT ON (COALESCE(period,'')) id::text,COALESCE(period,''),source,reason,actor,created_at FROM books_sources
- WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) ORDER BY COALESCE(period,''),id DESC`, org, name)
+ WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) ORDER BY COALESCE(period,''),books_sources.id DESC`, org, name)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 		rows, err := tx.QueryContext(ctx, `SELECT c.id,c.period,books_source(c.organization_id,c.entity,c.period),
  (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+`),
  (SELECT max(s.captured_at) FROM xero_snapshots s WHERE s.close_id=c.id),
- COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off'
+ COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')='signed_off'
   OR EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved')
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2)
  AND (($3<>'' AND c.period=$3) OR ($3='' AND NOT EXISTS(SELECT 1 FROM books_sources o WHERE o.organization_id=c.organization_id AND client_identity(o.organization_id,o.client_entity)=client_identity(c.organization_id,c.entity) AND o.period=c.period)))

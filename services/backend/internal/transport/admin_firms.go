@@ -80,8 +80,8 @@ func adminFirmExists(ctx context.Context, tx *sql.Tx, firm string) error {
 
 // adminInvitations is the firm's fifty newest invitations, open or decided.
 const adminInvitations = `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'email',email,'role',role_name,'state',state,'invited_by',invited_by,
- 'created_at',created_at,'expires_at',expires_at,'decided_at',decided_at) ORDER BY id DESC),'[]'::jsonb)
- FROM (SELECT * FROM member_invitations WHERE organization_id=$1 ORDER BY id DESC LIMIT 50) i`
+ 'created_at',created_at,'expires_at',expires_at,'decided_at',decided_at) ORDER BY i.id DESC),'[]'::jsonb)
+ FROM (SELECT * FROM member_invitations WHERE organization_id=$1 ORDER BY member_invitations.id DESC LIMIT 50) i`
 
 // adminFirmPeople is the firm's members (the Security center's view of them) and invitations. Reasons and the clients a
 // member is assigned to are masked unless revealed; the number of assignments shows.
@@ -123,7 +123,7 @@ const adminActivity = `SELECT at::text,actor,kind,text,content FROM (
  UNION ALL SELECT created_at,started_by,'workflow.started','Started '||workflow||' (run '||id||')',false FROM workflow_runs WHERE organization_id=$1
  UNION ALL SELECT finished_at,'','workflow.'||state,workflow||' (run '||id||') '||state,false FROM workflow_runs WHERE organization_id=$1 AND finished_at IS NOT NULL
  UNION ALL SELECT disabled_at,COALESCE(disabled_by,''),'firm.suspended','Suspended: '||COALESCE(disabled_reason,''),true FROM organizations WHERE id=$1 AND disabled_at IS NOT NULL
-) e WHERE at IS NOT NULL AND ($2='' OR starts_with(kind,$2)) ORDER BY at DESC,kind,text LIMIT $3 OFFSET $4`
+) e WHERE at IS NOT NULL AND ($2='' OR starts_with(kind,$2)) ORDER BY e.at DESC,e.kind,e.text LIMIT $3 OFFSET $4`
 
 type adminActivityRow struct {
 	At     string `json:"at"`

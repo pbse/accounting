@@ -492,7 +492,7 @@ func xeroWording(items []quickbooks.Exception) []quickbooks.Exception {
 // the last attempt and capture, with no attempt in the past 30 minutes.
 const xeroDue = `EXISTS(SELECT 1 FROM organizations o WHERE o.id=c.organization_id AND o.enabled)
  AND (c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM') OR EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.state='active'))
- AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'
  AND (((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '24 hours')
    AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id AND s.captured_at>now()-interval '24 hours'))
   OR ((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '30 minutes')

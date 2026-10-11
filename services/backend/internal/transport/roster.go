@@ -66,7 +66,7 @@ func warmTemplateRoles(ctx context.Context, db *sql.DB, org string, roles func(c
 }
 
 // rosterTemplate is SQL, over a current_client_roster row r, for the firm's current template t.
-const rosterTemplate = `LEFT JOIN LATERAL (SELECT due_days,owner FROM close_templates WHERE organization_id=r.organization_id ORDER BY id DESC LIMIT 1) t ON true`
+const rosterTemplate = `LEFT JOIN LATERAL (SELECT due_days,owner FROM close_templates WHERE organization_id=r.organization_id ORDER BY close_templates.id DESC LIMIT 1) t ON true`
 
 // applyCloseTemplate gives a newly opened close of an active roster client its month's due date (due_days after the
 // month ends) and owner, from the client's overrides or else the firm's template, recording the owner as a change of
@@ -266,7 +266,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		var dueDays sql.NullInt64
 		var owner, reason, actor, rev string
 		var at time.Time
-		switch err = tx.QueryRowContext(r.Context(), `SELECT due_days,owner,reason,actor,created_at,id::text FROM close_templates WHERE organization_id=$1 AND $2 ORDER BY id DESC LIMIT 1`, org, firmAccess(r)).Scan(&dueDays, &owner, &reason, &actor, &at, &rev); err {
+		switch err = tx.QueryRowContext(r.Context(), `SELECT due_days,owner,reason,actor,created_at,id::text FROM close_templates WHERE organization_id=$1 AND $2 ORDER BY close_templates.id DESC LIMIT 1`, org, firmAccess(r)).Scan(&dueDays, &owner, &reason, &actor, &at, &rev); err {
 		case nil:
 			template = map[string]any{"due_days": nil, "owner": owner, "reason": reason, "actor": actor, "at": at, "rev": rev}
 			if dueDays.Valid {
@@ -612,7 +612,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		// review every client's work.
 		var current string
 		if err = tx.QueryRowContext(r.Context(), `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organization(r)).Scan(new(string)); err == nil {
-			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM close_templates WHERE organization_id=$1 ORDER BY id DESC LIMIT 1),'')`, organization(r)).Scan(&current)
+			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM close_templates WHERE organization_id=$1 ORDER BY close_templates.id DESC LIMIT 1),'')`, organization(r)).Scan(&current)
 		}
 		if err != nil {
 			problem(w, 503, "The monthly close template could not be saved.")
