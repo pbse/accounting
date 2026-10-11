@@ -332,11 +332,19 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if pack["source"] != "files" || pack["file"] != "Acme 2027-01.csv" || pack["overall"] != "provisional" || pack["basis"] != "Accrual" || len(net) == 0 || net[len(net)-1].Amount != "500.25" || pack["profit_and_loss_unavailable"] != nil {
 		t.Fatalf("January's pack from its file: %v", pack)
 	}
+	// The budget comparison reads them too: the file's profit and loss accounts are the ones a budget maps to.
+	budget := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/budget", nil, 200)
+	if accounts := budget["accounts"].([]any); len(accounts) != 2 || budget["reason"] == "Capture this month's QuickBooks period snapshot or Xero Trial Balance first." {
+		t.Fatalf("January's budget from its file: %v", budget)
+	}
 	// Without the month's activity, the profit and loss is unavailable, never zero.
 	_, err = db.Exec(`UPDATE books_versions SET activity='{}',activity_unavailable='a column with the month''s movement' WHERE close_id::text=$1`, januaryClose)
 	must(err)
 	if pack = packOf(); pack["profit_and_loss_unavailable"] == nil || len(pack["profit_and_loss"].(statement).Sections) != 0 {
 		t.Fatalf("a pack without activity: %v", pack["profit_and_loss_unavailable"])
+	}
+	if budget = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/budget", nil, 200); budget["state"] != "waiting" || !strings.Contains(budget["reason"].(string), "activity is unavailable") {
+		t.Fatalf("a budget comparison without activity waits: %v", budget)
 	}
 	// A check the file was accepted with that holds its statements holds the pack, named.
 	_, err = db.Exec(`UPDATE books_import_acceptances SET checks=checks||'[{"key":"balanced","title":"Debits equal credits","state":"holds"}]'::jsonb WHERE id::text=$1`, januaryAccepted)
