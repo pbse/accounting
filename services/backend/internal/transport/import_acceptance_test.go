@@ -397,6 +397,13 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		t.Fatalf("no comparison before December is accepted: %v", comparison)
 	}
 	call("user_a", partner, "POST", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+december, with(call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+december, nil, 200), map[string]any{"exported_on": "2026-10-05"}), 200)
+	// Only once December's books are its files: until then its file supplements whatever its books are.
+	if pack = packOf(); pack["prior"] != nil {
+		t.Fatalf("a file of a month whose books are not its files is no comparative: %v", pack["prior"])
+	}
+	var rev string
+	must(db.QueryRow(`SELECT COALESCE(max(id)::text,'') FROM books_sources WHERE organization_id=$1`, org).Scan(&rev))
+	call("user_a", []string{"integrations:manage", "clients:all"}, "POST", "/v1/closes/client/books-source", map[string]any{"client": "Acme Co", "period": "2026-12", "source": "files", "reason": "The takeover's comparatives are files", "rev": rev}, 200)
 	pack = packOf()
 	if prior, _ := pack["prior"].(map[string]any); prior["status"] != "comparative" || prior["file"] != "Acme 2026-12.csv" || prior["as_of"] != "2026-12-31" || !strings.Contains(pack["note"].(string), "2026-12 is a reviewed comparative") || pack["overall"] != "provisional" {
 		t.Fatalf("December as a reviewed comparative: %v %v", pack["prior"], pack["note"])

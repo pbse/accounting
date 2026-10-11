@@ -224,24 +224,34 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 			m.Holds = append(m.Holds, c.Title)
 		}
 	}
-	// A newer account map classifying one of the file's accounts differently holds its statements too, until the file is
-	// accepted again on it; the books stay as accepted meanwhile.
-	if state, found, err := readFileState(ctx, q, org, entity, importID); err != nil {
+	live, err := liveHolds(ctx, q, org, entity, importID, m.Acceptance, kept)
+	if err != nil {
 		return nil, nil, err
-	} else if found {
-		changed, err := acceptedMapChanged(ctx, q, m.Acceptance, state.reading.Accounts)
-		if err != nil {
-			return nil, nil, err
-		}
-		if changed {
-			m.Holds = append(m.Holds, "the account map now classifies one of its accounts differently; accept the file again")
-		}
-		// The prior month's accepted books may have changed since: the month must still roll from them.
-		if c := rollForward(state); c.State == "holds" && !slices.ContainsFunc(kept, func(k importCheck) bool { return k.Key == "roll_forward" && k.State == "holds" }) {
-			m.Holds = append(m.Holds, "it no longer rolls forward: "+c.Detail)
-		}
 	}
+	m.Holds = append(m.Holds, live...)
 	return b, &m, nil
+}
+
+// liveHolds are what holds an accepted file's statements since it was accepted, beyond the checks it was accepted with
+// (kept): a newer account map classifying one of its accounts differently, until the file is accepted again on it (the
+// books stay as accepted meanwhile); and the prior month's accepted books changed so that it no longer rolls from them.
+func liveHolds(ctx context.Context, q rowReader, org, entity, importID, acceptance string, kept []importCheck) ([]string, error) {
+	state, found, err := readFileState(ctx, q, org, entity, importID)
+	if err != nil || !found {
+		return nil, err
+	}
+	holds := []string{}
+	changed, err := acceptedMapChanged(ctx, q, acceptance, state.reading.Accounts)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		holds = append(holds, "the account map now classifies one of its accounts differently; accept the file again")
+	}
+	if c := rollForward(state); c.State == "holds" && !slices.ContainsFunc(kept, func(k importCheck) bool { return k.Key == "roll_forward" && k.State == "holds" }) {
+		holds = append(holds, "it no longer rolls forward: "+c.Detail)
+	}
+	return holds, nil
 }
 
 // closeFilesPack is the management pack of a month whose books are its files, compared with last month's when its
@@ -649,13 +659,13 @@ func monthChanged(ctx context.Context, q rowReader, org, name, importID string, 
 }
 
 // reviewedComparative is a month that is no close, as its accepted file gives it (docs/books-sources.md, History and
-// takeover): prior-period figures for comparisons, with the checks they were accepted with that hold their statements.
-// Nil when the month has no current acceptance.
+// takeover): prior-period figures for comparisons, with what holds their statements, as for a month on files. Nil when
+// the month's books are not its files, or it has no current acceptance.
 func reviewedComparative(ctx context.Context, q rowReader, org, entity, period string) (*books, *fileMonth, error) {
 	var acceptance, importID, file string
 	var checks []byte
 	switch err := q.QueryRowContext(ctx, `SELECT a.id::text,a.import_id::text,i.name,a.checks FROM books_import_acceptances a JOIN books_imports i ON i.id=a.import_id
- WHERE a.organization_id=$1 AND client_identity(a.organization_id,a.client_entity)=client_identity($1,$2) AND a.period=$3
+ WHERE a.organization_id=$1 AND client_identity(a.organization_id,a.client_entity)=client_identity($1,$2) AND a.period=$3 AND books_source($1,$2,$3)='files'
   AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id)
  ORDER BY a.id DESC LIMIT 1`, org, entity, period).Scan(&acceptance, &importID, &file, &checks); {
 	case err == sql.ErrNoRows:
@@ -680,5 +690,10 @@ func reviewedComparative(ctx context.Context, q rowReader, org, entity, period s
 			m.Holds = append(m.Holds, c.Title)
 		}
 	}
+	live, err := liveHolds(ctx, q, org, entity, importID, acceptance, kept)
+	if err != nil {
+		return nil, nil, err
+	}
+	m.Holds = append(m.Holds, live...)
 	return b, m, nil
 }
