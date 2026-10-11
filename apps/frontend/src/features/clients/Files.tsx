@@ -5,6 +5,7 @@ import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, useDates } from "../../data/time";
 import { workspaceRequest } from "../closes/workspace";
+import { ImportScope } from "./ImportScope";
 
 // A client's books as files (docs/books-sources.md, Reading files): a file is sent for a month, the reader proposes how
 // to read it, a person previews the reading, and a reviewer confirms the layout, which is proposed again for the next
@@ -106,6 +107,7 @@ export function FilesCard({ client }: { client: string }) {
   const [older, setOlder] = useState<{ imports: ImportRow[]; more: boolean } | undefined>(undefined);
   const [sending, setSending] = useState(false);
   const [open, setOpen] = useState("");
+  const [scoping, setScoping] = useState("");
   const [all, setAll] = useState(false);
   const reread = () => (setOlder(undefined), void queryClient.invalidateQueries({ queryKey: ["workspace"] }));
   const imports = [...(files.data?.imports ?? []), ...(older?.imports ?? [])];
@@ -167,7 +169,12 @@ export function FilesCard({ client }: { client: string }) {
       </Dialog>
       {open && (
         <Dialog open onClose={() => (setOpen(""), reread())} title="Read the file" description="How the file is read: which row heads it, what each column holds, and how amounts are written.">
-          <ImportReader client={client} id={open} onDone={() => (setOpen(""), reread())} />
+          <ImportReader client={client} id={open} onDone={() => (setOpen(""), reread())} onScope={() => (setOpen(""), setScoping(open))} />
+        </Dialog>
+      )}
+      {scoping && (
+        <Dialog open onClose={() => setScoping("")} title="Scope and basis" description="What the file covers and what basis the export is on, attested of its confirmed reading.">
+          <ImportScope client={client} id={scoping} onClose={() => setScoping("")} />
         </Dialog>
       )}
     </>
@@ -243,7 +250,7 @@ function SendForm({ client, imports, onSent, onCancel }: { client: string; impor
 
 // ImportReader shows a file's first rows, the layout to read it with (proposed, or the one confirmed), a preview of the
 // reading, and, for a reviewer, confirming the layout with a reason.
-function ImportReader({ client, id, onDone }: { client: string; id: string; onDone: () => void }) {
+function ImportReader({ client, id, onDone, onScope }: { client: string; id: string; onDone: () => void; onScope: () => void }) {
   // A CSV is read as the reader reads it until a person chooses another encoding or delimiter.
   const [csv, setCsv] = useState<CSV | undefined>(undefined);
   const read = useQuery({ ...workspaceQuery<ImportRead>(importPath(client, id, csv)), placeholderData: keepPreviousData });
@@ -261,6 +268,7 @@ function ImportReader({ client, id, onDone }: { client: string; id: string; onDo
         csv={csv}
         onCsv={setCsv}
         onDone={onDone}
+        onScope={onScope}
       />
     </>
   );
@@ -274,6 +282,7 @@ function LayoutForm({
   csv,
   onCsv,
   onDone,
+  onScope,
 }: {
   client: string;
   id: string;
@@ -282,6 +291,7 @@ function LayoutForm({
   csv?: CSV;
   onCsv: (csv: CSV) => void;
   onDone: () => void;
+  onScope: () => void;
 }) {
   const [layout, setLayout] = useState<Layout>(
     start ?? { table: data.tables[0]?.name ?? "", header_row: 1, columns: {}, style: { decimal_comma: false, scale: 1 }, as_of: "", currency: "" },
@@ -576,6 +586,11 @@ function LayoutForm({
         <button type="button" onClick={() => void downloadFile()}>
           Download the file
         </button>
+        {data.import.confirmed && (
+          <button type="button" onClick={onScope}>
+            Scope and basis
+          </button>
+        )}
         {data.on !== false && (
           <button type="button" disabled={busy} onClick={() => void act("preview")}>
             {busy ? "Reading…" : "Preview the reading"}
