@@ -255,7 +255,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Lab fees were 9,860.00.", e("t2", 0, "/profit_and_loss/sections/1/lines/0/amount", "9860.00"))
 	reads["t20"] = read(`{"state":"ready","changes":[{"account":"Patient fees","change":"4940.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}]},{"account":"Rent","change":"500.00","changed":[{"name":"Landlord","this_month":"8500.00","last_month":"8300.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
 	rejected("Patient fees rose 4,940.00, driven by new patients at 3,000.00, while rent rose 500.00 from the landlord, the rest unexplained.", "account for 3000.00 of 4940.00",
-		e("t20", 0, "/changes/0/change", "4940.00"), e("t20", 0, "/changes/0/new/0/this_month", "3000.00"), e("t20", 0, "/changes/1/change", "500.00"), e("t20", 0, "/changes/1/changed/0/last_month", "8300.00"))
+		e("t20", 0, "/changes/0/change", "4940.00"), e("t20", 0, "/changes/0/new/0/this_month", "3000.00"), e("t20", 0, "/changes/1/change", "500.00"))
 	reads["t21"] = read(`{"items":[{"label":"Prepaid insurance","amount":"550.00"}]}`, "Drafts", "list_work", "", "")
 	rejected("Prepaid insurance and rent total 9,050.00.", "unknown currency", derived(0, "sum", "9050.00", "t21", "/items/0/amount", "t4", "/lines/0/month/actual"))
 	reads["t22"] = read(`{"state":"ready","currency":"USD","open_items":{"complete":false},"weeks":[{"start":"2026-12-13","receipts":"26400.00"},{"start":"2026-12-20","receipts":"14200.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
@@ -441,6 +441,12 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	// Round twenty-five: an unscheduled balance is an actual, not a forecast.
 	reads["t53"] = read(`{"state":"ready","currency":"USD","opening":{"amount":"64120.00","stale":false},"open_items":{"complete":true},"unscheduled":[{"label":"Invoice #99","amount":"1200.00"}],"weeks":[]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
 	ok("Invoice #99 has an unscheduled balance of 1,200.00.", e("t53", 0, "/unscheduled/0/amount", "1200.00"), e("t53", 0, "/unscheduled/0/label", "Invoice #99"))
+
+	// Round twenty-six: a movement backed by its own measure's change; a reason that names the effect.
+	rejected("Net income rose while revenue changed.", "not a change", e("t2", 0, ni+"/amount", "21780.00"), e("t6", 0, "/rows/0/change", "4940.00"))
+	reads["t54"] = read(`{"publication":{"id":"7","state":"current","reason":"Marketing invoices were coded to rent; corrected."},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00","change":"-500.00"}]}}}`, "Published report", "read_publication", "", "")
+	rejected("Net income fell 500.00 because of marketing.", "cause the reads do not show",
+		e("t54", 0, "/pack/profit_and_loss/measures/0/change", "-500.00"), e("t54", 0, "/publication/reason", "Marketing invoices were coded to rent; corrected."))
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))

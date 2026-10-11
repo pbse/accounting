@@ -853,9 +853,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				bound[i][o.normalized] = true
 			}
 		}
-		changeCited := false
+		changes := []claim{}
 		for _, m := range sentenceMoney[i] {
-			changeCited = changeCited || m.claim.kind == "change"
+			if m.claim.kind == "change" {
+				changes = append(changes, m.claim)
+			}
 		}
 		// "Net income rose to 21,780.00" states a level and a rise: a cited change or prior month of the same line
 		// must show the rise.
@@ -870,7 +872,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 			// A field whose figure the sentence does not state still holds what the sentence says of it.
 			if !used[j] && reasons[j] == "" {
-				if why := figurelessClaim(line, m.claim, m.got, changeCited); why != "" {
+				if why := figurelessClaim(line, m.claim, m.got, changes); why != "" {
 					return nil, why
 				}
 			}

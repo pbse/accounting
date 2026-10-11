@@ -977,8 +977,9 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 				// after the campaign started"); "the campaign raised payroll" supports no claim about revenue.
 				supported = true
 			case claims[i].cause:
+				// A stated reason supports the cause only when it also names the effect claimed.
 				got, _ := valueAt(reads[s.step].value, s.path)
-				supported = supported || sharesWord(cause, got) || labelNamed(cause, claims[i].label)
+				supported = supported || (sharesWord(cause, got) || labelNamed(cause, claims[i].label)) && effectNamed(effect, got, claims)
 			}
 		}
 		if !supported {
@@ -1070,7 +1071,12 @@ func rowGroup(step, path string) string {
 // rose", "cash is available"): the direction is the change's sign, an amount is never said to have moved, book cash is
 // never called available, and a stale read is said to be stale. changeCited says another field of the sentence is a
 // change, which a direction may then describe.
-func figurelessClaim(line string, c claim, got string, changeCited bool) string {
+func figurelessClaim(line string, c claim, got string, changes []claim) string {
+	// A change of this measure: the same line, or the same named metric.
+	changeCited := false
+	for _, ch := range changes {
+		changeCited = changeCited || strings.EqualFold(ch.label, c.label) || overlaps(ch.keys, c.keys)
+	}
 	lower := strings.ToLower(line)
 	// The directions said of this field: those in the clauses that name it ("revenue rose while expenses fell"),
 	// else the sentence's.
