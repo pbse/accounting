@@ -22,11 +22,14 @@ export function ReviewDecision({
   paperId,
   onChange,
   autoLoad = false,
+  payroll = false,
 }: {
   closeId: string;
   paperId: string;
   onChange: () => void;
   autoLoad?: boolean;
+  // A payroll recording is approved only with both of its confirmations, which the reviewer gives here.
+  payroll?: boolean;
 }) {
   const dates = useDates();
   // The decision, the comparison with the previous version and what changed since the last review: read with the page
@@ -43,6 +46,8 @@ export function ReviewDecision({
   const comparison = changes.data;
   const since = sinceReview.data;
   const [note, setNote] = useState("");
+  const [finalSummary, setFinalSummary] = useState(false);
+  const [notBooked, setNotBooked] = useState(false);
   const [actionError, setError] = useState("");
   const readFailed = decision.error ?? changes.error ?? sinceReview.error;
   const error = actionError || (readFailed ? readFailed.message || "Review unavailable." : "");
@@ -63,8 +68,11 @@ export function ReviewDecision({
         note,
         digest: review.digest,
         expected_review_id: review.review_id,
+        ...(payroll && decision === "approved" ? { attestations: ["final_approved_summary", "not_already_booked"] } : {}),
       });
       setNote("");
+      setFinalSummary(false);
+      setNotBooked(false);
       onChange();
       if (autoLoad) void load();
     } catch (e) {
@@ -197,14 +205,21 @@ export function ReviewDecision({
               placeholder="Explain what you checked or what needs changing."
             />
           </label>
+          {payroll && (
+            <fieldset>
+              <legend>Approving this payroll recording, I confirm:</legend>
+              <label><input type="checkbox" checked={finalSummary} onChange={(e) => setFinalSummary(e.target.checked)} /> The summary is the provider's final, approved payroll for the stated pay dates, not a preview.</label>
+              <label><input type="checkbox" checked={notBooked} onChange={(e) => setNotBooked(e.target.checked)} /> This payroll is not already booked in the ledger.</label>
+            </fieldset>
+          )}
           <div className="export-actions">
             <button
               disabled={
-                busy || !note.trim() || review.state === "source_changed"
+                busy || !note.trim() || review.state === "source_changed" || (payroll && !(finalSummary && notBooked))
               }
               onClick={() => void decide("approved")}
             >
-              Approve workpaper
+              {payroll ? "Approve payroll recording" : "Approve workpaper"}
             </button>
             <button
               disabled={busy || !note.trim()}

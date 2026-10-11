@@ -40,7 +40,7 @@ func draftApproved(ctx context.Context, tx *sql.Tx, closeID, paperID string, act
 	if !approving || state != "pending" || !slices.Contains(actor.Permissions, "workpapers:review") {
 		return 409, "A current accountant-approved workpaper is required. Approving a posting approves its pending draft only for someone who can review drafts."
 	}
-	_, status, message := decideReview(ctx, tx, closeID, paperID, actor.Subject, "approved", "Approved together with its posting.", digest, reviewID, false)
+	_, status, message := decideReview(ctx, tx, closeID, paperID, actor.Subject, "approved", "Approved together with its posting.", digest, reviewID, false, nil)
 	return status, message
 }
 

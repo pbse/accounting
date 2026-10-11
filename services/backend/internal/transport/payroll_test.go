@@ -2,6 +2,8 @@ package transport
 
 import (
 	"bytes"
+	"close.local/backend/internal/preparation"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -107,6 +109,65 @@ func TestPayrollDraftsNeedTheFirmsPayrollProcedure(t *testing.T) {
 	evidence("Gusto amended payroll register for September 2026: gross wages corrected")
 	if s := state(); s != "source_changed" {
 		t.Fatalf("an amended summary from the draft's provider reopens its review: %s", s)
+	}
+	// Through the preparation worker the draft carries its checks; it is approved only with both confirmations, given by
+	// the reviewer and recorded with the exact summary and ledger evidence. A second draft for the same pay dates is a
+	// duplicate, which blocks it.
+	evidenceRow := func(name, content string) preparation.Source {
+		t.Helper()
+		var id string
+		if err := db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,$2,$3,$4,'fixture','ready') RETURNING id::text`, closeID, name, preparation.Digest([]byte(content)), content).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return preparation.Source{ID: id, Digest: preparation.Digest([]byte(content)), Name: name, Location: "page 1"}
+	}
+	if _, err = db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, closeID); err != nil {
+		t.Fatal(err)
+	}
+	summary, page := evidenceRow("Gusto September summary.pdf", "Gusto payroll summary September 2026"), evidenceRow("Payroll clearing ledger.pdf", "Payroll clearing September 2026")
+	summary.Role, page.Role = "support", "ledger"
+	prepare := func() (string, string) {
+		t.Helper()
+		raw, _ := json.Marshal(input)
+		plans, _ := json.Marshal([]preparation.Plan{{Kind: "payroll", Input: raw, Sources: []preparation.Source{summary, page}}})
+		var job, paper string
+		if err := db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,'fixture') RETURNING id::text`, closeID, preparation.Digest(append(plans, rand.Text()...)), string(plans)).Scan(&job); err != nil {
+			t.Fatal(err)
+		}
+		if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
+			t.Fatal("the payroll job was not processed", e)
+		}
+		if err := db.QueryRow(`SELECT COALESCE(workpaper_ids->>0,'') FROM preparation_jobs WHERE id::text=$1`, job).Scan(&paper); err != nil || paper == "" {
+			t.Fatal("no payroll draft", err)
+		}
+		var checks string
+		db.QueryRow(`SELECT paper->'checks'::text FROM workpapers WHERE id::text=$1`, paper).Scan(&checks)
+		return paper, checks
+	}
+	first, checks := prepare()
+	if !strings.Contains(checks, `"No other draft"`) || !strings.Contains(checks, `"unavailable"`) {
+		t.Fatalf("the draft carries its checks, saying what the records cannot answer: %s", checks)
+	}
+	review := func(paper string, attestations []string, want int) []byte {
+		t.Helper()
+		var digest, reviewID string
+		if err := db.QueryRow(`SELECT digest,review_id FROM workpaper_review_state WHERE id::text=$1`, paper).Scan(&digest, &reviewID); err != nil {
+			t.Fatal(err)
+		}
+		return call("/v1/closes/"+closeID+"/workpapers/"+paper+"/reviews", map[string]any{"decision": "approved", "note": "Payroll checked", "digest": digest, "expected_review_id": reviewID, "attestations": attestations}, want)
+	}
+	if body := review(first, []string{"final_approved_summary"}, 409); !strings.Contains(string(body), "not already booked") {
+		t.Fatalf("a payroll recording needs both confirmations: %s", body)
+	}
+	review(first, []string{"final_approved_summary", "not_already_booked"}, 200)
+	var attested string
+	if err = db.QueryRow(`SELECT attestations::text FROM workpaper_reviews WHERE workpaper_id::text=$1 ORDER BY id DESC LIMIT 1`, first).Scan(&attested); err != nil || !strings.Contains(attested, `"id": "`+summary.ID+`"`) || !strings.Contains(attested, `"id": "`+page.ID+`"`) {
+		t.Fatalf("the confirmations are recorded with the exact summary and ledger page: %s %v", attested, err)
+	}
+	second, _ := prepare()
+	var blockers string
+	if err = db.QueryRow(`SELECT paper->'blockers'::text FROM workpapers WHERE id::text=$1`, second).Scan(&blockers); err != nil || !strings.Contains(blockers, "Draft #"+first+" already records Gusto payroll") {
+		t.Fatalf("a second draft for the same pay dates is a duplicate: %s %v", blockers, err)
 	}
 	if paperKey("payroll", json.RawMessage(`{"input":{"provider":"Gusto","source_reference":"Sep summary"}}`)) != paperKey("payroll", json.RawMessage(`{"input":{"provider":" gusto","source_reference":"Sep summary, corrected"}}`)) {
 		t.Fatal("a corrected summary replaces the provider's payroll for the month, whatever its title")

@@ -110,7 +110,7 @@ func TestTheClientsBasisDecidesWhichWorkCanBeSavedAndApproved(t *testing.T) {
 	}
 	tx, _ := db.Begin()
 	defer tx.Rollback()
-	if _, status, message := decideReview(ctx, tx, closeID, paperID, "user_reviewer", "approved", "Synthetic approval", "earlier", "", false); status != 409 || !strings.Contains(message, "cash basis") {
+	if _, status, message := decideReview(ctx, tx, closeID, paperID, "user_reviewer", "approved", "Synthetic approval", "earlier", "", false, nil); status != 409 || !strings.Contains(message, "cash basis") {
 		t.Fatalf("an accrual saved before the basis change must not be approved: %d %s", status, message)
 	}
 	tx.Rollback()

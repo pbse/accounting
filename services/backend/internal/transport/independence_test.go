@@ -71,7 +71,7 @@ func TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance(t *testing.
 			t.Fatal(e)
 		}
 		defer tx.Rollback()
-		_, status, message := decideReview(context.Background(), tx, closeID, paperID, approver, "approved", "Synthetic independence check", digest, "", false)
+		_, status, message := decideReview(context.Background(), tx, closeID, paperID, approver, "approved", "Synthetic independence check", digest, "", false, nil)
 		if status == 0 && tx.Commit() != nil {
 			t.Fatal("commit failed")
 		}

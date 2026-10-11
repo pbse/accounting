@@ -47,8 +47,6 @@ func TestPayrollRecordsTheSummaryTiedToCashAndLiabilities(t *testing.T) {
 		"expense is the clearing":   func(in *Input) { in.WageAccount = "Payroll clearing" },
 		"no pay":                    func(in *Input) { in.NetPay = "0.00" },
 		"other method":              func(in *Input) { in.Method = "payroll_run_v1" },
-		"summary not approved":      func(in *Input) { in.ApprovedConfirmed = false },
-		"payroll may be booked":     func(in *Input) { in.NotBookedConfirmed = false },
 	} {
 		in := summary()
 		change(&in)
