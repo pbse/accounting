@@ -3,6 +3,7 @@ package transport
 import (
 	"archive/zip"
 	"bytes"
+	"close.local/backend/internal/preparation"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -47,7 +48,8 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM books_versions WHERE organization_id=$1`, `DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM books_sources WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
+			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM coverage_bindings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_versions WHERE organization_id=$1`, `DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM books_sources WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
 			`DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
 			`DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
 			`DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`,
@@ -336,6 +338,44 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	budget := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/budget", nil, 200)
 	if accounts := budget["accounts"].([]any); len(accounts) != 2 || budget["reason"] == "Capture this month's QuickBooks period snapshot or Xero Trial Balance first." {
 		t.Fatalf("January's budget from its file: %v", budget)
+	}
+	// Its coverage is the file's accounts: the bank to reconcile, the rest for review, decided on the file's books.
+	coverage := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/coverage", nil, 200)["coverage"].(map[string]any)
+	kinds := map[string]string{}
+	for _, raw := range coverage["items"].([]any) {
+		item := raw.(map[string]any)
+		kinds[item["account_id"].(string)] = item["kind"].(string)
+	}
+	if !strings.HasPrefix(coverage["snapshot_id"].(string), "file:") || len(kinds) != 4 || kinds["n:1000"] != "reconciliation" || kinds["n:3000"] != "accountant_review" {
+		t.Fatalf("January's coverage from its file: %v", coverage)
+	}
+	call("user_a", partner, "POST", "/v1/closes/"+januaryClose+"/coverage", map[string]any{"action": "bind", "digest": coverage["digest"], "account_id": "n:3000", "excluded": true, "reason": "Equity is reviewed at year end", "confirmed": true}, 200)
+	var bound int
+	must(db.QueryRow(`SELECT count(*) FROM coverage_bindings WHERE close_id::text=$1 AND file_version_id IS NOT NULL AND account_id='n:3000' AND excluded`, januaryClose).Scan(&bound))
+	if bound != 1 {
+		t.Fatalf("a coverage decision on the file's books: %d", bound)
+	}
+	coverage = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/coverage", nil, 200)["coverage"].(map[string]any)
+	for _, raw := range coverage["items"].([]any) {
+		if item := raw.(map[string]any); item["account_id"] == "n:3000" && item["state"] != "excluded" {
+			t.Fatalf("the decision holds on the file's books: %v", item)
+		}
+	}
+	// A request for the bank's statement, made on the file's books, stays current and waits on the client.
+	call("user_a", partner, "POST", "/v1/closes/"+januaryClose+"/coverage", map[string]any{"action": "request", "digest": coverage["digest"], "accounts": []string{"n:1000"}, "recipient": "client@example.com", "body": "Please send January's bank statement.", "confirmed": true}, 200)
+	var current, waiting bool
+	must(db.QueryRow(`SELECT EXISTS(SELECT 1 FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id::text=$1 AND `+preparation.RequestCoverageIsCurrent+`)`, januaryClose).Scan(&current))
+	must(db.QueryRow(`SELECT EXISTS(SELECT 1 FROM client_closes c WHERE c.id::text=$1 AND `+waitingStatements+`)`, januaryClose).Scan(&waiting))
+	if !current || !waiting {
+		t.Fatalf("a statement request on the file's books: current %v, waiting %v", current, waiting)
+	}
+	// Accepted again, the month's new books version keeps the exclusion, carried from the earlier one.
+	januaryAccepted = call("user_a", partner, "POST", januaryPath, with(januaryRead, map[string]any{"exported_on": "2026-10-05"}), 200)["id"].(string)
+	again := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/coverage", nil, 200)["coverage"].(map[string]any)
+	for _, raw := range again["items"].([]any) {
+		if item := raw.(map[string]any); item["account_id"] == "n:3000" && (again["snapshot_id"] == coverage["snapshot_id"] || item["state"] != "excluded" || !strings.HasPrefix(item["reason"].(string), "Carried from an earlier capture")) {
+			t.Fatalf("an exclusion carries to the file's new books: %v %v", again["snapshot_id"], item)
+		}
 	}
 	// Without the month's activity, the profit and loss is unavailable, never zero.
 	_, err = db.Exec(`UPDATE books_versions SET activity='{}',activity_unavailable='a column with the month''s movement' WHERE close_id::text=$1`, januaryClose)

@@ -124,12 +124,12 @@ func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageV
 	carried := map[string]string{}
 	// Only a decision on the same ledger company counts: another company (a sandbox, another file) may give the same
 	// account ID to a different account.
-	rows, err = tx.QueryContext(ctx, `WITH cur(q,x) AS (SELECT `+captureColumns("$2")+`)
+	rows, err = tx.QueryContext(ctx, `WITH cur(q,x,f) AS (SELECT `+captureColumns("$2")+`)
  SELECT DISTINCT ON (b.account_id) b.account_id,b.excluded,b.reason,CASE WHEN c.id=me.id THEN '' ELSE c.period END
  FROM coverage_bindings b JOIN client_closes c ON c.id=b.close_id JOIN client_closes me ON me.id=$1 CROSS JOIN cur
  WHERE c.organization_id=me.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(me.organization_id,me.entity)
  AND (c.id=me.id AND `+bindingCapture("b")+`<>$2 OR c.period<me.period)
- AND `+captureCompany("b.snapshot_id", "b.xero_snapshot_id")+`=`+captureCompany("cur.q", "cur.x")+`
+ AND `+captureCompany("b.snapshot_id", "b.xero_snapshot_id", "b.file_version_id")+`=`+captureCompany("cur.q", "cur.x", "cur.f")+`
  ORDER BY b.account_id,c.period DESC,b.id DESC`, closeID, out.SnapshotID)
 	if err != nil {
 		return out, err
@@ -356,7 +356,7 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 			if in.Jobs == nil {
 				ids = []byte("[]")
 			}
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO coverage_bindings(close_id,snapshot_id,xero_snapshot_id,account_id,job_ids,excluded,reason,actor) VALUES($1,`+captureColumns("$2")+`,$3,$4,$5,$6,$7)`, closeID, view.SnapshotID, in.AccountID, string(ids), in.Excluded, in.Reason, actor)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO coverage_bindings(close_id,snapshot_id,xero_snapshot_id,file_version_id,account_id,job_ids,excluded,reason,actor) VALUES($1,`+captureColumns("$2")+`,$3,$4,$5,$6,$7)`, closeID, view.SnapshotID, in.AccountID, string(ids), in.Excluded, in.Reason, actor)
 		case "request":
 			recipient, e := mail.ParseAddress(strings.TrimSpace(in.Recipient))
 			if e != nil || recipient.Address != strings.TrimSpace(in.Recipient) || len(in.Recipient) > 254 || len(strings.TrimSpace(in.Body)) == 0 || len(in.Body) > 20000 || len(in.Accounts) == 0 || len(in.Accounts) > 20 {
@@ -445,8 +445,9 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// captureCompany is SQL for the ledger company of a capture, given its QuickBooks and Xero snapshot ID expressions.
-func captureCompany(quickbooksSnapshot, xeroSnapshot string) string {
+// captureCompany is SQL for the ledger company of a capture, given its QuickBooks, Xero and files books version ID
+// expressions. A client's files are one company: its account map keys their accounts alike.
+func captureCompany(quickbooksSnapshot, xeroSnapshot, fileVersion string) string {
 	return `COALESCE((SELECT 'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id=` + quickbooksSnapshot + `),
- (SELECT 'xero:'||s.tenant_id FROM xero_snapshots s WHERE s.id=` + xeroSnapshot + `))`
+ (SELECT 'xero:'||s.tenant_id FROM xero_snapshots s WHERE s.id=` + xeroSnapshot + `),(SELECT 'files' FROM books_versions v WHERE v.id=` + fileVersion + `))`
 }

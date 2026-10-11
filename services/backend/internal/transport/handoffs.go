@@ -483,7 +483,7 @@ func registerHandoffs(mux *http.ServeMux, db *sql.DB) {
 			document, snapshot = "coverage for "+progress.accounts.Items[i].Name, progress.accounts.SnapshotID
 		}
 		var id string
-		switch err = tx.QueryRowContext(r.Context(), `INSERT INTO goal_handoffs(goal_id,job_id,account_id,snapshot_id,xero_snapshot_id,document,assignee,assignee_name,via_grant,note,created_by) VALUES($1,NULLIF($2,'')::bigint,NULLIF($3,''),`+captureColumns("$4")+`,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, g.id, in.JobID, in.AccountID, snapshot, document, to.Subject, to.Name, to.viaGrant, in.Note, actor).Scan(&id); err {
+		switch err = tx.QueryRowContext(r.Context(), `INSERT INTO goal_handoffs(goal_id,job_id,account_id,snapshot_id,xero_snapshot_id,file_version_id,document,assignee,assignee_name,via_grant,note,created_by) VALUES($1,NULLIF($2,'')::bigint,NULLIF($3,''),`+captureColumns("$4")+`,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, g.id, in.JobID, in.AccountID, snapshot, document, to.Subject, to.Name, to.viaGrant, in.Note, actor).Scan(&id); err {
 		case nil:
 		case sql.ErrNoRows:
 			var holder string

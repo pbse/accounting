@@ -164,17 +164,25 @@ func SourceAllows(closeExpr, provider string) string {
 // requestCapture is SQL over work_requests q and request_drafts d: a consolidated request's ledger capture is still the
 // close's books' capture, chosen as coverage chooses it (transport's ledgerCoverage), of the month's source: the latest
 // QuickBooks period capture of the connection the books are read from, unless the latest Xero capture, named
-// "xero:<id>", is newer. A QuickBooks capture also needs its current
+// "xero:<id>", is newer; for a month whose books are its files, the books version of its newest current acceptance,
+// named "file:<id>". A QuickBooks capture also needs its current
 // source and an active connection; a Xero capture, an active connection.
-const requestCapture = `q.coverage_scope->>'snapshot_id'=(SELECT CASE WHEN xs.id IS NOT NULL AND (qs.id IS NULL OR xs.captured_at>qs.captured_at) THEN 'xero:'||xs.id ELSE qs.id::text END
+const requestCapture = `q.coverage_scope->>'snapshot_id'=COALESCE(` + filesCapture + `,(SELECT CASE WHEN xs.id IS NOT NULL AND (qs.id IS NULL OR xs.captured_at>qs.captured_at) THEN 'xero:'||xs.id ELSE qs.id::text END
   FROM (SELECT 1) one LEFT JOIN LATERAL (SELECT s.id,s.captured_at FROM quickbooks_snapshots s WHERE s.close_id=d.close_id AND s.payload ? 'period'
    AND s.connection_id=COALESCE(` + quickbooks.ReadingConnectionBefore + `s.close_id` + quickbooks.ReadingConnectionAfter + `,s.connection_id) AND COALESCE((SELECT books_source(sc.organization_id,sc.entity,sc.period) FROM client_closes sc WHERE sc.id=s.close_id),'newest') IN ('newest','quickbooks') ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) qs ON true
-  LEFT JOIN LATERAL (SELECT id,captured_at FROM xero_snapshots WHERE close_id=d.close_id AND COALESCE((SELECT books_source(sc.organization_id,sc.entity,sc.period) FROM client_closes sc WHERE sc.id=d.close_id),'newest') IN ('newest','xero') ORDER BY captured_at DESC,xero_snapshots.id DESC LIMIT 1) xs ON true)
- AND (EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')
+  LEFT JOIN LATERAL (SELECT id,captured_at FROM xero_snapshots WHERE close_id=d.close_id AND COALESCE((SELECT books_source(sc.organization_id,sc.entity,sc.period) FROM client_closes sc WHERE sc.id=d.close_id),'newest') IN ('newest','xero') ORDER BY captured_at DESC,xero_snapshots.id DESC LIMIT 1) xs ON true))
+ AND (starts_with(q.coverage_scope->>'snapshot_id','file:') OR EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')
   OR EXISTS(SELECT 1 FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE 'xero:'||s.id=q.coverage_scope->>'snapshot_id' AND x.state='active'))`
 
+// filesCapture is SQL naming request q's close's capture when its books are its files: "file:" and the books version of
+// the month's newest acceptance on its file's latest reading and scope (transport's fileMonthBooks); null otherwise.
+const filesCapture = `(SELECT 'file:'||v.id FROM client_closes fc JOIN books_import_acceptances a ON a.organization_id=fc.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(fc.organization_id,fc.entity) AND a.period=fc.period
+  JOIN books_versions v ON v.source='files' AND v.source_id=a.id::text AND v.close_id=fc.id
+  WHERE fc.id=d.close_id AND books_source(fc.organization_id,fc.entity,fc.period)='files' AND a.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=fc.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(fc.organization_id,fc.entity) AND b.period=fc.period
+   AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id)))`
+
 // requestBindings is each binding b a consolidated request q approved, with its account's newest binding cur.
-const requestBindings = `jsonb_array_elements(q.coverage_scope->'bindings') b LEFT JOIN LATERAL (SELECT c.id::text AS id,c.excluded,c.job_ids FROM coverage_bindings c WHERE c.close_id=d.close_id AND COALESCE('xero:'||c.xero_snapshot_id,c.snapshot_id::text)=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1) cur ON true`
+const requestBindings = `jsonb_array_elements(q.coverage_scope->'bindings') b LEFT JOIN LATERAL (SELECT c.id::text AS id,c.excluded,c.job_ids FROM coverage_bindings c WHERE c.close_id=d.close_id AND COALESCE('xero:'||c.xero_snapshot_id,'file:'||c.file_version_id,c.snapshot_id::text)=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1) cur ON true`
 
 // RequestCoverageIsCurrent is SQL over work_requests q and request_drafts d: a consolidated request is still on its
 // close's latest ledger capture, with a current source and active connection, and every binding is the current one.

@@ -1,13 +1,17 @@
 package transport
 
 import (
+	"close.local/backend/internal/quickbooks"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"maps"
+	"slices"
 	"strings"
+	"time"
 )
 
 // Months on files (docs/books-sources.md, One authoritative books version per month; delivery step 9, first part): a
@@ -272,4 +276,40 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 // basisTitle is a basis as the pack names it: Accrual, Cash or Modified cash.
 func basisTitle(basis string) string {
 	return map[string]string{"accrual": "Accrual", "cash": "Cash", "modified_cash": "Modified cash"}[basis]
+}
+
+// fileCoverage is a month on files' coverage, as ledgerCoverage gives a capture's: each account of its accepted file's
+// books with the evidence it needs, by the type the account map gives it (a bank or card account is reconciled; a
+// prepaid or accrued account gets its proposal; any other, an accountant's review). Its capture is "file:" and the books
+// version; null while the month has none.
+func fileCoverage(ctx context.Context, q rowReader, closeID string) (json.RawMessage, error) {
+	b, month, err := fileMonthBooks(ctx, q, closeID)
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return json.RawMessage("null"), nil
+	}
+	var digest, period string
+	var at time.Time
+	if err = q.QueryRowContext(ctx, `SELECT digest,period,captured_at FROM books_versions WHERE id::text=$1`, month.Version).Scan(&digest, &period, &at); err != nil {
+		return nil, err
+	}
+	items := []quickbooks.CoverageItem{}
+	for _, key := range slices.Sorted(maps.Keys(b.Accounts)) {
+		a := b.Accounts[key]
+		name := strings.ToLower(a.Name)
+		kind := "accountant_review"
+		switch {
+		case a.Type == "Bank" || a.Type == "Credit Card":
+			kind = "reconciliation"
+		case a.Type == "Other Current Asset" && strings.Contains(name, "prepaid"):
+			kind = "prepaid"
+		case a.Type == "Other Current Liability" && strings.Contains(name, "accru"):
+			kind = "accrual"
+		}
+		items = append(items, quickbooks.NewCoverageItem(key, a.Name, kind, month.File+": "+key))
+	}
+	return json.Marshal(map[string]any{"source": "files", "snapshot_id": fileCapture + month.Version, "digest": digest, "source_id": month.Acceptance, "period": period,
+		"captured_at": at.UTC(), "items": items, "stale": false})
 }
