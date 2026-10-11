@@ -86,8 +86,8 @@ export function Exceptions({ closeId }: { closeId: string }) {
       {copied && <p role="status">{copied}</p>}
       {!scan.capture && balances.snapshot?.source === "files" ? (
         <p className="empty">
-          This month's books are its accepted file, a Trial Balance without transactions: its balances are checked below. Its transactions are
-          checked once the month's ledger lines are read from a file.
+          This month's books are its accepted file, a Trial Balance without transactions. Its transactions are checked once the month's ledger
+          lines are read from a file; its balances are under Balances to review.
         </p>
       ) : !scan.capture ? (
         <p className="empty">
