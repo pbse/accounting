@@ -4447,3 +4447,13 @@ The user decided Claude owns slice 6's commands, fixtures, runs, result capture,
 
 Run here (revision before this change's merge, local PostgreSQL, no credentials): providers all dependencies; acceptance with recorded answers passed; acceptance with the live model and the golden-set replay recorded as dependencies (models not configured). `TestTheOCRPageIsAPNGGeminiAccepts` checks the rendered page, and its image was inspected by eye as legible. No live model, provider or accountant result is claimed.
 
+## 2026-10-11 — Acceptance corpus: specifications, more methods, and the accounting-review package (B12)
+
+Slice 6 owes fixtures with independently specified expected results and a concrete accounting-review package. Added:
+- **Treatment specifications.** Every sample case has a `spec.md`: the method and how each expected value is derived by hand.
+- **Three read-and-asked cases.** An accrual for a service not yet invoiced, a Gusto payroll summary that ties, and a lender's loan statement. Each is read exactly and put to a person, never drafted alone.
+- **`cmd/acceptance -review`.** It writes the accounting-review package: each case's specification, every expected fact and draft beside the app's, readiness, critical findings, and where the accountant confirms or corrects each value, judges the result and records minutes. Every case is marked builder-specified until the accountant confirms it.
+
+Run here (local PostgreSQL, recorded answers): ten cases, no critical failures, nothing unprocessed. Accrual, payroll and loan each scored 1 document, abstained 1. Prepaid tallies were unchanged. `TestTheSampleCorpusRunsThroughThePipeline` asserts the new tallies, and `TestTheReviewPackageSetsExpectedBesideObservedForTheAccountant` covers the package.
+
+Labels are the builder's. Drafts for accruals, payroll, loans and the other methods are not yet scored, because the harness sets up only the prepaid procedure. No live model run or accountant confirmation is claimed.

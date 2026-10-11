@@ -1,0 +1,37 @@
+{
+ "kind": "accrual",
+ "summary": "September cleaning received, not yet invoiced",
+ "questions": [],
+ "sources": [
+  {
+   "id": "$primary",
+   "role": "invoice"
+  }
+ ],
+ "facts": [
+  {
+   "field": "amount",
+   "value": "850.00",
+   "source_id": "$primary",
+   "quote": "Monthly fee USD 850.00"
+  },
+  {
+   "field": "currency",
+   "value": "USD",
+   "source_id": "$primary",
+   "quote": "Monthly fee USD 850.00"
+  },
+  {
+   "field": "service_start",
+   "value": "2026-09-01",
+   "source_id": "$primary",
+   "quote": "Service period 2026-09-01 to 2026-09-30"
+  },
+  {
+   "field": "service_end",
+   "value": "2026-09-30",
+   "source_id": "$primary",
+   "quote": "Service period 2026-09-01 to 2026-09-30"
+  }
+ ]
+}

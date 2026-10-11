@@ -15,6 +15,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"close.local/backend/internal/acceptance"
 	"close.local/backend/internal/llm"
@@ -27,6 +28,7 @@ func main() {
 	database := flag.String("database", os.Getenv("ACCEPTANCE_DATABASE_URL"), "a local, migrated PostgreSQL database holding no closes")
 	model := flag.String("model", "recorded", "recorded: replay each document's recorded answer; live: the model configured in the environment")
 	reportPath := flag.String("report", "", "write the full report, with every observation, as JSON here")
+	reviewPath := flag.String("review", "", "write the accounting-review package (Markdown) for the independent accountant here")
 	organization := flag.String("organization", "", "run every case as a close of this firm, as the person -subject; for a live Context Machine run, the firm and person its access profile serves")
 	subject := flag.String("subject", "", "the person the cases are worked as, with -organization")
 	flag.Parse()
@@ -95,6 +97,12 @@ func main() {
 	if *reportPath != "" {
 		raw, _ := json.MarshalIndent(report, "", " ")
 		if err = os.WriteFile(*reportPath, raw, 0o600); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if *reviewPath != "" {
+		run := fmt.Sprintf("Run of %s with %s model answers, %s.", *corpus, *model, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+		if err = os.WriteFile(*reviewPath, []byte(acceptance.ReviewPackage(cases, report, run)), 0o600); err != nil {
 			log.Fatal(err)
 		}
 	}

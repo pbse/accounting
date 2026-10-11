@@ -1,0 +1,73 @@
+{
+ "kind": "payroll",
+ "summary": "Gusto payroll for September",
+ "questions": [],
+ "sources": [
+  {
+   "id": "$primary",
+   "role": "support"
+  }
+ ],
+ "facts": [
+  {
+   "field": "provider",
+   "value": "Gusto",
+   "source_id": "$primary",
+   "quote": "Gusto payroll summary"
+  },
+  {
+   "field": "first_pay_date",
+   "value": "2026-09-15",
+   "source_id": "$primary",
+   "quote": "Pay dates 2026-09-15 and 2026-09-30"
+  },
+  {
+   "field": "last_pay_date",
+   "value": "2026-09-30",
+   "source_id": "$primary",
+   "quote": "Pay dates 2026-09-15 and 2026-09-30"
+  },
+  {
+   "field": "gross_wages",
+   "value": "10000.00",
+   "source_id": "$primary",
+   "quote": "Gross wages USD 10,000.00"
+  },
+  {
+   "field": "employee_taxes",
+   "value": "1500.00",
+   "source_id": "$primary",
+   "quote": "Employee taxes USD 1,500.00"
+  },
+  {
+   "field": "employee_deductions",
+   "value": "500.00",
+   "source_id": "$primary",
+   "quote": "Employee deductions USD 500.00"
+  },
+  {
+   "field": "net_pay",
+   "value": "8000.00",
+   "source_id": "$primary",
+   "quote": "Net pay USD 8,000.00"
+  },
+  {
+   "field": "employer_taxes",
+   "value": "765.00",
+   "source_id": "$primary",
+   "quote": "Employer taxes USD 765.00"
+  },
+  {
+   "field": "employer_contributions",
+   "value": "0.00",
+   "source_id": "$primary",
+   "quote": "Employer contributions USD 0.00"
+  },
+  {
+   "field": "provider_debits",
+   "value": "10265.00",
+   "source_id": "$primary",
+   "quote": "Total debited from your bank USD 10,265.00"
+  }
+ ]
+}

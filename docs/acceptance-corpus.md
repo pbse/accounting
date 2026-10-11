@@ -8,14 +8,15 @@ The release corpus required by the [build plan's accuracy contract](agent-first-
   - `services/backend/internal/acceptance`: the case format, scoring and report.
   - `transport.RunAcceptanceCase`: loads a case and drives the pipeline.
   - `cmd/acceptance`: the command line.
-- **A synthetic sample** in `services/backend/acceptance/sample`. It has seven cases with recorded answers:
+- **A synthetic sample** in `services/backend/acceptance/sample`. It has ten cases with recorded answers, each with its written treatment specification:
   - one goes through alone and, once approved, leaves the close ready;
   - one is asked about a wrong reading;
   - one is held as the wrong client;
   - one is asked about for want of a ledger capture;
   - one has a held document that keeps an approved close from being ready;
   - one has a Trial Balance that would not tie with its draft, so its approved close is blocked;
-  - one uploads the same invoice twice.
+  - one uploads the same invoice twice;
+  - an accrual for a service not yet invoiced, a payroll summary and a loan statement are each read exactly and put to a person, never drafted alone.
 
   `TestTheSampleCorpusRunsThroughThePipeline` keeps it, and the harness, working.
 - **The agent chat's golden set** in `services/backend/acceptance/agent`: forty questions over the sample cases and twenty off-scope prompts, with the reads recorded for replay, run by `cmd/agent-eval` ([agent-chat.md](agent-chat.md), "Evaluation and acceptance").
@@ -65,6 +66,7 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
     Other problems the plan requires (an OCR decimal error, missing pages, conflicting totals) are added to `acceptance.Exceptions` with their sign as the app learns to report them. Until then, a case can still label the facts and drafts of such a document.
 - **`signoff`.** The accountant's part once the agent is done, applied after the pipeline settles and recorded as "acceptance reviewer". With `approve_drafts`, every current draft is approved. `coverage` gives the accountant's answer to each account the capture asks about: the documents whose work supports it, or the reason it is excluded. An account left unanswered keeps blocking sign-off. The scope is defined as covering every draft. Readiness is then read as sign-off reads it. Without `signoff`, nothing defines the scope, so the close is never ready: a case with `expect_ready` true and no `signoff` is refused.
 - **`expect_ready`.** Whether the accountant's label says the close may be signed off once that is done.
+- **`spec.md`** (beside `case.json`). The treatment specification: the method, and how each expected value is derived by hand (rounding, dates, signs). The independent accountant confirms or corrects it in the review package; until then the case's labels are the builder's.
 - **`selection`.** A recorded evidence-selection answer, `{"selected_ids": ["$primary", "$source:<file>"]}`. It is needed only when the close is too large to read whole: more than 20 sources, or 128 KiB of text. The model then first chooses what to read with this document; without a recorded selection, that document's job fails and the run reports it as not processed, with the reason.
 - **`model`.** A recorded answer, in the model's answer shape. `"$primary"` stands for this document's evidence ID, and `"$source:<file>"` for another document's. Its quotes must be lines of the document, as a real reading's are.
 
@@ -83,7 +85,7 @@ go run ./cmd/acceptance -corpus ../path/to/corpus -database postgres://…@127.0
 - **Firm.** By default each case is a firm of its own, worked as "acceptance" and disabled afterwards. Context Machine reads only for the firm and person its access profile serves (`CONTEXT_MACHINE_PROFILES`). A live run through it therefore passes `-organization org_… -subject …` with that firm and person, and every case becomes a close of that one firm. A client has one close a month and one ledger connection there, so no two cases may share a client; the command refuses such a corpus. Run those cases separately, each on a fresh database. Each case's unfinished jobs are cancelled once it has been observed.
 - **PDFs** need `pdftotext`, `pdfinfo` and `tesseract`. Run PDF cases where those exist, such as the [release-check image](operations.md#release-revision-check).
 
-The command prints a Markdown report. It exits 1 on any critical failure, and on any document the pipeline never decided on, since the run has not evaluated it. Abstentions and expected-ready closes still blocked do not fail a run. They are reported with their denominators for the coverage and effort gates, where a uselessly high rate cannot pass. `-report` writes the full report as JSON, including every document's observed outcome.
+The command prints a Markdown report. It exits 1 on any critical failure, and on any document the pipeline never decided on, since the run has not evaluated it. Abstentions and expected-ready closes still blocked do not fail a run. They are reported with their denominators for the coverage and effort gates, where a uselessly high rate cannot pass. `-report` writes the full report as JSON, including every document's observed outcome. `-review` writes the accounting-review package ([slice 6 evidence](slice6-evidence.md)): for each case, its specification, every expected fact and draft beside the app's, readiness, the critical findings, and where the accountant confirms or corrects each value, judges the result and records minutes spent. Every case is marked builder-specified until the accountant confirms it.
 
 ## What is scored
 
@@ -120,4 +122,4 @@ This first version exercises document intake, reading, preparation, drafts and c
 - a hidden payroll shortfall;
 - a worker restart.
 
-Straight-through preparation in a case needs the prepaid procedure and the QuickBooks capture above. Other work types are read and put to a person.
+Straight-through preparation in a case needs the prepaid procedure and the QuickBooks capture above. Other work types are read and put to a person, so their cases score the reading, not drafts. Their drafts (and the reconciliation, depreciation, deferred revenue, owner and settlement methods) are scored once the harness can set up their procedures and ledger evidence, as the release corpus needs.

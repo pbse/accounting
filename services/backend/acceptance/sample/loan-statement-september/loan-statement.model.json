@@ -1,0 +1,43 @@
+{
+ "kind": "loan",
+ "summary": "September loan statement",
+ "questions": [],
+ "sources": [
+  {
+   "id": "$primary",
+   "role": "statement"
+  }
+ ],
+ "facts": [
+  {
+   "field": "lender",
+   "value": "First Harbor Bank",
+   "source_id": "$primary",
+   "quote": "First Harbor Bank"
+  },
+  {
+   "field": "agreement_reference",
+   "value": "Loan 7781",
+   "source_id": "$primary",
+   "quote": "Loan 7781"
+  },
+  {
+   "field": "annual_rate",
+   "value": "6.00",
+   "source_id": "$primary",
+   "quote": "Annual interest rate 6.00%"
+  },
+  {
+   "field": "opening_principal",
+   "value": "50000.00",
+   "source_id": "$primary",
+   "quote": "Opening principal USD 50,000.00"
+  },
+  {
+   "field": "closing_principal",
+   "value": "49250.00",
+   "source_id": "$primary",
+   "quote": "Closing principal USD 49,250.00"
+  }
+ ]
+}

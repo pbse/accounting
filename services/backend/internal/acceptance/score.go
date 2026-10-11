@@ -294,7 +294,21 @@ func compareDrafts(got, want []Entry) []string {
 	if len(got) != len(want) {
 		problems = append(problems, fmt.Sprintf("%d draft(s); the label expects %d", len(got), len(want)))
 	}
-	owner := make([]int, len(got)) // the labeled entry each draft is matched to, or -1
+	_, unmatched, spare := matchDrafts(got, want)
+	for i, w := range unmatched {
+		closest := Entry{}
+		if i < len(spare) {
+			closest = got[spare[i]]
+		}
+		problems = append(problems, fmt.Sprintf("no draft matches the labeled entry: %s", strings.Join(entryDifferences(closest, want[w]), "; ")))
+	}
+	return problems
+}
+
+// matchDrafts pairs drafts with labeled entries regardless of order, each draft matching at most one entry: owner gives
+// the entry each draft matched (or -1), unmatched the entries no draft matched, and spare the drafts left over.
+func matchDrafts(got, want []Entry) (owner, unmatched, spare []int) {
+	owner = make([]int, len(got))
 	for i := range owner {
 		owner[i] = -1
 	}
@@ -312,26 +326,17 @@ func compareDrafts(got, want []Entry) []string {
 		}
 		return false
 	}
-	unmatched := []int{}
 	for w := range want {
 		if !assign(w, make([]bool, len(got))) {
 			unmatched = append(unmatched, w)
 		}
 	}
-	spare := []Entry{}
 	for g, w := range owner {
 		if w < 0 {
-			spare = append(spare, got[g])
+			spare = append(spare, g)
 		}
 	}
-	for i, w := range unmatched {
-		closest := Entry{}
-		if i < len(spare) {
-			closest = spare[i]
-		}
-		problems = append(problems, fmt.Sprintf("no draft matches the labeled entry: %s", strings.Join(entryDifferences(closest, want[w]), "; ")))
-	}
-	return problems
+	return owner, unmatched, spare
 }
 
 // entryDifferences names each field the label gives that the entry does not match.
