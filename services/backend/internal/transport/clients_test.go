@@ -198,7 +198,8 @@ func TestAClientPageReadsTheClient(t *testing.T) {
 		t.Fatalf("Cy's months and requests: %v %v", months, cy["requests"])
 	}
 	if cy["whole"] != false || cy["roster"] != nil || len(cy["owed"].([]any)) != 0 || len(cy["quickbooks"].([]any)) != 0 || len(cy["xero"].([]any)) != 0 || cy["profile"] != nil || cy["basis"] != nil ||
-		cy["template"] != nil || cy["template_hidden"] != true || cy["people"] != nil || cy["can_manage"] != false || cy["can_connect"] != false {
+		cy["template"] != nil || cy["template_hidden"] != true || cy["people"] != nil || cy["can_manage"] != false || cy["can_connect"] != false ||
+		len(cy["production_grants"].([]any)) != 0 || len(cy["xero_grants"].([]any)) != 0 || cy["can_grant"] != false {
 		t.Fatalf("Cy's read: %v", cy)
 	}
 	// Dee is assigned to Acme under its own name: she reads all of it, its August month among them, with no template.

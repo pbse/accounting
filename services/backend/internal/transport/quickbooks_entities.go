@@ -53,7 +53,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		var period string
-		err = tx.QueryRowContext(r.Context(), `SELECT c.period FROM client_closes c JOIN quickbooks_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) WHERE c.id::text=$1 AND c.organization_id=$2 AND x.id::text=$3 AND x.id=`+quickbooks.ReadingConnection("c.id")+` AND x.state='active' AND x.credential IS NOT NULL FOR UPDATE OF c`, r.PathValue("id"), a.Organization, in.ConnectionID).Scan(&period)
+		err = tx.QueryRowContext(r.Context(), `SELECT c.period FROM client_closes c JOIN quickbooks_connections x ON x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) WHERE c.id::text=$1 AND c.organization_id=$2 AND x.id::text=$3 AND x.id=`+quickbooks.ReadingConnection("c.id")+` AND x.state='active' AND x.credential IS NOT NULL FOR UPDATE OF c`, r.PathValue("id"), a.Organization, in.ConnectionID).Scan(&period)
 		if err != nil {
 			problem(w, 409, "Refresh transactions from this client's current QuickBooks connection; production is used once connected.")
 			return
