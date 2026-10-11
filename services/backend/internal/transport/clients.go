@@ -343,6 +343,11 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["profile"] = profile
+		// Whether the firm takes the client's books as files.
+		if out["file_imports"], err = fileImportsOn(ctx, tx, org); err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
 		// The approved basis, as a close reads it for the name it was opened under: the client's own override, else the
 		// firm's. An override approved under a name since confirmed as the client's alias is that name's months' basis,
 		// so each is listed with the name it was approved under rather than folded into one client-wide value.

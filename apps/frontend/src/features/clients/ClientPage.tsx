@@ -8,6 +8,7 @@ import { clientPath } from "../../data/clients";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, monthShort, useDates, useToday } from "../../data/time";
 import { ClientForm, type Person, type RosterEntry } from "../closes/Roster";
+import { FilesCard } from "./Files";
 import { workspaceRequest } from "../closes/workspace";
 
 type Books = {
@@ -65,6 +66,8 @@ type ClientRead = {
   quickbooks: QuickBooksConnection[];
   xero: XeroConnection[];
   profile: Profile | null;
+  // file_imports says the firm takes the client's books as files.
+  file_imports?: boolean;
   basis: {
     method: "accrual" | "cash" | "modified_cash";
     scope: "client" | "firm";
@@ -313,6 +316,7 @@ export default function ClientPage() {
             {ledger.line}
             {managedIn || !client.can_connect ? "" : ` Open a month under ${ledger.held ?? name} to ${ledger.connected ? "manage" : "connect"} its ledger.`}
           </Card>
+          {client.file_imports && <FilesCard client={name} />}
           <Card
             icon="history"
             tone={!roster ? "wait" : "done"}

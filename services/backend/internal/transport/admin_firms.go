@@ -28,6 +28,7 @@ func registerAdminFirms(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("POST /v1/admin/firms/{id}/members/{subject}/revoke", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminMemberAccess(w, r, db, false) }))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/members/{subject}/restore", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminMemberAccess(w, r, db, true) }))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/limits", route(platformOperate, adminFirmLimits))
+	mux.HandleFunc("POST /v1/admin/firms/{id}/file-imports", route(platformOperate, adminFileImports))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/support-owner", route(platformOperate, adminSupportOwner))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/assistance", route(platformOperate, adminAssistance))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/invitations/{invitation}/revoke", route(platformOperate, adminRevokeInvitation))
@@ -438,4 +439,31 @@ func adminRevokeInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	jsonReply(w, 200, map[string]string{"message": revokeInWorkOS(r.Context(), workosID)})
+}
+
+// adminFileImports switches file imports on or off for one firm, with a reason (docs/books-sources.md, Delivery: off for
+// every firm until internal validation; the demonstration firm and internal firms first).
+func adminFileImports(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	firm := r.PathValue("id")
+	var in struct {
+		Enabled bool   `json:"enabled"`
+		Reason  string `json:"reason"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Reason }) {
+		return
+	}
+	if err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error { return adminFirmExists(ctx, tx, firm) }); err != nil {
+		adminFirmProblem(w, err, "firm read")
+		return
+	}
+	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "firm.file_imports", TargetType: "firm", TargetID: firm, Reason: strings.TrimSpace(in.Reason), Request: map[string]bool{"enabled": in.Enabled}},
+		func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE organizations SET file_imports=$2 WHERE id=$1`, firm, in.Enabled)
+			return err
+		})
+	if err != nil {
+		adminFirmProblem(w, err, "file imports")
+		return
+	}
+	jsonReply(w, 200, map[string]bool{"file_imports": in.Enabled})
 }
