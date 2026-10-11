@@ -78,6 +78,7 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 	// Parentheses, a leading or trailing minus and a currency mark or code can wrap one another in any order
 	// ($ (12.00), -$12.00, (12.00) USD); each is taken off until none is left.
 	var marks []string
+	signs := 0
 	for changed := true; changed; {
 		before := s
 		for _, m := range currencyMarks.FindAllString(s, -1) {
@@ -86,11 +87,14 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 			}
 		}
 		s = strings.TrimSpace(currencyMarks.ReplaceAllString(s, ""))
-		signed := strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") || strings.HasSuffix(s, "-") || strings.HasPrefix(s, "-")
-		// A side marker and a sign together (-100 Cr), or two signs (--100, (100)-), contradict or repeat each other: the
-		// amount is not read.
-		if signed && (side != "" || negative) {
+		signed := strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") || strings.HasSuffix(s, "-") || strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+")
+		// A side marker and a sign together (-100 Cr, +100 Cr), or two signs (--100, -+100, (100)-), contradict or repeat
+		// each other: the amount is not read.
+		if signed && (side != "" || signs > 0) {
 			return Amount{}, ErrNotAmount
+		}
+		if signed {
+			signs++
 		}
 		switch {
 		case strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")"):
