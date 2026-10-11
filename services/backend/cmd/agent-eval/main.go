@@ -71,8 +71,8 @@ func main() {
 	if llm.Model(llm.WithClient(ctx, client), "chat") == "" {
 		log.Fatal("a replay needs the chat model configured (LLM_PROVIDER with its OPENAI_* or CONTEXT_MACHINE_* settings)")
 	}
-	profiles := llm.CompletionProfiles(llm.WithClient(ctx, client))
-	if len(profiles) > 0 {
+	profiles := llm.EvaluationProfiles(llm.WithClient(ctx, client))
+	if llm.Engine(llm.WithClient(ctx, client), "chat") == string(llm.ContextMachine) {
 		if err = localContextMachine(client.ContextMachineEndpoint()); err != nil {
 			log.Fatal(err)
 		}
@@ -100,9 +100,6 @@ func main() {
 		}
 		if owner != nil {
 			rec.Organization, rec.Subject = owner.Organization, owner.Subject
-		}
-		if len(profiles) > 0 && !llm.Allows(llm.WithIdentity(llm.WithClient(ctx, client), rec.Organization, rec.Subject), rec.Organization) {
-			log.Fatal("fixture identity is not configured; use -profile with a single local evaluation owner")
 		}
 		if err = transport.EnsureAgentEvalFirm(ctx, db, rec); err != nil {
 			log.Fatal(err)

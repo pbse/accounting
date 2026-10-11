@@ -11,10 +11,10 @@ import (
 )
 
 func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
-	scope := Scope{Organization: "owner-org", Subject: "owner", AccessProfile: "own-read"}
+	scope := Scope{Organization: "owner-org", Subject: "owner", AccessProfile: ""}
 	for _, provider := range []string{"api", "context_machine"} {
 		calls := 0
-		cfg := Config{APIImages: true, Provider: provider, APIKey: "api-key", Model: "api-model", ContextMachineToken: "service-token", ContextMachineModel: "codex", CodexModel: "cli-model", Profiles: []Scope{scope}, AllowUncappedOutputTokens: true}
+		cfg := Config{APIImages: true, Provider: provider, APIKey: "api-key", Model: "api-model", ContextMachineToken: "service-token", ContextMachineModel: "codex", CodexModel: "cli-model", AllowUncappedOutputTokens: true}
 		cfg.HTTP = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			calls++
 			if provider == "api" {
@@ -27,10 +27,10 @@ func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
 				t.Fatal("private completion route")
 			}
 			var in CompletionRequest
-			if json.NewDecoder(r.Body).Decode(&in) != nil || in.Scope != scope || in.Agent != "codex" || in.Model != "cli-model" || in.Effort != "medium" || !in.Request.AllowUncappedOutputTokens || in.Request.Schema == nil {
+			if json.NewDecoder(r.Body).Decode(&in) != nil || in.Agent != "codex" || in.Model != "cli-model" || in.Effort != "medium" || !in.Request.AllowUncappedOutputTokens || in.Request.Schema == nil {
 				t.Fatal("lost completion contract")
 			}
-			raw, _ := json.Marshal(CompletionResponse{Version: 1, Status: "completed", Scope: scope, Response: Response{ID: "run", Model: "cli-model", ReasoningEffort: "medium", AuthMode: "chatgpt", Text: "{}", ModelCalls: 1}})
+			raw, _ := json.Marshal(CompletionResponse{Version: 1, Status: "completed", Scope: in.Scope, Response: Response{ID: "run", Model: "cli-model", ReasoningEffort: "medium", AuthMode: "chatgpt", Text: "{}", ModelCalls: 1}})
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
 		})}
 		client, err := New(cfg)
@@ -52,9 +52,12 @@ func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
 			t.Fatal("unexpected extra calls", calls)
 		}
 		if provider == "context_machine" {
-			_, err := Generate(WithIdentity(ctx, "other-org", "owner"), Request{Purpose: "preparation", Instructions: "No", MaxOutputTokens: 10})
-			if err == nil || calls != len(purposes) {
-				t.Fatal("foreign identity dispatched")
+			// Organization is provenance only. No identity/profile is required for inference.
+			for _, caller := range []context.Context{WithIdentity(ctx, "other-org", "other-user"), WithClient(context.Background(), client)} {
+				_, err = Generate(caller, Request{Purpose: "preparation", Instructions: "Read", Schema: &OutputSchema{Name: "result", Definition: json.RawMessage(`{"type":"object"}`)}, MaxOutputTokens: 100})
+				if err != nil {
+					t.Fatal("cross-firm/unscoped inference refused", err)
+				}
 			}
 			// Failure must not trigger a direct API fallback.
 			client.http = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
@@ -62,7 +65,7 @@ func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
 				return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("secret"))}, nil
 			})}
 			_, err = Generate(ctx, Request{Purpose: "preparation", Instructions: "No", MaxOutputTokens: 10})
-			if err == nil || calls != len(purposes)+1 || strings.Contains(err.Error(), "secret") {
+			if err == nil || calls != len(purposes)+3 || strings.Contains(err.Error(), "secret") {
 				t.Fatal("fallback or leak", err)
 			}
 			if Model(ctx, "preparation") != "context_machine/codex/cli-model" || Engine(ctx, "preparation") != "context_machine" {
@@ -73,9 +76,9 @@ func TestEveryPurposeCanSwitchBetweenAPIAndContextMachine(t *testing.T) {
 }
 
 func TestCompletionToolContinuationAndCallback(t *testing.T) {
-	scope := Scope{Organization: "org", Subject: "user", AccessProfile: "own"}
+	scope := Scope{Organization: "org", Subject: "user", AccessProfile: ""}
 	requests := 0
-	cfg := Config{Provider: "context_machine", ContextMachineToken: "private", ContextMachineModel: "claude", ClaudeModel: "fixed", Profiles: []Scope{scope}}
+	cfg := Config{Provider: "context_machine", ContextMachineToken: "private", ContextMachineModel: "claude", ClaudeModel: "fixed", Profiles: nil}
 	cfg.HTTP = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		requests++
 		var in CompletionRequest
@@ -120,7 +123,7 @@ func TestCompletionToolContinuationAndCallback(t *testing.T) {
 }
 
 func TestContextMachineDoesNotRequireUnusedAPICredentials(t *testing.T) {
-	cfg := Config{Provider: "context_machine", APIKey: "only-for-service", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "fixed", Profiles: []Scope{{Organization: "org", Subject: "owner", AccessProfile: "own"}}}
+	cfg := Config{Provider: "context_machine", APIKey: "only-for-service", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "fixed", Profiles: nil}
 	if _, err := New(cfg); err != nil {
 		t.Fatal(err)
 	}

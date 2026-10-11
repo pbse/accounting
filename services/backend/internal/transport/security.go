@@ -234,7 +234,7 @@ func ocrDisclosure(provider, model string) (string, string) {
 	case "openai":
 		return "OpenAI API (PDF images)", "Worker image route; model " + model
 	case "context_machine":
-		return "Private context machine (PDF images)", "Worker image route; model " + model + "; restricted to configured members and current client grants"
+		return "Private context machine (PDF images)", "Worker image route; model " + model + "; authorized uploaders with current client grants"
 	case "tesseract":
 		return "PDF image reading", "Model route not set on the worker; PDFs are read locally"
 	case "held":
