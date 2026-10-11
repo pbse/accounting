@@ -29,7 +29,12 @@ func registerClientConnections(mux *http.ServeMux, db *sql.DB) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer cancel()
-		held, err := heldUnder(ctx, db, "quickbooks_connections", in.ID, a.Organization, name)
+		// A new connection is made under the client's own name, whichever connection the request names.
+		held := name
+		var err error
+		if in.Action != "connect" {
+			held, err = heldUnder(ctx, db, "quickbooks_connections", in.ID, a.Organization, name)
+		}
 		if err != nil {
 			problem(w, 503, "The client's QuickBooks connection is unavailable.")
 			return
@@ -47,7 +52,11 @@ func registerClientConnections(mux *http.ServeMux, db *sql.DB) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer cancel()
-		held, err := heldUnder(ctx, db, "xero_connections", in.ID, a.Organization, name)
+		held := name
+		var err error
+		if in.Action != "connect" {
+			held, err = heldUnder(ctx, db, "xero_connections", in.ID, a.Organization, name)
+		}
 		if err != nil {
 			problem(w, 503, "The client's Xero connection is unavailable.")
 			return

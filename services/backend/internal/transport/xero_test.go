@@ -360,10 +360,12 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	if b := blockers(); !strings.Contains(b, "Disconnect the Xero connection opened from this close.") || !strings.Contains(b, "A Xero connection opened here is used by another close.") {
 		t.Fatalf("deleting the opening close must wait for disconnection and the other close: %s", b)
 	}
-	status = call("user_accountant", september, map[string]any{"action": "disconnect", "connection_id": id, "confirmed": true}, 200)
+	// A month only captures: the connection is disconnected on the client's page.
+	call("user_accountant", september, map[string]any{"action": "disconnect", "connection_id": id, "confirmed": true}, 409)
+	call("user_accountant", "client", map[string]any{"action": "disconnect", "connection_id": id, "confirmed": true}, 200)
 	var cleared bool
 	must(db.QueryRow(`SELECT credential IS NULL AND state='disconnected' FROM xero_connections WHERE id=$1`, id).Scan(&cleared))
-	if !cleared || status["connection"] != nil {
+	if !cleared {
 		t.Fatal("disconnecting clears the stored credential")
 	}
 }

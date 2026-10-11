@@ -557,7 +557,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		if entity, ok := grantClient(w, r, db, a); ok {
+		if entity, ok := grantClient(w, r, db, a); ok && grantsWhole(w, r, db, entity) {
 			productionGrantChange(w, r, db, a, entity)
 		}
 	})
@@ -987,6 +987,21 @@ func grantClient(w http.ResponseWriter, r *http.Request, db *sql.DB, a *auth.Cla
 		return "", false
 	}
 	return entity, true
+}
+
+// grantsWhole says the member may change the posting grants of the client a month names: a grant applies to every month
+// of the client, so it is changed by one who may open the client whole; otherwise it answers and says false.
+func grantsWhole(w http.ResponseWriter, r *http.Request, db *sql.DB, entity string) bool {
+	name, known, allowed, whole, err := clientNamed(r.Context(), db, organization(r), entity, firmAccess(r), subject(r))
+	if err != nil {
+		problem(w, 503, "The client is unavailable.")
+		return false
+	}
+	if !known || !allowed || !whole {
+		problem(w, 403, "A posting grant covers every month of the client; ask for access to "+name+".")
+		return false
+	}
+	return true
 }
 
 // productionGrantRead answers with the client entity's current production posting grant, or that it has none.

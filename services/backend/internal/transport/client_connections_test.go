@@ -66,18 +66,22 @@ func TestTheClientPageManagesConnectionsHeldUnderAnAlias(t *testing.T) {
 	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"clients:all", "integrations:manage"}}
 	mux := http.NewServeMux()
 	registerClientConnections(mux, db)
+	registerProductionPosting(mux, db)
+	registerXeroPosting(mux, db)
 	h := organizationBoundary(db, mux)
-	call := func(path string, body any, want int) {
+	callAs := func(as *auth.Claims, path string, body any, want int) string {
 		t.Helper()
 		raw, _ := json.Marshal(body)
 		r := httptest.NewRequest("POST", path, bytes.NewReader(raw))
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), actor)))
+		h.ServeHTTP(w, r.WithContext(auth.WithActor(r.Context(), as)))
 		if w.Code != want {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
 		}
+		return w.Body.String()
 	}
+	call := func(path string, body any, want int) { t.Helper(); callAs(actor, path, body, want) }
 	state := func(table, id string) string {
 		t.Helper()
 		var s string
@@ -115,6 +119,19 @@ func TestTheClientPageManagesConnectionsHeldUnderAnAlias(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,account_ids,kinds,max_amount,expires_at,reason,granted_by) VALUES($1,'Acme Co',$2,'904',ARRAY['1','2'],ARRAY['prepaid'],100,now()+interval '1 day','Synthetic','fixture')`, org, production)
 	must(err)
 	t.Cleanup(func() { db.Exec(`DELETE FROM production_posting_grants WHERE organization_id=$1`, org) })
+	// A member assigned only the alias' month cannot change the client's grants from it: a grant covers every month.
+	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_p',true,'Synthetic','fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_p','Acme Services LLC',true,'Synthetic','fixture')`, org)
+	must(err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM client_access WHERE organization_id=$1`, org) })
+	partial := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_p"}, Organization: org, Permissions: []string{"posting:approve"}}
+	revoke := map[string]any{"action": "revoke", "connection_id": production, "reason": "Not theirs to change", "confirmation": "REVOKE"}
+	for _, grant := range []string{"production-grant", "xero-grant"} {
+		if b := callAs(partial, "/v1/closes/"+september+"/"+grant, revoke, 403); !strings.Contains(b, "covers every month") {
+			t.Fatalf("%s from an alias month: %s", grant, b)
+		}
+	}
 	if g, e := readProductionGrant(t.Context(), db, org, "Acme Services LLC"); e != nil || g.ConnectionID != production {
 		t.Fatalf("the alias month's grant: %+v %v", g, e)
 	}

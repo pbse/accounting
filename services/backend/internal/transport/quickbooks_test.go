@@ -433,7 +433,9 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	if refreshes != 2 {
 		t.Fatal("uncertain refresh repeated")
 	}
-	action("disconnect", 200)
+	// A month only captures: the connection is disconnected on the client's page.
+	action("disconnect", 409)
+	call("POST", client, map[string]any{"action": "disconnect", "connection_id": start.ID, "confirmed": true}, 200)
 	action("snapshot", 404)
 	if e = db.QueryRowContext(context.Background(), `SELECT credential FROM quickbooks_connections WHERE id=$1`, start.ID).Scan(&encrypted); e != nil || len(encrypted) != 0 {
 		t.Fatal("disconnect retained credentials")

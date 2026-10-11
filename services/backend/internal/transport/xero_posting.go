@@ -271,7 +271,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 		}
 	})
 	mux.HandleFunc("POST "+grantPath, func(w http.ResponseWriter, r *http.Request) {
-		if _, entity, ok := scope(w, r, "posting:approve"); ok {
+		if _, entity, ok := scope(w, r, "posting:approve"); ok && grantsWhole(w, r, db, entity) {
 			a, _ := productionActor(w, r, "posting:approve")
 			xeroGrantChange(w, r, db, a, entity)
 		}
