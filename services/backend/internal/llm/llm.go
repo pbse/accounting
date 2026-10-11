@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -231,14 +230,20 @@ func (c *Client) post(ctx context.Context, endpoint, token string, body any, req
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, errors.New("model service could not be reached")
+		return nil, ErrUnreachable
 	}
 	if res.StatusCode != http.StatusOK {
 		res.Body.Close()
-		if res.StatusCode == http.StatusTooManyRequests {
-			return nil, ErrBusy
+		code := ""
+		// Only our private completion protocol supplies diagnostic codes. API
+		// provider headers and bodies cannot set application failure classes.
+		if _, completion := body.(CompletionRequest); completion {
+			switch v := res.Header.Get("X-Context-Machine-Failure"); v {
+			case "incomplete", "limit":
+				code = v
+			}
 		}
-		return nil, fmt.Errorf("model service returned HTTP %d", res.StatusCode)
+		return nil, &ServiceError{Status: res.StatusCode, Code: code}
 	}
 	return res, nil
 }

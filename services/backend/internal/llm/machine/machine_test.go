@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -106,7 +107,12 @@ func TestCommandsAndOutputFailClosed(t *testing.T) {
 		}
 	}
 	cancelled := false
-	b := &limitedOutput{cancel: func() { cancelled = true }}
+	b := &limitedOutput{cancel: func(cause error) {
+		if !errors.Is(cause, llm.ErrLimit) {
+			t.Error("overflow cause lost")
+		}
+		cancelled = true
+	}}
 	if _, err = b.Write(make([]byte, (1<<20)+1)); err == nil || !cancelled {
 		t.Fatal("unbounded process output")
 	}
@@ -427,10 +433,145 @@ func TestExecutionDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	if _, err := s.execute(ctx, runRequest{Model: "codex", Instructions: "test", MaxModelCalls: 1, MaxOutputTokens: 10}); err == nil {
-		t.Fatal("deadline ignored")
+	if _, err := s.execute(ctx, runRequest{Model: "codex", Instructions: "test", MaxModelCalls: 1, MaxOutputTokens: 10}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline classification lost: %v", err)
 	}
 	if time.Since(started) > 3*time.Second {
 		t.Fatal("child process retained output pipes after cancellation")
+	}
+}
+
+func TestProxyPreservesProviderFailureStatusWithoutBodyOrRetry(t *testing.T) {
+	for _, status := range []int{400, 401, 403, 429, 503, 504} {
+		calls := 0
+		p := &modelProxy{ctx: context.Background(), token: "run", key: "secret", model: "fixed", agent: "codex", limit: 1, client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader("SECRET_PROVIDER_BODY"))}, nil
+		})}}
+		for i := 0; i < 2; i++ {
+			r := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"input":[]}`))
+			r.Header.Set("Authorization", "Bearer run")
+			w := httptest.NewRecorder()
+			p.ServeHTTP(w, r)
+			want := status
+			if i == 1 {
+				want = 429
+			}
+			if w.Code != want || strings.Contains(w.Body.String(), "SECRET") {
+				t.Fatal(w.Code, w.Body.String())
+			}
+		}
+		if calls != 1 || int(p.upstreamStatus.Load()) != status {
+			t.Fatalf("status=%d calls=%d stored=%d", status, calls, p.upstreamStatus.Load())
+		}
+	}
+}
+
+func TestExecutionProviderFailureDoesNotOverrideRecoveredResearch(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/curl"); err != nil {
+		t.Skip("mock CLI requires /usr/bin/curl")
+	}
+	oldClient := http.DefaultClient
+	defer func() { http.DefaultClient = oldClient }()
+	for _, scenario := range []string{"exit", "parsed", "recovered"} {
+		recovered := scenario == "recovered"
+		dir := t.TempDir()
+		// Only a fresh random run token is used; no stored credential is read.
+		script := `#!/bin/sh
+base=''
+for arg in "$@"; do
+ case "$arg" in
+  model_providers.context_machine.base_url=*) base=${arg#*=}; base=${base#\"}; base=${base%\"} ;;
+ esac
+done
+case "$base" in
+ http://127.0.0.1:*/v1) ;;
+ *) exit 2 ;;
+esac
+/usr/bin/curl -s -o /dev/null -H "Authorization: Bearer $CONTEXT_MACHINE_RUN_TOKEN" -H 'Content-Type: application/json' -d '{"input":[]}' "$base/responses" || exit 1
+`
+		if recovered {
+			script += `/usr/bin/curl -sf -o /dev/null -H "Authorization: Bearer $CONTEXT_MACHINE_RUN_TOKEN" -H 'Content-Type: application/json' -d '{"input":[]}' "$base/responses" || exit 1
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Recovered."}}' '{"type":"turn.completed"}'
+`
+		} else if scenario == "parsed" {
+			script += "printf '%s\\n' '{\"type\":\"turn.failed\"}'\n"
+		} else {
+			script += "exit 1\n"
+		}
+		if err := os.WriteFile(dir+"/codex", []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+		calls := 0
+		// Provider requests are intercepted in memory and never leave this test.
+		http.DefaultClient = &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+			calls++
+			status, body := 503, "SECRET_PROVIDER_BODY"
+			if calls == 2 {
+				status, body = 200, `{"output":[]}`
+			}
+			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+		})}
+		s := &server{agents: map[string]agentSettings{"codex": {model: "fake", credential: "fake", effort: "medium", mode: "api_key"}}}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		out, err := s.execute(ctx, runRequest{Model: "codex", Instructions: "test", MaxModelCalls: 2, MaxOutputTokens: 10})
+		cancel()
+		if recovered {
+			if err != nil || out.Text != "Recovered." || out.ModelCalls != 2 || calls != 2 {
+				t.Fatalf("recovered run lost: %+v %v calls=%d", out, err, calls)
+			}
+		} else {
+			var service *llm.ServiceError
+			if !errors.As(err, &service) || service.Status != 503 || calls != 1 {
+				t.Fatalf("failed run lost status: %v calls=%d", err, calls)
+			}
+		}
+	}
+}
+
+func TestExecutionOutputLimitRetainsCause(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/codex", []byte("#!/bin/sh\nhead -c 1048577 /dev/zero\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	s := &server{agents: map[string]agentSettings{"codex": {model: "fake", credential: "fake", effort: "medium", mode: "api_key"}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.execute(ctx, runRequest{Model: "codex", Instructions: "test", MaxModelCalls: 1, MaxOutputTokens: 10}); !errors.Is(err, llm.ErrLimit) {
+		t.Fatalf("output limit cause lost: %v", err)
+	}
+}
+
+func TestProxyLatestProviderOutcomeClearsEarlierFailure(t *testing.T) {
+	for _, networkFailure := range []bool{false, true} {
+		calls := 0
+		p := &modelProxy{ctx: context.Background(), token: "run", key: "fake", model: "fake", agent: "codex", limit: 2, client: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("SECRET_OLD_BODY"))}, nil
+			}
+			if networkFailure {
+				return nil, errors.New("SECRET_NETWORK_ERROR")
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"output":[{"type":"function_call","name":"shell_command","arguments":"{}"}]}`))}, nil
+		})}}
+		for i := 0; i < 2; i++ {
+			req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"input":[]}`))
+			req.Header.Set("Authorization", "Bearer run")
+			w := httptest.NewRecorder()
+			p.ServeHTTP(w, req)
+			want := 503
+			if i == 1 {
+				want = 502
+			}
+			if w.Code != want || strings.Contains(w.Body.String(), "SECRET") {
+				t.Fatal(w.Code, w.Body.String())
+			}
+		}
+		if calls != 2 || p.upstreamStatus.Load() != 0 || p.invalidResponse.Load() == networkFailure {
+			t.Fatalf("stale outcome: calls=%d status=%d invalid=%v", calls, p.upstreamStatus.Load(), p.invalidResponse.Load())
+		}
 	}
 }

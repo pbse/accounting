@@ -385,6 +385,18 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
+		// Whether the firm takes the client's books as files, and how many files it has sent: those stay readable when
+		// the firm's file imports are switched off.
+		if out["file_imports"], err = fileImportsOn(ctx, tx, org); err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		var sent int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM books_imports WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2)`, org, name).Scan(&sent); err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		out["files"] = sent
 		if out["profiles"], err = profileHistory(ctx, tx, org, name); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return

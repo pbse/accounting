@@ -2,11 +2,13 @@ package transport
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"math/big"
 	"net/url"
@@ -319,7 +321,7 @@ const agentSystem = `You are the firm's accounting agent inside Krith, answering
 
 // agentScope is the part of the prompt that changes with the conversation.
 func agentScope(today, firm, entity, period, paperID string, permissions []string) string {
-	where := "Scope: firm-wide, across the closes this member can open; name a close by the id list_closes gives."
+	where := "Scope: firm-wide, across the closes this member can open; name a close by the id list_closes gives. If a singular question refers to this close or this month without identifying a client, and the conversation has not established one unambiguously, answer as kind help with exactly: \"Which client and month should I use?\". Do not choose arbitrary closes or sample the portfolio to answer that question. A clarification is help, without names, figures or claims about the books."
 	if entity != "" {
 		where = "Scope: the close of " + entity + " for " + period + "; every close-scoped tool reads this close and no other."
 		if paperID != "" {
@@ -341,7 +343,7 @@ func agentScope(today, firm, entity, period, paperID string, permissions []strin
 // agentAnswerSchema is the final answer: its kind, its text and, for each figure, where it came from.
 const agentAnswerSchema = `{"type":"object","additionalProperties":false,"required":["kind","answer","support"],"properties":{"kind":{"type":"string","enum":["facts","help","refusal","card"]},"answer":{"type":"string"},"support":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["step","sentence","path","value","quote","derive","of"],"properties":{"step":{"type":"string"},"sentence":{"type":"integer"},"path":{"type":"string"},"value":{"type":"string"},"quote":{"type":"string"},"derive":{"type":"string","enum":["","sum","difference","ratio"]},"of":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["step","path"],"properties":{"step":{"type":"string"},"path":{"type":"string"}}}}}}}}}`
 
-const agentAnswerInstructions = `Write the answer to the member's last message from the tool results in this conversation, in plain prose of at most 1,500 characters, no markdown headings. kind is facts when the answer states anything about the firm's work; help when it only says what you can do here; refusal when the request is outside what you do; card when you proposed an action and the answer only introduces it. For a facts answer, every sentence (numbered from 0) must carry at least one support entry, and every amount, count, percentage or date in the text must be the value of a support entry: step is the tool result's id (t1, t2, ...), path is a JSON pointer into that result (for example /rows/3/ledger_balance) and value is the exact value there; for a document's text, leave path empty and give a verbatim quote of at least 8 characters containing the figure. Leave derive empty and of [] for these. A figure you computed from fields (a total, a difference, one as a percentage of another) is cited with derive "sum", "difference" (the first less the rest) or "ratio" (the first as a percentage of the second), of listing each field's step and path, path and quote empty and value the figure you state; it is recomputed exactly and must match. Name what each figure measures in its sentence, with the words of its field or line (net income, receivables, the account's name): a figure is never relabelled. A change is stated as a change (up, down, by) and a balance as a balance; the prior month's amount is said to be the prior month's; a forecast or scenario figure is said to be forecast, and a budget to be the budget; book cash is never called available cash; a stale read is said to be stale. State a cause only when a read gives it (cite it), otherwise as a possibility (may, could), and when drivers explain part of a change, say what remains unexplained. A help or refusal answer carries no figures, no client, account or document names and no state of a close or draft. Use the person's words for what they asked; cite nothing you did not read.`
+const agentAnswerInstructions = `Write the answer to the member's last message from the tool results in this conversation, in plain prose of at most 1,500 characters, no markdown headings. kind is facts when the answer states anything about the firm's work; help when it only says what you can do here; refusal when the request is outside what you do; card when you proposed an action and the answer only introduces it. For a facts answer, every sentence (numbered from 0) must carry at least one support entry, and every amount, count, percentage or date in the text must be the value of a support entry: step is the tool result's id (t1, t2, ...), path is a JSON pointer into that result (for example /rows/3/ledger_balance) and value is the exact value there; for a document's text, leave path empty and give a verbatim quote of at least 8 characters containing the figure. Leave derive empty and of [] for these. A figure you computed from fields (a total, a difference, one as a percentage of another) is cited with derive "sum", "difference" (the first less the rest) or "ratio" (the first as a percentage of the second), of listing each field's step and path, path and quote empty and value the figure you state; it is recomputed exactly and must match. Name what each figure measures in its sentence, with the words of its field or line (net income, receivables, the account's name): a figure is never relabelled. A change is stated as a change (up, down, by) and a balance as a balance; the prior month's amount is said to be the prior month's; a forecast or scenario figure is said to be forecast, and a budget to be the budget; book cash is never called available cash; a stale read is said to be stale. State a cause only when a read gives it (cite it), otherwise as a possibility (may, could), and when drivers explain part of a change, say what remains unexplained. For an ambiguous singular firm-wide question, use kind help and exactly "Which client and month should I use?". A help or refusal answer carries no figures, no client, account or document names and no state of a close or draft. Use the person's words for what they asked; cite nothing you did not read.`
 
 // A calendar day or a close month is matched before its digits could be taken for separate numbers.
 var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b|[(−-]?\$?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?\)?`)
@@ -352,6 +354,9 @@ var agentObservation = regexp.MustCompile(`(?i)\b(?:see|saw|seen|found|finds?|sh
 
 // agentCapabilityStart is how a help, refusal or card sentence may begin: speaking for the agent or to the person.
 var agentCapabilityStart = regexp.MustCompile(`(?i)^(?:i |i'|i’|ask |say |open |you |to |here |this card|the card|confirm|check |choose |type |use |try |tell |nothing |no, |yes, |sorry|that |that's|that’s|it's|it’s)`)
+
+// A clarification has no qualifier that could imply an unsupported book fact.
+var agentClarification = regexp.MustCompile(`(?i)^(?:which|what) (?:client|company|month|period|close)(?: and (?:which |what )?(?:client|company|month|period))? (?:should i (?:use|read|check)|do you mean|are you asking about)\??$`)
 var agentURL = regexp.MustCompile(`(?i)\b(?:https?://|www\.)[^\s)]+`)
 
 // agentCompletion is a sentence saying an action happened; a card, help or refusal answer never says so, since nothing
@@ -603,7 +608,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		// Such an answer says what the agent can do or introduces its card: every sentence speaks for the agent or to
 		// the person, never about the books.
 		for _, line := range sentences(text) {
-			if !agentCapabilityStart.MatchString(line) {
+			if !agentCapabilityStart.MatchString(line) && !agentClarification.MatchString(line) {
 				return nil, "a " + kind + " answer stated something about the work: " + line
 			}
 			if agentObservation.MatchString(line) {
@@ -1181,6 +1186,11 @@ type agentPending struct {
 
 func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question string, firm, entity, period, today string, permissions []string, level string, history []llm.Message, read func(ctx context.Context, method, path string, body any) (string, bool), canOpen func(closeID string) bool, canClient func(entity string) bool, emit agentEvent) agentResult {
 	var out agentResult
+	attempt, began, phase := rand.Text(), time.Now(), "planning"
+	defer func() {
+		// Do not log out.why: support failures can quote model text.
+		log.Printf("agent_turn attempt=%s phase=%s outcome=%s elapsed_ms=%d rounds=%d tool_calls=%d", attempt, phase, out.outcome, time.Since(began).Milliseconds(), out.rounds, out.calls)
+	}()
 	executive := slices.Contains(permissions, "executive:read")
 	tools := agentTools(closeID != "", level, executive)
 	byName := map[string]mcpTool{}
@@ -1328,7 +1338,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		result, err := llm.Generate(roundCtx, llm.Request{Purpose: "chat", MaxResponseBytes: 1048576, MaxOutputTokens: 600, Messages: messages, Tools: definitions, ToolChoice: "auto", ParallelToolCalls: true})
 		cancel()
 		if err != nil {
-			out.outcome, out.why = "failed", "The agent model did not answer; try again."
+			out.outcome, out.why = "failed", agentModelFailure(err, "planning", out.rounds, out.calls, attempt, began)
 			return out
 		}
 		messages = append(messages, result.Continuation...)
@@ -1554,15 +1564,17 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 	final := append(slices.Clone(messages), llm.Message{Role: "user", Content: agentAnswerInstructions})
 	answerCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
+	phase = "answer"
 	response, err := llm.Generate(answerCtx, llm.Request{Purpose: "chat", MaxResponseBytes: 1048576, MaxOutputTokens: 1200, Messages: final, Schema: &llm.OutputSchema{Name: "agent_answer", Definition: json.RawMessage(agentAnswerSchema)}})
 	if errors.Is(err, llm.ErrRefused) {
 		out.outcome = "not_kept"
 		return out
 	}
 	if err != nil {
-		out.outcome, out.why = "failed", "The agent model did not answer; try again."
+		out.outcome, out.why = "failed", agentModelFailure(err, "answer", out.rounds, out.calls, attempt, began)
 		return out
 	}
+	phase = "schema"
 	var answer struct {
 		Kind    string `json:"kind"`
 		Answer  string `json:"answer"`
@@ -1583,6 +1595,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		out.outcome = "not_kept"
 		return out
 	}
+	phase = "support"
 	text, _ := documents.Redact(strings.TrimSpace(answer.Answer))
 	entries := make([]agentSupportEntry, 0, len(answer.Support))
 	for _, s := range answer.Support {
