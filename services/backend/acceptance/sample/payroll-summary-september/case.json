@@ -1,0 +1,32 @@
+{
+ "id": "payroll-summary-september",
+ "split": "development",
+ "client": "Harbor Fixture LLC",
+ "period": "2026-09",
+ "tags": [
+  "payroll",
+  "read_and_asked"
+ ],
+ "setup": {},
+ "documents": [
+  {
+   "file": "gusto-summary.txt",
+   "model": "gusto-summary.model.json",
+   "label": {
+    "work_type": "payroll",
+    "facts": {
+     "gross_wages": "10000.00",
+     "employee_taxes": "1500.00",
+     "employee_deductions": "500.00",
+     "net_pay": "8000.00",
+     "employer_taxes": "765.00",
+     "provider_debits": "10265.00",
+     "first_pay_date": "2026-09-15",
+     "last_pay_date": "2026-09-30",
+     "employer_contributions": "0.00"
+    }
+   }
+  }
+ ],
+ "expect_ready": false
+}

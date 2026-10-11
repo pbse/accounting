@@ -1,0 +1,9 @@
+First Harbor Bank
+Loan statement, September 2026
+Loan 7781
+Borrower: Harbor Fixture LLC
+Annual interest rate 6.00%
+Opening principal USD 50,000.00
+Interest charged for September USD 250.00
+Principal paid USD 750.00
+Closing principal USD 49,250.00

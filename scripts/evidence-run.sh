@@ -46,12 +46,13 @@ identity=()
 if [ -n "${ACCEPTANCE_ORGANIZATION:-}" ]; then identity=(-organization "$ACCEPTANCE_ORGANIZATION" -subject "${ACCEPTANCE_SUBJECT:-}"); fi
 if go run ./cmd/provider-check "${identity[@]+"${identity[@]}"}" -report "$out/providers.json" > "$out/providers.md" 2>&1; then status providers "no configured check failed (see providers.md for dependencies)"; else status providers "a configured check FAILED"; fi
 
-if go run ./cmd/acceptance -corpus "$corpus" -database "$(fresh recorded)" -model recorded -report "$out/acceptance-recorded.json" > "$out/acceptance-recorded.md" 2>&1; then
+if go run ./cmd/acceptance -corpus "$corpus" -database "$(fresh recorded)" -model recorded -report "$out/acceptance-recorded.json" -review "$out/review-package.md" > "$out/acceptance-recorded.md" 2>&1; then
   status "acceptance (recorded answers)" passed
 else
   status "acceptance (recorded answers)" "FAILED or critical failures (see acceptance-recorded.md)"
 fi
-if go run ./cmd/acceptance -corpus "$corpus" -database "$(fresh live)" -model live "${identity[@]+"${identity[@]}"}" -report "$out/acceptance-live.json" > "$out/acceptance-live.md" 2>&1; then
+# The live run's review package, when it runs, replaces the recorded one: the accountant judges the model's work.
+if go run ./cmd/acceptance -corpus "$corpus" -database "$(fresh live)" -model live "${identity[@]+"${identity[@]}"}" -report "$out/acceptance-live.json" -review "$out/review-package.md" > "$out/acceptance-live.md" 2>&1; then
   status "acceptance (live model)" passed
 elif grep -q "models configured\|configure" "$out/acceptance-live.md"; then
   status "acceptance (live model)" "dependency: the preparation and evidence_selection models are not configured"

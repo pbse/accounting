@@ -1,0 +1,26 @@
+{
+ "id": "accrual-unbilled-service",
+ "split": "development",
+ "client": "Harbor Fixture LLC",
+ "period": "2026-09",
+ "tags": [
+  "accrual",
+  "read_and_asked"
+ ],
+ "setup": {},
+ "documents": [
+  {
+   "file": "service-confirmation.txt",
+   "model": "service-confirmation.model.json",
+   "label": {
+    "work_type": "accrual",
+    "facts": {
+     "amount": "850.00",
+     "service_start": "2026-09-01",
+     "service_end": "2026-09-30"
+    }
+   }
+  }
+ ],
+ "expect_ready": false
+}

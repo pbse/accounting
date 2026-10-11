@@ -1,0 +1,10 @@
+Gusto payroll summary
+Company: Harbor Fixture LLC
+Pay dates 2026-09-15 and 2026-09-30
+Gross wages USD 10,000.00
+Employee taxes USD 1,500.00
+Employee deductions USD 500.00
+Net pay USD 8,000.00
+Employer taxes USD 765.00
+Employer contributions USD 0.00
+Total debited from your bank USD 10,265.00
