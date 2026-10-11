@@ -1,7 +1,7 @@
 import { workspaceKey, workspaceQuery } from "../../data/queries";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { LedgerSelection } from "./Coverage";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
@@ -278,10 +278,13 @@ function ImportCashFlow({ closeId, pack, onPack }: { closeId: string; pack: Extr
   );
 }
 
+// An explanation of one line that moved, drafted from the ledger and then reviewed; published with the pack.
+export type Explanation = { account_id: string; name: string; change: string; material: boolean; text: string };
 type Published = {
   id: string;
   version: number;
   commentary: string;
+  explanations?: Explanation[];
   reason: string;
   supersedes: string | null;
   published_by: string;
@@ -337,6 +340,19 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
   }
   const latest = list?.[0];
   const publishable = pack?.state === "ready" && pack.overall === "signed_off" && !pack.stale && pack.complete;
+  // The agent's drafted explanation of each line that moved (material movements first), the firm's until published.
+  const drafts = useQuery({ ...workspaceQuery<{ digest: string; explanations: Explanation[] }>(`/${closeId}/management-pack/explanations`), enabled: publishable });
+  // The drafts are for these figures only: drafted for another digest, they are read again before anything is published.
+  const draftsCurrent = pack?.state === "ready" && drafts.data?.digest === pack.digest;
+  const packDigest = pack?.state === "ready" ? pack.digest : "";
+  const queries = useQueryClient();
+  useEffect(() => {
+    if (publishable && drafts.data && drafts.data.digest !== packDigest) {
+      // Either side may be the newer: read both again.
+      void drafts.refetch();
+      void queries.invalidateQueries({ queryKey: workspaceKey(`/${closeId}/management-pack`) });
+    }
+  }, [publishable, packDigest, drafts.data?.digest]);
   return (
     <>
       <SectionHeader title="Publication" />
@@ -349,6 +365,7 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
               <strong>Version {p.version}</strong> · published by {p.published_by} {dates.dateTime(p.published_at)} ·{" "}
               <span className={publishedStates[p.state][0]}>{publishedStates[p.state][1]}</span>
               <p>{p.commentary}</p>
+              {(p.explanations?.length ?? 0) > 0 && <ul aria-label="Line explanations">{p.explanations!.map((e) => <li key={e.account_id}>{e.text}</li>)}</ul>}
               {p.reason && <p className="note">Corrects version {list.find((q) => q.id === p.supersedes)?.version}: {p.reason}</p>}
               <p className="note">
                 {p.acknowledgments.length === 0 ? "Not acknowledged yet." : `Acknowledged by ${p.acknowledgments.map((a) => `${a.subject} (${dates.date(a.at)})`).join(", ")}.`}
@@ -362,31 +379,48 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
       )}
       {!pack ? null : !publishable ? (
         <p className="note">Publish once the capture is current, the pack is complete and the sign-off of every month shown stands.</p>
-      ) : latest && latest.state === "current" ? null : (
+      ) : (
+        <details open={!latest || latest.state !== "current"}>
+        <summary>{latest?.state === "current" ? "Revise the commentary or explanations" : latest ? "Publish a correction" : "Publish this pack"}</summary>
         <form
           onSubmit={(e) => {
             e.preventDefault();
             const element = e.currentTarget;
             const form = new FormData(element);
-            void act({ action: "publish", digest: pack?.state === "ready" && pack.digest, commentary: form.get("commentary"), reason: form.get("reason") ?? "", confirmed: form.has("confirmed") }, latest ? "Published a correction." : "Published.").then((ok) => ok && element.reset());
+            const explanations = (drafts.data?.explanations ?? []).map((d) => ({ account_id: d.account_id, text: String(form.get(`explanation:${d.account_id}`) ?? "").trim() })).filter((d) => d.text !== "");
+            void act({ action: "publish", digest: pack?.state === "ready" && pack.digest, commentary: form.get("commentary"), explanations, reason: form.get("reason") ?? "", confirmed: form.has("confirmed") }, latest ? "Published a new version." : "Published.").then((ok) => ok && element.reset());
           }}
         >
           <fieldset disabled={busy}>
-            <legend>{latest ? "Publish a correction" : "Publish this pack"}</legend>
+            <legend>{latest ? "Publish a new version" : "Publish this pack"}</legend>
             <label>
               Commentary: what moved and why, as you have verified it (drafted from the figures; add why each moved)
               <textarea name="commentary" required maxLength={4000} defaultValue={pack?.state === "ready" ? pack.draft_commentary : ""} />
             </label>
+            {drafts.error && <p role="alert">The drafted line explanations could not be read. <button type="button" onClick={() => void drafts.refetch()}>Try again</button></p>}
+            {!draftsCurrent && !drafts.error && <p role="status">Drafting the line explanations…</p>}
+            {draftsCurrent && drafts.data!.explanations.length > 0 && (
+              <fieldset>
+                <legend>Line explanations, published with the pack (drafted from the ledger: confirm each, edit, or say plainly the cause is not known)</legend>
+                {drafts.data!.explanations.map((d) => (
+                  <label key={d.account_id}>
+                    {d.name}{d.material ? " · material" : ""}
+                    <textarea name={`explanation:${d.account_id}`} maxLength={600} required={d.material} defaultValue={d.text} />
+                  </label>
+                ))}
+              </fieldset>
+            )}
             {latest && (
               <label>
-                Why this corrects version {latest.version}
+                Why this version replaces version {latest.version}
                 <textarea name="reason" required maxLength={2000} />
               </label>
             )}
             <label><input type="checkbox" name="confirmed" required /> I reviewed these figures; the published version and its exports will not change.</label>
-            <button className="primary">Publish</button>
+            <button className="primary" disabled={!draftsCurrent}>Publish</button>
           </fieldset>
         </form>
+        </details>
       )}
     </>
   );

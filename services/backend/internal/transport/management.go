@@ -816,22 +816,7 @@ func draftCommentary(pack map[string]any, materiality string) string {
 			out = append(out, net.Name+" "+show(net.Amount)+"; last month is not compared.")
 		}
 	}
-	var lines []packLine
-	for _, s := range pl.Sections {
-		for _, l := range s.Lines {
-			if change, ok := new(big.Rat).SetString(cmp.Or(deref(l.Change), "0")); ok && change.Sign() != 0 {
-				lines = append(lines, l)
-			}
-		}
-	}
-	size := func(l packLine) *big.Rat { r, _ := new(big.Rat).SetString(*l.Change); return r.Abs(r) }
-	slices.SortStableFunc(lines, func(a, b packLine) int { return size(b).Cmp(size(a)) })
-	floor, limited := new(big.Rat), false
-	if _, ok := floor.SetString(materiality); ok && floor.Sign() > 0 {
-		lines = slices.DeleteFunc(lines, func(l packLine) bool { return size(l).Cmp(floor) < 0 })
-	} else if len(lines) > 5 {
-		lines, limited = lines[:5], true
-	}
+	lines, floor, limited := movedLines(pl, materiality)
 	if len(lines) > 0 {
 		said := []string{}
 		for _, l := range lines {
@@ -852,6 +837,27 @@ func draftCommentary(pack map[string]any, materiality string) string {
 		return ""
 	}
 	return strings.Join(out, " ") + " " + draftWhy
+}
+
+// movedLines are the profit and loss lines a pack explains, largest movement first: those that moved by at least the
+// firm's materiality floor (positive when set), or else the five largest movements (limited when there were more).
+func movedLines(pl statement, materiality string) (lines []packLine, floor *big.Rat, limited bool) {
+	for _, s := range pl.Sections {
+		for _, l := range s.Lines {
+			if change, ok := new(big.Rat).SetString(cmp.Or(deref(l.Change), "0")); ok && change.Sign() != 0 {
+				lines = append(lines, l)
+			}
+		}
+	}
+	size := func(l packLine) *big.Rat { r, _ := new(big.Rat).SetString(*l.Change); return r.Abs(r) }
+	slices.SortStableFunc(lines, func(a, b packLine) int { return size(b).Cmp(size(a)) })
+	floor = new(big.Rat)
+	if _, ok := floor.SetString(materiality); ok && floor.Sign() > 0 {
+		lines = slices.DeleteFunc(lines, func(l packLine) bool { return size(l).Cmp(floor) < 0 })
+	} else if len(lines) > 5 {
+		lines, limited = lines[:5], true
+	}
+	return lines, floor, limited
 }
 
 // draftWhy ends a drafted commentary; a commentary still carrying it has not been written by the reviewer.
