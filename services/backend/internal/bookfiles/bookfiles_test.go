@@ -806,3 +806,24 @@ func TestTotalsInEitherColumnAndWordMarks(t *testing.T) {
 		t.Fatalf("a word in a format: %q", got)
 	}
 }
+
+// The workbook's parts are found where its relationships put them, not only where Excel does.
+func TestWorkbookPartsByRelationship(t *testing.T) {
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	const rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+	file, err := Read("tb.xlsx", workbook(t, map[string]string{
+		"_rels/.rels":              `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="` + rel + `officeDocument" Target="book/main.xml"/></Relationships>`,
+		"book/main.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"book/_rels/main.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="` + rel + `worksheet" Target="sheets/one.xml"/><Relationship Id="rId2" Type="` + rel + `sharedStrings" Target="text/strings.xml"/><Relationship Id="rId3" Type="` + rel + `styles" Target="look/styles.xml"/></Relationships>`,
+		"book/text/strings.xml":    `<sst ` + main + `><si><t>Cash</t></si></sst>`,
+		"book/look/styles.xml":     `<styleSheet ` + main + `><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>`,
+		"book/sheets/one.xml":      `<worksheet ` + main + `><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" s="1"><v>46295</v></c></row></sheetData></worksheet>`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cells(file.Tables[0])
+	if got["A1"].Value != "Cash" || got["B1"].Kind != Date {
+		t.Fatalf("parts by relationship: %+v", got)
+	}
+}
