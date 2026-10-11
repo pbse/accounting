@@ -237,7 +237,9 @@ func forecastOn(weeks []cashWeek, day string) (string, bool) {
 }
 
 // cashPlanCalculation names how the plan is laid out; a review keeps it with the plan.
-const cashPlanCalculation = "cash_plan_v1"
+// cash_plan_v2: a bill stands in for a schedule's date only by a person's decision (replaces, part, separate,
+// duplicate), never by its vendor and week; v1 reviews show their inputs changed.
+const cashPlanCalculation = "cash_plan_v2"
 
 // lowestWeek is the week with the lowest end-of-day balance in the plan.
 func lowestWeek(weeks []cashWeek) cashWeek {
@@ -340,6 +342,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			return nil, tieRefusal{503, "The cash plan is unavailable."}
 		}
 		opening, banks, foreignBanks, unreadableBanks, ok := bookCash(accounts, home)
+		unreadableAccounts := slices.Clone(unreadableBanks)
 		foreignBanks = append(foreignBanks, unreadableBanks...)
 		if !ok {
 			return wait("The capture's accounts or the client's home currency could not be read.")
@@ -363,27 +366,94 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		start := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
 		day := func(on time.Time) int { return int(on.Sub(start) / (24 * time.Hour)) }
 		end := start.AddDate(0, 0, 13*7)
-		// Counted open bills by vendor and due week, before any bill-pay date moves them: an obligation's payment that week is
-		// the bill. A bill left out of the plan (disputed, on hold, undated) is not the payment, so the obligation counts.
-		billWeeks := map[string]bool{}
+		// How bills relate to the schedules' dates is what people decided, never a vendor and a week alone.
+		matches, err := cashMatchesOf(ctx, db, org, entity, company)
+		if err != nil {
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
+		}
+		obligations, err := clientObligations(r, db, org, entity)
+		if err != nil {
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
+		}
+		// A decision holds only while its schedule counts and still has that date; one whose schedule was retired or
+		// changed no longer moves anything and is named, so the bill is decided again against what applies now.
+		standing, lapsed := []cashMatch{}, []cashMatch{}
+		for _, m := range matches {
+			holds := false
+			for _, o := range obligations {
+				if o.ID != m.Obligation || o.ApprovedAt == nil || o.RetiredAt != nil || o.Direction != "out" || o.Currency != home {
+					continue
+				}
+				first, _ := time.Parse("2006-01-02", o.FirstOn)
+				on, err := time.Parse("2006-01-02", m.On)
+				var until *time.Time
+				if t, err := time.Parse("2006-01-02", o.UntilOn); err == nil {
+					until = &t
+				}
+				holds = err == nil && len(occurrences(first, o.Every, until, on, on.AddDate(0, 0, 1))) == 1
+			}
+			if holds {
+				standing = append(standing, m)
+			} else {
+				lapsed = append(lapsed, m)
+			}
+		}
+		matches = standing
+		repeated := map[string]bool{}
+		for _, m := range matches {
+			repeated[m.Document] = repeated[m.Document] || m.Relation == "duplicate"
+		}
+		// Every open bill, counted or not, so a decision about one always says where it stands.
+		bills := map[string]cashBill{}
+		sameWeek := func(a, b string) bool {
+			x, errX := time.Parse("2006-01-02", a)
+			y, errY := time.Parse("2006-01-02", b)
+			return errX == nil && errY == nil && !x.Before(start) && !y.Before(start) && day(x)/7 == day(y)/7
+		}
 		items, unscheduled, otherCurrency := []cashItem{}, []map[string]string{}, []string{}
 		for side, list := range [][]openItem{receivables, payables} {
 			for _, item := range list {
 				if d, ok := decided[item.Kind+"|"+item.ID]; ok {
 					item.Action = d.Action
 				}
+				key := strings.ToLower(item.Kind) + ":" + item.ID
+				bill := cashBill{Key: key, Label: item.Label, Vendor: item.Party, Due: item.Due}
+				bill.Balance, _ = new(big.Rat).SetString(item.Balance)
+				record := func() {
+					if side == 1 && item.Kind == "Bill" {
+						bills[key] = bill
+					}
+				}
 				if item.Currency != home {
 					otherCurrency = append(otherCurrency, item.Label)
+					bill.Reason = "It is in another currency, so it is left out."
+					record()
 					continue
 				}
 				on, basis, reason := cashSchedule(item)
+				// A date that cannot be read places nothing: the item is left out with the reason, never counted.
+				if _, err := time.Parse("2006-01-02", on); reason == "" && err != nil {
+					reason = "Its date (" + on + ") could not be read, so it is not placed."
+				}
 				if reason != "" {
 					unscheduled = append(unscheduled, map[string]string{"label": item.Label, "amount": item.Balance, "reason": reason})
+					bill.Reason = reason
+					record()
 					continue
 				}
-				if due, err := time.Parse("2006-01-02", item.Due); err == nil && side == 1 && !due.Before(start) {
-					billWeeks[strings.ToLower(strings.TrimSpace(item.Party))+"|"+strconv.Itoa(day(due)/7)] = true
+				// A bill decided to repeat a payment already counted is left out, under that decision.
+				if repeated[key] {
+					bill.Reason = "Left out: the same payment entered twice."
+					record()
+					continue
 				}
+				bill.On = on
+				if day, _ := time.Parse("2006-01-02", on); day.Before(start) {
+					bill.Reason = "It is past due with no agreed date."
+				} else {
+					bill.Counted = true
+				}
+				record()
 				value, _ := new(big.Rat).SetString(item.Balance)
 				if side == 1 {
 					value.Neg(value)
@@ -392,16 +462,11 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				if item.Action != nil && basis != "due date" {
 					ref = "decision:" + item.Action.ID
 				}
-				items = append(items, cashItem{Key: strings.ToLower(item.Kind) + ":" + item.ID, Ref: ref, On: on, Amount: value.FloatString(2), Label: item.Label, Source: strings.ToLower(item.Kind), Basis: basis, value: value})
+				items = append(items, cashItem{Key: key, Ref: ref, On: on, Amount: value.FloatString(2), Label: item.Label, Source: strings.ToLower(item.Kind), Basis: basis, value: value})
 			}
 		}
-		obligations, err := clientObligations(r, db, org, entity)
-		if err != nil {
-			return nil, tieRefusal{503, "The cash plan is unavailable."}
-		}
-		// An approved obligation counts on each of its dates, except where an open bill from its named vendor already
-		// falls in the same week: that bill is the payment, so the estimate is not counted twice.
-		pending, covered := []cashObligation{}, []map[string]string{}
+		// An approved obligation counts on each of its dates, less what the bills decided against that date pay of it.
+		pending, matched, questions := []cashObligation{}, []cashMatched{}, []cashQuestion{}
 		for _, o := range obligations {
 			if o.RetiredAt != nil {
 				continue
@@ -424,12 +489,24 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				if o.Direction == "out" {
 					value.Neg(value)
 				}
-				item := cashItem{Ref: "obligation:" + o.ID, On: on.Format("2006-01-02"), Amount: value.FloatString(2), Label: o.Name, Source: o.Category, Basis: "approved " + strings.ReplaceAll(o.Every, "_", " ") + " schedule", value: value}
-				if o.Direction == "out" && o.Vendor != "" && billWeeks[strings.ToLower(o.Vendor)+"|"+strconv.Itoa(day(on)/7)] {
-					covered = append(covered, map[string]string{"obligation": o.Name, "on": item.On, "vendor": o.Vendor})
-					continue
+				basis := "approved " + strings.ReplaceAll(o.Every, "_", " ") + " schedule"
+				if o.Direction == "out" {
+					residual, m, q := settleOccurrence(o, on.Format("2006-01-02"), sameWeek, bills, matches, func(m cashMatch) bool { return captureCovers(meta, m.DecidedAt, m.DocumentDate) })
+					if m != nil {
+						matched = append(matched, *m)
+					}
+					if q != nil {
+						questions = append(questions, *q)
+					}
+					if residual.Sign() == 0 {
+						continue
+					}
+					if residual.Cmp(new(big.Rat).Neg(value)) != 0 {
+						basis += ", less what its bills invoice"
+					}
+					value = new(big.Rat).Neg(residual)
 				}
-				items = append(items, item)
+				items = append(items, cashItem{Ref: "obligation:" + o.ID, On: on.Format("2006-01-02"), Amount: value.FloatString(2), Label: o.Name, Source: o.Category, Basis: basis, value: value})
 			}
 		}
 		// A scenario changes only this view: the base plan's lowest point is reported beside it.
@@ -470,17 +547,121 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		if executive(r) {
 			draftSchedules = []cashObligation{}
 		}
+		// What the plan cannot settle yet, each named: a missing source or an amount it cannot place makes it incomplete;
+		// otherwise an open decision makes it a draft.
+		gaps := []cashGap{}
+		source := func(text, amount string) { gaps = append(gaps, cashGap{"source", text, amount}) }
+		if stale {
+			source("The bank balances come from a capture that is no longer current.", "")
+		}
+		if meta["complete"] != true {
+			source("The latest capture did not read every open item.", "")
+		}
+		if apart.Abs() > 24*time.Hour {
+			source("The bank balances and the open items were read "+strconv.Itoa(int(apart.Abs().Hours()))+" hours apart.", "")
+		}
+		if first > meta["month_end"].(string) {
+			source("Invoices and bills dated after "+meta["month_end"].(string)+" are not captured here.", "")
+		}
+		// An item that needs an agreed date, or is left out by design (another currency), is an assumption a reviewer
+		// accepts: a decision. What the books did not let the plan read is a missing source.
+		decision := func(text, amount string) { gaps = append(gaps, cashGap{"decision", text, amount}) }
+		for _, name := range foreignBanks {
+			if slices.Contains(unreadableAccounts, name) {
+				source(name+"'s balance could not be read, so it is left out of book cash.", "")
+			} else {
+				decision(name+" is in another currency and left out of book cash.", "")
+			}
+		}
+		// A promise or bill-pay date that has passed is a broken expectation, not a payment: the item stays open and unplaced.
+		for _, item := range before {
+			switch item.Basis {
+			case "promised date":
+				decision(item.Label+": the promised date "+item.On+" passed without payment, so it is not placed.", item.Amount)
+			case "bill-pay date":
+				decision(item.Label+": the bill-pay date "+item.On+" passed and the bill is still open, so it is not placed.", item.Amount)
+			default:
+				decision(item.Label+" is past due with no agreed date.", item.Amount)
+			}
+		}
+		for _, item := range unscheduled {
+			if strings.Contains(item["reason"], "could not be read") {
+				source(item["label"]+": "+item["reason"], item["amount"])
+			} else {
+				decision(item["label"]+": "+item["reason"], item["amount"])
+			}
+		}
+		for _, label := range otherCurrency {
+			decision(label+" is in another currency and left out.", "")
+		}
+		for _, q := range questions {
+			bills := "an undecided bill"
+			if len(q.Bills) > 1 {
+				bills = strconv.Itoa(len(q.Bills)) + " undecided bills"
+			}
+			gaps = append(gaps, cashGap{"decision", q.Name + " on " + q.On + ": " + q.Vendor + " has " + bills + " that week; until someone decides whether a bill pays it, the payment may be counted twice.", q.Amount})
+		}
+		for _, m := range matched {
+			for _, b := range m.Bills {
+				if b.Confirm {
+					gaps = append(gaps, cashGap{"decision", b.Label + " was decided to pay " + m.Name + " on " + m.On + " and is no longer open; confirm whether it was paid, so the payment is not counted twice.", b.Amount})
+				}
+				if b.Unknown {
+					gaps = append(gaps, cashGap{"source", b.Label + ", decided to pay " + m.Name + " on " + m.On + ", is not in this capture, which cannot say whether it is still open; capture the books again.", b.Amount})
+				}
+			}
+		}
+		if scenario != nil {
+			for _, key := range scenario["missing"].([]string) {
+				gaps = append(gaps, cashGap{"source", "The scenario's change to " + key + " is not applied: the item is no longer open, or has no date.", ""})
+			}
+		}
+		for _, m := range lapsed {
+			gaps = append(gaps, cashGap{"decision", "A decision on " + m.Label + " was for a schedule's date that no longer applies (" + m.On + "); decide it again against what applies now.", ""})
+		}
+		// Readiness is part of what a review accepts, so the digest covers it as the firm sees it; a client's executive
+		// sees the proposed schedules only as a count.
+		reviewed := append([]cashGap{}, gaps...)
+		for _, o := range pending {
+			reviewed = append(reviewed, cashGap{"decision", o.Name + " is proposed but not approved, so it is not counted.", o.Amount})
+		}
+		if executive(r) && len(pending) > 0 {
+			gaps = append(gaps, cashGap{"decision", strconv.Itoa(len(pending)) + " proposed schedules wait for the firm's approval and are not counted.", ""})
+		} else {
+			gaps = reviewed
+		}
+		last := start.AddDate(0, 0, 13*7-1)
 		out := map[string]any{"state": "ready", "entity": entity, "currency": home, "start": start.Format("2006-01-02"), "unapproved_schedules": len(pending),
+			"horizon":   map[string]any{"start": start.Format("2006-01-02"), "end": last.Format("2006-01-02"), "weeks": 13},
+			"readiness": cashReadiness(gaps), "matches": matched, "questions": questions, "lapsed": lapsed,
 			"opening":    map[string]any{"amount": opening.FloatString(2), "as_of": asOf, "snapshot_id": snapshotID, "stale": stale, "accounts": banks, "left_out": foreignBanks},
 			"open_items": map[string]any{"captured_at": meta["captured_at"], "capture_id": meta["capture_id"], "complete": meta["complete"], "hours_apart": int(apart.Abs().Hours()), "through": meta["month_end"], "missing_later": first > meta["month_end"].(string)},
 			"weeks":      weeks, "lowest": map[string]string{"amount": lowest.Lowest, "on": lowest.LowestOn},
-			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "covered": covered, "pending_obligations": draftSchedules, "scenario": scenario,
+			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "pending_obligations": draftSchedules, "scenario": scenario,
 			"note": "Book cash is the ledger's bank balances at the capture, not bank-available cash. Receipts and payments are expectations from due dates, promises, bill-pay handoffs and approved schedules; nothing is paid, collected or written to the ledger. Sales not yet invoiced are not in the plan unless an approved receipt schedule adds them, so later weeks show only what is already known."}
 		// The digest binds the sources (the capture and the open items read) and the calculation, not only the totals.
-		figures, _ := json.Marshal([]any{cashPlanCalculation, entity, home, company, snapshotID, meta["capture_id"], out["start"], opening.FloatString(2), banks, weeks, before, after, unscheduled, covered, otherCurrency, scenario})
-		out["company"], out["calculation"], out["digest"] = company, cashPlanCalculation, preparation.Digest(figures)
+		figures, _ := json.Marshal([]any{cashPlanCalculation, entity, home, company, snapshotID, meta["capture_id"], out["start"], opening.FloatString(2), banks, weeks, before, after, unscheduled, matched, questions, otherCurrency, scenario, reviewed})
+		digest := preparation.Digest(figures)
+		out["company"], out["calculation"], out["digest"] = company, cashPlanCalculation, digest
+		// The newest review of this view, and whether the plan still is what it reviewed.
+		var reviewID, reviewedDigest, reviewedBy string
+		var reviewedAt time.Time
+		err = db.QueryRowContext(ctx, `SELECT id::text,digest,reviewed_by,reviewed_at FROM cash_plan_reviews WHERE close_id::text=$1 AND scenario_id IS NOT DISTINCT FROM NULLIF($2,'')::bigint ORDER BY id DESC LIMIT 1`, r.PathValue("id"), scenarioID).Scan(&reviewID, &reviewedDigest, &reviewedBy, &reviewedAt)
+		switch {
+		case err == sql.ErrNoRows:
+			out["review"] = nil
+		case err != nil:
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
+		default:
+			state := "inputs_changed"
+			if reviewedDigest == digest && !stale && meta["complete"] == true {
+				state = reviewedState(out)
+			}
+			out["review"] = map[string]any{"id": reviewID, "reviewed_by": reviewedBy, "reviewed_at": reviewedAt, "state": state}
+		}
 		return out, nil
 	}
+	registerCashMatches(mux, db, client)
 	mux.HandleFunc("GET /v1/closes/{id}/cash-plan", func(w http.ResponseWriter, r *http.Request) {
 		out, err := plan(r, r.URL.Query().Get("scenario"))
 		if refused, ok := err.(tieRefusal); ok {
@@ -531,6 +712,9 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			return
 		case out["opening"].(map[string]any)["stale"] == true || out["open_items"].(map[string]any)["complete"] != true:
 			problem(w, 409, "Only a plan from a current capture with every open item read can be reviewed.")
+			return
+		case len(out["questions"].([]cashQuestion)) > 0 || confirmationsOpen(out):
+			problem(w, 409, "Decide how the open bills relate to the schedules, and confirm any that were paid, first: until then the plan may count a payment twice.")
 			return
 		}
 		// Reviews of a close are made one at a time; the newest review of this view decides whether this one is new, so a
@@ -649,7 +833,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 					// The plan can no longer be laid out from current, complete books, so it cannot be confirmed as reviewed.
 					v.State = "inputs_changed"
 				case live["digest"] == v.digest:
-					v.State = "current"
+					v.State = reviewedState(live)
 				default:
 					v.State = "inputs_changed"
 				}
@@ -836,7 +1020,11 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Say why the obligation no longer applies.")
 				return
 			}
-			result, err = db.ExecContext(r.Context(), `UPDATE cash_obligations SET retired_by=$4,retired_at=now(),retire_reason=$5 WHERE id::text=$3 AND organization_id=$1 AND lower(client_entity)=lower($2) AND retired_at IS NULL`, org, entity, in.ID, who, in.Reason)
+			// The decisions made about bills against its dates go with it, so its bills are asked about again against
+			// whatever schedule applies now.
+			result, err = db.ExecContext(r.Context(), `WITH retired AS (UPDATE cash_obligations SET retired_by=$4,retired_at=now(),retire_reason=$5 WHERE id::text=$3 AND organization_id=$1 AND lower(client_entity)=lower($2) AND retired_at IS NULL RETURNING id),
+ lapsed AS (UPDATE cash_obligation_matches m SET retired_by=$4,retired_at=now() FROM retired WHERE m.obligation_id=retired.id AND m.retired_at IS NULL RETURNING m.id)
+ SELECT 1 FROM retired`, org, entity, in.ID, who, in.Reason)
 		default:
 			problem(w, 422, "Add, approve or retire an obligation.")
 			return
@@ -851,4 +1039,26 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]bool{"saved": true})
 	})
+}
+
+// reviewedState is what an unchanged review of a plan is: current only when the forecast is complete; a draft or
+// incomplete forecast (its unresolved items, named in it, accepted by the reviewer) is reviewed as a draft, never current.
+func reviewedState(plan map[string]any) string {
+	if ready, ok := plan["readiness"].(map[string]any); ok && ready["state"] == "complete" {
+		return "current"
+	}
+	return "draft_reviewed"
+}
+
+// confirmationsOpen says whether a decided bill that left the open items waits for someone to confirm it was paid.
+func confirmationsOpen(plan map[string]any) bool {
+	matched, _ := plan["matches"].([]cashMatched)
+	for _, m := range matched {
+		for _, b := range m.Bills {
+			if b.Confirm || b.Unknown {
+				return true
+			}
+		}
+	}
+	return false
 }

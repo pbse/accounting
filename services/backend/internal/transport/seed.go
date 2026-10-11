@@ -1643,6 +1643,27 @@ func (s *seeder) cashPlan(ctx context.Context, c *seed.Client) {
 			}
 		}
 	}
+	// The firm answers the plan's bill questions as a person would: a bill for exactly the schedule's amount pays it, any
+	// other bill from that vendor that week is a separate payment.
+	if out, ok := s.must(ctx, "cash plan", "GET", path+"/cash-plan", nil); ok {
+		var plan struct {
+			OpenItems struct {
+				CaptureID string `json:"capture_id"`
+			} `json:"open_items"`
+			Questions []cashQuestion `json:"questions"`
+		}
+		json.Unmarshal(out, &plan)
+		for _, q := range plan.Questions {
+			for _, b := range q.Bills {
+				relation := "separate"
+				if b.Amount == q.Amount {
+					relation = "replaces"
+				}
+				s.must(ctx, "bill against "+q.Name, "POST", path+"/cash-matches", map[string]any{"action": "decide", "capture_id": plan.OpenItems.CaptureID, "obligation_id": q.Obligation, "on": q.On, "document": b.Document, "relation": relation})
+			}
+		}
+	}
+	// The September plan starts in October, so later-dated items are not captured: it is reviewed as a draft.
 	if out, ok := s.must(ctx, "cash plan", "GET", path+"/cash-plan", nil); ok {
 		s.must(ctx, "cash plan review", "POST", path+"/cash-plan/reviews", map[string]any{"scenario": "", "digest": str(field(out, "digest")), "assumptions": "Open invoices collected on their due dates except Fairview Parks (net 45, historically 10 days late); bills paid on due dates; payroll and the note as scheduled.", "confirmed": true})
 	}
@@ -2072,6 +2093,10 @@ func RemoveSeed(ctx context.Context, db *sql.DB, firm seed.Firm, o SeedOptions) 
 		rows.Close()
 	}
 	statements := []seedStatement{}
+	// Decisions on bills against the seed's schedules go with the schedules they name.
+	if ids := recorded["cash_obligations"]; len(ids) > 0 {
+		statements = append(statements, seedStatement{`DELETE FROM cash_obligation_matches WHERE organization_id=$1 AND obligation_id::text=ANY($2) AND NOT lower(client_entity)=ANY(COALESCE($3::text[],'{}'))`, []any{o.Organization, ids, retained}})
+	}
 	for _, table := range []string{"client_roster", "client_access", "budget_versions", "cash_obligations", "cash_scenarios", "open_item_actions", "collection_contact_preferences", "close_routines"} {
 		if ids := recorded[table]; len(ids) > 0 {
 			statements = append(statements, seedStatement{fmt.Sprintf(`DELETE FROM %s WHERE organization_id=$1 AND id::text=ANY($2) AND NOT lower(client_entity)=ANY(COALESCE($3::text[],'{}'))`, table), []any{o.Organization, ids, retained}})

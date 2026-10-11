@@ -461,6 +461,10 @@ func claimOf(read agentRead, path string) claim {
 			if items, ok := root["open_items"].(map[string]any); ok && items["complete"] == false && c.forecast {
 				c.incomplete = true
 			}
+			// A plan with an open decision or a missing source is a draft or incomplete forecast, said to be so.
+			if ready, ok := root["readiness"].(map[string]any); ok && (ready["state"] == "draft" || ready["state"] == "incomplete") && c.forecast {
+				c.incomplete = true
+			}
 		}
 	}
 	// A prior month's figure, and a change made from it, are as fresh as the prior month's capture.
@@ -553,7 +557,7 @@ var (
 	claimScenario       = regexp.MustCompile(`\b(scenario|what-if|if)\b`)
 	claimFromTo         = regexp.MustCompile(`(?i)\bfrom\s+(\w+(?:\s+\d{4})?)\s+to\s+(\w+(?:\s+\d{4})?)`)
 	claimNegation       = regexp.MustCompile(`\b(not|no|never|without|neither|nor|unrelated|isn't|wasn't|didn't|doesn't|don't|won't|cannot|can't|hasn't|haven't)\b|n't\b`)
-	claimIncompleteSaid = regexp.MustCompile(`\b(incomplete|missing|partial|not complete|provisional|not yet captured|not all)\b`)
+	claimIncompleteSaid = regexp.MustCompile(`\b(incomplete|missing|partial|not complete|provisional|not yet captured|not all|draft|unresolved|not approved|undecided)\b`)
 	// Month names in any case, except "may", which is a month only as May.
 	claimMonth    = regexp.MustCompile(`\b((?i:january|february|march|april|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)|May)\b(?:\s+(\d{4}))?|\b(\d{4})-(\d{2})\b(?:-\d{2})?`)
 	claimCurrency = regexp.MustCompile(`(?i)\b(USD|EUR|GBP|CAD|AUD|NZD|INR|JPY|CHF|SGD|HKD|MXN|SEK|NOK|DKK|ZAR)\b|[€£₹¥$]`)
