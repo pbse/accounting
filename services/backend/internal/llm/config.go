@@ -35,8 +35,7 @@ type Config struct {
 
 var purposes = []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat", "ocr"}
 
-// AnyMember is the subject of an organization-wide caller profile: every current member of the organization may
-// complete through it, and the context machine checks that member's own access on every call.
+// AnyMember is the legacy wildcard subject in research/evaluation configuration; it never gates inference.
 const AnyMember = "*"
 
 // New freezes routing configuration. Unknown purposes fail closed rather than
@@ -86,8 +85,8 @@ func New(cfg Config) (*Client, error) {
 		if effort == "" {
 			effort = "medium"
 		}
-		if model == "" || !ValidAgentEffort(cfg.ContextMachineModel, effort) || len(cfg.Profiles) == 0 {
-			return nil, errors.New("context-machine completion requires its model, effort and profiles")
+		if model == "" || !ValidAgentEffort(cfg.ContextMachineModel, effort) {
+			return nil, errors.New("context-machine completion requires its model and effort")
 		}
 		for _, purpose := range purposes {
 			c.routes[purpose] = route{Provider: ContextMachine, Model: model, Agent: cfg.ContextMachineModel, Effort: effort, Token: cfg.ContextMachineToken, Uncapped: cfg.AllowUncappedOutputTokens}
@@ -350,66 +349,27 @@ func ProviderLabel(ctx context.Context, purpose string) string {
 	return "OpenAI API"
 }
 
-// CompletionProfiles supplies immutable caller eligibility for background SQL selection.
-// Nil means API routing, where existing caller authorization applies.
-func CompletionProfiles(ctx context.Context) []Scope {
+// EvaluationProfiles exposes optional local replay mappings, never inference eligibility.
+func EvaluationProfiles(ctx context.Context) []Scope {
 	c, _ := ctx.Value(clientKey{}).(*Client)
-	if c == nil || c.routes["preparation"].Provider != ContextMachine {
+	if c == nil {
 		return nil
 	}
 	return slices.Clone(c.profiles)
 }
 
-// Allows checks configured caller eligibility before a workflow reserves budget.
-// Background selection without identity may inspect only its configured organizations;
-// each selected job must then supply its recorded creator before dispatch.
+// Allows checks the application's established tenant context before budget use;
+// any organization can use the configured inference route.
 func Allows(ctx context.Context, organization string) bool {
-	c, _ := ctx.Value(clientKey{}).(*Client)
-	if c == nil || c.routes["preparation"].Provider != ContextMachine {
-		return true
-	}
 	id, has := ctx.Value(identityKey{}).(identity)
-	if has && (id.organization != organization || id.subject == "" || id.subject == AnyMember) {
-		return false
-	}
-	return c.profile(organization, id.subject).AccessProfile != ""
+	return !has || id.organization == organization
 }
 
-// ViaWideProfile reports that the caller's eligibility rests on an organization-wide profile rather than their own:
-// membership alone put them there, so a background caller must also check the client grant the work needs.
-func ViaWideProfile(ctx context.Context, organization string) bool {
+// RequiresClientGrant triggers the existing SQL membership/client-grant checks
+// before background data is sent to context-machine inference. It does not grant access.
+func RequiresClientGrant(ctx context.Context) bool {
 	c, _ := ctx.Value(clientKey{}).(*Client)
-	id, has := ctx.Value(identityKey{}).(identity)
-	if c == nil || !has || c.routes["preparation"].Provider != ContextMachine || id.organization != organization {
-		return false
-	}
-	for _, p := range c.profiles {
-		if p.Organization == organization && p.Subject == id.subject {
-			return false
-		}
-	}
-	return c.profile(organization, id.subject).AccessProfile != ""
-}
-
-// profile finds the configured scope for a caller: the member's own profile first, then the organization-wide one,
-// which stands for the member themselves. Without a subject, any profile for the organization makes it eligible.
-func (c *Client) profile(organization, subject string) Scope {
-	var wide Scope
-	for _, p := range c.profiles {
-		if p.Organization != organization {
-			continue
-		}
-		if subject == "" || p.Subject == subject {
-			return p
-		}
-		if p.Subject == AnyMember {
-			wide = p
-		}
-	}
-	if wide.AccessProfile == "" {
-		return Scope{}
-	}
-	return Scope{Organization: organization, Subject: subject, AccessProfile: wide.AccessProfile}
+	return c != nil && c.routes["preparation"].Provider == ContextMachine
 }
 
 // ContextMachineEndpoint exposes non-secret transport metadata for local evaluation

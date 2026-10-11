@@ -344,6 +344,6 @@ func pageReadingAllowed(ctx context.Context, db *sql.DB, org, entity string) boo
 		return true
 	}
 	var allowed bool
-	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) AND EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted) AND EXISTS(SELECT 1 FROM organizations WHERE id=$1 AND enabled AND disabled_at IS NULL)`, org, llm.Subject(ctx), entity).Scan(&allowed)
+	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) AND EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted) AND EXISTS(SELECT 1 FROM organizations WHERE id=$1 AND enabled)`, org, llm.Subject(ctx), entity).Scan(&allowed)
 	return err == nil && allowed
 }

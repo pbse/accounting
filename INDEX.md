@@ -6,7 +6,9 @@ Start here to find the governing plan, implementation details and acceptance evi
 
 1. Read [AGENTS.md](AGENTS.md) for repository working instructions and [README.md](README.md) for local setup, commands and code layout.
 2. Follow [docs/agent-first-build-plan.md](docs/agent-first-build-plan.md): **the authoritative remaining build scope, B01–B12, phases A–E and partner-signup gates**, merged in PR #223. All twelve packages are required; internal milestones are not partial launch products.
+   - For every implementation, apply its [supervision experience contract](docs/agent-first-build-plan.md#supervision-experience-contract): preserve the current Krith chat and client/month layout, let the agent progress delegated work, and give people precise decisions and approvals. This includes concrete journeys and acceptance for clarity, accuracy and speed.
 3. Check [docs/implementation-backlog.md](docs/implementation-backlog.md) for implementation progress and known limits, then read the relevant feature documents below and inspect current code before changing it.
+   - For the October 10 product/accuracy work, use [docs/agent-first-implementation-handoff.md](docs/agent-first-implementation-handoff.md): prioritized fixes, source entry points, close-page changes, regression cases, acceptance walkthrough and the building-agent brief. It translates the governing plan; it is not a second launch backlog.
 4. Use [docs/maturity.md](docs/maturity.md) for dated audit findings, buyer/dashboard rationale, no-accounting-lead working guidance and follow-ups mapped to B01–B12.
 5. Record proof in [docs/validation.md](docs/validation.md); use [docs/onboarding.md](docs/onboarding.md), [docs/deployment.md](docs/deployment.md) and [docs/operations.md](docs/operations.md) for environment acceptance and operation.
 
@@ -17,8 +19,9 @@ Start here to find the governing plan, implementation details and acceptance evi
 | Document | What it contains / when to read it |
 | --- | --- |
 | [Agent-first build plan](docs/agent-first-build-plan.md) | Required customer jobs, agent behavior, shared UX, accuracy/performance, complete demo, delivery dependencies and acceptance. Start every build package here. |
+| [Product fixes and accuracy handoff](docs/agent-first-implementation-handoff.md) | October 10 implementation instructions: accuracy fixes, [approved Home and scalable navigation](docs/agent-first-implementation-handoff.md#b02--approved-home-and-scalable-client-navigation), close-page/Settings refinements, preparation, decision state, change propagation, live acceptance and optional differentiation. Includes tests, entry points and a building-agent brief. The [saved screenshot](docs/images/agent-first-home-reference.png) illustrates the approved main content; its company/month sidebar tree is explicitly excluded. |
 | [Implementation backlog](docs/implementation-backlog.md) | Delivery progress, existing coverage, decisions and remaining activation work. Update progress here without creating a competing launch plan. |
-| [Maturity](docs/maturity.md) | Historical and October 2 implementation reviews, concrete defects, dashboard metric definitions, market/persona reasoning, acceptance detail and B01–B12 crosswalk. |
+| [Maturity](docs/maturity.md) | Start with the [October 10 review](docs/maturity.md#product-maturity-and-differentiation-review-2026-10-10): current agent/UI/workflow assessment, reproduced citation gap, maturity gates and ranked value additions. Earlier dated audits, dashboard definitions and B01–B12 crosswalk remain as supporting evidence. |
 | [Design-partner product bar](docs/design-partner-product-bar.md) | Supporting October 2 market/persona analysis and complete-service offer. Consolidated into the build plan; not a separate source of launch authority. |
 | [Enterprise readiness review](docs/enterprise-readiness-review.md) | Supporting technical inventory, earlier recommendations and dated local test results. Narrower scope/deferrals are superseded by the build plan. |
 | [Original product requirements](docs/product-requirements.md) | Original customer/problem definition, requirement IDs, boundaries and success targets. Read for provenance; the build plan extends its scope. |
@@ -53,7 +56,7 @@ These are pointers into the existing implementation, not evidence that a package
 | Document | Contents |
 | --- | --- |
 | [Architecture](docs/architecture.md) | System boundaries, identity/authority, exact accounting and shared capabilities. |
-| [Design system](docs/design-system.md) | Krith: the agent-first shell (sidebar, Home stage, composer, close and records pages), tokens, components, motion and the layout check. Tray is archived at [docs/archive/design-system-tray.md](docs/archive/design-system-tray.md). |
+| [Design system](docs/design-system.md) | Krith: preserve the current sidebar, chat-first Home, composer and client/month close layouts; tokens, components, motion and the layout check. Read with the build plan's supervision experience contract. Tray is archived at [docs/archive/design-system-tray.md](docs/archive/design-system-tray.md). |
 | [Workspace simplification](docs/workspace-simplification.md) | The 2026-10-07 audit's decisions: the cleaner look, the top bar, and the PR sequence that rebuilds the home, Clients, the close page, Firm settings and the copy. |
 | [Workflow engine](docs/workflow-engine.md) | Go durable workflow primitives, activity execution and current/deferred engine capabilities. |
 | [LLM gateway](docs/llm-gateway.md) | Text/image model routing, context-machine integration, local evaluation, execution and operational boundaries. |
