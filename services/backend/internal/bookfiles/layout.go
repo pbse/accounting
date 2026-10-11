@@ -255,25 +255,27 @@ func checkTotal(lines []Line, i int, debit, credit *big.Rat) []string {
 		return covered
 	}
 	if label == "" {
-		debits, credits := new(big.Rat), new(big.Rat)
-		for _, l := range lines[:i] {
-			if l.Kind == Posting && l.Balance.Sign() > 0 {
-				debits.Add(debits, l.Balance)
-			} else if l.Kind == Posting {
-				credits.Sub(credits, l.Balance)
+		// An unlabeled total ("Total", "TOTAL") closes the whole file, or the section since the total before it: it
+		// checks when either holds.
+		since := 0
+		for j := i - 1; j >= 0; j-- {
+			if lines[j].Kind == Total {
+				since = j + 1
+				break
 			}
 		}
 		if debit != nil && credit != nil {
-			debits, credits = columnSums(lines[:i])
-			if debit.Cmp(debits) != 0 || credit.Cmp(credits) != 0 {
-				return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows above come to %s and %s", t.Row, t.Label(), exact(debit), exact(credit), exact(debits), exact(credits))}
+			debits, credits := columnSums(lines[:i])
+			section, sectionCredits := columnSums(lines[since:i])
+			if (debit.Cmp(debits) == 0 && credit.Cmp(credits) == 0) || (debit.Cmp(section) == 0 && credit.Cmp(sectionCredits) == 0) {
+				return nil
 			}
+			return []string{fmt.Sprintf("Row %d (%s) shows debits of %s and credits of %s, but the rows above come to %s and %s", t.Row, t.Label(), exact(debit), exact(credit), exact(debits), exact(credits))}
+		}
+		if all := sum(0); all.Cmp(t.Balance) == 0 || sum(since).Cmp(t.Balance) == 0 {
 			return nil
 		}
-		if net := new(big.Rat).Sub(debits, credits); net.Cmp(t.Balance) != 0 {
-			return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows above come to %s", t.Row, t.Label(), exact(t.Balance), exact(net))}
-		}
-		return nil
+		return []string{fmt.Sprintf("Row %d (%s) is %s, but the rows above come to %s", t.Row, t.Label(), exact(t.Balance), exact(sum(0)))}
 	}
 	from := coveredFrom(lines, i)
 	if debit != nil && credit != nil {
@@ -551,7 +553,7 @@ func (l Layout) Read(t Table) Reading {
 		// account with a zero balance (an export leaves a zero blank), said so when it has no number to show it is one.
 		// A total is named so ("Total …") or marked so, unless a person marked the row an account.
 		total := (totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number)) && !slices.Contains(l.Postings, r.Number)
-		if line.Balance == nil && !total && !totalled[strings.ToLower(line.Label())] && !slices.Contains(l.Headings, r.Number) {
+		if line.Balance == nil && !total && (!totalled[strings.ToLower(line.Label())] || slices.Contains(l.Postings, r.Number)) && !slices.Contains(l.Headings, r.Number) {
 			line.Balance = new(big.Rat)
 			if line.Number == "" {
 				reading.Notes = append(reading.Notes, fmt.Sprintf("Row %d (%s) has no amounts: read as an account with a zero balance; mark it a heading if it is one", r.Number, line.Name))

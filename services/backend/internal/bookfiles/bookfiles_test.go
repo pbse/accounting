@@ -657,3 +657,18 @@ func TestNegativeSides(t *testing.T) {
 		t.Fatalf("a negative debit is a credit: %+v", reading)
 	}
 }
+
+// An unlabeled total can close a section; a confirmed account named by a later total stays an account.
+func TestSectionTotalsAndConfirmedParents(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00\nVan,50.00\nTotal,150.00\nLoan,-50.00\nCapital,-100.00\nTotal,-150.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	if reading := layout.Read(file.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {
+		t.Fatalf("section totals: %+v", reading.Problems)
+	}
+	parent, _ := Read("tb.csv", []byte("Number,Account,Balance\n1000,Bank,\n1010,Checking,100.00\n,Total Bank,100.00\n3000,Capital,-100.00\n"))
+	layout = Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountNumber, 1: AccountName, 2: Balance}, Style: NumberStyle{Scale: 1}, Postings: []int{2}}
+	reading := layout.Read(parent.Tables[0])
+	if reading.Lines[0].Kind != Posting || len(reading.Problems) != 0 {
+		t.Fatalf("a confirmed parent account stays an account: %+v", reading)
+	}
+}
