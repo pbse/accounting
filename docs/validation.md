@@ -4374,6 +4374,12 @@ Reminders required an unused link and no reply at all, so a client who answered 
 
 Test: `TestApprovedEmailDurableRetryAndScope` records a partial reply on a used link: the reminder period restarts from it, the goal offers the reminder, approval succeeds and the worker sends it; seen to fail without the fix (and without the worker's change, cancelled). The closest email, attention, goal, partial-reply, inbound-reply and Work tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — Procedures can be rolled back, and a firm rule no longer blocks client overrides (B08)
+
+Publishing enabled guidance was refused whenever any learned method version had ever existed for the client or the firm, disabled ones included: a retired rule could never be rolled back to guidance, and one firm-wide learned rule stopped every client from publishing its own override. The check now refuses only while the newest version of the same scope is an active learned method; and any earlier guidance or fixed-method version can be restored as a new version (`restore_id` on the publish route, **Restore this version** in Version history, which lists the affected closes and each version's method), with the same reason, current-version and impact checks as any publish. A learned method rule is restored only through procedure learning, which replays its approved examples.
+
+Test: `TestProcedureOverridesPinAndInvalidate` publishes a client override over a firm learned rule (allowed), is refused over the client's own active learned rule, publishes guidance once that rule is retired, refuses restoring a learned rule or a version into another scope, and restores earlier guidance as it was. The procedure and procedure-learning tests passed on a fresh local PostgreSQL. Not done here: effective dates for method versions.
+
 ## 2026-10-11 — A client reply leaves a receipt of what it led to (B05/B11)
 
 After a client replied, the goal's history said only that the client replied, so the person opened Work to learn what the answer did. The goal now records a receipt for a request's new replies, after the request's work settles (none of its documents still being read or prepared, and none of its files still waiting for scanning or release): "Request #N: the client answered 3 of 4 questions, 1 document to follow. invoice.pdf: draft #31 ready for review; statement.pdf: needs you." Each receipt is keyed by the reply's time, so a sweep never repeats it and a later reply gets its own.

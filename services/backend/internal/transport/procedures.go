@@ -225,10 +225,27 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			preparation.Procedure
 			PreviousID   string `json:"previous_id"`
 			ImpactDigest string `json:"impact_digest"`
-			Confirmed    bool   `json:"confirmed"`
+			// RestoreID publishes an earlier version of the same kind and scope again, as a new version, with its own reason.
+			RestoreID string `json:"restore_id"`
+			Confirmed bool   `json:"confirmed"`
 		}
 		if !decode(w, r, &in) {
 			return
+		}
+		if in.RestoreID != "" {
+			var earlier preparation.Procedure
+			err := db.QueryRowContext(r.Context(), `SELECT client_entity,kind,method,instructions,expense_account,prepaid_account,enabled FROM procedure_versions WHERE id::text=$1 AND organization_id=$2`, in.RestoreID, organization(r)).
+				Scan(&earlier.ClientEntity, &earlier.Kind, &earlier.Method, &earlier.Instructions, &earlier.ExpenseAccount, &earlier.PrepaidAccount, &earlier.Enabled)
+			if err != nil || earlier.Kind != in.Kind || !strings.EqualFold(earlier.ClientEntity, strings.TrimSpace(in.ClientEntity)) {
+				problem(w, 422, "Choose an earlier version of this procedure, for the same client or the firm, to restore.")
+				return
+			}
+			// A learned method rule comes back only through procedure learning, which replays its approved examples first.
+			if earlier.Method != "" && fixedMethods[earlier.Kind] == nil && earlier.Kind != "owner" {
+				problem(w, 422, "A learned method rule is restored through procedure learning, which checks its approved examples again.")
+				return
+			}
+			in.Method, in.Instructions, in.ExpenseAccount, in.PrepaidAccount, in.Enabled = earlier.Method, earlier.Instructions, earlier.ExpenseAccount, earlier.PrepaidAccount, earlier.Enabled
 		}
 		in.ClientEntity = strings.TrimSpace(in.ClientEntity)
 		in.Instructions = strings.TrimSpace(in.Instructions)
@@ -280,9 +297,11 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Procedure changed. Refresh and review the latest version first.")
 			return
 		}
+		// Replacing the scope's active learned method with new guidance goes through procedure learning; a learned rule
+		// that is retired, or that another scope holds (the firm's, for a client override), does not stand in the way.
 		if in.Enabled && fixedMethods[in.Kind] == nil && in.Kind != "owner" {
 			var learned bool
-			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM procedure_versions WHERE organization_id=$1 AND kind=$2 AND method<>'' AND (client_entity='' OR lower(client_entity)=lower($3)))`, org, in.Kind, in.ClientEntity).Scan(&learned)
+			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT enabled AND method<>'' FROM procedure_versions WHERE organization_id=$1 AND kind=$2 AND lower(client_entity)=lower($3) ORDER BY id DESC LIMIT 1),false)`, org, in.Kind, in.ClientEntity).Scan(&learned)
 			if err != nil || learned {
 				problem(w, 409, "An active method rule requires a new reviewed draft and regression example. Use procedure learning.")
 				return
