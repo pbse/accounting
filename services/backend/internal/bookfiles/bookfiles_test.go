@@ -836,3 +836,18 @@ func TestCrMarkedCreditsTotal(t *testing.T) {
 		t.Fatalf("a Cr-marked credit and its total: %+v", reading)
 	}
 }
+
+// A footer left out totals nothing: the account it names keeps its zero balance.
+func TestALeftOutFooterTotalsNothing(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nBank,,\nCapital,,100.00\nTotal Bank,,\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	layout.Ignored = []int{5}
+	reading := layout.Read(file.Tables[0])
+	bank := false
+	for _, l := range reading.Lines {
+		bank = bank || (l.Name == "Bank" && l.Kind == Posting)
+	}
+	if !bank {
+		t.Fatalf("Bank is an account: %+v", reading.Lines)
+	}
+}

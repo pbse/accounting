@@ -389,9 +389,12 @@ func (l Layout) Read(t Table) Reading {
 		return reading
 	}
 	// The names a total row totals ("Total Current Assets" totals "Current Assets"): a row by such a name with no amounts
-	// heads what the total covers.
+	// heads what the total covers. Rows above the header, left out, or marked accounts total nothing.
 	totalled := map[string]bool{}
 	for _, r := range t.Rows {
+		if r.Number <= l.HeaderRow || slices.Contains(l.Ignored, r.Number) || slices.Contains(l.Postings, r.Number) {
+			continue
+		}
 		for _, c := range r.Cells {
 			if (l.Columns[c.Column] == AccountName || l.Columns[c.Column] == AccountNumber) && totalName.MatchString(strings.TrimSpace(c.Value)) {
 				totalled[strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(strings.TrimSpace(c.Value), "")))] = true

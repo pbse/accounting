@@ -135,10 +135,15 @@ func ReadWorkbook(body []byte) (File, error) {
 			file.LinkedWorkbooks = append(file.LinkedWorkbooks, "an external workbook")
 			continue
 		}
+		found := false
 		for _, r := range linked.Rel {
 			if r.TargetMode == "External" || strings.Contains(r.Target, ".xls") {
-				file.LinkedWorkbooks = append(file.LinkedWorkbooks, r.Target)
+				file.LinkedWorkbooks, found = append(file.LinkedWorkbooks, r.Target), true
 			}
+		}
+		// A link that names no workbook is still a link: its results came from somewhere else.
+		if !found {
+			file.LinkedWorkbooks = append(file.LinkedWorkbooks, "an external workbook")
 		}
 	}
 	// Shared strings, rich text included, in order.
