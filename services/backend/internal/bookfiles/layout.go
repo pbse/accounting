@@ -590,8 +590,8 @@ func (l Layout) Read(t Table) Reading {
 	// heading is the account a ledger's heading row names (QuickBooks' General Ledger heads each account's lines with
 	// its name), the account of the lines beneath it that name none, until its total; headed are those lines, named
 	// after the table is read, so its totals are checked as written.
-	var heading, headingRef string
-	headed := map[int][2]string{}
+	var heading *Line
+	headed := map[int]*Line{}
 	// beside is each column the layout does not name, with the rows that hold an amount in it beside the row's own.
 	beside := map[int][]int{}
 	var columns []int
@@ -854,11 +854,12 @@ func (l Layout) Read(t Table) Reading {
 		if ledger {
 			switch {
 			case line.Kind == Heading:
-				heading, headingRef = line.Label(), line.Cells[AccountName]
+				h := line
+				heading = &h
 			case line.Kind == Total:
-				heading, headingRef = "", ""
-			case line.Kind == Posting && line.Name == "" && line.Number == "" && heading != "":
-				headed[i] = [2]string{heading, headingRef}
+				heading = nil
+			case line.Kind == Posting && line.Name == "" && line.Number == "" && heading != nil:
+				headed[i] = heading
 			}
 		}
 		switch line.Kind {
@@ -898,8 +899,14 @@ func (l Layout) Read(t Table) Reading {
 	for _, c := range slices.Sorted(maps.Keys(beside)) {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("Column %s holds values in rows %s outside the chosen columns: choose what it holds, or mark it ignored", strings.TrimRight(cellRef(c, 1), "1"), rowList(beside[c])))
 	}
+	// Each headed line takes its heading's account, its number and name, and the cells they came from.
 	for i, h := range headed {
-		reading.Lines[i].Name, reading.Lines[i].Cells[AccountName] = h[0], h[1]
+		reading.Lines[i].Number, reading.Lines[i].Name = h.Number, h.Name
+		for _, m := range []Meaning{AccountNumber, AccountName} {
+			if ref, ok := h.Cells[m]; ok {
+				reading.Lines[i].Cells[m] = ref
+			}
+		}
 	}
 	if len(eitherWays) > 0 {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("The dates in rows %s could be read day first or month first: confirm how the dates are written", rowList(eitherWays)))

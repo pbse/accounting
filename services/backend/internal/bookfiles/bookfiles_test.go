@@ -973,4 +973,11 @@ func TestALedgerHeadedByAccountReadsEachLineAsItsAccounts(t *testing.T) {
 	if len(accounts) != 4 || accounts[7] != "Business Checking -200 2027-01-05" || accounts[11] != "Rent 200 2027-01-05" || accounts[14] != "Sales -700.25 2027-01-20" {
 		t.Fatalf("each line is its heading's account's: %v", accounts)
 	}
+	// A heading with the account's number and name gives its lines both.
+	numbered, _ := Read("gl.csv", []byte("Date,Account No,Account,Debit,Credit\n,1000,Checking,,\n01/25/2027,,,,200.00\n,6000,Rent,,\n01/25/2027,,,200.00,\n"))
+	layout, _ = ProposeLayout(numbered.Tables[0])
+	layout.AsOf = "2027-01-31"
+	if reading = layout.Read(numbered.Tables[0]); len(reading.Problems) != 0 || reading.Lines[1].Number != "1000" || reading.Lines[1].Name != "Checking" || reading.Lines[3].Number != "6000" || reading.Lines[1].Cells[AccountNumber] != "R2C2" {
+		t.Fatalf("a heading's number and name: %+v", reading)
+	}
 }
