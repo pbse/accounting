@@ -579,3 +579,16 @@ func TestSheetNamesAndUndefinedBytes(t *testing.T) {
 		t.Fatal("an undefined byte is refused when confirmed too")
 	}
 }
+
+// An account named like a total is a total until a person marks it an account.
+func TestAnAccountNamedLikeATotal(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00\nTotal Rewards,-40.00\nCapital,-60.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	if reading := layout.Read(file.Tables[0]); len(reading.Problems) == 0 {
+		t.Fatalf("read as a total first: %+v", reading)
+	}
+	layout.Postings = []int{3}
+	if reading := layout.Read(file.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced || reading.Lines[1].Kind != Posting {
+		t.Fatalf("marked an account: %+v", reading)
+	}
+}

@@ -46,6 +46,8 @@ type Layout struct {
 	// a total is otherwise known by its name ("Total …"), never by its amount being a formula.
 	Headings []int `json:"headings,omitempty"`
 	Totals   []int `json:"totals,omitempty"`
+	// Postings are rows a person confirmed are accounts though named like totals ("Total Rewards").
+	Postings []int `json:"postings,omitempty"`
 	// Ignored are rows a person confirmed are not part of the Trial Balance (a footer, a note) though they hold values
 	// outside the layout's columns; any other such row is a problem. IgnoredColumns are columns a person confirmed hold
 	// nothing of it (a memo, last year's figures); amounts in any other column the layout does not name are a problem.
@@ -531,20 +533,22 @@ func (l Layout) Read(t Table) Reading {
 		}
 		// A row with no amounts heads a section when a total names it or a person said it does; otherwise it is an
 		// account with a zero balance (an export leaves a zero blank), said so when it has no number to show it is one.
-		if line.Balance == nil && !totalName.MatchString(line.Label()) && !slices.Contains(l.Totals, r.Number) && !totalled[strings.ToLower(line.Label())] && !slices.Contains(l.Headings, r.Number) {
+		// A total is named so ("Total …") or marked so, unless a person marked the row an account.
+		total := (totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number)) && !slices.Contains(l.Postings, r.Number)
+		if line.Balance == nil && !total && !totalled[strings.ToLower(line.Label())] && !slices.Contains(l.Headings, r.Number) {
 			line.Balance = new(big.Rat)
 			if line.Number == "" {
 				reading.Notes = append(reading.Notes, fmt.Sprintf("Row %d (%s) has no amounts: read as an account with a zero balance; mark it a heading if it is one", r.Number, line.Name))
 			}
 		}
 		switch {
-		case line.Balance == nil && (totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number)):
+		case line.Balance == nil && total:
 			// A total with no amount says the export was cut short, or the layout misses its column.
 			line.Kind = Total
 			reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d (%s) is a total with no amount", r.Number, line.Label()))
 		case line.Balance == nil:
 			line.Kind = Heading
-		case totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number):
+		case total:
 			line.Kind = Total
 		default:
 			line.Kind = Posting
