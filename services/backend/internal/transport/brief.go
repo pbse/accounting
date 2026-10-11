@@ -96,6 +96,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 		var board struct {
 			Snapshot *struct {
 				Source     string    `json:"source"`
+				File       string    `json:"file"`
 				CapturedAt time.Time `json:"captured_at"`
 				Stale      bool      `json:"stale"`
 			} `json:"snapshot"`
@@ -112,10 +113,22 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 		switch {
 		case !boardRead:
 			add("ledger", "unknown", "The ledger snapshot could not be read.", "evidence")
+		case board.Snapshot != nil && board.Snapshot.Source == "files":
+			// A month whose books are its files reads its accepted file's; no ledger certifies a file.
+			if board.Error != "" {
+				add("ledger", "attention", "Books from files: "+board.Error+".", "books")
+				needs = append(needs, "resolve the accepted file's checks")
+			} else {
+				add("ledger", "done", "Books read from the accepted file "+board.Snapshot.File+", exported "+board.Snapshot.CapturedAt.UTC().Format("Jan 2")+".", "books")
+			}
 		case board.Snapshot == nil:
 			// Uploaded exports a person labeled stand in for a live ledger, as reported, never as verified.
 			label, err := latestExportLabel(r.Context(), db, r.PathValue("id"))
+			source, sourceErr := closeBooksSource(r.Context(), db, r.PathValue("id"))
 			switch {
+			case sourceErr == nil && source == "files":
+				add("ledger", "attention", "No accepted file's books yet: accept a reading of this month's file on the client's page.", "books")
+				needs = append(needs, "accept the month's file")
 			case err != nil:
 				add("ledger", "unknown", "The historical exports label could not be read.", "evidence")
 			case label != nil:
