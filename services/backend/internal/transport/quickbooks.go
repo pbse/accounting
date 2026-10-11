@@ -328,7 +328,7 @@ func quickbooksAct(ctx context.Context, w http.ResponseWriter, db *sql.DB, a *au
 		token := rand.Text()
 		var id string
 		// The client lock orders a new connection against snapshot saves that check which connection is read.
-		err := db.QueryRowContext(ctx, `WITH l AS (SELECT pg_advisory_xact_lock(hashtext($2||'/'||lower($3)))) INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment) SELECT NULLIF($1,'')::bigint,$2,$3,$4,'authorizing',$5,now()+interval '10 minutes',$6 FROM l ON CONFLICT DO NOTHING RETURNING id::text`, closeID, a.Organization, entity, a.Subject, preparation.Digest([]byte(token)), in.Environment).Scan(&id)
+		err := db.QueryRowContext(ctx, `WITH l AS (SELECT pg_advisory_xact_lock(hashtext($2||'/'||client_identity($2,$3)))) INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment) SELECT NULLIF($1,'')::bigint,$2,$3,$4,'authorizing',$5,now()+interval '10 minutes',$6 FROM l ON CONFLICT DO NOTHING RETURNING id::text`, closeID, a.Organization, entity, a.Subject, preparation.Digest([]byte(token)), in.Environment).Scan(&id)
 		if err != nil {
 			problem(w, 409, "A connection or attempt already exists. Refresh; disconnect the old attempt before reconnecting.")
 			return
@@ -500,8 +500,9 @@ func quickbooksAct(ctx context.Context, w http.ResponseWriter, db *sql.DB, a *au
 			return
 		}
 		defer tx.Rollback()
-		// Taken first, as the connect insert does, so the two never wait on each other's row locks.
-		if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1||'/'||lower($2)))`, a.Organization, entity); e != nil {
+		// Taken first, as the connect insert does (keyed by client identity, whichever of its names each is under), so the
+		// two never wait on each other's row locks.
+		if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1||'/'||client_identity($1,$2)))`, a.Organization, entity); e != nil {
 			problem(w, 503, "Snapshot storage unavailable.")
 			return
 		}

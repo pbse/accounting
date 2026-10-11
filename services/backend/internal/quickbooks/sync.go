@@ -74,7 +74,7 @@ func syncCredentials(ctx context.Context, db *sql.DB, job syncClaim) (string, st
 	var expires sql.NullTime
 	var reading bool
 	err := db.QueryRowContext(ctx, `SELECT x.organization_id,x.realm,x.environment,x.state,x.credential,x.access_expires_at,x.id=`+ReadingConnection("c.id")+`
- FROM quickbooks_connections x JOIN client_closes c ON c.id=$1 AND c.organization_id=x.organization_id AND lower(c.entity)=lower(x.client_entity) JOIN organizations o ON o.id=x.organization_id AND o.enabled
+ FROM quickbooks_connections x JOIN client_closes c ON c.id=$1 AND c.organization_id=x.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) JOIN organizations o ON o.id=x.organization_id AND o.enabled
  WHERE x.id=$2 AND c.period=$3`, job.closeID, job.connectionID, job.period).Scan(&organization, &realm, &environment, &state, &encrypted, &expires, &reading)
 	if err != nil || state != "active" || len(encrypted) == 0 {
 		return "", "", "", errors.New("Connected QuickBooks company or firm is no longer active")
@@ -381,8 +381,9 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 		return err
 	}
 	defer tx.Rollback()
-	// Same lock order as a person's capture, so the two never wait on each other's row locks.
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1||'/'||lower($2)))`, org, entity); err == nil {
+	// Same lock order as a person's capture, so the two never wait on each other's row locks; keyed by client identity,
+	// as connecting is, whichever of the client's names the month and connection are under.
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1||'/'||client_identity($1,$2)))`, org, entity); err == nil {
 		if _, err = tx.ExecContext(ctx, `SELECT 1 FROM quickbooks_connections WHERE id=$1 FOR UPDATE`, job.connectionID); err == nil {
 			_, err = tx.ExecContext(ctx, `SELECT 1 FROM client_closes WHERE id=$1 FOR UPDATE`, job.closeID)
 		}
