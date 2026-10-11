@@ -544,6 +544,10 @@ func xeroGrantRead(w http.ResponseWriter, r *http.Request, db *sql.DB, org, enti
 		problem(w, 503, "Grant unavailable.")
 		return
 	}
+	if !grantVisible(r, db, `SELECT client_entity FROM xero_posting_grants WHERE id::text=$1`, g.ID) {
+		jsonReply(w, 200, map[string]string{"state": "held_elsewhere"})
+		return
+	}
 	jsonReply(w, 200, g)
 }
 

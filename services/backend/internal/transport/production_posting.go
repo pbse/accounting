@@ -1000,7 +1000,23 @@ func productionGrantRead(w http.ResponseWriter, r *http.Request, db *sql.DB, a *
 		problem(w, 503, "Grant unavailable.")
 		return
 	}
+	if !grantVisible(r, db, `SELECT client_entity FROM production_posting_grants WHERE id::text=$1`, g.ID) {
+		jsonReply(w, 200, map[string]string{"state": "held_elsewhere"})
+		return
+	}
 	jsonReply(w, 200, g)
+}
+
+// grantVisible says the reader may see a grant's details: they may open the client name it is held under (a grant
+// made under the client's own name stays its own, even for a month opened under an alias). heldUnder is SQL reading
+// that name for the grant's id.
+func grantVisible(r *http.Request, db *sql.DB, heldUnder, id string) bool {
+	var held string
+	if err := db.QueryRowContext(r.Context(), heldUnder, id).Scan(&held); err != nil {
+		return false
+	}
+	ok, err := clientAccess(db, r, held)
+	return err == nil && ok
 }
 
 // productionGrantChange grants the client entity bounded production posting, or revokes its grant, as a member with
