@@ -161,8 +161,10 @@ type claim struct {
 	currency string
 	basis    string
 	stale    bool
-	cause    bool
-	money    bool
+	// incomplete is a forecast built while some of its inputs were not captured.
+	incomplete bool
+	cause      bool
+	money      bool
 }
 
 var (
@@ -307,9 +309,20 @@ func claimOf(read agentRead, path string) claim {
 			c.cause = true
 		}
 	}
-	// A cash plan is a forecast, except the captured opening balance it starts from.
-	if read.tool == "cash_plan" && keys[0] != "opening" && keys[0] != "open_items" {
-		c.forecast = true
+	// A cash plan is a forecast, except the captured opening balance it starts from. Every figure of it is as fresh as
+	// that opening, and the forecast is incomplete while its open items are.
+	if read.tool == "cash_plan" {
+		if keys[0] != "opening" && keys[0] != "open_items" {
+			c.forecast = true
+		}
+		if root, ok := read.value.(map[string]any); ok {
+			if opening, ok := root["opening"].(map[string]any); ok && opening["stale"] == true {
+				c.stale = true
+			}
+			if items, ok := root["open_items"].(map[string]any); ok && items["complete"] == false && c.forecast {
+				c.incomplete = true
+			}
+		}
 	}
 	if c.kind == "prior" && len(c.period) == 7 {
 		if m, err := time.Parse("2006-01", c.period); err == nil {
@@ -361,7 +374,11 @@ var (
 	claimAvailable = regexp.MustCompile(`\b(available|in the bank|spendable|on hand at the bank)\b`)
 	claimCausal    = regexp.MustCompile(`\b(because|due to|driven by|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|led by|on the back of)\b`)
 	claimHedge     = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
-	claimRemainder = regexp.MustCompile(`\b(remainder|rest|other|others|unexplained|remaining|partly|in part|including|among|largely|mostly|mainly|part of)\b`)
+	// The remainder named: words that state what is left unexplained, not qualifiers ("including", "mostly").
+	claimRemainder = regexp.MustCompile(`\b(remainder|rest|other|others|unexplained|unattributed|remaining|not explained|unaccounted)\b`)
+	// Words that attribute a total to drivers, which must then add up or name the rest.
+	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|reflecting)\b`)
+	claimIncompleteSaid = regexp.MustCompile(`\b(incomplete|missing|partial|not complete|provisional|not yet captured|not all)\b`)
 	// Month names in any case, except "may", which is a month only as May.
 	claimMonth    = regexp.MustCompile(`\b((?i:january|february|march|april|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)|May)\b(?:\s+(\d{4}))?|\b(\d{4})-(\d{2})\b(?:-\d{2})?`)
 	claimCurrency = regexp.MustCompile(`(?i)\b(USD|EUR|GBP|CAD|AUD|NZD|INR|JPY|CHF|SGD|HKD|MXN|SEK|NOK|DKK|ZAR)\b|[€£₹¥$]`)
@@ -705,9 +722,12 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			}
 		}
 	}
-	// A stale read is said to be one.
+	// A stale read is said to be one; a forecast built from incomplete inputs is said to be incomplete.
 	if c.stale && !claimStaleSaid.MatchString(lowerLine) {
 		return "the sentence states " + o.normalized + " as current, but the cited read is stale"
+	}
+	if c.incomplete && !claimIncompleteSaid.MatchString(lowerLine) {
+		return "the sentence states the forecast " + o.normalized + " without saying its inputs are incomplete"
 	}
 	return ""
 }
@@ -785,7 +805,7 @@ func driverMovement(read agentRead, path string) (string, *big.Rat, bool) {
 // second total in the sentence ("while expenses rose 3,100") never excuses the first's missing remainder.
 func checkRemainder(line string, totals, drivers map[string][]*big.Rat) string {
 	lower := strings.ToLower(line)
-	if !claimCausal.MatchString(lower) && !strings.Contains(lower, " from ") && !strings.Contains(lower, "of which") {
+	if !claimCausal.MatchString(lower) && !claimAttribution.MatchString(lower) {
 		return ""
 	}
 	for _, group := range slices.Sorted(maps.Keys(totals)) {
@@ -838,6 +858,8 @@ func figurelessClaim(line string, c claim, got string, changeCited bool) string 
 		return "the sentence calls book cash available at the bank"
 	case c.stale && !claimStaleSaid.MatchString(lower):
 		return "the sentence states " + c.describe() + " as current, but the cited read is stale"
+	case c.incomplete && !claimIncompleteSaid.MatchString(lower):
+		return "the sentence states the forecast without saying its inputs are incomplete"
 	}
 	return ""
 }
@@ -1005,6 +1027,9 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		// As written in the sentence, at its written precision.
 		if o.normalized == stated && derivedMatches(s.derive, line[o.start:o.end], computed) {
 			found = true
+			if why := derivedResult(s.derive, o, claims, computed); why != "" {
+				return why
+			}
 		}
 	}
 	if !found {
@@ -1148,4 +1173,57 @@ func firmClients(ctx context.Context, db *sql.DB, org string) []string {
 		}
 	}
 	return out
+}
+
+// derivedResult holds what the sentence says a computed figure is: a sum or a ratio is an amount, never a movement; a
+// difference may be stated as a rise or fall only between the same line's two months, in its sign; a gap between
+// different lines is stated as a gap ("exceeds by", "less than"). A currency stated beside it is the inputs'.
+func derivedResult(op string, o occurrence, claims []claim, computed *big.Rat) string {
+	direction := o.direction()
+	// The same line at two times: two months' amounts, or one row's current and prior fields (amount and prior,
+	// this month and last month).
+	sameLine := false
+	if len(claims) == 2 && strings.EqualFold(claims[0].label, claims[1].label) {
+		a, b := claims[0], claims[1]
+		sameLine = a.period != "" && b.period != "" && a.period != b.period ||
+			a.kind != b.kind && (a.kind == "prior" || b.kind == "prior") ||
+			a.field == "this month" && b.field == "last month" || a.field == "last month" && b.field == "this month"
+	}
+	// A movement verb before the figure ("rose", "fell"), not a comparison ("exceeds by", "more than").
+	rose, fell := false, false
+	for _, w := range o.before {
+		rose = rose || claimRiseVerb[w]
+		fell = fell || claimFallVerb[w]
+	}
+	moved := rose || fell
+	if rose {
+		direction = "rise"
+	} else if fell {
+		direction = "fall"
+	}
+	switch op {
+	case "sum", "ratio":
+		if direction == "rise" || direction == "fall" || direction == "change" {
+			return "the sentence states the " + op + " " + o.normalized + " as a change"
+		}
+	case "difference":
+		if moved && !sameLine {
+			return "the sentence states the difference " + o.normalized + " between different lines as a movement"
+		}
+		if moved && (direction == "rise" && computed.Sign() < 0 || direction == "fall" && computed.Sign() > 0) {
+			return "the sentence states a " + direction + " of " + o.normalized + ", but the computed difference is " + computed.FloatString(2)
+		}
+	}
+	for _, m := range claimCurrency.FindAllString(o.clause, -1) {
+		code := map[string]string{"€": "EUR", "£": "GBP", "₹": "INR", "¥": "JPY"}[m]
+		if code == "" {
+			code = strings.ToUpper(m)
+		}
+		for _, c := range claims {
+			if c.currency != "" && (code == "$" && !dollarFamily[c.currency] || code != "$" && code != c.currency) {
+				return "the sentence states " + o.normalized + " in " + m + ", but its fields are in " + c.currency
+			}
+		}
+	}
+	return ""
 }

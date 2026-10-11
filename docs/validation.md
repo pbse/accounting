@@ -4086,7 +4086,10 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - an unverified publication needs a caveat;
   - every causal clause of a sentence needs its own support;
   - drivers are held to their own row's total, even with a second total in the sentence;
-  - an introductory "Year to date," qualifies the figure after it.
+  - an introductory "Year to date," qualifies the figure after it;
+  - a derived sum or ratio is never stated as a movement, a difference is a rise or fall only between one line's two times and in its sign, otherwise a gap ("exceed … by"), and a currency stated beside it is its fields';
+  - a cash forecast is as fresh as its captured opening and says so when its open items are incomplete;
+  - a remainder must be named ("the rest is unexplained"), not merely qualified ("including", "mostly").
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.

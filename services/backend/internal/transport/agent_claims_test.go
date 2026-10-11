@@ -36,7 +36,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		"t3": read(`{"state":"ready","entity":"Bluegrass Dental PLLC","currency":"USD","opening":{"amount":"64120.00","as_of":"2026-10-31","stale":true},
 			"weeks":[{"start":"2026-12-20","end":"2026-12-26","opening":"69620.00","receipts":"14200.00","disbursements":"60420.00","closing":"23400.00","lowest":"19850.00","lowest_on":"2026-12-19"}],
 			"scenario":{"name":"Bonus slips","weeks":[{"start":"2026-12-20","closing":"41400.00"}]}}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10"),
-		"t4": read(`{"lines":[{"name":"Rent","month":{"actual":"8500.00","budget":"8000.00","variance":"500.00","percent":"6.3%"},"ytd":{"actual":"85000.00","budget":"80000.00","variance":"5000.00"}},
+		"t4": read(`{"currency":"USD","lines":[{"name":"Rent","month":{"actual":"8500.00","budget":"8000.00","variance":"500.00","percent":"6.3%"},"ytd":{"actual":"85000.00","budget":"80000.00","variance":"5000.00"}},
 			{"name":"Marketing","month":{"actual":"540.00","budget":"0.00","variance":"540.00","percent":null}}]}`, "Budget against actual", "budget_comparison", "Bluegrass Dental PLLC", "2026-10"),
 		"t5": read(`{"closes":[{"id":"9","entity":"Birch Dental","period":"2026-10","net_income":"21780.00"}]}`, "List client closes", "list_closes", "", ""),
 		"t6": read(`{"rows":[{"account":"Revenue","change":"4940.00","drivers":[{"payee":"New patients","change":"3000.00"},{"payee":"Hygiene fees","change":"1000.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10"),
@@ -104,9 +104,9 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 
 	// A forecast is never stated as an actual, nor a scenario as the base plan.
 	rejected("Cash closes the week of 2026-12-20 at 23,400.00.", "forecast 23400 as an actual", e("t3", 0, "/weeks/0/closing", "23400.00"), e("t3", 0, "/weeks/0/start", "2026-12-20"))
-	ok("Cash is forecast to close the week of 2026-12-20 at 23,400.00.", e("t3", 0, "/weeks/0/closing", "23400.00"), e("t3", 0, "/weeks/0/start", "2026-12-20"))
-	rejected("Cash is forecast to close that week at 41,400.00.", "without saying it is a scenario", e("t3", 0, "/scenario/weeks/0/closing", "41400.00"))
-	ok("If the bonus slips, cash is forecast to close that week at 41,400.00.", e("t3", 0, "/scenario/weeks/0/closing", "41400.00"))
+	ok("From the stale opening, cash is forecast to close the week of 2026-12-20 at 23,400.00.", e("t3", 0, "/weeks/0/closing", "23400.00"), e("t3", 0, "/weeks/0/start", "2026-12-20"))
+	rejected("From the stale opening, cash is forecast to close that week at 41,400.00.", "without saying it is a scenario", e("t3", 0, "/scenario/weeks/0/closing", "41400.00"))
+	ok("If the bonus slips, cash is forecast from the stale opening to close that week at 41,400.00.", e("t3", 0, "/scenario/weeks/0/closing", "41400.00"))
 	// Book cash is not available bank cash; a stale capture is said to be stale.
 	rejected("Available cash is 64,120.00 as of the last capture.", "available at the bank", e("t3", 0, "/opening/amount", "64120.00"))
 	rejected("Opening book cash is 64,120.00.", "the cited read is stale", e("t3", 0, "/opening/amount", "64120.00"))
@@ -217,6 +217,23 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Patient fees rose 4,940.00, driven by new patients at 3,000.00, while expenses rose 3,100.00.", "account for 3000.00 of 4940.00",
 		e("t16", 0, "/changes/0/change", "4940.00"), e("t16", 0, "/changes/0/new/0/this_month", "3000.00"), e("t16", 0, "/changes/1/change", "3100.00"))
 	ok("Year to date, rent was 85,000.00.", e("t4", 0, "/lines/0/ytd/actual", "85000.00"))
+
+	// Round four: what a derived result is said to be; a stale or incomplete cash forecast; a remainder named, not qualified.
+	reads["t17"] = read(`{"lines":[{"name":"Revenue","amount":"100.00"},{"name":"Revenue","amount":"200.00"}]}`, "Statement", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Revenue rose by 300.00.", "sum 300 as a change", derived(0, "sum", "300.00", "t17", "/lines/0/amount", "t17", "/lines/1/amount"))
+	ok("Net income rose 1,840.00 from September to October.", derived(0, "difference", "1840.00", "t2", ni+"/amount", "t9", "/profit_and_loss/measures/0/amount"))
+	rejected("Net income fell 1,840.00 from September to October.", "computed difference is 1840.00", derived(0, "difference", "1840.00", "t2", ni+"/amount", "t9", "/profit_and_loss/measures/0/amount"))
+	rejected("Patient fees rose 21,780.00 over total expense.", "between different lines as a movement",
+		derived(0, "difference", "21780.00", "t2", "/profit_and_loss/sections/0/lines/0/amount", "t2", "/profit_and_loss/sections/1/total/amount"))
+	ok("Patient fees exceed total expense by 21,780.00.",
+		derived(0, "difference", "21780.00", "t2", "/profit_and_loss/sections/0/lines/0/amount", "t2", "/profit_and_loss/sections/1/total/amount"))
+	rejected("Rent and marketing total €9,040.00.", "but its fields are in USD", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
+	reads["t18"] = read(`{"state":"ready","entity":"Bluegrass Dental PLLC","currency":"USD","opening":{"amount":"64120.00","stale":true},"open_items":{"complete":false},"weeks":[{"start":"2026-12-20","closing":"23400.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Cash is forecast to close that week at 23,400.00.", "the cited read is stale", e("t18", 0, "/weeks/0/closing", "23400.00"))
+	rejected("From a stale opening, cash is forecast to close that week at 23,400.00.", "inputs are incomplete", e("t18", 0, "/weeks/0/closing", "23400.00"))
+	ok("From a stale opening and incomplete open items, cash is forecast to close that week at 23,400.00.", e("t18", 0, "/weeks/0/closing", "23400.00"))
+	rejected("Revenue rose 4,940.00, including new patients up 3,000.00 and hygiene fees up 1,000.00.", "account for 4000.00 of 4940.00",
+		e("t6", 0, "/rows/0/change", "4940.00"), e("t6", 0, "/rows/0/drivers/0/change", "3000.00"), e("t6", 0, "/rows/0/drivers/1/change", "1000.00"))
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
