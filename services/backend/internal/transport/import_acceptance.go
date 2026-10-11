@@ -60,7 +60,8 @@ type fileState struct {
 	scope    *importScope
 	approved string
 	currency string
-	// fiscalStart is the client's fiscal year's first month (1–12), from its profile.
+	// fiscalStart is the client's fiscal year's first month (1–12), from its profile, when confirmed or reported by a
+	// connected ledger (0 when only the default).
 	fiscalStart int
 	mapStamp    string
 	recorded    bool
@@ -93,13 +94,19 @@ func monthActivity(s fileState) (activity map[string]*big.Rat, from, missing str
 	switch {
 	case movement:
 		for _, a := range pl {
+			// A movement unreadable, rounded at its source, or a formula's result (unless a recalculated copy is attested)
+			// is not used: the month's activity waits for one that can be.
+			switch held := a.MovementHeld; {
+			case held == "unreadable":
+				return nil, "", "a movement that reads for " + strings.TrimSpace(a.Number+" "+a.Name)
+			case held == "rounded":
+				return nil, "", "a movement exact to the cent for " + strings.TrimSpace(a.Number+" "+a.Name)
+			case held == "formula" && (s.scope == nil || !s.scope.Recalculated):
+				return nil, "", "a values-only export, or attest a recalculated copy: the movement for " + strings.TrimSpace(a.Number+" "+a.Name) + " is a formula's result"
+			}
 			m, ok := new(big.Rat).SetString(cmp.Or(a.Movement, "0"))
 			if !ok {
-				return nil, "", "an account's movement could not be read"
-			}
-			// The movement is written in the balance's convention: a positive balance a credit makes a positive movement one.
-			if s.layout.Layout.BalanceSign == "credit" {
-				m.Neg(m)
+				return nil, "", "a movement that reads for " + strings.TrimSpace(a.Number+" "+a.Name)
 			}
 			activity[a.Key] = presented(a.Mapped.Class, m)
 		}
@@ -118,6 +125,9 @@ func monthActivity(s fileState) (activity map[string]*big.Rat, from, missing str
 			return nil, "", "the file is post-closing (its profit and loss accounts are closed to equity): export the Trial Balance before closing, or with the month's movement"
 		}
 		return activity, "year_to_date", ""
+	}
+	if s.fiscalStart == 0 {
+		return nil, "", "a column with the month's movement (the net change for the month); the client's fiscal year is not confirmed, so its first month is not known"
 	}
 	return nil, "", "a column with the month's movement (the net change for the month), or a Trial Balance for the fiscal year's first month"
 }
@@ -177,7 +187,10 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	if err != nil {
 		return s, false, err
 	}
-	s.currency, s.fiscalStart = profile.Currency, profile.FiscalStart
+	s.currency = profile.Currency
+	if profile.State == "confirmed" || profile.State == "detected" {
+		s.fiscalStart = profile.FiscalStart
+	}
 	s.recorded = true
 	for _, a := range reading.Accounts {
 		if a.Mapped == nil || !slices.Contains(a.Mapped.Readings, reading.ID) {

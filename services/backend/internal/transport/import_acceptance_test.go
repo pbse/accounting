@@ -46,7 +46,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
 			`DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
 			`DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
 			`DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`,
@@ -279,7 +279,14 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	confirmLayout(january, "2027-01-31")
 	attest(january)
 	mapAll(january)
-	if c := checksOf(call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+january, nil, 200))["activity"]; c["state"] != "passes" || !strings.Contains(c["detail"].(string), "revenue 700.25, expenses 200.00") {
+	januaryPath := "/v1/closes/client/import/acceptance?name=Acme%20Co&id=" + january
+	// Only once the client's fiscal year is confirmed is January known to be its first month.
+	if c := checksOf(call("user_a", partner, "GET", januaryPath, nil, 200))["activity"]; c["state"] != "holds" || !strings.Contains(c["detail"].(string), "not confirmed") {
+		t.Fatalf("January with no confirmed fiscal year: %v", c)
+	}
+	_, err = db.Exec(`INSERT INTO client_profiles(organization_id,client_entity,effective_from,currency,fiscal_year_start,reason,actor) VALUES($1,'Acme Co','2026-08','USD',1,'Calendar year','fixture')`, org)
+	must(err)
+	if c := checksOf(call("user_a", partner, "GET", januaryPath, nil, 200))["activity"]; c["state"] != "passes" || !strings.Contains(c["detail"].(string), "revenue 700.25, expenses 200.00") {
 		t.Fatalf("January's activity is its year-to-date balances: %v", c)
 	}
 	december := send1("2026-12", "Number,Account,Debit,Credit,Movement\n1000,Business Checking,1600.25,,\n3000,Owner's Equity,,1000.00,\n4000,Sales,,900.25,-200.00\n6000,Rent,300.00,,100.00\n")
@@ -288,6 +295,14 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	mapAll(december)
 	if c := checksOf(call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+december, nil, 200))["activity"]; c["state"] != "passes" || !strings.Contains(c["detail"].(string), "movement column: revenue 200.00, expenses 100.00") {
 		t.Fatalf("December's activity is its movement column: %v", c)
+	}
+	// A movement that does not read holds the month's activity rather than counting as nothing.
+	november := send1("2026-11", "Number,Account,Debit,Credit,Movement\n1000,Business Checking,1600.25,,\n3000,Owner's Equity,,1000.00,\n4000,Sales,,900.25,-200.00\n6000,Rent,300.00,,n/a\n")
+	confirmColumns(november, "2026-11-30", map[string]string{"0": "account_number", "1": "account_name", "2": "debit", "3": "credit", "4": "movement"})
+	attest(november)
+	mapAll(november)
+	if c := checksOf(call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+november, nil, 200))["activity"]; c["state"] != "holds" || !strings.Contains(c["detail"].(string), "6000 Rent") {
+		t.Fatalf("an unreadable movement holds: %v", c)
 	}
 	// With file imports switched off, the checks are read, and nothing is accepted.
 	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)

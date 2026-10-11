@@ -45,6 +45,20 @@ func monthEndFormula(l bookfiles.Line) bool {
 	return false
 }
 
+// movementHeld is why a line's movement cannot be used as read: unreadable, rounded at its source, or a formula's stored
+// result; "" when it can.
+func movementHeld(l bookfiles.Line) string {
+	switch {
+	case slices.Contains(l.Unread, bookfiles.Movement):
+		return "unreadable"
+	case slices.Contains(l.Rounded, bookfiles.Movement):
+		return "rounded"
+	case slices.Contains(l.Formulas, bookfiles.Movement):
+		return "formula"
+	}
+	return ""
+}
+
 // sameMapping says whether two entries map an account alike, whichever readings they were confirmed on.
 func sameMapping(a, b mappedAccount) bool {
 	return a.Class == b.Class && a.Type == b.Type && a.Name == b.Name && a.Number == b.Number
@@ -90,9 +104,10 @@ type fileAccount struct {
 	// amounts is a formula's stored result.
 	Cents   bool `json:"-"`
 	Formula bool `json:"-"`
-	// Movement is the account's period movement as the file writes it, summed over its rows ("" when the file has
-	// none for it).
-	Movement string `json:"-"`
+	// Movement is the account's period movement, debit minus credit, summed over its rows ("" when the file has none
+	// for it); MovementHeld says one of its rows' movements was unreadable, rounded at its source, or a formula result.
+	Movement     string `json:"-"`
+	MovementHeld string `json:"-"`
 }
 
 // latestAccountMap is client name's map in force, or nil.
@@ -191,10 +206,11 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 				if m, ok := l.Others[bookfiles.Movement]; ok {
 					accounts[at].Movement = addAmounts(cmp.Or(accounts[at].Movement, "0"), m)
 				}
+				accounts[at].MovementHeld = cmp.Or(accounts[at].MovementHeld, movementHeld(l))
 				continue
 			}
 			seen[key] = len(accounts)
-			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents, Formula: monthEndFormula(l), Movement: l.Others[bookfiles.Movement]}
+			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents, Formula: monthEndFormula(l), Movement: l.Others[bookfiles.Movement], MovementHeld: movementHeld(l)}
 			if current != nil {
 				if m, ok := current.Accounts[key]; ok {
 					a.Mapped = &m
