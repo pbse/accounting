@@ -175,6 +175,7 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off',
  COALESCE((SELECT profile FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'null'::jsonb),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved') OR EXISTS(SELECT 1 FROM takeover_setups t WHERE t.close_id=c.id),
+ COALESCE((SELECT t.content->'profile' FROM takeover_setups t WHERE t.close_id=c.id ORDER BY t.id DESC LIMIT 1),'null'::jsonb),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved' AND upper(COALESCE(NULLIF(w.paper->'input'->>'currency',''),'USD'))<>$4)
  OR EXISTS(SELECT 1 FROM statement_extractions s JOIN evidence e ON e.id=s.source_id AND e.superseded_by IS NULL WHERE s.close_id=c.id AND s.confirmed IS NOT NULL AND COALESCE(s.confirmed->>'currency','')<>'' AND upper(s.confirmed->>'currency')<>$4)
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
@@ -187,13 +188,15 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 		id, period          string
 		signed, contradicts bool
 		signedUnder         []byte
-		// reviewed says the month has approved work or a confirmed takeover setup.
-		reviewed bool
+		// reviewed says the month has approved work or a confirmed takeover setup; takenOverUnder is the profile the
+		// setup confirmed, when it confirmed one.
+		reviewed       bool
+		takenOverUnder []byte
 	}
 	var months []month
 	for rows.Next() {
 		var m month
-		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.signedUnder, &m.reviewed, &m.contradicts); err != nil {
+		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.signedUnder, &m.reviewed, &m.takenOverUnder, &m.contradicts); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -212,16 +215,17 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 		if !m.signed && !m.reviewed {
 			continue
 		}
-		// Approved work and a confirmed takeover setup were prepared under the month's fiscal year (and the setup under
-		// its currency): a change to them waits for them to be reopened.
+		// Approved work and a confirmed takeover setup were prepared under the month's fiscal year: a change to it waits
+		// for them to be reopened. Their currency is what they saved (approved work's is checked above; a setup's is the
+		// profile it confirmed), never what a connection reports now.
 		if !m.signed {
 			p, err := preparation.ClientProfile(ctx, tx, m.id)
 			if err != nil {
 				return nil, err
 			}
-			// Its currency is held only when known: approved work's own currency is checked above, and an assumed one
-			// was never what it was prepared in.
-			if p.FiscalStart != start || (p.State != "none" && p.State != "unknown" && p.Currency != currency) {
+			var setup preparation.Profile
+			taken := json.Unmarshal(m.takenOverUnder, &setup) == nil && setup.Currency != ""
+			if p.FiscalStart != start || (taken && (setup.Currency != currency || setup.FiscalStart != start)) {
 				held = append(held, m.period)
 			}
 			continue

@@ -210,7 +210,13 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	if p := call("user_a", partner, "GET", takeover, nil, 200)["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "confirm its currency and fiscal year") {
 		t.Fatalf("a client with neither a connection nor a profile: %v", p)
 	}
+	unbound := call("user_a", partner, "GET", "/v1/closes/"+birch+"/readiness", nil, 200)
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Birch Ltd", "currency": "GBP", "fiscal_year_start": 4, "effective_from": "2026-08", "reason": "Books as files, in pounds", "rev": ""}, 200)
+	// A sign-off made against readiness read before the profile was confirmed is refused: the digest binds the profile.
+	if after := call("user_a", partner, "GET", "/v1/closes/"+birch+"/readiness", nil, 200); after["digest"] == unbound["digest"] {
+		t.Fatal("the readiness digest binds the client's profile")
+	}
+	call("user_a", append([]string{"close:signoff"}, partner...), "POST", "/v1/closes/"+birch+"/signoff", map[string]any{"digest": unbound["digest"], "expected_decision_id": unbound["decision_id"], "action": "sign", "note": "Read before the profile", "confirmed": true}, 409)
 	setup := call("user_a", partner, "GET", takeover, nil, 200)
 	content := setup["content"].(map[string]any)
 	if len(setup["problems"].([]any)) != 0 || content["books"] != "files" || content["profile"].(map[string]any)["currency"] != "GBP" {

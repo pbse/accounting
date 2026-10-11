@@ -37,6 +37,10 @@ type readiness struct {
 	History           json.RawMessage `json:"history"`
 	Snapshot          json.RawMessage `json:"snapshot"`
 	coverage          coverageView
+	// snapshotDigest is the snapshot's own digest, kept with a sign-off; Digest also binds the client's confirmed
+	// profile, so a sign-off made against a profile since changed is refused.
+	snapshotDigest string
+	profile        preparation.Profile
 }
 
 // Read from the caller's consistent snapshot. Sign-off never relies on browser counts.
@@ -93,6 +97,14 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	out.Snapshot = json.RawMessage(raw)
 	// PostgreSQL jsonb text fixes object key order for a stable, server-owned digest.
 	out.Digest = preparation.Digest(raw)
+	out.snapshotDigest = out.Digest
+	if out.profile, err = preparation.ClientProfile(ctx, tx, id); err != nil {
+		return out, err
+	}
+	if out.profile.State == "confirmed" || out.profile.State == "differs" {
+		bound, _ := json.Marshal(map[string]any{"snapshot": out.snapshotDigest, "currency": out.profile.Currency, "fiscal_year_start": out.profile.FiscalStart, "state": out.profile.State})
+		out.Digest = preparation.Digest(bound)
+	}
 	var snapshot struct {
 		Scope *struct {
 			Scope closeScope `json:"scope"`
@@ -245,14 +257,15 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		}
 	}
 	out.Blockers = append(out.Blockers, opening...)
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',s.id::text,'decision',s.decision,'snapshot_digest',s.snapshot_digest,'note',s.note,'actor',s.actor,'created_at',s.created_at) ORDER BY s.id DESC),'[]') FROM close_signoffs s WHERE s.close_id::text=$1`, id).Scan(&out.History)
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',s.id::text,'decision',s.decision,'snapshot_digest',s.snapshot_digest,'profile',s.profile,'note',s.note,'actor',s.actor,'created_at',s.created_at) ORDER BY s.id DESC),'[]') FROM close_signoffs s WHERE s.close_id::text=$1`, id).Scan(&out.History)
 	if err != nil {
 		return out, err
 	}
 	var history []struct {
-		ID       string `json:"id"`
-		Decision string `json:"decision"`
-		Digest   string `json:"snapshot_digest"`
+		ID       string               `json:"id"`
+		Decision string               `json:"decision"`
+		Digest   string               `json:"snapshot_digest"`
+		Profile  *preparation.Profile `json:"profile"`
 	}
 	if err = json.Unmarshal(out.History, &history); err != nil {
 		return out, err
@@ -262,7 +275,9 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	}
 	if len(history) > 0 && history[0].Decision == "signed_off" {
 		out.State = "signed_off"
-		if history[0].Digest != out.Digest || len(out.Blockers) > 0 {
+		// A month signed off under another currency or fiscal year than it reads now was signed off over other books.
+		moved := history[0].Profile != nil && history[0].Profile.Currency != "" && (history[0].Profile.Currency != out.profile.Currency || history[0].Profile.FiscalStart != out.profile.FiscalStart)
+		if history[0].Digest != out.snapshotDigest || moved || len(out.Blockers) > 0 {
 			out.State = "reopen_required"
 		}
 	}
@@ -387,18 +402,13 @@ func registerReadiness(mux *http.ServeMux, db *sql.DB) {
 				}
 				decision = "reopened"
 			}
-			// The profile the month is signed off under is kept with the decision.
+			// The profile the month is signed off under, the one the signer read, is kept with the decision.
 			var signedProfile any
 			if decision == "signed_off" {
-				p, e := preparation.ClientProfile(r.Context(), tx, r.PathValue("id"))
-				if e != nil {
-					problem(w, 503, "The client's profile is unavailable.")
-					return
-				}
-				raw, _ := json.Marshal(p)
+				raw, _ := json.Marshal(current.profile)
 				signedProfile = string(raw)
 			}
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor,profile) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`, r.PathValue("id"), decision, current.Digest, string(current.Snapshot), in.Note, actor, signedProfile)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor,profile) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`, r.PathValue("id"), decision, current.snapshotDigest, string(current.Snapshot), in.Note, actor, signedProfile)
 			if err == nil {
 				// "close.signed_off:<id>" or "close.reopened:<id>" for workflows (docs/workflow-engine.md).
 				_, err = wf.EmitForClose(r.Context(), tx, r.PathValue("id"), "close."+decision+":"+r.PathValue("id"), map[string]string{"close_id": r.PathValue("id"), "decision": decision}, actor)
