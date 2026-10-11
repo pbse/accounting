@@ -630,6 +630,37 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if link := call("user_a", partner, "GET", linksPath, nil, 200)["companies"].([]any)[0].(map[string]any)["link"].(map[string]any); link["id"] != linked || link["current"] != true || link["accounts"].(map[string]any)["n:4000"] != "4" {
 		t.Fatalf("the confirmed link: %v", link)
 	}
+	// With the company confirmed, months compare across the sources through the accounts mapped across: November, on
+	// files, with October's QuickBooks books; October's books with September's file, while an account September carries
+	// is not mapped.
+	packFor := func(closeID string) map[string]any {
+		t.Helper()
+		tx, err := db.BeginTx(t.Context(), nil)
+		must(err)
+		defer tx.Rollback()
+		pack, err := closeManagementPack(t.Context(), tx, closeID)
+		must(err)
+		return pack
+	}
+	chooseFiles := func(period string) {
+		t.Helper()
+		var rev string
+		must(db.QueryRow(`SELECT COALESCE(max(id)::text,'') FROM books_sources WHERE organization_id=$1`, org).Scan(&rev))
+		call("user_a", []string{"integrations:manage", "clients:all"}, "POST", "/v1/closes/client/books-source", map[string]any{"client": "Acme Co", "period": period, "source": "files", "reason": "Kept on files", "rev": rev}, 200)
+	}
+	var novemberClose, septemberClose string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme Co','2026-11') RETURNING id::text`, org).Scan(&novemberClose))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme Co','2026-09') RETURNING id::text`, org).Scan(&septemberClose))
+	novemberPath := "/v1/closes/client/import/acceptance?name=Acme%20Co&id=" + november
+	call("user_a", partner, "POST", novemberPath, with(call("user_a", partner, "GET", novemberPath, nil, 200), map[string]any{"exported_on": "2026-10-05"}), 200)
+	chooseFiles("2026-11")
+	chooseFiles("2026-09")
+	if pack := packFor(novemberClose); fmt.Sprint(pack["prior"].(map[string]any)["source"]) != "quickbooks" || !strings.Contains(pack["note"].(string), "confirmed as the files' company") {
+		t.Fatalf("November on files compared with October's QuickBooks books: %v %v", pack["prior"], pack["comparison_unavailable"])
+	}
+	if pack := packFor(octoberClose); pack["prior"] != nil || !strings.Contains(fmt.Sprint(pack["comparison_unavailable"]), "Last month's activity is unavailable") {
+		t.Fatalf("October's books with September's file, which gives no month's activity: %v %v", pack["prior"], pack["comparison_unavailable"])
+	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
 		t.Fatalf("parity leaves a file's books alone: %v %v", mismatched, err)
@@ -695,7 +726,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	must(err)
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+january, map[string]any{"reason": "Sent in error"}, 200)
 	var left int
-	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1 AND source='files'`, org).Scan(&left))
+	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1 AND source='files' AND close_id::text=$2`, org, januaryClose).Scan(&left))
 	if left != 0 {
 		t.Fatalf("a deleted file's books go with it: %d", left)
 	}
@@ -849,5 +880,34 @@ func TestAFileReconcilesToTheMonthsBooks(t *testing.T) {
 	matched, differences := reconcileFile(f, captured)
 	if matched != 2 || len(differences) != 2 || differences[0] != "1000 Business Checking: the file says 1500.25, the books 1400.00, a difference of 100.25." || differences[1] != "Savings: 10.00 in the books, not in the file." {
 		t.Fatalf("a file that differs: %d %q", matched, differences)
+	}
+}
+
+// Books re-keyed through a confirmed company link carry each mapped account across; an unmapped account with a balance
+// or activity keeps the months apart, named.
+func TestBooksAreRelinkedThroughTheMappedAccounts(t *testing.T) {
+	amount := func(s string) *big.Rat { r, _ := new(big.Rat).SetString(s); return r }
+	b := &books{Currency: "USD", Accounts: map[string]packAccount{"1": {Name: "Checking", Class: "Asset"}, "4": {Name: "Sales", Class: "Revenue"}, "9": {Name: "Old", Class: "Asset"}},
+		Balances: map[string]*big.Rat{"1": amount("100"), "4": amount("-50"), "9": amount("0")}, Activity: map[string]*big.Rat{"4": amount("50")}}
+	out, missing := relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, nil, false)
+	if missing != "" || out.Balances["n:1000"].Cmp(amount("100")) != 0 || out.Activity["n:4000"].Cmp(amount("50")) != 0 || out.Accounts["n:4000"].Name != "Sales" {
+		t.Fatalf("books relinked: %v %v", out, missing)
+	}
+	if out.Typed || out.group("n:1000", nil) != "Assets" {
+		t.Fatalf("relinked books group as an untyped pack does: %v", out.group("n:1000", nil))
+	}
+	// Into typed books, an account with no type takes the one the other side describes it with, else its class's general
+	// type (revenue is Income); one with its own type keeps it, which last month's checks read.
+	out, _ = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, map[string]packAccount{"n:1000": {Name: "1000 Business Checking", Class: "Asset", Type: "Bank"}}, true)
+	if out.Accounts["n:1000"].Type != "Bank" || out.Accounts["n:4000"].Type != "Income" {
+		t.Fatalf("relinked into typed books: %v", out.Accounts)
+	}
+	b.Accounts["1"] = packAccount{Name: "Checking", Class: "Asset", Type: "Other Current Asset"}
+	if out, _ = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, map[string]packAccount{"n:1000": {Type: "Bank"}}, true); out.Accounts["n:1000"].Type != "Other Current Asset" {
+		t.Fatalf("an account keeps its own type: %v", out.Accounts["n:1000"])
+	}
+	b.Balances["9"] = amount("10")
+	if out, missing = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, nil, true); out != nil || missing != "Old" {
+		t.Fatalf("an unmapped account with a balance: %v %q", out, missing)
 	}
 }
