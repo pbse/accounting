@@ -163,6 +163,12 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if !gated {
 		t.Fatal("the latest run decides its build's gate")
 	}
+	// Every version it read records the first run that read it.
+	var unread int
+	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1 AND first_checked_run IS NULL`, org).Scan(&unread))
+	if unread != 0 {
+		t.Fatalf("each version read by the run is marked: %d unmarked", unread)
+	}
 	// Once the readers would read a capture differently, the parity check names it.
 	_, err = db.Exec(`UPDATE quickbooks_snapshots SET payload=jsonb_set(payload,'{reports,TrialBalance,Rows,Row,0,ColData,1,value}','"1500.26"') WHERE id=$1`, readable)
 	must(err)

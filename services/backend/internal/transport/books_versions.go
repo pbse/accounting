@@ -280,6 +280,14 @@ func booksParity(ctx context.Context, q interface {
 	rowReader
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, org string, through int64) (checked int, mismatched []string, err error) {
+	return booksParityRun(ctx, q, org, through, nil)
+}
+
+// booksParityRun is booksParity, telling seen each page of versions it read.
+func booksParityRun(ctx context.Context, q interface {
+	rowReader
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, org string, through int64, seen func([]int64) error) (checked int, mismatched []string, err error) {
 	// A page of versions at a time, by id, so every version up to through (0: every one) is checked however many
 	// there are.
 	after := int64(0)
@@ -292,6 +300,15 @@ func booksParity(ctx context.Context, q interface {
 			break
 		}
 		after = page[len(page)-1].row
+		if seen != nil {
+			ids := make([]int64, len(page))
+			for i, v := range page {
+				ids[i] = v.row
+			}
+			if err = seen(ids); err != nil {
+				return checked, mismatched, err
+			}
+		}
 		n, wrong, e := compareVersions(ctx, q, page)
 		checked, mismatched = checked+n, append(mismatched, wrong...)
 		if e != nil {
@@ -508,7 +525,11 @@ func runBooksParity(ctx context.Context, db *sql.DB) error {
 	if err := db.QueryRowContext(ctx, `INSERT INTO books_parity(pending,through,build) SELECT (SELECT count(*) FROM books_pending),COALESCE((SELECT max(id) FROM books_versions),0),$1 RETURNING id,through`, wf.CodeVersion).Scan(&run, &through); err != nil {
 		return err
 	}
-	checked, mismatched, err := booksParity(ctx, db, "", through)
+	// Each version it reads records the first run that read it: only those are ever verified by a run.
+	checked, mismatched, err := booksParityRun(ctx, db, "", through, func(ids []int64) error {
+		_, err := db.ExecContext(ctx, `UPDATE books_versions SET first_checked_run=$1 WHERE id=ANY($2) AND first_checked_run IS NULL`, run, ids)
+		return err
+	})
 	if err != nil {
 		return err
 	}
@@ -516,11 +537,19 @@ func runBooksParity(ctx context.Context, db *sql.DB) error {
 		mismatched = []string{}
 	}
 	raw, _ := json.Marshal(mismatched)
-	_, err = db.ExecContext(ctx, `UPDATE books_parity SET finished_at=now(),checked=$2,mismatched=$3::jsonb WHERE id=$1`, run, checked, string(raw))
-	// The run decides the readers' gate for its build: how far the record is verified, and whether it agreed throughout.
-	if err == nil {
-		_, err = db.ExecContext(ctx, `INSERT INTO books_record_gate(build,run,through,clean,finished_at) VALUES($1,$2,$3,$4,now())
- ON CONFLICT (build) DO UPDATE SET run=EXCLUDED.run,through=EXCLUDED.through,clean=EXCLUDED.clean,finished_at=EXCLUDED.finished_at WHERE books_record_gate.run<EXCLUDED.run`, wf.CodeVersion, run, through, len(mismatched) == 0)
+	// The run finishes and decides its build's readers' gate together: a finished run that disagreed never leaves an
+	// earlier clean gate standing.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
 	}
-	return err
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE books_parity SET finished_at=now(),checked=$2,mismatched=$3::jsonb WHERE id=$1`, run, checked, string(raw)); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO books_record_gate(build,run,through,clean,finished_at) VALUES($1,$2,$3,$4,now())
+ ON CONFLICT (build) DO UPDATE SET run=EXCLUDED.run,through=EXCLUDED.through,clean=EXCLUDED.clean,finished_at=EXCLUDED.finished_at WHERE books_record_gate.run<EXCLUDED.run`, wf.CodeVersion, run, through, len(mismatched) == 0); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

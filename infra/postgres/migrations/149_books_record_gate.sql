@@ -15,4 +15,8 @@ CREATE TABLE books_record_gate (
 ALTER TABLE books_record_gate ENABLE ROW LEVEL SECURITY;
 CREATE POLICY anyone_reads ON books_record_gate FOR SELECT USING (true);
 CREATE POLICY system_writes ON books_record_gate USING (current_setting('app.organization',true)='*') WITH CHECK (current_setting('app.organization',true)='*');
+-- first_checked_run is the first parity run that read a version: a version is verified for the readers only when that
+-- run is no later than the clean run its build's gate names, so one committed after a run passed its id is never taken
+-- for checked.
+ALTER TABLE books_versions ADD COLUMN first_checked_run bigint;
 COMMIT;

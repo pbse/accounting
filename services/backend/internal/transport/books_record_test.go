@@ -64,9 +64,11 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	for _, id := range []string{readable, unreadable} {
 		must(writeBooksVersion(t.Context(), db, "quickbooks", id))
 	}
-	// A parity run of this build checked every version so far and found them agreeing.
+	// A parity run of this build read both versions and found every version agreeing.
 	_, err = db.Exec(`INSERT INTO books_record_gate(build,run,through,clean,finished_at) VALUES($1,1,(SELECT max(id) FROM books_versions),true,now())
- ON CONFLICT (build) DO UPDATE SET through=EXCLUDED.through,clean=true`, wf.CodeVersion)
+ ON CONFLICT (build) DO UPDATE SET run=1,through=EXCLUDED.through,clean=true`, wf.CodeVersion)
+	must(err)
+	_, err = db.Exec(`UPDATE books_versions SET first_checked_run=1 WHERE organization_id=$1`, org)
 	must(err)
 	month := func(id string) *fluxMonth {
 		t.Helper()
@@ -102,6 +104,14 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	if b, err := recordBooks(t.Context(), db, month(readable)); err != nil || b.Balances["1"].FloatString(2) != "1.00" {
 		t.Fatalf("read from the record: %v %v", b, err)
 	}
+	// A version no run has read yet is read from its capture, whatever its id.
+	_, err = db.Exec(`UPDATE books_versions SET first_checked_run=NULL WHERE source='quickbooks' AND source_id=$1`, readable)
+	must(err)
+	if b, err := recordBooks(t.Context(), db, month(readable)); err != nil || b.Balances["1"].FloatString(2) != "1500.25" {
+		t.Fatalf("an unread version, the capture: %v %v", b, err)
+	}
+	_, err = db.Exec(`UPDATE books_versions SET first_checked_run=1 WHERE source='quickbooks' AND source_id=$1`, readable)
+	must(err)
 	// Switched off, the capture is read.
 	t.Setenv("BOOKS_RECORD_READERS", "")
 	if b, err := recordBooks(t.Context(), db, month(readable)); err != nil || b.Balances["1"].FloatString(2) != "1500.25" {
