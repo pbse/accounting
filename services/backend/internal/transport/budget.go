@@ -272,8 +272,8 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 		return
 	}
 	// chart is a close's newest capture as books, with the ledger company it came from; nil when nothing is captured. A
-	// month whose books are its files reads its accepted file's books (company "files"), none while the checks it was
-	// accepted with hold its statements.
+	// month whose books are its files reads its accepted file's books (company "files:" and its basis, so months on
+	// another basis are never compared or combined), none while the checks it was accepted with hold its statements.
 	chart := func(r *http.Request, closeID, period string) (*books, string, error) {
 		if source, err := closeBooksSource(r.Context(), db, closeID); err != nil {
 			return nil, "", err
@@ -282,7 +282,7 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 			if err != nil || b == nil || len(month.Holds) > 0 {
 				return nil, "files", err
 			}
-			return b, "files", nil
+			return b, "files:" + month.Basis, nil
 		}
 		m, err := periodBooks(r.Context(), db, closeID, period)
 		if err != nil || m == nil {
@@ -350,7 +350,12 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, out)
 		}
 		if this == nil && company == "files" {
-			wait("This month's books are its files: accept a reading of the month's file, with no check holding its statements.")
+			// An accepted file whose checks hold its statements names them; otherwise a reading is still to be accepted.
+			if _, month, err := fileMonthBooks(ctx, db, r.PathValue("id")); err == nil && month != nil && len(month.Holds) > 0 {
+				wait("The accepted file " + month.File + " has checks that hold its statements: " + strings.Join(month.Holds, "; ") + ".")
+				return
+			}
+			wait("This month's books are its files: accept a reading of the month's file first.")
 			return
 		}
 		if this == nil {
