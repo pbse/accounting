@@ -194,7 +194,7 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id::text,'organization_id',i.organization_id,'firm_name',o.name,'email',i.email,'role',i.role_name,
    'state',CASE WHEN i.state='pending' AND i.expires_at<=now() THEN 'expired' ELSE i.state END,'invited_by',i.invited_by,'created_at',i.created_at,'expires_at',i.expires_at,
    'email_state',(SELECT e.state FROM platform_emails e WHERE e.invitation=i.id ORDER BY e.id DESC LIMIT 1)) ORDER BY i.id DESC)
-  FROM (SELECT * FROM member_invitations WHERE subject IN (SELECT jsonb_array_elements_text($1::jsonb)) OR (subject IS NULL AND email IN (SELECT jsonb_array_elements_text($2::jsonb))) ORDER BY id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
+  FROM (SELECT * FROM member_invitations WHERE subject IN (SELECT jsonb_array_elements_text($1::jsonb)) OR (subject IS NULL AND email IN (SELECT jsonb_array_elements_text($2::jsonb))) ORDER BY member_invitations.id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
  COALESCE((SELECT jsonb_object_agg(id,name) FROM organizations WHERE id IN (SELECT jsonb_array_elements_text($3::jsonb))),'{}'::jsonb)`,
 			jsonList(ids), jsonList(emails), jsonList(orgs)).Scan(&memberships, &invitations, &firms)
 	})

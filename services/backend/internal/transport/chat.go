@@ -312,7 +312,7 @@ func delegateTargets(r *http.Request, db *sql.DB, text string, today time.Time) 
 		return nil, nil, nil
 	}
 	rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period FROM client_closes c WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
- AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off' ORDER BY c.period DESC,c.id DESC`, organization(r), firmAccess(r), subject(r))
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off' ORDER BY c.period DESC,c.id DESC`, organization(r), firmAccess(r), subject(r))
 	if err != nil {
 		return nil, nil, err
 	}

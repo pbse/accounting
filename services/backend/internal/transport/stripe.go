@@ -80,7 +80,7 @@ func sweepStripeReports(ctx context.Context, db *sql.DB) error {
 	for range 10 {
 		var id, closeID, connection, period, key, org, entity, actor, state, report string
 		var runID sql.NullString
-		err := db.QueryRowContext(ctx, `UPDATE stripe_report_runs r SET claimed_at=now() FROM client_closes c WHERE c.id=r.close_id AND r.id=(SELECT id FROM stripe_report_runs WHERE (state='pending' OR (state='requesting' AND created_at<now()-interval '1 minute')) AND (claimed_at IS NULL OR claimed_at<now()-interval '5 minutes') ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
+		err := db.QueryRowContext(ctx, `UPDATE stripe_report_runs r SET claimed_at=now() FROM client_closes c WHERE c.id=r.close_id AND r.id=(SELECT id FROM stripe_report_runs WHERE (state='pending' OR (state='requesting' AND created_at<now()-interval '1 minute')) AND (claimed_at IS NULL OR claimed_at<now()-interval '5 minutes') ORDER BY stripe_report_runs.id FOR UPDATE SKIP LOCKED LIMIT 1)
  RETURNING r.id::text,r.close_id::text,r.connection_id::text,r.period,r.idempotency_key::text,r.run_id,r.state,c.organization_id,c.entity,r.actor,r.report`).Scan(&id, &closeID, &connection, &period, &key, &runID, &state, &org, &entity, &actor, &report)
 		if err == sql.ErrNoRows {
 			return nil
@@ -226,7 +226,7 @@ func registerStripe(mux *http.ServeMux, db *sql.DB) {
 		var raw json.RawMessage
 		err := db.QueryRowContext(ctx, `SELECT jsonb_build_object(
  'connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'livemode',x.livemode,'key_last4',x.key_last4,'account_id',x.account_id,'account_name',x.account_name) FROM stripe_connections x JOIN client_closes c ON c.organization_id=x.organization_id AND lower(c.entity)=lower(x.client_entity) WHERE c.id::text=$1 AND x.state<>'disconnected'),
- 'runs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',r.id::text,'period',r.period,'report',r.report,'state',r.state,'error',r.error,'evidence_id',r.evidence_id::text,'created_at',r.created_at) ORDER BY r.id DESC) FROM (SELECT * FROM stripe_report_runs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 10) r),'[]'::jsonb))`, closeID).Scan(&raw)
+ 'runs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',r.id::text,'period',r.period,'report',r.report,'state',r.state,'error',r.error,'evidence_id',r.evidence_id::text,'created_at',r.created_at) ORDER BY r.id DESC) FROM (SELECT * FROM stripe_report_runs WHERE close_id::text=$1 ORDER BY stripe_report_runs.id DESC LIMIT 10) r),'[]'::jsonb))`, closeID).Scan(&raw)
 		return raw, err
 	}
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {

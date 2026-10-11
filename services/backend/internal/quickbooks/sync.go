@@ -66,7 +66,7 @@ func claimSync(ctx context.Context, db *sql.DB) (syncClaim, error) {
 		return job, err
 	}
 	err := db.QueryRowContext(ctx, `UPDATE quickbooks_entity_syncs s SET state='running',claim=$1,claimed_at=now(),started_at=COALESCE(started_at,now()),attempts=attempts+1,error=''
- WHERE s.id=(SELECT id FROM quickbooks_entity_syncs WHERE attempts<3 AND ((state='queued' AND next_attempt_at<=now()) OR (state='running' AND claimed_at<now()-interval '8 minutes')) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
+ WHERE s.id=(SELECT id FROM quickbooks_entity_syncs WHERE attempts<3 AND ((state='queued' AND next_attempt_at<=now()) OR (state='running' AND claimed_at<now()-interval '8 minutes')) ORDER BY quickbooks_entity_syncs.id FOR UPDATE SKIP LOCKED LIMIT 1)
  RETURNING s.id::text,s.close_id::text,s.connection_id::text,s.period,s.attempts`, job.token).Scan(&job.id, &job.closeID, &job.connectionID, &job.period, &job.attempts)
 	return job, err
 }

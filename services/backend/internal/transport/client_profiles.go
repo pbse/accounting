@@ -36,7 +36,7 @@ func profileHistory(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, org, name string) ([]confirmedProfile, error) {
 	rows, err := q.QueryContext(ctx, `SELECT id::text,effective_from,currency,fiscal_year_start,reason,actor,created_at FROM client_profiles
- WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) ORDER BY id DESC LIMIT 50`, org, name)
+ WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) ORDER BY client_profiles.id DESC LIMIT 50`, org, name)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +172,8 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 	if _, err := tx.ExecContext(ctx, `SELECT c.id FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3 ORDER BY c.id FOR UPDATE`, org, name, from); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off',
- COALESCE((SELECT profile FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'null'::jsonb),
+	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')='signed_off',
+ COALESCE((SELECT profile FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'null'::jsonb),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved' AND upper(COALESCE(NULLIF(w.paper->'input'->>'currency',''),'USD'))<>$4)
  OR EXISTS(SELECT 1 FROM statement_extractions s JOIN evidence e ON e.id=s.source_id AND e.superseded_by IS NULL WHERE s.close_id=c.id AND s.confirmed IS NOT NULL AND COALESCE(s.confirmed->>'currency','')<>'' AND upper(s.confirmed->>'currency')<>$4)

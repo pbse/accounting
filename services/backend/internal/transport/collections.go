@@ -47,7 +47,7 @@ func registerCollections(mux *http.ServeMux, db *sql.DB) {
 	// authority is the sender the client's recorded permission in force allows, or "" when none is granted.
 	authority := func(r *http.Request, org, entity string) (string, error) {
 		var sender string
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT CASE WHEN granted THEN sender ELSE '' END FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY id DESC LIMIT 1),'')`, org, entity).Scan(&sender)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT CASE WHEN granted THEN sender ELSE '' END FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY customer_contact_authority.id DESC LIMIT 1),'')`, org, entity).Scan(&sender)
 		return sender, err
 	}
 	// blocked says why an address may not be emailed: the client asked not to, or an email to it bounced, was complained
@@ -67,11 +67,11 @@ func registerCollections(mux *http.ServeMux, db *sql.DB) {
 		}
 		var current, messages, preferences, bounced []byte
 		err = db.QueryRowContext(r.Context(), `SELECT
- COALESCE((SELECT to_jsonb(a) FROM (SELECT granted,sender,reference,recorded_by,recorded_at FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY id DESC LIMIT 1) a),'null'),
+ COALESCE((SELECT to_jsonb(a) FROM (SELECT granted,sender,reference,recorded_by,recorded_at FROM customer_contact_authority WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY customer_contact_authority.id DESC LIMIT 1) a),'null'),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',c.id::text,'item_id',c.item_id,'label',c.label,'customer',c.customer,'amount',c.amount::text,'currency',c.currency,'recipient',c.recipient,'reply_to',c.reply_to,'subject',c.subject,'body',c.body,'created_by',c.created_by,'created_at',c.created_at,
    'email',(SELECT jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'error',m.error,'approved_by',m.approved_by,'created_at',m.created_at) FROM email_delivery m WHERE m.collection_id=c.id)) ORDER BY c.id DESC)
-   FROM (SELECT * FROM collection_messages WHERE close_id::text=$3 ORDER BY id DESC LIMIT 100) c),'[]'),
- COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.recipient) FROM (SELECT DISTINCT ON (lower(recipient)) recipient,do_not_contact,reason,recorded_by,recorded_at FROM collection_contact_preferences WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY lower(recipient),id DESC) p),'[]'),
+   FROM (SELECT * FROM collection_messages WHERE close_id::text=$3 ORDER BY collection_messages.id DESC LIMIT 100) c),'[]'),
+ COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.recipient) FROM (SELECT DISTINCT ON (lower(recipient)) recipient,do_not_contact,reason,recorded_by,recorded_at FROM collection_contact_preferences WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY lower(recipient),collection_contact_preferences.id DESC) p),'[]'),
  COALESCE((SELECT jsonb_agg(recipient ORDER BY recipient) FROM collection_bounces WHERE organization_id=$1 AND client_entity=lower($2)),'[]')`,
 			org, entity, r.PathValue("id")).Scan(&current, &messages, &preferences, &bounced)
 		if err != nil {

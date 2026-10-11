@@ -57,7 +57,7 @@ func dailyFindings(ctx context.Context, db reader, org string, firm bool, who, c
  LEFT JOIN daily_reviews d ON d.close_id=c.id LEFT JOIN quickbooks_entity_syncs b ON b.id=d.sync_id LEFT JOIN xero_snapshots bx ON bx.id=d.xero_snapshot_id
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
- AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off' OR c.id::text=ANY($5::text[]))
+ AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off' OR c.id::text=ANY($5::text[]))
  AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4)`, org, firm, who, client, reopened)
 	if err != nil {
 		return nil, err

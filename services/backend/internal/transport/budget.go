@@ -281,7 +281,7 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 		return b, m.Source + ":" + m.realm, err
 	}
 	versions := func(r *http.Request, org, entity string, accounts map[string]packAccount) ([]budgetVersion, error) {
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,name,company,currency,lines,source,based_on::text,created_by,created_at,COALESCE(approved_by,''),approved_at FROM budget_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY id DESC`, org, entity)
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,name,company,currency,lines,source,based_on::text,created_by,created_at,COALESCE(approved_by,''),approved_at FROM budget_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY budget_versions.id DESC`, org, entity)
 		if err != nil {
 			return nil, err
 		}

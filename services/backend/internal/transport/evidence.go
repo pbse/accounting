@@ -94,7 +94,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'created_by',created_by,'agent',agent,'bytes',COALESCE(octet_length(original),octet_length(content)),'purpose',purpose,'procedure_id',procedure_id::text,'procedure_kind',(SELECT kind FROM procedure_versions WHERE id=procedure_id),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'created_by',created_by,'agent',agent,'bytes',COALESCE(octet_length(original),octet_length(content)),'purpose',purpose,'procedure_id',procedure_id::text,'procedure_kind',(SELECT kind FROM procedure_versions WHERE id=procedure_id),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY evidence.id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
 		if err != nil {
 			problem(w, 503, "Could not load evidence.")
 			return
@@ -495,7 +495,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/preparations", func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'plan',plan,'created_at',created_at) ORDER BY id DESC),'[]'::jsonb) FROM (SELECT * FROM preparation_plans WHERE close_id::text=$1 ORDER BY id DESC LIMIT 100) p`, r.PathValue("id")).Scan(&body)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'plan',plan,'created_at',created_at) ORDER BY p.id DESC),'[]'::jsonb) FROM (SELECT * FROM preparation_plans WHERE close_id::text=$1 ORDER BY preparation_plans.id DESC LIMIT 100) p`, r.PathValue("id")).Scan(&body)
 		if err != nil {
 			problem(w, 503, "Could not load preparation instructions.")
 			return

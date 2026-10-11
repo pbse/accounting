@@ -157,7 +157,7 @@ func acceptanceSignoff(ctx context.Context, db *sql.DB, closeID string, s accept
 			return err
 		}
 	}
-	_, err := db.ExecContext(ctx, `INSERT INTO close_scopes(close_id,scope,actor) SELECT $1,jsonb_build_object('description',$2::text,'required_papers',COALESCE(jsonb_agg(id::text ORDER BY id),'[]'::jsonb),'external_steps','[]'::jsonb),'acceptance reviewer'
+	_, err := db.ExecContext(ctx, `INSERT INTO close_scopes(close_id,scope,actor) SELECT $1,jsonb_build_object('description',$2::text,'required_papers',COALESCE(jsonb_agg(id::text ORDER BY w.id),'[]'::jsonb),'external_steps','[]'::jsonb),'acceptance reviewer'
  FROM workpapers w WHERE close_id=$1 AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`, closeID, s.Description)
 	return err
 }
