@@ -1207,6 +1207,17 @@ body {
 .ks-sheet .ks-tr {
   --ks-columns: minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr) 24px;
 }
+/* Workpapers: the drafts, and every saved version. */
+.ks-drafts .ks-tr {
+  --ks-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.8fr) 24px;
+}
+.ks-versions .ks-tr {
+  --ks-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+.ks-tr .ks-who small {
+  font-weight: 400;
+  color: var(--ink-3);
+}
 .ks-tr .r {
   justify-self: end;
   text-align: right;
@@ -1631,6 +1642,13 @@ body {
   }
   .ks-sheet .ks-tr > :nth-child(2),
   .ks-sheet .ks-tr > :nth-child(3) {
+    display: none;
+  }
+  .ks-drafts .ks-tr {
+    --ks-columns: minmax(0, 1fr) auto 24px;
+  }
+  .ks-drafts .ks-tr > :nth-child(3),
+  .ks-drafts .ks-tr > :nth-child(4) {
     display: none;
   }
 }

@@ -3,12 +3,7 @@ import { closeTab, closeTabs, type CloseTab } from "../../data/closeTabs";
 import { monthName, useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
-import { Icon } from "@close/ui/components/Icon";
-import { IconTile } from "@close/ui/components/IconTile";
-import { Segmented } from "@close/ui/components/Segmented";
-import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { CloseLede, signOffAvailable, useBrief } from "./Stands";
-import { CarryForward } from "./CarryForward";
 import { EmailReplies } from "./EmailReplies";
 import { CashPlan } from "./CashPlan";
 import { Reports } from "./Reports";
@@ -23,27 +18,19 @@ import { Stripe } from "./Stripe";
 import { Readiness } from "./Readiness";
 import { OpeningBaseline } from "./OpeningBaseline";
 import { TakeoverSetup } from "./TakeoverSetup";
-import { Recurring } from "./Recurring";
 import { Replay } from "./Replay";
-import { RecurringAccruals } from "./RecurringAccruals";
 import { Requests } from "./Requests";
 import { EffortCard, EffortTracker, type Activity } from "./Effort";
 import { Books, BooksLede } from "./Books";
+import { Workpapers, WorkpapersLede } from "./Workpapers";
 import { AgentChip, CloseMenu, countsOf, needsFor, Overview, useDecisions, useGoalStatus } from "./Overview";
 import { workspaceRequest } from "./workspace";
-import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
-import { EntityCell, RowList } from "@close/ui/components/RowList";
+import { useClose, type Close, type Profile } from "./WorkpaperView";
 
 // Overview holds what needs a person; Books holds what the ledger shows; the rest is where each kind of work lives.
 const tabs = closeTabs;
 type Tab = CloseTab;
 const tabActivity: Record<Tab, Activity> = { overview: "prepare", books: "review", workpapers: "prepare", evidence: "evidence", requests: "requests", reports: "review", cash: "review", signoff: "signoff", settings: "configuration" };
-const filters: Record<string, [string, (paper: Paper) => boolean]> = {
-  all: ["All drafts", () => true],
-  ready: ["Ready for review", readyForReview],
-  attention: ["Needs attention", needsAttention],
-  approved: ["Approved", (paper) => paper.review_state === "approved"],
-};
 
 
 
@@ -107,6 +94,14 @@ function Package({ close }: { close: Close }) {
 
 // Each tab's own actions and exception paths, at the top of the close's ⋯ menu.
 const tabMenus = (base: string): Partial<Record<Tab, { title: string; items: { label: string; to: string }[] }>> => ({
+  workpapers: {
+    title: "Workpapers",
+    items: [
+      { label: "Refresh recurring schedules", to: `${base}?tab=workpapers&view=recurring` },
+      { label: "Refresh recurring accruals", to: `${base}?tab=workpapers&view=accruals` },
+      { label: "Carry work into the next month", to: `${base}?tab=workpapers&view=carry` },
+    ],
+  },
   books: {
     title: "Books",
     items: [
@@ -121,7 +116,7 @@ const tabMenus = (base: string): Partial<Record<Tab, { title: string; items: { l
 export default function ClientClose() {
   const { id } = useParams();
   const location = useLocation();
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const { close, papers, more, error, refreshError, loading, reload } = useClose(id);
   const briefRead = useBrief(id ?? "");
   const brief = briefRead.data;
@@ -130,7 +125,6 @@ export default function ClientClose() {
   const dates = useDates();
   const [deleted, setDeleted] = useState("");
   const tab: Tab = closeTab(params.get("tab"));
-  const filter = filters[params.get("filter") ?? ""] ? params.get("filter")! : "all";
   // A link to a section scrolls to it once it is there: a section can mount after the month's data loads, so the
   // target is looked for each frame for a few seconds.
   useEffect(() => {
@@ -154,12 +148,7 @@ export default function ClientClose() {
     );
   if (loading && !close) return <p role="status">Opening close…</p>;
   if (error || !close) return <p role="alert">{error || "Close not found."}</p>;
-  const ready = papers.filter(readyForReview);
-  const attention = papers.filter(needsAttention);
-  const approved = papers.filter((paper) => paper.review_state === "approved");
-  const shown = papers.filter(filters[filter][1]);
   const base = `/dashboard/closes/${close.id}`;
-  const latest = more ? " among the latest 100" : "";
   // What needs the person, counted once for the sentence, the tabs' badges and Overview's list. Decisions that could not
   // be read are said so, never counted as none.
   const { needs, teammates } = needsFor(decisionsRead.data?.events, brief, papers, base);
@@ -194,7 +183,7 @@ export default function ClientClose() {
         </div>
       </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
-      {tab === "books" ? <BooksLede close={close} base={base} /> : <CloseLede close={close} counts={counts} />}
+      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : <CloseLede close={close} counts={counts} />}
       {close.profile && (close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown") && (
         <p className="ks-lede-notes">
           <span className="chip warn" role={close.profile.state === "unknown" ? undefined : "alert"} title={close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>
@@ -218,45 +207,7 @@ export default function ClientClose() {
       </nav>
       {tab === "overview" && <Overview close={close} papers={papers} needs={needs} teammates={teammates} brief={brief} briefRead={briefRead} decisionsError={decisionsError} base={base} onPrepared={() => void reload()} />}
       {tab === "books" && <Books close={close} papers={papers} needs={needs.filter((need) => need.tab === "books")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
-      {tab === "workpapers" && (
-        <div className="stack">
-      <StatGroup>
-        <StatTile icon="review" label="Ready for review" value={ready.length} caption={`Current drafts with evidence and no blockers${latest}`} to={`${base}?tab=workpapers&filter=ready`} />
-        <StatTile icon="blocked" tone="red" label="Needs attention" value={attention.length} caption={`Blockers, changes requested or evidence changed${latest}`} to={`${base}?tab=workpapers&filter=attention`} />
-        <StatTile icon="decision" tone="teal" label="Approved" value={approved.length} caption="Approval is not posting or sign-off" to={`${base}?tab=workpapers&filter=approved`} />
-        <StatTile icon="file" tone="gray" label="Saved drafts" value={papers.length} caption={more ? "Latest 100 shown" : "All versions in this close"} to={`${base}?tab=workpapers`} />
-      </StatGroup>
-          <div className="toolbar">
-            <Segmented
-              label="Filter drafts"
-              items={Object.entries(filters).map(([key, [label, test]]) => ({ key, label, count: papers.filter(test).length }))}
-              value={filter}
-              onChange={(key) => setParams({ tab: "workpapers", filter: key })}
-            />
-          </div>
-          <RowList columns={["Workpaper", "Review", "Prepared", ""]}>
-            {shown.length === 0 && <p className="empty">No drafts match this view. Prepare work from evidence or change the filter.</p>}
-            {shown.map((paper) => (
-              <Link className="row" key={paper.id} to={`${base}/workpapers/${paper.id}`}>
-                <EntityCell
-                  leading={<IconTile icon="file" tone="gray" />}
-                  title={paperLabel(paper)}
-                  detail={`Draft #${paper.id}${paper.paper.revises ? ` · revises #${paper.paper.revises}` : ""}${(paper.paper.blockers?.length ?? 0) > 0 ? ` · ${paper.paper.blockers!.length} blocker${paper.paper.blockers!.length === 1 ? "" : "s"}` : ""}`}
-                />
-                <span>
-                  <ReviewPill state={paper.review_state} />
-                </span>
-                <small>{dates.dateTime(paper.created_at)}</small>
-                <Icon name="arrow" />
-              </Link>
-            ))}
-          </RowList>
-          {more && <p className="note">Showing the 100 most recent drafts. Older records remain saved.</p>}
-          <Recurring key={`recurring-${close.id}`} closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
-          <RecurringAccruals closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
-          <CarryForward key={close.id} closeId={close.id} />
-        </div>
-      )}
+      {tab === "workpapers" && <Workpapers close={close} papers={papers} more={more} needs={needs.filter((need) => need.tab === "workpapers")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} statusError={!goalRead.isError ? "" : goalRead.data ? "stale" : "failed"} base={base} onPrepared={() => void reload()} />}
       {tab === "evidence" && (
         <div className="stack">
           <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
