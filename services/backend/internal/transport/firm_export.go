@@ -14,7 +14,7 @@ var firmExportTables = []struct{ table, order string }{
 	{"organization_member_access", "id"}, {"member_role_changes", "id"}, {"client_access", "id"}, {"agent_access", "id"}, {"organization_policy_changes", "id"},
 	{"procedure_versions", "id"}, {"procedure_drafts", "id"}, {"client_aliases", "confirmed_at"}, {"close_routines", "id"}, {"client_roster", "id"}, {"close_templates", "id"}, {"client_profiles", "id"}, {"client_ledgers", "id"}, {"books_sources", "id"}, {"books_import_deletions", "id"},
 	{"takeover_setups", "id"}, {"opening_baselines", "id"}, {"opening_cleanup_resolutions", "id"},
-	{"budget_versions", "id"}, {"cash_scenarios", "id"}, {"cash_obligations", "id"}, {"standing_approvals", "id"}, {"open_item_actions", "id"},
+	{"budget_versions", "id"}, {"cash_scenarios", "id"}, {"cash_obligations", "id"}, {"cash_obligation_matches", "id"}, {"standing_approvals", "id"}, {"open_item_actions", "id"},
 	{"customer_contact_authority", "id"}, {"collection_contact_preferences", "id"}, {"email_settlements", "id"},
 	{"production_posting_grants", "id"}, {"xero_posting_grants", "id"}, {"operation_acceptances", "id"},
 }

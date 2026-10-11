@@ -81,6 +81,10 @@ func projectCashPlan(value any) any {
 		}
 	}
 	for key, v := range object {
+		if ready, ok := v.(map[string]any); ok && key == "readiness" {
+			cut(ready, "unresolved")
+			continue
+		}
 		if key == "weeks" {
 			if weeks, ok := v.([]any); ok {
 				for _, week := range weeks {

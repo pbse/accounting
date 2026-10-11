@@ -551,6 +551,11 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	reads["t71"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","basis":"cash","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00","change":"5000.00"}]}}`, "Management pack (cash basis)", "management_pack", "Bluegrass Dental PLLC", "2026-10")
 	rejected("Net income rose to 21,780.00, up 5,000.00.", "nothing cited shows it rose", e("t2", 0, ni+"/amount", "21780.00"), e("t71", 0, "/profit_and_loss/measures/0/change", "5000.00"))
 
+	// A draft cash plan (an open decision) states its forecast as a draft.
+	reads["t72"] = read(`{"state":"ready","currency":"USD","opening":{"amount":"64120.00","stale":false},"open_items":{"complete":true},"readiness":{"state":"draft","unresolved":[{"kind":"decision","text":"Bonus is proposed but not approved, so it is not counted.","amount":"18000.00"}]},"weeks":[{"start":"2026-10-05","end":"2026-10-11","closing":"23400.00"}],"lowest":{"amount":"21000.00","on":"2026-10-07"}}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Book cash is forecast to run lowest at 21,000.00.", "without saying its inputs are incomplete", e("t72", 0, "/lowest/amount", "21000.00"))
+	ok("In this draft forecast, book cash runs lowest at 21,000.00.", e("t72", 0, "/lowest/amount", "21000.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }
