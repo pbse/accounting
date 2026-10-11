@@ -166,7 +166,7 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 	var accounts, balances, activity, cashFlow, uncounted []byte
 	var unavailable, org, entity, importID string
 	var checks []byte
-	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,i.name,v.as_of::text,v.basis,a.exported_on::timestamp AT TIME ZONE 'UTC',v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable,a.checks,v.captured_at,c.organization_id,c.entity,a.import_id::text
+	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,i.name,v.as_of::text,v.basis,a.exported_on::timestamp AT TIME ZONE 'UTC',v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable,a.checks,v.created_at,c.organization_id,c.entity,a.import_id::text
  FROM client_closes c JOIN books_import_acceptances a ON a.organization_id=c.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(c.organization_id,c.entity) AND a.period=c.period
  JOIN books_imports i ON i.id=a.import_id JOIN books_versions v ON v.source='files' AND v.source_id=a.id::text AND v.close_id=c.id
  WHERE c.id::text=$1 AND a.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=c.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(c.organization_id,c.entity) AND b.period=c.period
