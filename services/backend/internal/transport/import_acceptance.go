@@ -776,7 +776,12 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 		if found {
 			checks := fileChecks(state, explainedFor(accepted, state.missing))
 			out["checks"], out["holds"], out["reading"], out["map_stamp"] = checks, holding(checks), state.reading.ID, state.mapStamp
-			out["period"], out["can_accept"] = state.reading.Period, canReview(r) && on && state.scope != nil
+			// A ledger's month-end balances are its lines rolled from the prior month's: read and mapped, it is not yet a
+			// month's books (docs/books-sources.md, delivery step 8).
+			out["period"], out["can_accept"] = state.reading.Period, canReview(r) && on && state.scope != nil && !state.layout.Layout.Ledger()
+			if state.layout.Layout.Ledger() {
+				out["ledger"] = "This file is the month's ledger detail: its lines are read, and its month-end balances, rolled from the prior month's accepted books, arrive with the next step."
+			}
 			if state.scope != nil {
 				out["scope"] = state.scope.ID
 			}
@@ -859,6 +864,9 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 		switch {
 		case !found:
 			problem(w, 409, "Confirm how the file is read before accepting it.")
+			return
+		case state.layout.Layout.Ledger():
+			problem(w, 409, "This file is the month's ledger detail: its month-end balances, rolled from the prior month's accepted books, arrive with the next step.")
 			return
 		case state.scope == nil:
 			problem(w, 409, "Attest what the file covers and its basis, for the reading confirmed now, before accepting it.")

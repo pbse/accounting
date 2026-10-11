@@ -13,7 +13,7 @@ import { ImportScope } from "./ImportScope";
 // to read it, a person previews the reading, and a reviewer confirms the layout, which is proposed again for the next
 // month's file. Nothing here is a month's books yet: accepting an import arrives with a later step.
 
-type Meaning = "account_number" | "account_name" | "account_type" | "debit" | "credit" | "balance" | "opening" | "movement" | "year_to_date" | "dimension";
+type Meaning = "account_number" | "account_name" | "account_type" | "debit" | "credit" | "balance" | "opening" | "movement" | "year_to_date" | "dimension" | "date" | "reference" | "memo" | "party";
 type Layout = {
   table: string;
   header_row: number;
@@ -27,6 +27,8 @@ type Layout = {
   postings?: number[];
   ignored?: number[];
   ignored_columns?: number[];
+  // date_order is how a ledger's dates in numbers read: year, month, day (ymd), month first (mdy) or day first (dmy).
+  date_order?: string;
 };
 type Cell = { column: number; ref: string; kind: string; value: string; formula?: string };
 type Row = { number: number; hidden?: boolean; cells: Cell[] };
@@ -70,6 +72,11 @@ const meanings: [Meaning | "" | "ignored", string][] = [
   ["movement", "Movement"],
   ["year_to_date", "Year to date"],
   ["dimension", "Department, location or class"],
+  // A column of dates makes the file a General Ledger: each row a line of the month's transactions.
+  ["date", "Date (a ledger's line)"],
+  ["reference", "Transaction number"],
+  ["memo", "Description"],
+  ["party", "Payee or customer"],
 ];
 // A row the reader cannot place is marked by a person: an account it took for a total, a total or heading it cannot name,
 // or a footer to leave out.
@@ -488,6 +495,17 @@ function LayoutForm({
             </label>
           ))}
         </div>
+        {Object.values(layout.columns).includes("date") && (
+          <label>
+            Dates are written
+            <select value={layout.date_order ?? ""} onChange={(e) => set({ date_order: e.target.value })}>
+              <option value="">as they show (asked when they could read two ways)</option>
+              <option value="mdy">month first (01/31/2026)</option>
+              <option value="dmy">day first (31/01/2026)</option>
+              <option value="ymd">year first (2026-01-31)</option>
+            </select>
+          </label>
+        )}
         {Object.values(layout.columns).includes("balance") && (
           <label>
             A positive balance is

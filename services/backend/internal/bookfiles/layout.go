@@ -32,6 +32,13 @@ const (
 	// is one account whose balance is the sum, the split kept on its lines (docs/books-sources.md, Hierarchy, dimensions
 	// and entities).
 	Dimension Meaning = "dimension"
+	// Date, Reference, Memo and Party are a General Ledger's: a layout naming a date column reads each posting row as a
+	// line of the month's transactions (its date, the transaction's number, its description and the payee), its amount
+	// the line's, not an account's month-end balance.
+	LineDate  Meaning = "date"
+	Reference Meaning = "reference"
+	Memo      Meaning = "memo"
+	Party     Meaning = "party"
 )
 
 // Layout is how to read one table as a Trial Balance: which row heads it, what each column means, how its amounts are
@@ -61,6 +68,19 @@ type Layout struct {
 	// Headers are the header row's text over each column the layout names or leaves out, kept when it is confirmed: a
 	// later file is read with the same layout without a question only when its headers say the same.
 	Headers map[int]string `json:"headers,omitempty"`
+	// DateOrder is how a ledger's dates written in numbers read (YMD, MDY or DMY), confirmed when they could read two
+	// ways.
+	DateOrder string `json:"date_order,omitempty"`
+}
+
+// Ledger says the layout reads a General Ledger's lines, not a Trial Balance's month-end balances: it names a date.
+func (l Layout) Ledger() bool {
+	for _, m := range l.Columns {
+		if m == LineDate {
+			return true
+		}
+	}
+	return false
 }
 
 // headerWords names what each column header usually says, for a proposal.
@@ -80,6 +100,18 @@ var headerWords = []struct {
 	{Balance, regexp.MustCompile(`(?i)^(closing\s*)?balance|^net$|^amount$|^total$|closing`)},
 }
 
+// ledgerWords name a General Ledger's own columns, read before headerWords in a header row that has a date: there,
+// "Name" is the payee and "Description" the line's, not the account's, and "Num" the transaction's number.
+var ledgerWords = []struct {
+	meaning Meaning
+	words   *regexp.Regexp
+}{
+	{LineDate, regexp.MustCompile(`(?i)^(date|txn\.?\s*date|transaction\s*date|posting\s*date|entry\s*date|gl\s*date|journal\s*date|doc(ument)?\s*date)$`)},
+	{Reference, regexp.MustCompile(`(?i)^(num|no\.?|#|ref\.?|reference|doc(ument)?\s*(no\.?|number|#)|entry\s*(no\.?|number|#)|journal\s*(no\.?|number|#|id)|transaction\s*(id|no\.?|number|#)|txn\s*(id|no\.?|number|#)|voucher(\s*(no\.?|number|#))?)$`)},
+	{Party, regexp.MustCompile(`(?i)^(name|payee|payer|customer|vendor|supplier|contact|customer/vendor|payee/payer)$`)},
+	{Memo, regexp.MustCompile(`(?i)^(memo|memo/description|description|narration|details|particulars|line\s*description)$`)},
+}
+
 // ProposeLayout guesses how to read a table as a Trial Balance: the first of its first 30 rows whose cells name at
 // least two Trial Balance columns heads it, each column's meaning comes from its header, and the number style from the
 // amounts beneath. It returns what a person must still confirm, said as questions; a table with no header it can find
@@ -92,9 +124,20 @@ func ProposeLayout(t Table) (Layout, []string) {
 			break
 		}
 		columns, repeated := map[int]Meaning{}, map[Meaning][]int{}
+		// A header row with a date heads a General Ledger: its own columns are read first.
+		ledger := slices.ContainsFunc(r.Cells, func(c Cell) bool { return ledgerWords[0].words.MatchString(strings.TrimSpace(c.Value)) })
 		for _, c := range r.Cells {
 			text := strings.TrimSpace(c.Value)
-			for _, h := range headerWords {
+			words := headerWords
+			if ledger {
+				words = append(slices.Clone(ledgerWords), headerWords...)
+			}
+			// A ledger's running balance beside its lines' amounts is no column of the month's figures: left out.
+			if ledger && regexp.MustCompile(`(?i)^(running\s*)?balance$`).MatchString(text) {
+				layout.IgnoredColumns = append(layout.IgnoredColumns, c.Column)
+				continue
+			}
+			for _, h := range words {
 				if h.words.MatchString(text) {
 					// A header repeated (a multi-period export's Balance for each month) proposes its first column only,
 					// and asks which one is meant.
@@ -121,6 +164,17 @@ func ProposeLayout(t Table) (Layout, []string) {
 		}
 	}
 	questions := append([]string{}, repeats...)
+	// A ledger's running balance was left out with the header row it heads, not another's.
+	if layout.HeaderRow != 0 {
+		layout.IgnoredColumns = slices.DeleteFunc(layout.IgnoredColumns, func(c int) bool {
+			return !regexp.MustCompile(`(?i)^(running\s*)?balance$`).MatchString(strings.TrimSpace(headerText(t, layout.HeaderRow, c)))
+		})
+	} else {
+		layout.IgnoredColumns = nil
+	}
+	if len(layout.IgnoredColumns) == 0 {
+		layout.IgnoredColumns = nil
+	}
 	if layout.HeaderRow == 0 {
 		return layout, append(questions, "Which row heads the Trial Balance, and what does each column hold?")
 	}
@@ -220,6 +274,31 @@ func ProposeLayout(t Table) (Layout, []string) {
 	if unsure {
 		questions = append(questions, "Are the amounts written with a decimal point (1,234.56) or a decimal comma (1.234,56)?")
 	}
+	if layout.Ledger() {
+		// A ledger's dates in numbers are read in the order they show; one they do not show is asked.
+		var dates []string
+		for _, r := range t.Rows {
+			if r.Number <= layout.HeaderRow {
+				continue
+			}
+			for _, c := range r.Cells {
+				if layout.Columns[c.Column] == LineDate && c.Kind != Date {
+					dates = append(dates, c.Value)
+				}
+			}
+		}
+		layout.DateOrder = proposeDateOrder(dates)
+		for _, d := range dates {
+			if _, err := readDate(Cell{Value: d}, layout.DateOrder); err == errEitherWays {
+				questions = append(questions, "Are the dates written day first (31/01/2026) or month first (01/31/2026)?")
+				break
+			}
+		}
+		for _, c := range layout.IgnoredColumns {
+			questions = append(questions, fmt.Sprintf("Column %s is a running balance, left out: is it?", strings.TrimRight(cellRef(c, 1), "1")))
+		}
+		return layout, append(questions, "Which month-end is this ledger's, and in which currency?", "Are the amounts in units, or in thousands?")
+	}
 	questions = append(questions, "As of which date is this Trial Balance, and in which currency?", "Are the amounts in units, or in thousands?")
 	return layout, questions
 }
@@ -265,6 +344,12 @@ type Line struct {
 	// Formulas are the amounts read from a formula's stored result, by meaning: the last calculation, which may not be
 	// the current one (docs/books-sources.md, Formulas).
 	Formulas []Meaning `json:"formulas,omitempty"`
+	// Date, Reference, Memo and Party are a ledger line's: its date as YYYY-MM-DD, its transaction's number, its
+	// description and its payee.
+	Date      string `json:"date,omitempty"`
+	Reference string `json:"reference,omitempty"`
+	Memo      string `json:"memo,omitempty"`
+	Party     string `json:"party,omitempty"`
 }
 
 // Label is what names the row: its account name, else its account number (a Trial Balance with codes alone writes its
@@ -497,6 +582,10 @@ func (l Layout) Read(t Table) Reading {
 		}
 	}
 	debits, credits := new(big.Rat), new(big.Rat)
+	// A ledger's lines are each dated, within the month the file is as of; a date that reads two ways waits for its
+	// order.
+	ledger := l.Ledger()
+	var eitherWays, outsideMonth []int
 	// beside is each column the layout does not name, with the rows that hold an amount in it beside the row's own.
 	beside := map[int][]int{}
 	var columns []int
@@ -514,7 +603,7 @@ func (l Layout) Read(t Table) Reading {
 		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cells: map[Meaning]string{}, Cents: true}
 		dimensions := map[int]string{}
 		var debit, credit, balance *big.Rat
-		hasAmount, signed := false, false
+		hasAmount, signed, dateUnread := false, false, false
 		// outside are the row's values in columns the layout does not name, and strays their columns: nothing is dropped
 		// unseen.
 		var outside []string
@@ -552,6 +641,25 @@ func (l Layout) Read(t Table) Reading {
 				line.Type = strings.TrimSpace(c.Value)
 			case Dimension:
 				dimensions[c.Column] = strings.TrimSpace(c.Value)
+			case LineDate:
+				if strings.TrimSpace(c.Value) == "" {
+					break
+				}
+				d, err := readDate(c, l.DateOrder)
+				switch {
+				case err == errEitherWays:
+					eitherWays, dateUnread = append(eitherWays, r.Number), true
+				case err != nil:
+					reading.Problems, dateUnread = append(reading.Problems, fmt.Sprintf("%s: %q is not a date", c.Ref, c.Value)), true
+				default:
+					line.Date = d
+				}
+			case Reference:
+				line.Reference = strings.TrimSpace(c.Value)
+			case Memo:
+				line.Memo = strings.TrimSpace(c.Value)
+			case Party:
+				line.Party = strings.TrimSpace(c.Value)
 			default:
 				if c.Formula != "" {
 					line.Formulas = append(line.Formulas, meaning)
@@ -708,7 +816,8 @@ func (l Layout) Read(t Table) Reading {
 		if total && !totalName.MatchString(line.Name) && totalName.MatchString(line.Number) {
 			line.Name, line.Number = strings.TrimSpace(line.Number+" "+line.Name), ""
 		}
-		if line.Balance == nil && !total && (!totalled[strings.ToLower(line.Label())] || slices.Contains(l.Postings, r.Number)) && !slices.Contains(l.Headings, r.Number) {
+		// In a ledger, a row with neither an amount nor a date heads the lines beneath it (an account's, say).
+		if line.Balance == nil && !total && !(ledger && line.Date == "" && !dateUnread) && (!totalled[strings.ToLower(line.Label())] || slices.Contains(l.Postings, r.Number)) && !slices.Contains(l.Headings, r.Number) {
 			line.Balance = new(big.Rat)
 			if line.Number == "" {
 				reading.Notes = append(reading.Notes, fmt.Sprintf("Row %d (%s) has no amounts: read as an account with a zero balance; mark it a heading if it is one", r.Number, line.Name))
@@ -744,6 +853,13 @@ func (l Layout) Read(t Table) Reading {
 			if !line.Cents {
 				reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d is not exact to the cent", r.Number))
 			}
+			switch {
+			case !ledger || dateUnread:
+			case line.Date == "":
+				reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d has an amount but no date", r.Number))
+			case len(l.AsOf) >= 7 && (line.Date > l.AsOf || line.Date[:7] != l.AsOf[:7]):
+				outsideMonth = append(outsideMonth, r.Number)
+			}
 			// Each side as written: a row with both a debit and a credit counts each on its own side.
 			d, c := columnSums([]Line{line})
 			debits.Add(debits, d)
@@ -765,6 +881,12 @@ func (l Layout) Read(t Table) Reading {
 	}
 	for _, c := range slices.Sorted(maps.Keys(beside)) {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("Column %s holds values in rows %s outside the chosen columns: choose what it holds, or mark it ignored", strings.TrimRight(cellRef(c, 1), "1"), rowList(beside[c])))
+	}
+	if len(eitherWays) > 0 {
+		reading.Problems = append(reading.Problems, fmt.Sprintf("The dates in rows %s could be read day first or month first: confirm how the dates are written", rowList(eitherWays)))
+	}
+	if len(outsideMonth) > 0 {
+		reading.Problems = append(reading.Problems, fmt.Sprintf("Rows %s are dated outside the month of %s: a ledger is read for its month alone", rowList(outsideMonth), l.AsOf))
 	}
 	reading.Debits, reading.Credits = exact(debits), exact(credits)
 	reading.Balanced = debits.Cmp(credits) == 0
