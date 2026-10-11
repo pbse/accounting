@@ -83,8 +83,19 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 	if profile.State == "confirmed" || profile.State == "differs" {
 		content["profile"] = map[string]any{"currency": profile.Currency, "fiscal_year_start": profile.FiscalStart, "state": profile.State}
 	}
+	// A ledger connected once and since disconnected is not a client whose books come as files: it is reconnected.
+	var disconnected string
+	if len(check.Companies) == 0 {
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT 'QuickBooks' FROM quickbooks_connections q JOIN client_closes c ON c.id::text=$1 WHERE q.organization_id=c.organization_id AND client_identity(q.organization_id,q.client_entity)=client_identity(c.organization_id,c.entity) AND q.state='disconnected' LIMIT 1),
+ (SELECT 'Xero' FROM xero_connections x JOIN client_closes c ON c.id::text=$1 WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='disconnected' LIMIT 1),'')`, closeID).Scan(&disconnected)
+		if err != nil {
+			return nil, "", nil, err
+		}
+	}
 	problems := []string{}
 	switch {
+	case len(check.Companies) == 0 && disconnected != "":
+		problems = append(problems, "The client's "+disconnected+" connection was disconnected: reconnect it on the client's page, as the takeover confirms where its books are read from.")
 	case len(check.Companies) == 0 && profile.State == "confirmed":
 		content["books"] = "files"
 	case len(check.Companies) == 0:

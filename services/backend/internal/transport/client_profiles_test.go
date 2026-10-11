@@ -137,8 +137,10 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	if p := profileOf(september); p.State != "confirmed" || p.Currency != "CAD" || p.EffectiveFrom != "2026-09" || p.Unsettled() {
 		t.Fatalf("September: %+v", p)
 	}
-	if p := profileOf(alias); p.State != "differs" || p.Currency != "USD" {
-		t.Fatalf("July, opened under the alias, reads the client's connection and keeps its confirmed profile, asking: %+v", p)
+	// July, opened under the alias, keeps the US dollars it was confirmed in: the Canadian ledger is September's
+	// profile's to answer, not a question for a month a later profile superseded.
+	if p := profileOf(alias); p.State != "confirmed" || p.Currency != "USD" || p.Unsettled() {
+		t.Fatalf("July keeps its confirmed profile, unasked: %+v", p)
 	}
 
 	// The client page shows the profile in force and its history, newest first, under the client's own name.
@@ -223,6 +225,14 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	if len(setup["problems"].([]any)) != 0 || content["books"] != "files" || content["profile"].(map[string]any)["currency"] != "GBP" {
 		t.Fatalf("a file-only client is taken over with its profile: %v", setup)
 	}
+	// A ledger connected once and since disconnected is reconnected, not taken for books that come as files.
+	_, err = db.Exec(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_name) VALUES($1,$2,'Birch Ltd','fixture','disconnected',$3,now(),'Birch')`, birch, org, rand.Text())
+	must(err)
+	if p := call("user_a", partner, "GET", takeover, nil, 200)["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "Xero connection was disconnected") {
+		t.Fatalf("a disconnected ledger is reconnected: %v", p)
+	}
+	_, err = db.Exec(`DELETE FROM xero_connections WHERE organization_id=$1`, org)
+	must(err)
 	// A ledger connected later that reports dollars is a question the takeover waits on.
 	_, err = db.Exec(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,home_currency,fiscal_year_start) VALUES($1,$2,'Birch Ltd','fixture','active',$3,now(),'88','USD',4)`, birch, org, rand.Text())
 	must(err)
@@ -231,5 +241,19 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	}
 	if b := call("user_a", partner, "GET", "/v1/closes/"+birch+"/readiness", nil, 200)["blockers"].([]any); !slices.ContainsFunc(b, func(x any) bool { return strings.Contains(x.(string), "its connected ledger reports USD") }) {
 		t.Fatalf("sign-off waits on a ledger that differs: %v", b)
+	}
+
+	// A month under a profile since superseded keeps its own: today's ledger answers for the newest profile alone.
+	var cedar, cedarLater string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Cedar Ltd','2026-08') RETURNING id::text`, org).Scan(&cedar))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Cedar Ltd','2026-09') RETURNING id::text`, org).Scan(&cedarLater))
+	_, err = db.Exec(`INSERT INTO client_profiles(organization_id,client_entity,effective_from,currency,fiscal_year_start,reason,actor) VALUES($1,'Cedar Ltd','2026-01','USD',1,'Dollars','fixture'),($1,'Cedar Ltd','2026-09','CAD',1,'Canadian dollars from September','fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,home_currency,fiscal_year_start) VALUES($1,$2,'Cedar Ltd','fixture','active',$3,now(),'99','CAD',1)`, cedarLater, org, rand.Text())
+	must(err)
+	for id, want := range map[string]string{cedar: "USD", cedarLater: "CAD"} {
+		if p, e := preparation.ClientProfile(t.Context(), db, id); e != nil || p.State != "confirmed" || p.Currency != want {
+			t.Fatalf("Cedar's month %s: %+v %v", id, p, e)
+		}
 	}
 }
