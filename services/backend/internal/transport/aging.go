@@ -43,7 +43,7 @@ func latestAging(r *http.Request, db *sql.DB) (receivables, payables []quickbook
 	var raw []byte
 	var captured, completeness, period, home, captureID, company string
 	err = db.QueryRowContext(r.Context(), `SELECT COALESCE(s.payload->'open_items','{}'::jsonb),COALESCE(s.payload->>'finished_at',''),COALESCE(s.payload->>'completeness',''),c.period,COALESCE(x.home_currency,''),s.id::text,'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id
- WHERE s.close_id::text=$1 AND s.period=c.period AND s.state IN ('completed','unchanged') AND s.payload ? 'open_items' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` ORDER BY s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw, &captured, &completeness, &period, &home, &captureID, &company)
+ WHERE s.close_id::text=$1 AND s.period=c.period AND s.state IN ('completed','unchanged') AND s.payload ? 'open_items' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+` ORDER BY s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw, &captured, &completeness, &period, &home, &captureID, &company)
 	if err == sql.ErrNoRows {
 		return nil, nil, nil, waiting("Capture this month's QuickBooks transactions or Xero books first; the aging uses the open items that capture reads.")
 	}

@@ -64,7 +64,7 @@ func readBillCorrection(ctx context.Context, db *sql.DB, closeID, entity, id str
 func capturedTxn(ctx context.Context, db *sql.DB, closeID, entity, id, realm string) (string, string, json.RawMessage, error) {
 	var captureID, evidenceID string
 	var raw []byte
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.evidence_id::text,s.payload FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state='completed' AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND s.payload->>'realm'=$2 AND e.superseded_by IS NULL AND e.extraction_state='ready'`, closeID, realm).Scan(&captureID, &evidenceID, &raw)
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.evidence_id::text,s.payload FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "quickbooks")+` AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state='completed' AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND s.payload->>'realm'=$2 AND e.superseded_by IS NULL AND e.extraction_state='ready'`, closeID, realm).Scan(&captureID, &evidenceID, &raw)
 	if err != nil {
 		return "", "", nil, errors.New("A current completed QuickBooks transaction capture is required")
 	}

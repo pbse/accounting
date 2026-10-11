@@ -39,8 +39,8 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
  q.captured_at,COALESCE(q.usable,false),q.accounts,q.trial_balance,x.captured_at,COALESCE(x.active,false),x.payload
  FROM client_closes c
  LEFT JOIN LATERAL (SELECT s.captured_at,x.state='active' AND e.id IS NOT NULL AND e.superseded_by IS NULL AS usable,s.payload->'accounts' AS accounts,s.payload->'reports'->'TrialBalance' AS trial_balance FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
-  WHERE s.close_id=c.id AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) q ON true
- LEFT JOIN LATERAL (SELECT s.captured_at,x.state='active' AS active,s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id AND x.state<>'disconnected' WHERE s.close_id=c.id AND s.period=c.period ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) x ON true
+  WHERE s.close_id=c.id AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) q ON true
+ LEFT JOIN LATERAL (SELECT s.captured_at,x.state='active' AS active,s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id AND x.state<>'disconnected' WHERE s.close_id=c.id AND s.period=c.period AND `+sourceAllows("c.id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) x ON true
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND (c.period<=$4 OR c.due_on<=$5::date) ORDER BY c.period DESC,c.id DESC`, organization(r), firmAccess(r), subject(r), now.Format("2006-01"), week)
 		if err != nil {
