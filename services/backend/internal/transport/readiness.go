@@ -110,12 +110,20 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	if out.profile.Unsettled() {
 		out.Blockers = append(out.Blockers, "Client profile: "+out.profile.Question()+".")
 	}
-	// A month whose books are its files is not signed off yet: the readers, and the file's checks, come to readiness
-	// with the next steps (docs/books-sources.md, delivery step 9).
+	// A month whose books are its files is signed off over its accepted file's books, which coverage binds (its capture
+	// is the books version): it waits for them, and for the checks the file was accepted with that hold its statements.
 	if source, err := closeBooksSource(ctx, tx, id); err != nil {
 		return out, err
 	} else if source == "files" {
-		out.Blockers = append(out.Blockers, "Books from files: a month whose books are its files cannot be signed off yet.")
+		b, month, err := fileMonthBooks(ctx, tx, id)
+		switch {
+		case err != nil:
+			return out, err
+		case b == nil:
+			out.Blockers = append(out.Blockers, "Books from files: this month has no accepted file's books yet.")
+		case len(month.Holds) > 0:
+			out.Blockers = append(out.Blockers, "Books from files: the accepted file "+month.File+" has checks that hold its statements: "+strings.Join(month.Holds, "; ")+".")
+		}
 	}
 	var snapshot struct {
 		Scope *struct {

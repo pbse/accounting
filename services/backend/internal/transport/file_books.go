@@ -201,7 +201,7 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 }
 
 // closeFilesPack is the management pack of a month whose books are its files, compared with last month's when its
-// books are its files too, in the same currency. A month on files cannot be signed off yet, so the pack is provisional.
+// books are its files too, in the same currency. It is signed off while the sign-off of every month shown stands over its books version.
 func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, period string) (map[string]any, error) {
 	thisBooks, this, err := fileMonthBooks(ctx, tx, closeID)
 	if err != nil {
@@ -273,15 +273,22 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 	if err != nil {
 		return nil, tieRefusal{503, "Close readiness unavailable."}
 	}
-	status := "provisional"
+	status := boundStatus(ctx, tx, closeID, fileCapture+this.Version)
 	pack["open"] = !signed
 	pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, basisTitle(this.Basis)
 	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"], pack["file"] = "files", this.Version, this.AsOf, false, status, this.File
-	note := "Figures are the client's books from its accepted file " + this.File + ", as of " + this.AsOf + "; approved drafts not yet posted are excluded. Provisional: a month on files is not signed off yet."
+	note := "Figures are the client's books from its accepted file " + this.File + ", as of " + this.AsOf + "; approved drafts not yet posted are excluded."
 	if lastBooks != nil {
-		pack["prior"] = map[string]any{"close_id": priorClose, "period": shiftMonth(period, -1), "snapshot_id": last.Version, "as_of": last.AsOf, "stale": false, "status": status}
+		prior := boundStatus(ctx, tx, priorClose, fileCapture+last.Version)
+		pack["prior"] = map[string]any{"close_id": priorClose, "period": shiftMonth(period, -1), "snapshot_id": last.Version, "as_of": last.AsOf, "stale": false, "status": prior}
+		if prior != "signed_off" {
+			status = prior
+		}
 	} else {
 		pack["comparison_unavailable"] = comparison
+	}
+	if status != "signed_off" {
+		note += " Provisional until the sign-off of every month shown stands."
 	}
 	if disclosure, ok := pack["cash_flow"].(map[string]any)["disclosure"].(string); ok {
 		note += " " + disclosure

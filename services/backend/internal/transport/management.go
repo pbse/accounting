@@ -639,12 +639,18 @@ var errCurrency = errors.New("the Trial Balance and Profit and Loss are in diffe
 // capture, QuickBooks or Xero, the one the signed readiness digest binds through ledger coverage (any newer capture
 // reopens it). Unknown when readiness cannot be read.
 func captureStatus(ctx context.Context, tx *sql.Tx, closeID string, m *fluxMonth) string {
-	if _, err := tx.ExecContext(ctx, `SAVEPOINT capture_status`); err != nil {
-		return "unknown"
-	}
 	bound := m.SnapshotID
 	if m.Source == "xero" {
 		bound = xeroCapture + m.SnapshotID
+	}
+	return boundStatus(ctx, tx, closeID, bound)
+}
+
+// boundStatus is signed_off only while the close's sign-off stands over the capture coverage names bound: a QuickBooks
+// snapshot's ID, "xero:" and a Xero snapshot's, or "file:" and a month on files' books version.
+func boundStatus(ctx context.Context, tx *sql.Tx, closeID, bound string) string {
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT capture_status`); err != nil {
+		return "unknown"
 	}
 	current, err := closeReadiness(ctx, tx, closeID)
 	switch {

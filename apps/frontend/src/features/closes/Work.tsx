@@ -1029,8 +1029,10 @@ function WorkDetails({
                 {reply.received_from}
               </summary>
               <p>
-                Recorded by {reply.recorded_by}; sender identity has not been
-                independently verified.
+                Recorded by {reply.recorded_by};{" "}
+                {reply.received_from.endsWith("(new sender, firm-verified)")
+                  ? "the firm verified this new sender with the client through a known contact channel."
+                  : "sender identity has not been independently verified."}
               </p>
               <pre>{reply.body}</pre>
             </details>
