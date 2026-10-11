@@ -1,0 +1,26 @@
+{
+ "id": "loan-statement-september",
+ "split": "development",
+ "client": "Harbor Fixture LLC",
+ "period": "2026-09",
+ "tags": [
+  "loan",
+  "read_and_asked"
+ ],
+ "setup": {},
+ "documents": [
+  {
+   "file": "loan-statement.txt",
+   "model": "loan-statement.model.json",
+   "label": {
+    "work_type": "loan",
+    "facts": {
+     "annual_rate": "6.00",
+     "opening_principal": "50000.00",
+     "closing_principal": "49250.00"
+    }
+   }
+  }
+ ],
+ "expect_ready": false
+}

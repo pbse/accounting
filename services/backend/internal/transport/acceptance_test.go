@@ -75,6 +75,12 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 	if !report.Passed() || *prepaid != (acceptance.Tally{Documents: 9, Accepted: 3, Abstained: 3, CaughtExceptions: 3}) {
 		t.Fatalf("sample corpus: %+v\n%s\n%+v", *prepaid, report.Markdown(), report.Observed)
 	}
+	// An accrual, a payroll summary and a loan statement are each read exactly and put to a person, never drafted alone.
+	for _, kind := range []string{"accrual", "payroll", "loan"} {
+		if tally := report.Tallies["development"][kind]; tally == nil || *tally != (acceptance.Tally{Documents: 1, Abstained: 1}) {
+			t.Fatalf("the %s case is read exactly and asked about: %+v", kind, tally)
+		}
+	}
 	straight := report.Observed["straight-through-prepaid"].Documents[0]
 	if len(straight.Drafts) != 1 || straight.Drafts[0].Amount != "1100.00" || straight.Facts["amount"] != "1200.00" || !strings.HasPrefix(straight.Reason, "Prepared without confirmation") {
 		t.Fatalf("the clean invoice's bill, booked to Insurance, moves 1,100.00 to prepaid: %+v", straight)

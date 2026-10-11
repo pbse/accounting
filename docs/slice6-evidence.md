@@ -26,6 +26,7 @@ The run creates fresh databases on a local PostgreSQL server and writes to no ho
 | `providers.md`, `providers.json` | `cmd/provider-check`: one structured model call per configured route, and the OCR route (Gemini, when configured) reading a rendered page of known text, which must come back exactly (nothing missing or added); Krith's email sender (key, verified domain, sending enabled, click tracking off). These checks are read-only and send nothing. |
 | `acceptance-recorded.md`, `.json` | `cmd/acceptance` with recorded model answers: everything around the model, scored by work type. |
 | `acceptance-live.md`, `.json` | The same corpus read by the configured model; the release corpus is scored this way. |
+| `review-package.md` | The accounting-review package from the live run when the model is configured, otherwise from the recorded run. |
 | `agent-eval.md`, `.json` | The chat golden set replayed against the configured chat model: ≥90% of questions, every off-scope refusal. |
 | `summary.txt` | One line per harness: passed, FAILED, or the dependency it is waiting on. |
 
@@ -35,7 +36,7 @@ Each harness can also run alone. See [acceptance corpus](acceptance-corpus.md), 
 
 | Evidence (handoff B12 item) | How it is produced | State |
 | --- | --- | --- |
-| 1. Independent expected results for every advertised method, with a held-out set | Corpus cases with a written treatment specification and hand-derived expected values per case, confirmed or corrected by the independent accountant | **Prepared, partly.** The sample covers prepaid intake only, with labels written by the builder. Extending the corpus to accruals, reconciliations, payroll, loans, depreciation, deferred revenue, owner items and settlements, plus the review package, is the next change. Accountant confirmation is a dependency. |
+| 1. Independent expected results for every advertised method, with a held-out set | Corpus cases with a written treatment specification and hand-derived expected values per case, confirmed or corrected by the independent accountant | **Prepared, partly.** The sample has ten cases, each with a written specification (`spec.md`): prepaid end to end, plus an accrual, a payroll summary and a loan statement read exactly and put to a person. Labels are the builder's. Drafts for methods other than prepaid, and the reconciliation, depreciation, deferred revenue, owner and settlement methods, need the harness to set up their procedures and ledger evidence. Accountant confirmation and the held-out set are dependencies. |
 | 2. Actual model runs by task and denominator | `acceptance -model live`, `agent-eval` replay, provider check (model routes) | **Waiting:** model access. |
 | 3. Provider operations: reads, pagination, refresh, rate limits, write and read-back, unknown-outcome recovery | Provider check (model, OCR, email). QuickBooks and Xero through the app's own connect, capture and sandbox-posting flows, recorded in the Security view (`sandbox_checked`); see [provider capabilities](provider-capabilities.md) | **Waiting:** QuickBooks sandbox app and company, Xero demo company, Gemini key, one controlled email recipient. |
 | 4. Three clients across two consecutive periods, toward about 20 client-months and 100 documents | The release corpus, run by `evidence-run.sh <corpus-dir>` | **Waiting:** authorized records. |
@@ -58,7 +59,9 @@ For each case, the package gives the accountant:
 - the expected values with how each was derived;
 - the values the app produced, and every difference.
 
-It also has a place to confirm, correct or reject each expected value and each draft, and to record time spent. Corrections become the case's labels. A case the accountant has not confirmed stays builder-labelled and is reported apart, never as accountant-accepted. It is generated from a corpus and a run's report by the next change. Until then, the close review package (`GET /v1/closes/{id}/export`, [close review package](close-review-package.md)) gives the drafts and evidence of any one close.
+It also has a place to confirm, correct or reject each expected value and each draft, and to record time spent. Corrections become the case's labels. A case the accountant has not confirmed stays builder-labelled and is reported apart, never as accountant-accepted.
+
+`cmd/acceptance -review <file>` writes it from a corpus and its run, and `evidence-run.sh` writes `review-package.md` beside the run's reports. The source documents are the case directories themselves. For any one close, the close review package (`GET /v1/closes/{id}/export`, [close review package](close-review-package.md)) gives its drafts and evidence.
 
 ## What I need from you
 
