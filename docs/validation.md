@@ -4374,6 +4374,30 @@ Reminders required an unused link and no reply at all, so a client who answered 
 
 Test: `TestApprovedEmailDurableRetryAndScope` records a partial reply on a used link: the reminder period restarts from it, the goal offers the reminder, approval succeeds and the worker sends it; seen to fail without the fix (and without the worker's change, cancelled). The closest email, attention, goal, partial-reply, inbound-reply and Work tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — A client reply leaves a receipt of what it led to (B05/B11)
+
+After a client replied, the goal's history said only that the client replied, so the person opened Work to learn what the answer did. The goal now records a receipt for a request's new replies, after the request's work settles (none of its documents still being read or prepared, and none of its files still waiting for scanning or release): "Request #N: the client answered 3 of 4 questions, 1 document to follow. invoice.pdf: draft #31 ready for review; statement.pdf: needs you." Each receipt is keyed by the reply's time, so a sweep never repeats it and a later reply gets its own.
+
+Test: `TestCloseGoalKeepsPreparationMovingUntilReadyForReview` records a partial reply and, over two sweeps, gets exactly one receipt, "Request #N: the client answered part of it. statement.pdf: still waiting on the client."; seen to fail (no receipt) without the fix. The goal, attention and Home tests passed on a fresh local PostgreSQL.
+
+## 2026-10-11 — The original budget stays comparable beside a reforecast (B07/B10)
+
+The budget comparison always used the newest approved version, so approving a reforecast silently replaced the original plan in the comparison, with no way to see the month against the plan agreed first. The comparison now lists every approved version of the same books that budgets the month (newest first, the default) and compares with any of them on request (`?baseline=`, **Compare with**); a version that does not budget the month, or another ledger's, is refused. Executives keep the newest approved baseline only.
+
+Test: `TestBudgetImportRemapApproveAndCompare` approves a reforecast: it becomes the default, both September budgets are offered, the original can be chosen, and the August-only budget is refused; seen to fail without the fix. The budget and executive tests passed on a fresh local PostgreSQL. Variance explanations tied to the total change are a separate change.
+
+## 2026-10-11 — An amended payroll summary reopens the payroll draft (B04/B08)
+
+The later-evidence link (migration 155) covered prepaid drafts only, so an amended payroll summary arriving as a new document left an approved payroll draft standing unless someone recorded a replacement. Migration 159 extends `link_later_evidence_for`: a document read after a payroll draft, naming its provider (whole words) and speaking of an amendment, correction, revision, reissue, void or adjustment, is linked to the draft, which shows as changed at source and cannot be approved as it is; the attention notice says it names the payroll provider. The prepaid rule is unchanged, and documents already readable are not linked.
+
+Test: `TestPayrollDraftsNeedTheFirmsPayrollProcedure` adds next month's ordinary Gusto summary (draft stays as it was) and an amended September register (draft reopened); seen to fail without the migration. The payroll, attention and mixed-close tests passed on a fresh local PostgreSQL. Not covered here: preparing a difference-only successor after a payroll draft was posted.
+
+## 2026-10-11 — Procedure versions take effect from a month (B08)
+
+A new procedure version, published or activated from learning, applied at once to every month, earlier ones included, so a method changed mid-year could reach a month closed under the old one. A version can now name the first month it applies to (`effective_from`, migration 158): every query that picks a close's current procedure (CurrentProcedure, the basis, method, owner and pinned checks, the close and takeover views) takes the newest version in effect for the close's month; client-level views use the current month, and a books file's basis check uses the file's own month. The firm-wide preview counts a client's closes from before its override takes effect, and the procedures panel (and learning activation) choose and set the month the same way. The publish and activation impact previews count only the closes from that month on, and their digest binds it. A version without a month applies to every month, as before.
+
+Test: `TestProcedureOverridesPinAndInvalidate` publishes a version effective from October: the preview counts only October's close, an invalid month is refused, September keeps the version in effect for it and October takes the new one. The procedure, learning, agent, prepaid, straight-through, payroll, loan, recurring, standing, owner, import, file, card, review and posting tests passed on a fresh local PostgreSQL.
+
 ## 2026-10-11 — A reclassified account puts a file's acceptance out of date (B03/B08)
 
 An accepted file stayed "current" after the client's account map was changed, so nothing told the reviewer that the month's books still classified an account the old way. The acceptance view now compares the map the acceptance was given on (its `map_stamp`) with the current map for this file's accounts only: a different class or type marks the acceptance not current with `map_changed`, and the reader says the month's books keep the earlier map until the file is accepted again. A map change that touches none of the file's accounts leaves it current. The month's books from files (`fileMonthBooks`) carry the same finding as a hold, so the management pack and budget comparison wait with that reason instead of presenting the earlier classification silently.

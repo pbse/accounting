@@ -532,13 +532,15 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			ImpactDigest  string `json:"impact_digest"`
 			DraftRevision int    `json:"draft_revision"`
 			Reason        string `json:"reason"`
+			// EffectiveFrom is the first month the rule applies to; earlier months keep the version in effect for them.
+			EffectiveFrom string `json:"effective_from"`
 			Confirmed     bool   `json:"confirmed"`
 		}
 		if !decode(w, r, &in) {
 			return
 		}
 		in.Reason = strings.TrimSpace(in.Reason)
-		if !in.Confirmed || len(in.Reason) == 0 || len(in.Reason) > 2000 || in.ImpactDigest == "" {
+		if !in.Confirmed || len(in.Reason) == 0 || len(in.Reason) > 2000 || in.ImpactDigest == "" || !effectiveMonth(in.EffectiveFrom) {
 			problem(w, 422, "Confirm the accountant's rule approval, examples and impact.")
 			return
 		}
@@ -599,7 +601,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Procedure changed. Refresh the impact preview.")
 			return
 		}
-		digest, _, err := procedureScopeDigest(r.Context(), tx, org, d.ClientEntity, d.Kind, previous)
+		digest, _, err := procedureScopeDigest(r.Context(), tx, org, d.ClientEntity, d.Kind, previous, in.EffectiveFrom)
 		if err != nil || digest != in.ImpactDigest {
 			problem(w, 409, "Affected closes changed. Refresh the impact preview.")
 			return
@@ -635,7 +637,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO procedure_versions(organization_id,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,draft_id) VALUES($1,$2,$3,$4,$5,$6,$7,true,$8,$9,$10) RETURNING id::text`, org, d.ClientEntity, d.Kind, d.Method, d.Instructions, d.ExpenseAccount, d.PrepaidAccount, in.Reason, actor, d.ID).Scan(&id)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO procedure_versions(organization_id,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,draft_id,effective_from) VALUES($1,$2,$3,$4,$5,$6,$7,true,$8,$9,$10,NULLIF($11,'')) RETURNING id::text`, org, d.ClientEntity, d.Kind, d.Method, d.Instructions, d.ExpenseAccount, d.PrepaidAccount, in.Reason, actor, d.ID, in.EffectiveFrom).Scan(&id)
 		if err == nil {
 			_, err = tx.ExecContext(r.Context(), `UPDATE procedure_drafts SET activated_version_id=$2 WHERE id=$1`, d.ID, id)
 		}

@@ -28,6 +28,8 @@ type Report = {
   versions: Version[];
   accounts: { id: string; name: string; class: string }[];
   baseline?: { id: string; name: string; approved_by: string; approved_at: string };
+  // The approved versions that budget this month, newest first, any of which the comparison can use.
+  baselines?: { id: string; name: string; approved_at: string }[];
   rows?: Row[];
   totals?: Record<"income_month" | "income_ytd" | "expense_month" | "expense_ytd" | "net_month" | "net_ytd", Figure>;
   currency?: string;
@@ -43,7 +45,9 @@ type Report = {
 // Budget against actual for the close month and the fiscal year to date, from an approved baseline the firm imported.
 // readOnly is an executive's view: the comparison alone, without budget versions to import or approve.
 export function Budget({ closeId, readOnly = false }: { closeId: string; readOnly?: boolean }) {
-  const read = useQuery(workspaceQuery<Report>(`/${closeId}/budget`));
+  // The approved budget to compare with; "" is the newest approved one.
+  const [chosen, setChosen] = useState("");
+  const read = useQuery(workspaceQuery<Report>(`/${closeId}/budget${chosen ? `?baseline=${encodeURIComponent(chosen)}` : ""}`));
   const report = read.data;
   const [actionError, setError] = useState("");
   const error = actionError || (read.error ? read.error.message || "The budget comparison is unavailable." : "");
@@ -108,6 +112,14 @@ export function Budget({ closeId, readOnly = false }: { closeId: string; readOnl
       {report.state === "waiting" && <p className="empty">{report.reason}</p>}
       {report.state === "ready" && report.rows && report.totals && (
         <>
+          {!readOnly && (report.baselines?.length ?? 0) > 1 && (
+            <label>
+              Compare with{" "}
+              <select value={report.baseline!.id} onChange={(e) => setChosen(e.target.value === report.baselines![0].id ? "" : e.target.value)}>
+                {report.baselines!.map((b, i) => <option key={b.id} value={b.id}>{b.name}{i === 0 ? " (newest approved)" : ""}</option>)}
+              </select>
+            </label>
+          )}
           <p className="note">
             Approved baseline “{report.baseline!.name}” (approved by {report.baseline!.approved_by}). Year to date from {report.ytd_from}; prior month {report.prior_month}.{" "}
             {report.materiality ? `Material means a difference of at least ${show(report.materiality)}, the firm's materiality.` : "The firm has no materiality amount, so nothing is flagged material."}{" "}

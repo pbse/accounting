@@ -26,12 +26,15 @@ type Procedure struct {
 	Reason         string `json:"reason"`
 	Actor          string `json:"actor"`
 	CreatedAt      string `json:"created_at"`
+	// EffectiveFrom is the first month (YYYY-MM) the version applies to; "" applies to every month.
+	EffectiveFrom string `json:"effective_from,omitempty"`
 }
 
-// A client override replaces the firm default; disabled overrides suppress it.
+// A client override replaces the firm default; disabled overrides suppress it. Only a version in effect for the close's
+// month counts.
 func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Procedure, error) {
 	var p Procedure
-	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt)
+	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text,COALESCE(p.effective_from,'') FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom)
 	return p, err
 }
 
@@ -236,7 +239,7 @@ func BasisIssue(ctx context.Context, q interface {
 		return "", nil
 	}
 	var basis string
-	err := q.QueryRowContext(ctx, `SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID).Scan(&basis)
+	err := q.QueryRowContext(ctx, `SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID).Scan(&basis)
 	if err == sql.ErrNoRows || basis == "accrual" {
 		return "", nil
 	}
@@ -292,7 +295,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		}
 		json.Unmarshal(paper, &entityType)
 		var recorded string
-		err := q.QueryRowContext(ctx, `SELECT CASE WHEN p.enabled THEN p.method ELSE '' END FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='owner' AND lower(p.client_entity)=lower(c.entity) ORDER BY p.id DESC LIMIT 1`, closeID).Scan(&recorded)
+		err := q.QueryRowContext(ctx, `SELECT CASE WHEN p.enabled THEN p.method ELSE '' END FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='owner' AND lower(p.client_entity)=lower(c.entity) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY p.id DESC LIMIT 1`, closeID).Scan(&recorded)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
@@ -307,7 +310,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 	if methods := requiredMethods[kind]; methods != nil {
 		var enabled bool
 		var approved string
-		err := q.QueryRowContext(ctx, `SELECT p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&enabled, &approved)
+		err := q.QueryRowContext(ctx, `SELECT p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&enabled, &approved)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
@@ -319,7 +322,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		return err
 	}
 	var method string
-	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT p.method FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),(SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1),'')`, closeID, kind).Scan(&method)
+	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT p.method FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),(SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1),'')`, closeID, kind).Scan(&method)
 	if err != nil || method == "" {
 		return err
 	}
@@ -430,7 +433,7 @@ func ProcedureCurrent(ctx context.Context, q interface {
 	var latestEnabled bool
 	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT e.procedure_id::text FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),''),
  COALESCE(l.id::text,''),COALESCE(l.enabled,false)
- FROM (SELECT 1) one LEFT JOIN LATERAL (SELECT p.id,p.enabled FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1) l ON true`, closeID, kind).Scan(&pinned, &latest, &latestEnabled)
+ FROM (SELECT 1) one LEFT JOIN LATERAL (SELECT p.id,p.enabled FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1) l ON true`, closeID, kind).Scan(&pinned, &latest, &latestEnabled)
 	if err != nil {
 		return err
 	}
@@ -452,7 +455,7 @@ func ApprovalAuthority(ctx context.Context, q interface {
 	}
 	var exists, enabled bool
 	var method string
-	err := q.QueryRowContext(ctx, `SELECT true,p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&exists, &enabled, &method)
+	err := q.QueryRowContext(ctx, `SELECT true,p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&exists, &enabled, &method)
 	if err == sql.ErrNoRows {
 		return nil
 	}

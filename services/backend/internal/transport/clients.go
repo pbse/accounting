@@ -412,7 +412,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		// firm's. An override approved under a name since confirmed as the client's alias is that name's months' basis,
 		// so each is listed with the name it was approved under rather than folded into one client-wide value.
 		var basis, scope string
-		switch err = tx.QueryRowContext(ctx, `SELECT p.method,CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END FROM procedure_versions p WHERE p.organization_id=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower($2)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, org, name).Scan(&basis, &scope); err {
+		switch err = tx.QueryRowContext(ctx, `SELECT p.method,CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END FROM procedure_versions p WHERE p.organization_id=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower($2)) AND (p.effective_from IS NULL OR p.effective_from<=to_char(now(),'YYYY-MM')) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, org, name).Scan(&basis, &scope); err {
 		case nil:
 			out["basis"] = map[string]string{"method": basis, "scope": scope}
 		case sql.ErrNoRows:
@@ -425,7 +425,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		if err == nil || err == sql.ErrNoRows {
 			var rows *sql.Rows
 			if rows, err = tx.QueryContext(ctx, `SELECT DISTINCT ON (lower(p.client_entity)) p.client_entity,p.method FROM procedure_versions p
- WHERE p.organization_id=$1 AND p.kind='basis' AND p.client_entity<>'' AND lower(p.client_entity)<>lower($2) AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)
+ WHERE p.organization_id=$1 AND p.kind='basis' AND p.client_entity<>'' AND lower(p.client_entity)<>lower($2) AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2) AND (p.effective_from IS NULL OR p.effective_from<=to_char(now(),'YYYY-MM'))
  ORDER BY lower(p.client_entity),p.id DESC`, org, name); err == nil {
 				for rows.Next() {
 					var held, method string
