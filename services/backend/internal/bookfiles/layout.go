@@ -71,26 +71,41 @@ var headerWords = []struct {
 // is left to them whole.
 func ProposeLayout(t Table) (Layout, []string) {
 	layout := Layout{Table: t.Name, Columns: map[int]Meaning{}, Style: NumberStyle{Scale: 1}}
+	var repeats []string
 	for i, r := range t.Rows {
 		if i >= 30 {
 			break
 		}
-		columns := map[int]Meaning{}
+		columns, repeated := map[int]Meaning{}, map[Meaning][]int{}
 		for _, c := range r.Cells {
 			text := strings.TrimSpace(c.Value)
 			for _, h := range headerWords {
 				if h.words.MatchString(text) {
-					columns[c.Column] = h.meaning
+					// A header repeated (a multi-period export's Balance for each month) proposes its first column only,
+					// and asks which one is meant.
+					if len(repeated[h.meaning]) == 0 {
+						columns[c.Column] = h.meaning
+					}
+					repeated[h.meaning] = append(repeated[h.meaning], c.Column)
 					break
 				}
 			}
 		}
 		if len(columns) >= 2 {
 			layout.HeaderRow, layout.Columns = r.Number, columns
+			for _, m := range []Meaning{AccountNumber, AccountName, AccountType, Debit, Credit, Balance, Opening, Movement, YearToDate} {
+				if cols := repeated[m]; len(cols) > 1 {
+					letters := make([]string, len(cols))
+					for i, c := range cols {
+						letters[i] = strings.TrimRight(cellRef(c, 1), "1")
+					}
+					repeats = append(repeats, fmt.Sprintf("Columns %s are all headed as %s: which one is this month's?", strings.Join(letters, ", "), strings.ReplaceAll(string(m), "_", " ")))
+				}
+			}
 			break
 		}
 	}
-	questions := []string{}
+	questions := append([]string{}, repeats...)
 	if layout.HeaderRow == 0 {
 		return layout, append(questions, "Which row heads the Trial Balance, and what does each column hold?")
 	}
@@ -315,8 +330,19 @@ func (l Layout) Read(t Table) Reading {
 	// The month-end balance is what a Trial Balance is read for: a layout naming no column for it reads nothing, rather
 	// than every account as zero.
 	meanings := map[Meaning]bool{}
+	var twice []string
 	for _, m := range l.Columns {
+		if meanings[m] && !slices.Contains(twice, string(m)) {
+			twice = append(twice, string(m))
+		}
 		meanings[m] = true
+	}
+	// Each meaning is one column: two balance columns (two months of a multi-period export) would leave one month's
+	// figures read as the other's.
+	if len(twice) > 0 {
+		sort.Strings(twice)
+		reading.Problems = append(reading.Problems, "The layout names more than one column for: "+strings.ReplaceAll(strings.Join(twice, ", "), "_", " ")+"; choose one each")
+		return reading
 	}
 	if !meanings[Balance] && !(meanings[Debit] && meanings[Credit]) {
 		reading.Problems = append(reading.Problems, "The layout names no month-end balance: choose the debit and credit columns, or the one signed balance column")
@@ -454,7 +480,7 @@ func (l Layout) Read(t Table) Reading {
 		}
 		// A row with no amounts heads a section when a total names it or a person said it does; otherwise it is an
 		// account with a zero balance (an export leaves a zero blank), said so when it has no number to show it is one.
-		if line.Balance == nil && !totalName.MatchString(line.Name) && !totalled[strings.ToLower(line.Name)] && !slices.Contains(l.Headings, r.Number) {
+		if line.Balance == nil && !totalName.MatchString(line.Name) && !slices.Contains(l.Totals, r.Number) && !totalled[strings.ToLower(line.Name)] && !slices.Contains(l.Headings, r.Number) {
 			line.Balance = new(big.Rat)
 			if line.Number == "" {
 				reading.Notes = append(reading.Notes, fmt.Sprintf("Row %d (%s) has no amounts: read as an account with a zero balance; mark it a heading if it is one", r.Number, line.Name))

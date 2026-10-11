@@ -415,3 +415,23 @@ func TestNothingIsDroppedUnseen(t *testing.T) {
 		}
 	}
 }
+
+// A repeated header is asked about, not read twice, and a layout naming two balance columns reads nothing; a row a
+// person marked a total with no amount is a problem, not a zero.
+func TestEachMeaningIsOneColumn(t *testing.T) {
+	months, _ := Read("tb.csv", []byte("Account,Balance,Balance\nBank,100.00,90.00\nCapital,-100.00,-90.00\n"))
+	layout, questions := ProposeLayout(months.Tables[0])
+	if len(layout.Columns) != 2 || layout.Columns[1] != Balance || !strings.Contains(questions[0], "Columns B, C") {
+		t.Fatalf("a repeated header: %+v %v", layout, questions)
+	}
+	layout.Columns[2] = Balance
+	if reading := layout.Read(months.Tables[0]); len(reading.Lines) != 0 || len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "more than one column for: balance") {
+		t.Fatalf("two balance columns: %+v", reading)
+	}
+	marked, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00\nCapital,-100.00\nAll accounts,\n"))
+	layout, _ = ProposeLayout(marked.Tables[0])
+	layout.Totals = []int{4}
+	if reading := layout.Read(marked.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Row 4 (All accounts) is a total with no amount") {
+		t.Fatalf("a marked total with no amount: %+v", reading)
+	}
+}
