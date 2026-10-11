@@ -219,6 +219,8 @@ The demonstration seed writes QuickBooks-shaped captures from generated reports.
 
 File imports stay behind a firm setting until every feature a month on files needs reads the record.
 
+The record landed first as step 3 of the delivery, with no visible change (migration 145): the worker's books-versions loop writes a version for every QuickBooks period capture and Xero capture that has none, the existing ones first, a batch at a time, then each new one within a minute. A version is the books `readLedgerMonth` makes of the capture (accounts with class, type and subtype; balances and activity as exact decimals; the ledger's cash-flow statement when it has one), with the capture it came from, the company, the month-end date and a digest of its figures; a QuickBooks capture's General Ledger rows are kept as its lines, each with its report location. A capture the readers cannot read is kept with the reason, once, so a reader that would refuse it agrees with the record. The parity check recomputes each stored version from its capture's payload and names any that disagree; the staff console's Connections page shows how many captures have their version and whether the readers agree. No reader reads the record yet.
+
 ## Connections
 
 ### Today
