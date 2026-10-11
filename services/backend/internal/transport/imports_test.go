@@ -132,6 +132,11 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	if preview["balanced"] != true || preview["debits"] != "1500.25" || len(preview["problems"].([]any)) != 0 {
 		t.Fatalf("the preview: %v", preview)
 	}
+	// A preview's lines come two hundred at a time, from the one asked for, with how many there are.
+	paged := call("user_b", preparer, "POST", path, map[string]any{"action": "preview", "layout": layout, "lines_from": 2}, 200)
+	if len(paged["reading"].(map[string]any)["lines"].([]any)) != 2 || paged["line_count"] != 4.0 || paged["accounts"] != 3.0 {
+		t.Fatalf("a preview's lines from the third: %v", paged)
+	}
 	// A reviewer confirms it with a reason; a preparer cannot.
 	call("user_b", preparer, "POST", path, map[string]any{"action": "confirm", "layout": layout, "reason": "Matches the export"}, 403)
 	call("user_a", partner, "POST", path, map[string]any{"action": "confirm", "layout": layout, "reason": ""}, 422)

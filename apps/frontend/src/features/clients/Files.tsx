@@ -292,6 +292,8 @@ function LayoutForm({
   const [reading, setReading] = useState<Reading | undefined>(sameParse ? data.import.confirmed?.reading : undefined);
   // The confirmed reading's lines are fetched in pages; a preview's come with it.
   const [previewed, setPreviewed] = useState(false);
+  // A preview's counts: its lines come two hundred at a time, as the server sends them.
+  const [counts, setCounts] = useState<{ lines: number; accounts: number }>({ lines: 0, accounts: 0 });
   const [deleting, setDeleting] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [reason, setReason] = useState("");
@@ -313,6 +315,7 @@ function LayoutForm({
     try {
       const out = await workspaceRequest(importPath(client, id), { action, layout, reason: reason.trim(), csv: csv ?? { encoding: "", delimiter: "" } });
       setReading(out.reading);
+      setCounts({ lines: out.line_count ?? out.reading.lines.length, accounts: out.accounts ?? 0 });
       setPreviewed(true);
       if (action === "confirm") onDone();
     } catch (e) {
@@ -513,7 +516,7 @@ function LayoutForm({
               {!reading.balanced ? "Not balanced" : reading.problems.length ? "Balanced, with problems" : "Balanced"}
             </span>{" "}
             Debits {reading.debits}, credits {reading.credits},{" "}
-            {previewed || !data.import.confirmed?.line_count ? reading.lines.filter((l) => l.kind === "posting").length : (data.import.confirmed.accounts ?? 0)} accounts.
+            {previewed ? counts.accounts : data.import.confirmed?.line_count ? (data.import.confirmed.accounts ?? 0) : reading.lines.filter((l) => l.kind === "posting").length} accounts.
           </p>
           {reading.problems.length > 0 && (
             <ul role="alert">
@@ -530,7 +533,16 @@ function LayoutForm({
             </ul>
           )}
           {previewed || !data.import.confirmed?.line_count ? (
-            <ReadingLines lines={reading.lines} />
+            <ReadingLines
+              key={JSON.stringify(layout)}
+              lines={[]}
+              total={previewed ? counts.lines : reading.lines.length}
+              page={async (offset) =>
+                previewed && offset >= reading.lines.length
+                  ? (await workspaceRequest(importPath(client, id), { action: "preview", layout, reason: "", csv: csv ?? { encoding: "", delimiter: "" }, lines_from: offset })).reading
+                  : { lines: reading.lines.slice(offset, offset + 200) }
+              }
+            />
           ) : (
             <ReadingLines lines={[]} total={data.import.confirmed.line_count} page={(offset) => workspaceRequest(`/client/import/lines?name=${encodeURIComponent(client)}&id=${encodeURIComponent(id)}&offset=${offset}`)} />
           )}

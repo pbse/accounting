@@ -139,6 +139,22 @@ func importOwner(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, bo
 	return name, true
 }
 
+// askedChoice is why a CSV choice asked for cannot be used for import id, or "": either both an encoding and a delimiter
+// the reader knows, for a CSV, or neither.
+func askedChoice(ctx context.Context, q rowReader, org, name, id string, asked csvChoice) string {
+	if asked.Encoding == "" && asked.Delimiter == "" {
+		return ""
+	}
+	if !slices.Contains([]string{"utf-8", "utf-16le", "utf-16be", "windows-1252"}, asked.Encoding) || !slices.Contains([]string{"comma", "semicolon", "tab", "pipe"}, asked.Delimiter) {
+		return "Choose an encoding (UTF-8, UTF-16 or Windows-1252) and a delimiter (comma, semicolon, tab or pipe) together."
+	}
+	var format string
+	if q.QueryRowContext(ctx, `SELECT format FROM books_imports WHERE id::text=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)`, id, org, name).Scan(&format) == nil && format != "csv" {
+		return "Only a CSV file is read with an encoding and a delimiter."
+	}
+	return ""
+}
+
 // parseKey names what decides how an import is read for a request: the choice asked for, its own confirmed layout and
 // the client's last one, by their ids. Its rows read under the same key are the same rows.
 func parseKey(asked csvChoice, confirmed, saved *confirmedRead) string {
@@ -648,6 +664,10 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		asked := csvChoice{Encoding: r.URL.Query().Get("encoding"), Delimiter: r.URL.Query().Get("delimiter")}
+		if refusal := askedChoice(r.Context(), db, org, name, id, asked); refusal != "" {
+			problem(w, 422, refusal)
+			return
+		}
 		key := parseKey(asked, ownRef, clientRef)
 		// Rows come in pages: from the first, or from the row a person asks for (?from=), so any row can be seen and
 		// marked. A later page is read from the rows kept the first time the file was read this way.
@@ -912,6 +932,8 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			Layout bookfiles.Layout `json:"layout"`
 			Reason string           `json:"reason"`
 			CSV    csvChoice        `json:"csv"`
+			// LinesFrom asks a preview for its lines from that one (0-based), two hundred at a time.
+			LinesFrom int `json:"lines_from"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -942,6 +964,10 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The file's layout is unavailable.")
 			return
 		}
+		if refusal := askedChoice(r.Context(), db, org, name, r.URL.Query().Get("id"), in.CSV); refusal != "" {
+			problem(w, 422, refusal)
+			return
+		}
 		summary, file, err := readImportAs(r.Context(), db, org, name, r.URL.Query().Get("id"), in.CSV, ownLayout, clientLayout)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
@@ -967,8 +993,19 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		in.Layout.Headers = headersOf(table, in.Layout)
 		reading := in.Layout.Read(table)
+		// A reading answers with its totals, problems and notes, and two hundred of its lines (from lines_from), with how
+		// many it has and how many are accounts: a file's thousands of lines are not sent at once.
+		brief := reading
+		accounts := 0
+		for _, l := range reading.Lines {
+			if l.Kind == bookfiles.Posting {
+				accounts++
+			}
+		}
+		from := min(max(in.LinesFrom, 0), len(reading.Lines))
+		brief.Lines = reading.Lines[from:min(from+200, len(reading.Lines))]
 		if in.Action == "preview" {
-			jsonReply(w, 200, map[string]any{"reading": reading})
+			jsonReply(w, 200, map[string]any{"reading": brief, "line_count": len(reading.Lines), "accounts": accounts, "lines_from": from})
 			return
 		}
 		layout, _ := json.Marshal(in.Layout)
@@ -984,7 +1021,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The layout could not be saved.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"id": id, "reading": reading})
+		jsonReply(w, 200, map[string]any{"id": id, "reading": brief, "line_count": len(reading.Lines), "accounts": accounts})
 	})
 }
 
