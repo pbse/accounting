@@ -132,7 +132,8 @@ func morning(db *sql.DB) http.HandlerFunc {
  d.ready,d.attention,
  (SELECT count(*) FROM preparation_jobs j WHERE j.close_id=c.id AND j.state='needs_confirmation'),
  (SELECT count(*) FROM preparation_jobs j WHERE j.close_id=c.id AND j.state='failed'),
- c.period<to_char(now() AT TIME ZONE 'UTC','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+`) AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id)
+ c.period<to_char(now() AT TIME ZONE 'UTC','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+`)
+ AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id AND `+sourceAllows("c.id", "xero")+`)
  FROM client_closes c
  CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE x.review_state='pending' AND sourced AND NOT blocked) AS ready,count(*) FILTER (WHERE x.review_state IN ('changes_requested','source_changed') OR blocked) AS attention
   FROM (SELECT x.review_state,COALESCE(jsonb_typeof(x.paper->'sources')='array' AND x.paper->'sources'<>'[]'::jsonb,false) AS sourced,COALESCE(jsonb_typeof(x.paper->'blockers')='array' AND x.paper->'blockers'<>'[]'::jsonb,false) AS blocked

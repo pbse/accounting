@@ -141,13 +141,25 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		var capturedAt, xeroAt time.Time
 		var stale, xeroStale bool
 		var accounts, trialBalance, xeroPayload []byte
-		err := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
+		// The month's books come from its source: the newest capture, or only QuickBooks' or Xero's.
+		source, err := closeBooksSource(r.Context(), db, r.PathValue("id"))
+		if err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "The month's books source is unavailable.")
+			return
+		}
+		err = db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
  WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &capturedAt, &stale, &accounts, &trialBalance)
 		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Period snapshot unavailable.")
 			return
 		}
-		xeroErr := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at,x.state<>'active',s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&xeroID, &xeroAt, &xeroStale, &xeroPayload)
+		if !readsQuickBooks(source) {
+			err = sql.ErrNoRows
+		}
+		xeroErr := sql.ErrNoRows
+		if readsXero(source) {
+			xeroErr = db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at,x.state<>'active',s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&xeroID, &xeroAt, &xeroStale, &xeroPayload)
+		}
 		if xeroErr != nil && xeroErr != sql.ErrNoRows {
 			problem(w, 503, "Xero snapshot unavailable.")
 			return
@@ -249,7 +261,7 @@ func latestCapture(ctx context.Context, db *sql.DB, closeID string) (c capture, 
  COALESCE((SELECT c.id::text FROM quickbooks_entity_syncs c WHERE c.close_id=s.close_id AND c.evidence_id=s.evidence_id AND c.state='completed' ORDER BY c.id DESC LIMIT 1),''),
  COALESCE((SELECT home_currency FROM quickbooks_connections WHERE id=s.connection_id),'')
  FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))`, closeID).Scan(&c.ID, &c.EvidenceID, &c.Finished, &c.Exceptions, &c.RowsSync, &c.HomeCurrency)
+ WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "quickbooks")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))`, closeID).Scan(&c.ID, &c.EvidenceID, &c.Finished, &c.Exceptions, &c.RowsSync, &c.HomeCurrency)
 	return c, err
 }
 
@@ -307,9 +319,9 @@ func ledgerCertification(ctx context.Context, q interface {
 	var snapshotAt time.Time
 	var report []byte
 	err := q.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,s.payload->'reports'->'TransactionList' FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
- WHERE s.close_id::text=$1 AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&snapshotID, &snapshotRealm, &snapshotAt, &report)
+ WHERE s.close_id::text=$1 AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&snapshotID, &snapshotRealm, &snapshotAt, &report)
 	if err == sql.ErrNoRows || err == nil && len(report) == 0 {
-		return map[string]any{"status": "unavailable", "reason": "No current QuickBooks period reports for this month."}, nil
+		return map[string]any{"status": "unavailable", "reason": "No current QuickBooks period reports for this month, or its books are not read from QuickBooks."}, nil
 	}
 	if err != nil {
 		return nil, err

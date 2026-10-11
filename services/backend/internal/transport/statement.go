@@ -96,7 +96,7 @@ func rowIssue(row statementRow, pages map[int]string) string {
 		return fmt.Sprintf("Not found as one line on page %d; compare with the original.", row.Page)
 	case !statementAmount.MatchString(row.Amount):
 		return "Amount unreadable."
-	case !documents.AmountIn(row.Quote, row.Amount):
+	case !documents.MoneyIn(row.Quote, row.Amount):
 		return "The amount does not appear in the line."
 	case !dateIn(row.Quote, row.Date):
 		return "The date does not appear in the line."
@@ -123,8 +123,8 @@ func validateStatement(p *statementProposal, pages map[int]string, content strin
 		{"account", &p.Account, &p.AccountQuote, func(line, v string) bool { return v != "" && strings.Contains(line, v) }},
 		{"period start", &p.PeriodStart, &p.PeriodQuote, dateIn},
 		{"period end", &p.PeriodEnd, &p.PeriodQuote, dateIn},
-		{"opening balance", &p.Opening, &p.OpeningQuote, func(line, v string) bool { return statementAmount.MatchString(v) && documents.AmountIn(line, v) }},
-		{"closing balance", &p.Closing, &p.ClosingQuote, func(line, v string) bool { return statementAmount.MatchString(v) && documents.AmountIn(line, v) }},
+		{"opening balance", &p.Opening, &p.OpeningQuote, func(line, v string) bool { return statementAmount.MatchString(v) && documents.MoneyIn(line, v) }},
+		{"closing balance", &p.Closing, &p.ClosingQuote, func(line, v string) bool { return statementAmount.MatchString(v) && documents.MoneyIn(line, v) }},
 	} {
 		if *f.quote == "" || strings.ContainsAny(*f.quote, "\r\n") || !strings.Contains(content, *f.quote) || !f.shows(*f.quote, *f.value) {
 			p.Issues = append(p.Issues, "The "+f.label+" was not found in the text; enter it from the original.")

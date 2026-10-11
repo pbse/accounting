@@ -58,6 +58,9 @@ type Profile = {
 };
 // One confirmed profile in the client's history: the currency and fiscal year from a month on.
 type ConfirmedProfile = { id: string; effective_from: string; currency: string; fiscal_year_start: number; reason: string; actor: string; at: string };
+// A source chosen for the client's months' books: its default (period "") or one month's.
+type BooksSource = { id: string; period: string; source: "newest" | "quickbooks" | "xero"; reason: string; actor: string; at: string };
+const sourceNames: Record<BooksSource["source"], string> = { newest: "the newest capture, QuickBooks or Xero", quickbooks: "QuickBooks alone", xero: "Xero alone" };
 type ClientRead = {
   entity: string;
   // whole says the reader may see the client as a whole; without it they see only the months they can open, opened
@@ -65,8 +68,10 @@ type ClientRead = {
   whole: boolean;
   can_manage: boolean;
   can_connect: boolean;
-  // can_review says the reader may confirm the client's profile.
+  // can_review says the reader may confirm the client's profile; can_connect, connect its ledgers and choose where its
+  // books come from.
   can_review: boolean;
+  books_sources?: BooksSource[];
   // can_grant says the reader may give and revoke the client's posting grants.
   can_grant: boolean;
   roster: RosterEntry | null;
@@ -147,7 +152,7 @@ export default function ClientPage() {
   const client = read.data;
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "profile" | "ledger">("");
+  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "profile" | "ledger" | "source">("");
   const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   if (!client) {
     if (read.isPending) return <p role="status">Opening the client…</p>;
@@ -339,6 +344,11 @@ export default function ClientPage() {
                       Ledger
                     </button>
                   )}
+                  {client.can_connect && (
+                    <button type="button" onClick={() => setDialog("source")}>
+                      Source
+                    </button>
+                  )}
                   {ledger.month && (
                     <Link className="button" to={`/dashboard/closes/${ledger.month.id}?tab=evidence#historical-exports`}>
                       {monthShort(ledger.month.period)}’s exports
@@ -352,6 +362,7 @@ export default function ClientPage() {
           >
             {keeps}
             {ledger.line}
+            {sourceLine(client.books_sources ?? [])}
           </Card>
           {postingConnections(client.quickbooks.filter((c) => c.environment === "production").map((c) => c.id), client.production_grants).map((id) => (
             <PostingCard key={id} client={client} connection={id} onChanged={reread} />
@@ -562,6 +573,16 @@ export default function ClientPage() {
           description="The currency its books are kept in and the month its fiscal year starts, from a month on. A connected ledger that reports otherwise asks a question; it never overrides this."
         >
           <ProfileForm key={client.profiles[0]?.id ?? "none"} client={name} profile={profile} history={client.profiles} first={months.length ? months[months.length - 1].period : undefined} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
+        </Dialog>
+      )}
+      {client.can_connect && (
+        <Dialog
+          open={dialog === "source"}
+          onClose={() => setDialog("")}
+          title={`Where ${name}’s books come from`}
+          description="Every part of a month reads its books from one source: the newest capture, or QuickBooks or Xero alone. Choose it for the client, or for one month."
+        >
+          <SourceForm key={client.books_sources?.[0]?.id ?? "none"} client={name} chosen={client.books_sources ?? []} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
         </Dialog>
       )}
       {canRecord && (
@@ -854,6 +875,96 @@ function LedgerForm({ client, kept, onSaved, onCancel }: { client: string; kept:
             Cancel
           </button>
           <button className="primary" disabled={busy || !reason.trim() || (choice.ledger === "other" && !choice.other_name.trim())}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </DialogActions>
+      </fieldset>
+    </form>
+  );
+}
+
+// sourceLine says where the client's months' books come from, when a source was chosen: its default, and each month
+// chosen otherwise.
+function sourceLine(chosen: BooksSource[]) {
+  if (!chosen.length) return "";
+  const own = chosen.find((c) => c.period === "");
+  const months = chosen.filter((c) => c.period !== "" && c.source !== (own?.source ?? "newest"));
+  return ` Its months’ books are read from ${sourceNames[own?.source ?? "newest"]}${months.length ? `; ${months.map((m) => `${monthName(m.period)} from ${sourceNames[m.source]}`).join("; ")}` : ""}.`;
+}
+
+// SourceForm chooses where the client's months' books come from, for the client or one month, with a reason, against the
+// newest choice as read; a choice that would change a signed-off month's books is refused until it is reopened.
+function SourceForm({ client, chosen, onSaved, onCancel }: { client: string; chosen: BooksSource[]; onSaved: () => void; onCancel: () => void }) {
+  const [period, setPeriod] = useState("");
+  // The source in force for what is chosen for: the month's own, else the client's default, else the newest capture.
+  const inForce = (p: string) => chosen.find((c) => c.period === p)?.source ?? chosen.find((c) => c.period === "")?.source ?? "newest";
+  const [source, setSource] = useState<BooksSource["source"]>(inForce(""));
+  const choose = (p: string) => (setPeriod(p), setSource(inForce(p)));
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const newest = chosen.reduce((max, c) => (Number(c.id) > Number(max) ? c.id : max), "");
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest("/client/books-source", { client, period, source, reason: reason.trim(), rev: newest });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The source could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form onSubmit={save}>
+      <fieldset disabled={busy}>
+        <label>
+          For
+          <select value={period === "" ? "" : "month"} onChange={(e) => choose(e.target.value === "" ? "" : new Date().toISOString().slice(0, 7))}>
+            <option value="">Every month without its own choice</option>
+            <option value="month">One month</option>
+          </select>
+        </label>
+        {period !== "" && (
+          <label>
+            Month
+            <input type="month" value={period} required onChange={(e) => choose(e.target.value)} />
+          </label>
+        )}
+        <label>
+          Books from
+          <select value={source} onChange={(e) => setSource(e.target.value as BooksSource["source"])}>
+            {(Object.keys(sourceNames) as BooksSource["source"][]).map((s) => (
+              <option key={s} value={s}>
+                {sourceNames[s][0].toUpperCase() + sourceNames[s].slice(1)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Reason
+          <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+        </label>
+        {chosen.length > 0 && (
+          <details>
+            <summary>Chosen so far</summary>
+            <ul>
+              {chosen.map((c) => (
+                <li key={c.id}>
+                  {c.period ? monthName(c.period) : "Every month"}: {sourceNames[c.source]}. {c.reason} ({c.actor})
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {error && <p role="alert">{error}</p>}
+        <DialogActions>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" disabled={busy || !reason.trim()}>
             {busy ? "Saving…" : "Save"}
           </button>
         </DialogActions>

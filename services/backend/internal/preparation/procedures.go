@@ -100,7 +100,8 @@ func ClientProfileOf(ctx context.Context, q interface {
 }
 
 // clientProfile reads the profile of the one client the WITH clause c names (its organization_id, entity and the month,
-// period), from its confirmed profile and its active connections, both matched by client identity.
+// period), from its confirmed profile and its active connections of the month's books source, both matched by client
+// identity.
 func clientProfile(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, client string, args ...any) (Profile, error) {
@@ -110,8 +111,8 @@ func clientProfile(ctx context.Context, q interface {
 	var confirmedStart sql.NullInt64
 	var superseded bool
 	err := q.QueryRowContext(ctx, client+`,
- x AS (SELECT q.home_currency,q.fiscal_year_start FROM quickbooks_connections q JOIN c ON c.organization_id=q.organization_id AND client_identity(q.organization_id,q.client_entity)=client_identity(c.organization_id,c.entity) WHERE q.state='active'
- UNION ALL SELECT r.home_currency,r.fiscal_year_start FROM xero_connections r JOIN c ON c.organization_id=r.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(c.organization_id,c.entity) WHERE r.state='active'),
+ x AS (SELECT q.home_currency,q.fiscal_year_start FROM quickbooks_connections q JOIN c ON c.organization_id=q.organization_id AND client_identity(q.organization_id,q.client_entity)=client_identity(c.organization_id,c.entity) WHERE q.state='active' AND books_source(c.organization_id,c.entity,c.period) IN ('newest','quickbooks')
+ UNION ALL SELECT r.home_currency,r.fiscal_year_start FROM xero_connections r JOIN c ON c.organization_id=r.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(c.organization_id,c.entity) WHERE r.state='active' AND books_source(c.organization_id,c.entity,c.period) IN ('newest','xero')),
  f AS (SELECT f.currency,f.fiscal_year_start,f.effective_from FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1)
  SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('currency',home_currency,'start',fiscal_year_start)) FROM x),'[]'::jsonb),(SELECT currency FROM f),(SELECT fiscal_year_start FROM f),(SELECT effective_from FROM f),
  EXISTS(SELECT 1 FROM client_profiles l, c WHERE l.organization_id=c.organization_id AND client_identity(l.organization_id,l.client_entity)=client_identity(c.organization_id,c.entity) AND l.effective_from>(SELECT effective_from FROM f) AND l.effective_from<=to_char(now() AT TIME ZONE 'UTC','YYYY-MM'))`, args...).Scan(&raw, &confirmed, &confirmedStart, &effective, &superseded)

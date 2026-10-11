@@ -4046,3 +4046,158 @@ Commands: `go test -count=1 -race ./internal/llm/...`; focused transport (`TestA
 The earlier unsupported-model conclusion applied to Codex CLI 0.157.1. A fresh comparison using the same existing ChatGPT login and exact `gpt-6.1-sol` / medium policy rejected that model on 0.157.1 but completed the synthetic tool-free `MODEL_OK` prompt on the current published 0.162.1. The context-machine image now pins 0.162.1; Claude remains at its separately tested version. This local subscription result does not prove the stored Cloudflare login, hosted inference or accounting accuracy. The intended-model protocol rerun exposed GPT-6.1 Sol inline tool carriers. The proxy now strips those carriers, supplies the same trusted record schemas used by MCP, and validates executable provider calls before the CLI can receive them. All 33 cases run the actual installed CLIs against fake local providers and pass with the intended model name in their fixtures; completion explicitly exercises medium effort. Regressions cover inline carriers, forbidden namespaces, custom executor calls, both provider formats and literal tool-shaped text. Opus 5.5 Medium reviewed the update without blocking defects. CI and hosted acceptance remain required before activation; existing application membership/client grants and the personal account data-handling condition still apply.
 
 Proof: production image build; `go test -count=1 -race ./internal/llm/...` and `go vet ./internal/llm/...` against migrated disposable local Docker PostgreSQL 17 passed; Linux image test binary ran `TestInstalled.*CLIs` (33 cases) successfully. These fake-provider tests prove the request/response policy and CLI protocol, not provider acceptance or accounting accuracy. The local real-subscription completion succeeded; hosted completion acceptance remains pending. Codex autonomous research also requires separate hosted namespace/tool-call acceptance and configured read profiles before use.
+
+## 2026-10-10 — Financial claim support (B04/B07/B08/B09)
+
+Handoff slice 1 ([financial answers that support the actual claim](agent-first-implementation-handoff.md#b04b07b08b09--financial-answers-that-support-the-actual-claim)), on the branch after `54cf4a39`.
+
+Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose value's number appeared in the sentence, so `{"receivables":"8000.00"}` supported "Net income is 8,000.00." (the maturity review's probe). The fix reads each cited field's identity from its read (`internal/transport/agent_claims.go`) and holds each stated money figure to it; a `derive` support form lets the server recompute a total, difference or percentage exactly.
+
+- **`TestAgentClaimsBindWhatAFigureMeasures` (new). The original set has 27 rejections and 18 acceptances.** The rejections are:
+  - the reproduction itself;
+  - a figure with no named metric;
+  - gross profit or an expense line called net income or revenue;
+  - the right metric for the wrong client (Birch vs Bluegrass) or month (September vs October);
+  - euro for a USD figure, and the cash basis for an accrual one;
+  - a rise stated for a negative change;
+  - an amount stated as a change, and a change as an amount;
+  - the prior month stated as current;
+  - a forecast week stated as actual, and a scenario stated without saying so;
+  - book cash called available;
+  - a stale capture, and a superseded publication, stated as current;
+  - an actual called a budget, and a budget not said to be one;
+  - year to date stated as a month;
+  - drivers summing to 4,000.00 of a 4,940.00 change with no remainder named;
+  - an unhedged, uncited cause;
+  - a wrong derived sum or ratio, an uncited input, a ratio to a zero base, and amounts mixed with changes.
+
+  The acceptances include the same claims correctly worded, a multi-period comparison, a zero-base budget line where 540.00 is both the actual and the variance, a source-linked difference and sum, and a ratio at its stated precision. Citations name fields from typed facts (`Management pack › Net income · change`).
+  Review follow-ups add these cases:
+  - a firm client that no read mentions (Acme Dental) is still caught as another client;
+  - a budget percentage cited as a net-income margin is rejected;
+  - a derived sum across two clients must name each client, a sum across accounting bases is refused, and a sum across months must name both months;
+  - the changes read's real payee rows (`new`, `changed`, `unattributed`, each with this and last month) count as drivers, so 3,000.00 plus 1,000.00 of a 4,940.00 change must name the 940.00 unattributed;
+  - a quoted passage supports a cause only when it names it;
+  - a derived figure may not be called a measure none of its inputs carries (rent plus marketing is never net income);
+  - a month and its year to date are each qualified in their own clause;
+  - offsetting drivers (+500, −400) explain a net 100 change, the total being the cited change that is not a driver;
+  - each figure takes the measure named nearest it ("net income is 8,000.00 versus receivables at 8,000.00" fails for its first figure);
+  - month names and currency codes in any case (september, eur) are checked, but "may" counts as a month only when written May;
+  - no derived figure joins a budget to an actual or a forecast to an actual;
+  - a hedge excuses a cause only in the cause's own clause;
+  - `TestManagement…`: reading one published version now returns its computed state (`superseded` after a correction), as the listing does, so the agent sees a superseded version as stale;
+  - a direction stated without its figure ("Lab fees rose" for −260.00, "Net income rose" citing only the amount) is held to the field;
+  - a publication section read keeps the pack's client, month, currency and basis;
+  - a ratio is checked at its written precision (17.49% is not "17.0%", is "17.5%" and "17%");
+  - an unverified publication needs a caveat;
+  - every causal clause of a sentence needs its own support;
+  - drivers are held to their own row's total, even with a second total in the sentence;
+  - an introductory "Year to date," qualifies the figure after it;
+  - a derived sum or ratio is never stated as a movement, a difference is a rise or fall only between one line's two times and in its sign, otherwise a gap ("exceed … by"), and a currency stated beside it is its fields';
+  - a cash forecast is as fresh as its captured opening and says so when its open items are incomplete;
+  - a remainder must be named ("the rest is unexplained"), not merely qualified ("including", "mostly");
+  - "rose to 21,780.00" states a level after a rise, so a cited change or prior month of the same line must show the rise;
+  - a derived total may not count one field twice;
+  - a firm-wide or executive read of one close takes that close's client and month, looked up under the member;
+  - a derived difference is said to be a difference, change or what is left, never a plain balance;
+  - money is never combined with a count;
+  - `MoneyIn` also refuses a hyphenated term ("12-month policy") while keeping the trailing-minus refund;
+  - a line is named by its distinctive words, so a shared word does not identify a line ("Patient fees" never names "Lab fees");
+  - each row's remainder is sought only in its own part of the sentence;
+  - every derived input's currency is compared, and a known currency is never mixed with an unknown one from another read;
+  - incomplete forecast inputs are caveated in derived answers too;
+  - derived citations link to their rows (an executive's report version);
+  - each figure takes the month named nearest it, so swapped months fail;
+  - a passage that negates a cause supports none;
+  - a derived rise or fall must be one client's line;
+  - every client a sentence names must be one its cited fields are of, so one figure is never given to two clients;
+  - a computed result is labelled only by a measure all its inputs share (the numerator's for a ratio), except a stated gap ("exceed … by");
+  - staleness must be disclosed in words that say so, never a bare "as of";
+  - a quoted passage supports a cause only when it states a causal relation and names the claimed effect ("the campaign raised payroll" supports nothing about revenue);
+  - clients are matched exactly and longest first ("Acme" is not "Acme Europe");
+  - a derived change's "from September to October" must match its operands' order;
+  - the budget comparison's percentage, stored as a bare signed number ("6.3", "-6.3"), binds only as a percentage, is said to be against the budget, and "over" or "under" follows its sign;
+  - a derived sum never adds a month to its year to date;
+  - a figure-less forecast or scenario sentence ("cash closes positive next week") must say it is one;
+  - a sentence that computes from a stale read may say "stale";
+  - the remainder must be stated ("the rest", "unexplained"), never inferred from a driver's own name ("Other services");
+  - a hedge excuses a cause only when it qualifies the cause, before or at the connective;
+  - a line named "Interest income" is an income line, never net income;
+  - prior-month figures and changes inherit the prior capture's staleness;
+  - client names are found by plain search with whole-word edges: twenty figures checked against 5,000 firm clients take well under a second (the earlier per-client patterns took about 26 seconds in the reviewer's probe);
+  - a changes read's `last_month` is the prior month;
+  - attribution and cause are separate: "driven by", "from" and "including" attribute a change to drivers, which must add up or name the rest, while "because of", "due to" and "caused by" assert a cause, which needs a causal source or a hedge; a payee grouping is a driver, never a cause;
+  - a two-letter client ("GE") is matched in its own case as a whole word;
+  - "rose to" evidence must be the same client's line in the level's month (or the month before, for a prior amount);
+  - forecast and scenario wording qualifies only the figure's own clause or an introduction before it;
+  - a derived decline may be stated as its magnitude with "fell", held to the computed sign;
+  - figure-less directions are read in the clause that names each field ("revenue rose while expenses fell");
+  - a change named as a variance or difference needs no "up", "down" or "by", and a variance may be said to be against the budget;
+  - a line is named by all its distinctive words ("Office rent" never names "Office supplies");
+  - the budget comparison's totals are read as what they are: `_ytd` totals are year to date, and `net_*`, `income_*` and `expense_*` are net income, income and expenses;
+  - client names are matched rune by rune, so a name whose lowercase form has another byte length cannot shift offsets;
+  - a stale caveat must qualify the figure: in its clause, an uncontradicted introduction, or right after it ("…, which is stale"), never "…stale, but … now";
+  - a causal verb with a measure after it ("marketing raised revenue") is a cause claim needing evidence or a hedge;
+  - a cash-plan figure is never read as a mislabelled budget;
+  - a change derived from an account row's this and last month is that row's total, so its drivers must add up or name the rest;
+  - figures are normalized as exact decimals, never through a float (9,999,999,999,999,999.99 is not 10^16);
+  - a payee that shares a client's name is the cited row, not that client;
+  - the month May is not a hedge;
+  - one fact read two ways (a report through the overview and the report itself) is counted once in a derived sum;
+  - "Revenue rose 4,940.00, because of …" keeps the effect before the comma;
+  - every measure a financial sentence names must be measured by something it cites ("net income and receivables are each 8,000.00" needs both);
+  - a money variance against the budget is stated over or under in its sign, like its percentage;
+  - a total cited twice counts once in the remainder check;
+  - two clients each cited may share a sentence ("Bluegrass Dental PLLC and Birch Dental each had …"), while a figure in another client's clause still fails;
+  - causal evidence must attribute the effect ("the campaign drove revenue up"); timing ("rose after the campaign started") is not cause;
+  - a derived total whose inputs are listed as a set ("rent and payroll total 9,040.00") is not labelled by one of them, while "payroll including rent totals …" is;
+  - a whole JSON number is a count whatever its key ("Coverage has 3 accounts" citing `/coverage/total`);
+  - an executive overview's published figure must be said to be the published report's, since the overview does not compute whether the books changed after it;
+  - one measure's two revisions (or one fact read two ways) is counted once in a derived sum, by identity rather than value, with an unknown basis matching any;
+  - a total across clients is never stated as each client's ("each", "both", "respectively");
+  - a sentence stating a cited count names no measure the count does not measure ("Net income is 3" citing a coverage count fails);
+  - in a cash plan only the projection (weeks, lowest point, scenario, after the horizon) is forecast; an unscheduled or past-due balance is the captured actual;
+  - a figure-less movement ("net income rose") needs a change of that same measure, not any change in the sentence;
+  - a cited reason supports a cause only when it also names the effect claimed;
+  - an unverified publication is said to be unverified, never merely "stale", in direct, derived and figure-less claims alike, as is a published report's figure said to be the report's;
+  - "up" and "down" hold a derived movement to its sign like "rose" and "fell";
+  - "on the cash basis" is a basis, not the cash measure;
+  - a line's measure is the head of its name, within its statement ("Sales tax payable" is a payable, never sales), and its own name is no further measure;
+  - a published figure read through the overview and through the report is one fact (same measure, client, month and kind), while two accounts or two weeks stay two;
+  - a sentence may say a cited source is stale only of that source ("the bank feed is stale" with only a report cited fails);
+  - an opening balance is dated by its capture's as-of date, not the close's month;
+  - a total and its drivers stated in different sentences are reconciled across the answer;
+  - "over budget by 630.00" is held to the variance's sign like "630.00 over budget";
+  - reading an older publication says "superseded" even when the current pack cannot be built; only the newest is then "unverified";
+  - a whole object or list cited at once binds no figure, so every figure is cited at a typed leaf;
+  - "the cash plan" is the plan's name, not the cash measure;
+  - a driver row counts toward a movement only when the sentence states it (its payee, its figure, or that it is unattributed);
+  - two differently named lines with the same measure ("Customer receipts", "Other receipts") are two facts in a derived sum;
+  - a cited change the sentence does not print is still the total its drivers tie to ("revenue rose, driven entirely by new patients");
+  - a forecast week's figure is of the months that week runs in ("forecast for January" fails for the week of December 20);
+  - `MoneyIn` reads a number's unit or reference on its own line only ("Balance: 100.00" then "Months remaining: 12" keeps the balance);
+  - a change happens in its own month: the month before places it only as the comparison ("rose 1,840.00 from September", never "in September");
+  - a figure in a cited prose field supports a sentence only as the measure the prose names for it ("Receivables were 8,000.00" never supports "net income is 8,000.00");
+  - one stable account is one fact in a derived sum even when renamed between versions;
+  - `MoneyIn` also treats a number after a quantity or term label ("Qty 12", "Term: 12") as no amount;
+  - a derived sum never adds balances at different dates (two weeks' closing cash), while flows across weeks still add;
+  - a line the sentence names is only that line: "Retail sales total 300.00" cannot add wholesale sales in;
+  - every month a derived sentence names is one of its inputs' months ("September and October" fails for two October figures);
+  - denying that book cash is available at the bank is accepted; asserting it is not;
+  - an equal figure belongs to the line named for it: citing Rent alone never supports "marketing is 500.00" too;
+  - a currency introducing a figure's clause ("In EUR, net income is …") is checked against the cited field;
+  - a figure the sentence names for another line of the read ("Wholesale sales were 100.00" citing Retail sales) is rejected even when the cited line goes unnamed, and a figure-less denial of bank availability is accepted;
+  - a field named as a rate is a percentage and one named as a term or count is no money, however written ("annual_rate": "5.25" never adds to principal);
+  - "rose to" is shown only by a change or prior month of the same books (client, basis, currency, account, published or live, stale or current), and a cited change and prior month must reconcile with the level;
+  - the firm's client-name lookup fails closed: if it errors, a factual answer is withheld rather than checked without client names; it runs only for factual answers, with its own five-second budget after the model call;
+  - `TestFirmClientsFindsTheNamesAnAnswerUses` (new, database): the firm's clients named in an answer are found by the database across all clients with no cap (including a two-letter name), and never another firm's.
+- **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
+- **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
+- **Suites (final run on the branch, after merging main through #360):** `go test ./...` against local PostgreSQL migrated through 148 (`close_agent_test`) passed every package except two tests that need Poppler, which is not installed on this machine: `TestExtractMixedPDF` (`pdfinfo`) and `TestPackagePreservesBothWorkpapersAndEscapesSources` (`pdftotext`). CI runs both. `go vet ./internal/...` passed.
+- **Review:** Codex `gpt-6-sol` at high effort reviewed the branch against `origin/main` over more than forty rounds; each finding gained a focused failing case before its fix, and the final round found no actionable defect.
+
+Not verified:
+- an actual-model golden-set replay with the new answer schema (`derive`, `of`) and instructions; the changed rules may raise the rate of withheld answers until the model follows them, which only a replay against the configured provider can measure;
+- exported/published equivalents: chat answers are not exported, and report exports render from typed pack fields, not model text;
+- the ambiguous numeric date (09/01/2026 accepted as either order), recorded as a known limit.
+

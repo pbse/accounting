@@ -62,7 +62,7 @@ func sweepComparisons(ctx context.Context, db *sql.DB, cursor string) (string, i
 	rows, err := db.QueryContext(ctx, `SELECT c.id::text FROM client_closes c WHERE c.id>$1::bigint
  AND NOT `+seedInProgress("c")+`
  AND COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')<>'signed_off'
- AND EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period')
+ AND EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND `+sourceAllows("c.id", "quickbooks")+`)
  AND EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id=c.id AND w.kind='prepaid' AND w.paper ? 'carry_forward' AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text))
  ORDER BY c.id LIMIT 20`, cursor)
 	if err != nil {

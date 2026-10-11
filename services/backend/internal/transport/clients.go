@@ -136,8 +136,8 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
  FROM client_closes c LEFT JOIN LATERAL (SELECT * FROM (
    SELECT 'quickbooks' AS source,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active' AS stale FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id
     LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
-    WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+`
-   UNION ALL SELECT 'xero',s.captured_at,x.state<>'active' FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id=c.id) v
+    WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+`
+   UNION ALL SELECT 'xero',s.captured_at,x.state<>'active' FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id=c.id AND `+sourceAllows("c.id", "xero")+`) v
   ORDER BY captured_at DESC,source='quickbooks' DESC LIMIT 1) b ON true
  WHERE `+sameClient+` AND ($3 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$4 AND g.granted AND lower(g.client_entity)=lower(c.entity)))
  ORDER BY c.period DESC,c.id DESC`, org, name, firm, who)
@@ -267,6 +267,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		if !whole {
 			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["profiles"], out["basis"], out["ledger"] = nil, nil, true, []any{}, []any{}, nil, []any{}, nil, nil
 			out["production_grants"], out["xero_grants"], out["can_grant"], out["can_connect"], out["can_manage"] = []any{}, []any{}, false, false, false
+			out["books_sources"] = []any{}
 			jsonReply(w, 200, out)
 			return
 		}
@@ -397,6 +398,11 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		out["files"] = sent
 		if out["profiles"], err = profileHistory(ctx, tx, org, name); err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		// Where its months' books come from: its default and each month chosen otherwise.
+		if out["books_sources"], err = clientSources(ctx, tx, org, name); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}

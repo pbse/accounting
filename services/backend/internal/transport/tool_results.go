@@ -149,7 +149,14 @@ func projectPublication(value any, section string) any {
 	publication, _ := object["publication"].(map[string]any)
 	switch section {
 	case "profit_and_loss", "balance_sheet", "working_capital", "cash_flow":
-		return map[string]any{"publication": publication, "section": section, section: pack[section]}
+		// A section keeps what its figures are of (client, month, currency, basis), so they stay bound to them.
+		out := map[string]any{"publication": publication, "section": section, section: pack[section]}
+		for _, key := range []string{"entity", "period", "currency", "basis", "status"} {
+			if v, ok := pack[key]; ok {
+				out[key] = v
+			}
+		}
+		return out
 	case "commentary":
 		return map[string]any{"publication": publication, "section": section, "commentary": publication["commentary"]}
 	}

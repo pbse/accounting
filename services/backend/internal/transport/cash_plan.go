@@ -332,7 +332,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		var stale bool
 		var accounts []byte
 		err = db.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',COALESCE(s.payload->'accounts','[]'::jsonb),COALESCE(x.home_currency,''),'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id
- LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &asOf, &stale, &accounts, &home, &company)
+ LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "quickbooks")+` AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &asOf, &stale, &accounts, &home, &company)
 		if err == sql.ErrNoRows {
 			return wait("Capture this client's QuickBooks books first: the plan opens from the ledger's bank balances. A Xero client's cash plan is not built yet.")
 		}
@@ -656,7 +656,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			}
 			start, _ := time.Parse("2006-01-02", v.Start)
 			later, e := db.QueryContext(r.Context(), `SELECT s.captured_at,COALESCE(s.payload->'accounts','[]'::jsonb) FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id
- WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND s.captured_at>$3 AND s.captured_at<$4 AND 'quickbooks:'||x.environment||':'||x.realm=$5 AND COALESCE(x.home_currency,'')=$6 ORDER BY s.captured_at LIMIT 30`, org, entity, v.asOf, start.AddDate(0, 0, 13*7), v.company, v.Currency)
+ WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND s.captured_at>$3 AND s.captured_at<$4 AND `+sourceAllows("c.id", "quickbooks")+` AND 'quickbooks:'||x.environment||':'||x.realm=$5 AND COALESCE(x.home_currency,'')=$6 ORDER BY s.captured_at LIMIT 30`, org, entity, v.asOf, start.AddDate(0, 0, 13*7), v.company, v.Currency)
 			if e != nil {
 				problem(w, 503, "Reviews are unavailable.")
 				return

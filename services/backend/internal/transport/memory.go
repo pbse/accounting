@@ -128,16 +128,16 @@ func workHints(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// The chart of accounts in the close's newest snapshot, a QuickBooks period snapshot on its reading
-		// connection or a Xero capture; a stale one says nothing.
+		// The chart of accounts in the close's newest snapshot of its month's source, a QuickBooks period snapshot on its
+		// reading connection or a Xero capture; a stale one says nothing.
 		var accounts []byte
 		var stale bool
 		err = tx.QueryRowContext(ctx, `SELECT accounts,stale FROM (
  (SELECT s.payload->'accounts' AS accounts,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active' AS stale,s.captured_at FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
-  WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1)
+  WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1)
  UNION ALL
  (SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('Name',a->>'Name','Active',a->>'Status'='ACTIVE')) FROM jsonb_array_elements(s.payload->'accounts'->'Accounts') a),'[]'::jsonb),x.state<>'active',s.captured_at FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id
-  WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1)) latest ORDER BY captured_at DESC LIMIT 1`, closeID).Scan(&accounts, &stale)
+  WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1)) latest ORDER BY captured_at DESC LIMIT 1`, closeID).Scan(&accounts, &stale)
 		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Client memory is unavailable.")
 			return
