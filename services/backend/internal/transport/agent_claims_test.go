@@ -210,8 +210,9 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Payroll is 17.5% of revenue.", derived(0, "ratio", "17.5%", "t13", "/lines/0/amount", "t13", "/lines/1/amount"))
 	ok("Payroll is 17% of revenue.", derived(0, "ratio", "17%", "t13", "/lines/0/amount", "t13", "/lines/1/amount"))
 	reads["t15"] = read(`{"publication":{"id":"5","state":"unverified"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00"}]}}}`, "Published report", "read_publication", "", "")
-	rejected("Net income is 21,780.00.", "the cited read is stale", e("t15", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
+	rejected("Net income is 21,780.00.", "could not be verified", e("t15", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
 	ok("The published net income is 21,780.00, which could not be verified against the books.", e("t15", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
+	rejected("The stale report's net income is 21,780.00.", "could not be verified", e("t15", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
 	rejected("Revenue rose 4,940.00 because of the marketing campaign, and expenses rose due to seasonality.", "due to seasonality",
 		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "The marketing campaign drove revenue up"},
 		e("t2", 0, "/profit_and_loss/sections/1/total/change", "3100.00"))

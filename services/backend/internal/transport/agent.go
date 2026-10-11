@@ -1516,7 +1516,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		}
 		entries = append(entries, entry)
 	}
-	citations, rejected := agentSupport(answer.Kind, text, entries, reads, names, firmClients(ctx, db, org)...)
+	citations, rejected := agentSupport(answer.Kind, text, entries, reads, names, firmClients(ctx, db, org, text)...)
 	if rejected != "" {
 		out.outcome, out.why = "not_kept", rejected
 		return out

@@ -4152,10 +4152,12 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - a sentence stating a cited count names no measure the count does not measure ("Net income is 3" citing a coverage count fails);
   - in a cash plan only the projection (weeks, lowest point, scenario, after the horizon) is forecast; an unscheduled or past-due balance is the captured actual;
   - a figure-less movement ("net income rose") needs a change of that same measure, not any change in the sentence;
-  - a cited reason supports a cause only when it also names the effect claimed.
+  - a cited reason supports a cause only when it also names the effect claimed;
+  - an unverified publication is said to be unverified, never merely "stale";
+  - `TestFirmClientsFindsTheNamesAnAnswerUses` (new, database): the firm's clients named in an answer are found by the database across all clients with no cap (including a two-letter name), and never another firm's.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
-- **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.
+- **Suites (final run on the branch):** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.
 
 Not verified:
 - an actual-model golden-set replay with the new answer schema (`derive`, `of`) and instructions; the changed rules may raise the rate of withheld answers until the model follows them, which only a replay against the configured provider can measure;

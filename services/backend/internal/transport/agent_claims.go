@@ -176,6 +176,8 @@ type claim struct {
 	currency string
 	basis    string
 	stale    bool
+	// unverified says the figure's current standing could not be checked (a publication the books could not be compared with).
+	unverified bool
 	// published says the figure is a published report's as frozen (an executive overview row), not the current books.
 	published bool
 	// row is what identifies the row the field sits in (an id, a week's start, an account), when it has one.
@@ -269,8 +271,11 @@ func claimOf(read agentRead, path string) claim {
 	if root, ok := read.value.(map[string]any); ok {
 		if pub, ok := root["publication"].(map[string]any); ok {
 			switch strings.ToLower(text(pub, "state")) {
-			case "superseded", "needs_correction", "signoff_lapsed", "unverified":
+			case "superseded", "needs_correction", "signoff_lapsed":
 				c.stale = true
+			case "unverified":
+				// Its standing against the books is unknown: neither current nor known to be stale.
+				c.unverified = true
 			}
 		}
 	}
@@ -465,6 +470,7 @@ var (
 	claimVarianceNamed = regexp.MustCompile(`\b(variance|difference|change|movement|swing|gap)\b`)
 	// Verbs that state a cause acting on a measure ("marketing raised revenue").
 	claimCausalVerb     = regexp.MustCompile(`\b(raised|drove|boosted|lifted|caused|pushed up|pushed down|cut|reduced|lowered|led to|resulted in|brought down|brought up|hurt|dragged down|weighed on|increased|decreased)\b`)
+	claimUnverifiedSaid = regexp.MustCompile(`\b(unverified|not verified|could not be verified|cannot be verified|couldn't be verified|not been verified|may have changed|not confirmed)\b`)
 	claimDistributive   = regexp.MustCompile(`\b(each|both|apiece|respectively|every one)\b`)
 	claimPublishedSaid  = regexp.MustCompile(`\b(published|publication|report|pack)\b`)
 	claimContrast       = regexp.MustCompile(`\b(but|however|yet|although|though|now|currently|today)\b`)
@@ -894,6 +900,10 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 				return "the sentence states " + o.normalized + " on the " + m[1] + " basis, but the cited figure is on the " + c.basis + " basis"
 			}
 		}
+	}
+	// A figure whose standing could not be checked is said to be unverified, not current and not stale.
+	if c.unverified && !claimUnverifiedSaid.MatchString(lowerLine) {
+		return "the sentence states " + o.normalized + " without saying it could not be verified against the books"
 	}
 	// A published report's frozen figure is said to be the report's, never the books' as they stand now.
 	if c.published && !claimPublishedSaid.MatchString(lowerLine) {
@@ -1489,10 +1499,11 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 
 func strconvItoa(n int) string { return big.NewInt(int64(n)).String() }
 
-// firmClients is every client name the firm has closes for, so the support gate knows a client a sentence names even
-// when no read mentioned it. A failed read returns none; the reads' own clients are still checked.
-func firmClients(ctx context.Context, db *sql.DB, org string) []string {
-	rows, err := db.QueryContext(ctx, `SELECT DISTINCT entity FROM client_closes WHERE organization_id=$1 LIMIT 5000`, org)
+// firmClients is the firm's clients whose names appear in the answer, found by the database across all of them (no cap),
+// so the support gate knows a client a sentence names even when no read mentioned it. A failed read returns none; the
+// reads' own clients are still checked.
+func firmClients(ctx context.Context, db *sql.DB, org, answer string) []string {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT entity FROM client_closes WHERE organization_id=$1 AND length(entity)>=2 AND strpos(lower($2), lower(entity))>0`, org, answer)
 	if err != nil {
 		return nil
 	}
