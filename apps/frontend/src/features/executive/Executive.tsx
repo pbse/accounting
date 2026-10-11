@@ -23,12 +23,19 @@ type Published = {
   net_income: string;
   book_cash: string;
   working_capital: string;
+  state?: "current" | "needs_correction" | "signoff_lapsed" | "superseded" | "unverified";
+};
+// A published version is frozen; when the books change after it, the firm publishes a correction and the version says so.
+const standing: Record<string, [string, string]> = {
+  needs_correction: ["status warn", "The books changed since; a correction is due"],
+  signoff_lapsed: ["status warn", "Its sign-off no longer stands; a correction may follow"],
+  unverified: ["status info", "Could not be checked against the books right now"],
 };
 type Overview = { executive: boolean; closes?: Close[]; published?: Published[] };
 export type ExecutiveView = "overview" | "reports" | "cash" | "decisions";
 
 const pages: Record<ExecutiveView, [string, string]> = {
-  overview: ["Business overview", "Each client's newest published management pack. Published figures are reviewed and signed off; they do not change."],
+  overview: ["Business overview", "Each client's newest published management pack. A published version is reviewed, signed off and never edited; if the books change afterwards, it is marked and the firm publishes a correction."],
   reports: ["Reports", "Published versions of the month's management pack, with PDF and spreadsheet copies, and the current comparison with the approved budget."],
   cash: ["Cash plan", "The next 13 weeks of book cash, prepared from the books and approved schedules. It is a working forecast, not reviewed results."],
   decisions: ["My decisions", "Published reports waiting for your acknowledgment. Acknowledging records that you received a version; it approves nothing."],
@@ -101,6 +108,11 @@ export default function Executive({ view }: { view: ExecutiveView }) {
                 </Link>{" "}
                 · version {p.version}, published {dates.date(p.published_at)} · net income {show(p, p.net_income)} · book cash {show(p, p.book_cash)} · working
                 capital {show(p, p.working_capital)} ·{" "}
+                {p.state && standing[p.state] && (
+                  <>
+                    <span className={standing[p.state][0]}>{standing[p.state][1]}</span> ·{" "}
+                  </>
+                )}
                 {p.acknowledged ? <span className="status ok">Acknowledged</span> : <span className="status warn">Waiting for your acknowledgment</span>}
               </li>
             ))}
@@ -130,6 +142,7 @@ export default function Executive({ view }: { view: ExecutiveView }) {
               .map((p) => (
                 <li key={p.close_id}>
                   {p.entity} · {p.period}: version {p.version} of the management pack.{" "}
+                  {p.state && standing[p.state] && <span className={standing[p.state][0]}>{standing[p.state][1]}</span>}{" "}
                   <Link to={`/dashboard/executive/reports?close=${p.close_id}`}>Read it</Link>{" "}
                   <button type="button" onClick={() => void acknowledge(p)}>
                     Acknowledge
