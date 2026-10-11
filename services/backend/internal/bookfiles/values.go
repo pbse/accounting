@@ -102,7 +102,11 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 	if m == nil || (m[1] == "" && m[2] == "") || len(m[1])+len(m[2]) > maxDigits+10 {
 		return Amount{}, ErrNotAmount
 	}
+	// The limit counts digits, separators aside.
 	whole, fraction := strings.NewReplacer(",", "", ".", "", " ", "", "'", "").Replace(m[1]), m[2]
+	if len(whole)+len(fraction) > maxDigits {
+		return Amount{}, ErrNotAmount
+	}
 	value, ok := new(big.Rat).SetString(whole + "." + fraction + "0")
 	if !ok {
 		return Amount{}, ErrNotAmount

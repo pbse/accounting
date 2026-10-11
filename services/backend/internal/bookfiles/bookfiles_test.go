@@ -727,3 +727,13 @@ func TestAWorkbookAmountsCurrencyIsItsFormats(t *testing.T) {
 		t.Fatalf("currencies by format: %+v", reading)
 	}
 }
+
+// The digit limit counts digits, not separators: 31 ungrouped digits are not an amount, 30 grouped ones are.
+func TestTheDigitLimitCountsDigits(t *testing.T) {
+	if _, err := ParseAmount(strings.Repeat("9", 31), NumberStyle{}); err != ErrNotAmount {
+		t.Fatalf("31 digits: %v", err)
+	}
+	if a, err := ParseAmount("999"+strings.Repeat(",999", 9), NumberStyle{}); err != nil || a.Value.Num().String() != strings.Repeat("9", 30) {
+		t.Fatalf("30 grouped digits: %v %v", a, err)
+	}
+}
