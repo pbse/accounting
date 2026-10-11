@@ -167,15 +167,19 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 // fiscal year it would change.
 func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, currency string, start int) ([]string, error) {
 	// The new profile governs months from its own up to the next later profile's, which keeps the months after it.
-	// The months are locked, so a decision on one (a statement confirmed, a sign-off) waits for this change or sees it.
+	// The months are locked first, in a statement of their own, so a decision on one (a statement confirmed, a sign-off)
+	// either waits for this change or has committed before the decisions are read below.
+	if _, err := tx.ExecContext(ctx, `SELECT c.id FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3 ORDER BY c.id FOR UPDATE`, org, name, from); err != nil {
+		return nil, err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off',
  COALESCE((SELECT profile FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'null'::jsonb),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved') OR EXISTS(SELECT 1 FROM takeover_setups t WHERE t.close_id=c.id),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved' AND upper(COALESCE(NULLIF(w.paper->'input'->>'currency',''),'USD'))<>$4)
- OR EXISTS(SELECT 1 FROM statement_extractions s WHERE s.close_id=c.id AND s.confirmed IS NOT NULL AND COALESCE(s.confirmed->>'currency','')<>'' AND upper(s.confirmed->>'currency')<>$4)
+ OR EXISTS(SELECT 1 FROM statement_extractions s JOIN evidence e ON e.id=s.source_id AND e.superseded_by IS NULL WHERE s.close_id=c.id AND s.confirmed IS NOT NULL AND COALESCE(s.confirmed->>'currency','')<>'' AND upper(s.confirmed->>'currency')<>$4)
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
  AND c.period<COALESCE((SELECT min(f.effective_from) FROM client_profiles f WHERE f.organization_id=$1 AND client_identity(f.organization_id,f.client_entity)=client_identity($1,$2) AND f.effective_from>$3),'9999-99')
- ORDER BY c.period FOR UPDATE OF c`, org, name, from, currency)
+ ORDER BY c.period`, org, name, from, currency)
 	if err != nil {
 		return nil, err
 	}
