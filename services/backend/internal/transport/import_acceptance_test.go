@@ -369,6 +369,14 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if !current || !waiting {
 		t.Fatalf("a statement request on the file's books: current %v, waiting %v", current, waiting)
 	}
+	// Accepted again, the month's new books version keeps the exclusion, carried from the earlier one.
+	januaryAccepted = call("user_a", partner, "POST", januaryPath, with(januaryRead, map[string]any{"exported_on": "2026-10-05"}), 200)["id"].(string)
+	again := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/coverage", nil, 200)["coverage"].(map[string]any)
+	for _, raw := range again["items"].([]any) {
+		if item := raw.(map[string]any); item["account_id"] == "n:3000" && (again["snapshot_id"] == coverage["snapshot_id"] || item["state"] != "excluded" || !strings.HasPrefix(item["reason"].(string), "Carried from an earlier capture")) {
+			t.Fatalf("an exclusion carries to the file's new books: %v %v", again["snapshot_id"], item)
+		}
+	}
 	// Without the month's activity, the profit and loss is unavailable, never zero.
 	_, err = db.Exec(`UPDATE books_versions SET activity='{}',activity_unavailable='a column with the month''s movement' WHERE close_id::text=$1`, januaryClose)
 	must(err)
