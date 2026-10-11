@@ -133,8 +133,8 @@ func TestNoQueryOrdersByAColumnItAlsoSelectsAsText(t *testing.T) {
 	}
 }
 
-// The latest of a client's layouts is the newest, across a power of ten: ids 99 and 100 (or 999 and 1000) once sorted
-// as text gave the older (issue #369).
+// The latest of a client's layouts is the newest, across a power of ten: ids 999999999 and 1000000000, sorted as text,
+// gave the older (issue #369).
 func TestTheLatestLayoutIsTheNewestAcrossAPowerOfTen(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -161,15 +161,15 @@ func TestTheLatestLayoutIsTheNewestAcrossAPowerOfTen(t *testing.T) {
 	}()
 	var file string
 	must(db.QueryRow(`INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,actor) VALUES($1,'Acme Co','2026-09','a.csv',md5(random()::text)||md5(random()::text),'x','csv','fixture') RETURNING id::text`, org).Scan(&file))
-	// The next two layouts take the ids either side of the next power of ten: only ever moved forward.
-	_, err = db.Exec(`SELECT setval(pg_get_serial_sequence('books_layouts','id'), (10^(length((SELECT last_value FROM books_layouts_id_seq)::text)+1))::bigint-2)`)
+	// Two layouts either side of a power of ten, at ids of their own: the shared sequence is left as it is, and the ids
+	// are far above any it reaches.
+	older, newer := "999999999", "1000000000"
+	_, err = db.Exec(`DELETE FROM books_layouts WHERE id IN (999999999,1000000000)`)
 	must(err)
-	var older, newer string
-	for _, id := range []*string{&older, &newer} {
-		must(db.QueryRow(`INSERT INTO books_layouts(organization_id,client_entity,import_id,layout,reading,reason,actor,encoding,delimiter) VALUES($1,'Acme Co',$2::bigint,'{}','{}','Fixture','fixture','utf-8','comma') RETURNING id::text`, org, file).Scan(id))
-	}
-	if len(newer) == len(older) {
-		t.Fatalf("the layouts straddle a power of ten: %s %s", older, newer)
+	for _, id := range []string{older, newer} {
+		_, err = db.Exec(`INSERT INTO books_layouts(id,organization_id,client_entity,import_id,layout,reading,reason,actor,encoding,delimiter) OVERRIDING SYSTEM VALUE
+ VALUES($3::bigint,$1,'Acme Co',$2::bigint,'{}','{}','Fixture','fixture','utf-8','comma')`, org, file, id)
+		must(err)
 	}
 	for _, scope := range []string{file, ""} {
 		if l, err := latestLayout(t.Context(), db, org, "Acme Co", scope); err != nil || l == nil || l.ID != newer {
