@@ -49,7 +49,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
+		for _, q := range []string{`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
 			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM coverage_bindings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_versions WHERE organization_id=$1`, `DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM books_sources WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
 			`DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
 			`DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
@@ -353,6 +353,13 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	tie := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200)
 	if rows := tie["rows"].([]any); tie["snapshot"].(map[string]any)["source"] != "files" || len(rows) != 1 || rows[0].(map[string]any)["account_id"] != "n:1000" || rows[0].(map[string]any)["hint"] != "Reconcile it to the bank statement." {
 		t.Fatalf("January's tie-out from its file: %v", tie)
+	}
+	// A reconciliation naming the account without its number supports it.
+	_, err = db.Exec(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'reconciliation','files-bank','{"input":{"account":"Business Checking","ledger_closing":"1500.25"}}')`, januaryClose)
+	must(err)
+	tie = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200)
+	if row := tie["rows"].([]any)[0].(map[string]any); row["status"] != "ties" || row["account"] != "1000 Business Checking" || len(tie["unmatched"].([]any)) != 0 {
+		t.Fatalf("a reconciliation supports the file's bank: %v", tie)
 	}
 	// Its coverage is the file's accounts: the bank to reconcile, the rest for review, decided on the file's books.
 	coverage := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/coverage", nil, 200)["coverage"].(map[string]any)

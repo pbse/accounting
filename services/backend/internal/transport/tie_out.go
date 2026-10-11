@@ -164,7 +164,7 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 		}
 		for _, key := range slices.Sorted(maps.Keys(b.Balances)) {
 			a := b.Accounts[key]
-			balances = append(balances, ledger.AccountBalance{ID: key, Name: a.Name, Class: a.Class, AccountType: a.Type, Subtype: a.Subtype, Net: b.Balances[key]})
+			balances = append(balances, ledger.AccountBalance{ID: key, Name: fileAccountName(key, a.Name), FullName: a.Name, Class: a.Class, AccountType: a.Type, Subtype: a.Subtype, Net: b.Balances[key]})
 		}
 	case xeroErr == nil && (err == sql.ErrNoRows || xeroAt.After(capturedAt)):
 		snapshot = map[string]any{"id": xeroID, "captured_at": xeroAt, "stale": xeroStale, "source": "xero"}
@@ -475,6 +475,22 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 	}
 	slices.SortStableFunc(out, func(a, b tieRow) int { return strings.Compare(a.Class, b.Class) })
 	return tieOutcome{Snapshot: snapshot, Currency: currency, Rows: out, Unmatched: unmatched, Unclassified: unclassified}, nil
+}
+
+// fileAccountName is a file account's name without the number its books version puts before it ("1000 Business
+// Checking" is "Business Checking"), so a workpaper naming the account either way matches it.
+func fileAccountName(key, name string) string {
+	number, ok := strings.CutPrefix(key, "n:")
+	if !ok {
+		return name
+	}
+	fields := strings.Fields(name)
+	for k := 1; k < len(fields); k++ {
+		if strings.ToLower(strings.Join(fields[:k], "")) == number {
+			return strings.Join(fields[k:], " ")
+		}
+	}
+	return name
 }
 
 func cmpName(b ledger.AccountBalance) string {
