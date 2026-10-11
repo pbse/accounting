@@ -4103,7 +4103,11 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - derived citations link to their rows (an executive's report version);
   - each figure takes the month named nearest it, so swapped months fail;
   - a passage that negates a cause supports none;
-  - a derived rise or fall must be one client's line.
+  - a derived rise or fall must be one client's line;
+  - every client a sentence names must be one its cited fields are of, so one figure is never given to two clients;
+  - a computed result is labelled only by a measure all its inputs share (the numerator's for a ratio), except a stated gap ("exceed … by");
+  - staleness must be disclosed in words that say so, never a bare "as of";
+  - a quoted passage supports a cause only when it states a causal relation.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.

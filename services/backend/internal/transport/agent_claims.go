@@ -360,17 +360,18 @@ func (c claim) describe() string {
 
 var (
 	// The verbs of movement a figure-less sentence states ("net income rose").
-	claimRiseVerb  = map[string]bool{"rose": true, "risen": true, "rises": true, "rising": true, "increased": true, "increases": true, "grew": true, "grown": true, "grows": true, "climbed": true, "jumped": true, "gained": true, "improved": true}
-	claimFallVerb  = map[string]bool{"fell": true, "fallen": true, "falls": true, "falling": true, "decreased": true, "decreases": true, "dropped": true, "drops": true, "declined": true, "declines": true, "slipped": true, "lost": true, "worsened": true}
-	claimRise      = map[string]bool{"rose": true, "risen": true, "rises": true, "rising": true, "increased": true, "increases": true, "grew": true, "grown": true, "grows": true, "climbed": true, "jumped": true, "gained": true, "improved": true, "up": true, "higher": true, "more": true, "above": true, "ahead": true, "better": true, "increase": true}
-	claimFall      = map[string]bool{"fell": true, "fallen": true, "falls": true, "falling": true, "decreased": true, "decreases": true, "dropped": true, "drops": true, "declined": true, "declines": true, "slipped": true, "lost": true, "worsened": true, "down": true, "lower": true, "less": true, "below": true, "behind": true, "worse": true, "decrease": true, "short": true}
-	claimNeutral   = map[string]bool{"changed": true, "moved": true, "swung": true, "change": true, "movement": true, "swing": true, "variance": true, "difference": true, "differs": true, "differ": true, "off": true, "gap": true, "exceeds": true, "exceed": true, "over": true, "under": true}
-	claimBefore    = map[string]bool{"from": true, "versus": true, "vs": true, "against": true, "than": true}
-	claimForecast  = regexp.MustCompile(`\b(forecast|forecasts|projected|projection|projects|expected|expect|expects|plan|planned|plans|will|would|could|estimate|estimated|scenario|if|likely|assumes|assumed|assumption)\b`)
-	claimActual    = regexp.MustCompile(`\b(actual|actually|recorded|booked|posted|was|were|ended|closed)\b`)
-	claimBudget    = regexp.MustCompile(`\b(budget|budgets|budgeted|plan|planned|target)\b`)
-	claimYTD       = regexp.MustCompile(`\b(year to date|year-to-date|ytd|so far this year)\b`)
-	claimStaleSaid = regexp.MustCompile(`\b(stale|superseded|out of date|not current|no longer current|earlier|older|last captured|as of|before the latest|needs correction|needs a correction|as published|sign-off lapsed|lapsed|unverified|not verified|could not be verified|may have changed)\b`)
+	claimRiseVerb = map[string]bool{"rose": true, "risen": true, "rises": true, "rising": true, "increased": true, "increases": true, "grew": true, "grown": true, "grows": true, "climbed": true, "jumped": true, "gained": true, "improved": true}
+	claimFallVerb = map[string]bool{"fell": true, "fallen": true, "falls": true, "falling": true, "decreased": true, "decreases": true, "dropped": true, "drops": true, "declined": true, "declines": true, "slipped": true, "lost": true, "worsened": true}
+	claimRise     = map[string]bool{"rose": true, "risen": true, "rises": true, "rising": true, "increased": true, "increases": true, "grew": true, "grown": true, "grows": true, "climbed": true, "jumped": true, "gained": true, "improved": true, "up": true, "higher": true, "more": true, "above": true, "ahead": true, "better": true, "increase": true}
+	claimFall     = map[string]bool{"fell": true, "fallen": true, "falls": true, "falling": true, "decreased": true, "decreases": true, "dropped": true, "drops": true, "declined": true, "declines": true, "slipped": true, "lost": true, "worsened": true, "down": true, "lower": true, "less": true, "below": true, "behind": true, "worse": true, "decrease": true, "short": true}
+	claimNeutral  = map[string]bool{"changed": true, "moved": true, "swung": true, "change": true, "movement": true, "swing": true, "variance": true, "difference": true, "differs": true, "differ": true, "off": true, "gap": true, "exceeds": true, "exceed": true, "over": true, "under": true}
+	claimBefore   = map[string]bool{"from": true, "versus": true, "vs": true, "against": true, "than": true}
+	claimForecast = regexp.MustCompile(`\b(forecast|forecasts|projected|projection|projects|expected|expect|expects|plan|planned|plans|will|would|could|estimate|estimated|scenario|if|likely|assumes|assumed|assumption)\b`)
+	claimActual   = regexp.MustCompile(`\b(actual|actually|recorded|booked|posted|was|were|ended|closed)\b`)
+	claimBudget   = regexp.MustCompile(`\b(budget|budgets|budgeted|plan|planned|target)\b`)
+	claimYTD      = regexp.MustCompile(`\b(year to date|year-to-date|ytd|so far this year)\b`)
+	// Words that disclose a figure is not current: never a bare "as of", which dates without disclosing.
+	claimStaleSaid = regexp.MustCompile(`\b(stale|superseded|out of date|outdated|not current|no longer current|earlier version|older version|before the latest|needs correction|needs a correction|sign-off lapsed|lapsed|unverified|not verified|could not be verified|may have changed|has changed since)\b`)
 	claimAvailable = regexp.MustCompile(`\b(available|in the bank|spendable|on hand at the bank)\b`)
 	claimCausal    = regexp.MustCompile(`\b(because|due to|driven by|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|led by|on the back of)\b`)
 	claimHedge     = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
@@ -380,6 +381,7 @@ var (
 	claimDifferenceSaid = regexp.MustCompile(`\b(difference|differ|differs|gap|less|leave|leaves|leaving|left|net of|minus|exceed|exceeds|short|more than|less than|over|under|after|change|changed|up|down|higher|lower|ahead|behind)\b`)
 	// Words that attribute a total to drivers, which must then add up or name the rest.
 	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|reflecting)\b`)
+	claimCausalEvidence = regexp.MustCompile(`\b(because|due to|caused|causes|driven|drove|drives|resulted|result of|results from|led to|leads to|owing to|thanks to|after|following|boosted|lifted|raised|increased|reduced|lowered|cut|added|brought|grew|rose|fell|dropped)\b`)
 	claimNegation       = regexp.MustCompile(`\b(not|no|never|without|neither|nor|unrelated|isn't|wasn't|didn't|doesn't|don't|won't|cannot|can't|hasn't|haven't)\b|n't\b`)
 	claimIncompleteSaid = regexp.MustCompile(`\b(incomplete|missing|partial|not complete|provisional|not yet captured|not all)\b`)
 	// Month names in any case, except "may", which is a month only as May.
@@ -480,9 +482,21 @@ func (o occurrence) direction() string {
 		return "fall"
 	case claimNeutral[w1] && w1 != "over" && w1 != "under":
 		return "change"
-	case w1 == "by" || w1 == "of":
-		// "rose by", "an increase of", "differs by": the word the preposition hangs on, not one further back
-		// ("128,400 less expenses of 106,620" is an amount of expenses).
+	case w1 == "by":
+		// "rose by", "differs by", "exceed total expense by": the verb "by" hangs on, up to three words back.
+		for _, w := range []string{w2, w3, last(4)} {
+			switch {
+			case claimRise[w]:
+				return "rise"
+			case claimFall[w]:
+				return "fall"
+			case claimNeutral[w]:
+				return "change"
+			}
+		}
+	case w1 == "of":
+		// "an increase of": the word "of" hangs on, not one further back ("128,400 less expenses of 106,620" is an
+		// amount of expenses).
 		w := w2
 		if w == "a" || w == "an" || w == "the" {
 			w = w3
@@ -736,16 +750,11 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 		if len(inClause) == 0 {
 			inClause = inLine
 		}
-		if len(inClause) > 0 {
-			match := false
-			for _, e := range inClause {
-				le, lc := strings.ToLower(e), strings.ToLower(c.entity)
-				if le == lc || strings.Contains(lc, le) || strings.Contains(le, lc) {
-					match = true
-				}
-			}
-			if !match {
-				return "the sentence gives " + o.normalized + " to " + inClause[0] + ", but the cited figure is " + c.entity + "'s"
+		// Every client named beside the figure is the field's: one figure is never given to two clients.
+		for _, e := range inClause {
+			le, lc := strings.ToLower(e), strings.ToLower(c.entity)
+			if le != lc && !strings.Contains(lc, le) && !strings.Contains(le, lc) {
+				return "the sentence gives " + o.normalized + " to " + e + ", but the cited figure is " + c.entity + "'s"
 			}
 		}
 	}
@@ -805,7 +814,8 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 			switch {
 			case s.quote != "" && claimNegation.MatchString(strings.ToLower(s.quote)):
 				// "The campaign did not affect revenue" contradicts the cause rather than supporting it.
-			case s.quote != "" && labelNamed(cause, s.quote):
+			case s.quote != "" && labelNamed(cause, s.quote) && claimCausalEvidence.MatchString(strings.ToLower(s.quote)):
+				// The passage names the cause and says it acted ("visits rose after the campaign started").
 				supported = true
 			case claims[i].cause:
 				got, _ := valueAt(reads[s.step].value, s.path)
@@ -1105,21 +1115,32 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 	}
 	named := metricsIn(line)
 	lower := strings.ToLower(line)
-	// What the result is called, next to it, must be a measure its inputs carry: rent plus marketing is never net income.
-	inputKeys := map[string]bool{}
-	for _, c := range claims {
-		for k := range c.keys {
-			inputKeys[k] = true
+	// What the result is called must be a measure every input shares (for a ratio, the numerator's): rent plus
+	// marketing is never net income, nor net income plus rent. A measure with an input's figure between it and the
+	// result names that input ("less expenses of 106,620.00 leave 21,780.00").
+	shared := map[string]bool{}
+	for k := range claims[0].keys {
+		shared[k] = true
+	}
+	if s.derive != "ratio" {
+		for _, c := range claims[1:] {
+			for k := range shared {
+				if !c.keys[k] {
+					delete(shared, k)
+				}
+			}
 		}
 	}
 	for _, o := range figuresIn(line) {
 		if o.normalized != stated {
 			continue
 		}
-		for k := range metricsIn(o.clause) {
-			if !inputKeys[k] {
-				return "the sentence calls the " + s.derive + " " + stated + " " + strings.ReplaceAll(k, "_", " ") + ", which none of its fields measures"
-			}
+		// A gap ("patient fees exceed total expense by 21,780.00") names what it compares, not what it is.
+		if s.derive == "difference" && o.direction() == "change" {
+			continue
+		}
+		if label := resultLabel(line, o); len(label) > 0 && !overlaps(label, shared) {
+			return "the sentence calls the " + s.derive + " " + stated + " " + keysNamed(label) + ", which its fields do not all measure"
 		}
 	}
 	clientsOf, bases, months := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -1356,4 +1377,33 @@ func movementShown(c claim, got, direction string, cited []moneyEntry) string {
 	}
 	verb := map[string]string{"rise-to": "rose", "fall-to": "fell"}[direction]
 	return "the sentence says " + c.describe() + " " + verb + " to " + normalizeFigure(got) + ", but nothing cited shows it " + verb
+}
+
+// resultLabel is the measure that names a computed figure: the one nearest before it in its clause with no other
+// figure between (else the nearest after, with none between); a measure separated by an input's figure names that input.
+func resultLabel(line string, o occurrence) map[string]bool {
+	start := strings.Index(line, o.clause)
+	if start < 0 {
+		return nil
+	}
+	var pick *metricAt
+	for _, m := range metricsAt(o.clause) {
+		m := m
+		if start+m.end <= o.start {
+			if !agentFigure.MatchString(line[start+m.end : o.start]) {
+				pick = &m
+			}
+		} else if start+m.start >= o.end && pick == nil && !agentFigure.MatchString(line[o.end:start+m.start]) {
+			pick = &m
+			break
+		}
+	}
+	if pick == nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, k := range pick.keys {
+		out[k] = true
+	}
+	return out
 }

@@ -110,7 +110,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	// Book cash is not available bank cash; a stale capture is said to be stale.
 	rejected("Available cash is 64,120.00 as of the last capture.", "available at the bank", e("t3", 0, "/opening/amount", "64120.00"))
 	rejected("Opening book cash is 64,120.00.", "the cited read is stale", e("t3", 0, "/opening/amount", "64120.00"))
-	ok("Opening book cash was 64,120.00 as of the last capture, which is stale.", e("t3", 0, "/opening/amount", "64120.00"))
+	ok("Opening book cash was 64,120.00 at the last capture, which is stale.", e("t3", 0, "/opening/amount", "64120.00"))
 	// A superseded report revision is said to be one.
 	rejected("Net income is 20,100.00.", "the cited read is stale", e("t7", 0, "/pack/profit_and_loss/measures/0/amount", "20100.00"))
 	ok("The superseded report showed net income of 20,100.00.", e("t7", 0, "/pack/profit_and_loss/measures/0/amount", "20100.00"))
@@ -178,7 +178,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 
 	// What a derived figure is called is checked too; a month and its year to date are each qualified on their own;
 	// offsetting drivers explain a smaller net change.
-	rejected("Rent and marketing make net income 9,040.00.", "which none of its fields measures", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
+	rejected("Rent and marketing make net income 9,040.00.", "which its fields do not all measure", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
 	ok("Rent is 8,500.00 this month and 85,000.00 year to date.", e("t4", 0, "/lines/0/month/actual", "8500.00"), e("t4", 0, "/lines/0/ytd/actual", "85000.00"))
 	reads["t12"] = read(`{"rows":[{"account":"Revenue","change":"100.00","drivers":[{"payee":"Acme","change":"500.00"},{"payee":"Zenith","change":"-400.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
 	ok("Revenue rose 100.00, driven by Acme up 500.00 and Zenith down 400.00.",
@@ -273,6 +273,15 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	reads["t25"] = read(`{"closes":[{"id":"10","entity":"Birch Dental","period":"2026-09","currency":"USD","name":"Net income","amount":"19000.00"}]}`, "List client closes", "list_closes", "", "")
 	rejected("Net income rose 2,780.00 from Birch Dental in September to Bluegrass Dental PLLC in October.", "between different lines as a movement",
 		derived(0, "difference", "2780.00", "t2", ni+"/amount", "t25", "/closes/0/amount"))
+
+	// Round nine: one figure for two clients; a result labelled by one input; a bare "as of"; a passage that names a
+	// cause without saying it acted.
+	rejected("Birch Dental and Bluegrass Dental PLLC each had net income of 21,780.00.", "nothing it cites is Birch Dental's", e("t2", 0, ni+"/amount", "21780.00"))
+	rejected("Net income including rent totals 30,280.00.", "do not all measure", derived(0, "sum", "30280.00", "t2", ni+"/amount", "t4", "/lines/0/month/actual"))
+	rejected("Net income as of October is 20,100.00.", "the cited read is stale", e("t7", 0, "/pack/profit_and_loss/measures/0/amount", "20100.00"))
+	reads["t26"] = agentRead{text: "The marketing campaign is scheduled for next year.", doc: true, link: chatCitation{"Evidence #11", "/dashboard/closes/7"}, title: "Read evidence text"}
+	rejected("Revenue rose 4,940.00 because of the marketing campaign.", "cause the reads do not show",
+		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t26", sentence: 0, quote: "The marketing campaign is scheduled"})
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))

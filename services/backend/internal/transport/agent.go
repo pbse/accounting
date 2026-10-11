@@ -639,6 +639,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	sentenceClaims := make([]map[int]claim, len(lines))
 	sentenceEntries := make([][]agentSupportEntry, len(lines))
 	sentenceMoney := make([][]moneyEntry, len(lines))
+	// The clients each sentence's cited fields are of, so a client it names without a cited field is caught.
+	sentenceClients := make([]map[string]bool, len(lines))
+	for i := range lines {
+		sentenceClients[i] = map[string]bool{}
+	}
 	// Per sentence and row: the totals stated, and each driver's movement once (a payee row cited by any field).
 	sentenceTotals := make([]map[string][]*big.Rat, len(lines))
 	sentenceDrivers := make([]map[string]map[string]*big.Rat, len(lines))
@@ -678,6 +683,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 			for _, in := range s.of {
 				driver(s.sentence, in.step, in.path)
+				if e := claimOf(reads[in.step], in.path).entity; e != "" {
+					sentenceClients[s.sentence][strings.ToLower(e)] = true
+				}
 			}
 			covered[s.sentence] = true
 			continue
@@ -709,6 +717,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			// income); a money figure is then held to what the field measures, below, once every entry is in.
 			fieldClaim = claimOf(read, s.path)
 			driver(s.sentence, s.step, s.path)
+			if fieldClaim.entity != "" {
+				sentenceClients[s.sentence][strings.ToLower(fieldClaim.entity)] = true
+			}
 			if !substantiates(lines[s.sentence], got, s.path) && !labelNamed(lines[s.sentence], fieldClaim.label) && !overlaps(metricsIn(lines[s.sentence]), fieldClaim.keys) {
 				return nil, "a cited field does not bear on its sentence"
 			}
@@ -816,6 +827,24 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 	}
 	for i := range lines {
+		// A client the sentence names must be one its cited fields are of: "Birch and Bluegrass each had 21,780.00"
+		// needs Birch's figure too.
+		if len(sentenceClients[i]) > 0 {
+			lower := strings.ToLower(lines[i])
+			for _, e := range entities {
+				le := strings.ToLower(e)
+				if len(e) < 3 || !strings.Contains(lower, le) {
+					continue
+				}
+				covered := false
+				for c := range sentenceClients[i] {
+					covered = covered || c == le || strings.Contains(c, le) || strings.Contains(le, c)
+				}
+				if !covered {
+					return nil, "the sentence names " + e + ", but nothing it cites is " + e + "'s"
+				}
+			}
+		}
 		if why := checkCauses(lines[i], sentenceEntries[i], sentenceClaims[i], reads); why != "" {
 			return nil, why
 		}
