@@ -4302,6 +4302,12 @@ Durable follow-through gaps found by a code read of the handoff's B04/B05/B11 se
 
 Test: `TestApprovedEmailDurableRetryAndScope` refuses a reminder while a held reply exists, seen to fail without the fix; the closest email, inbound-reply and delivery tests passed against a fresh local PostgreSQL.
 
+## 2026-10-11 — Executives see when a published pack needs correction (B07)
+
+Slice 5. The executive overview said published figures "do not change" and returned no state, so an executive could read and acknowledge a version the books no longer matched. The overview now returns each newest version's state from the same helper the report page uses (`publicationState`: current, needs correction, sign-off lapsed, or unverified when the books cannot be read), and the overview and My decisions show it; the copy now says a version is never edited and a correction follows when the books change. Acknowledging still records receipt only. To keep the page within its budget, the overview computes standing for the latest ended month and the current one (as Home rechecks sign-offs); an older version shows its standing on its report page.
+
+Test: `TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews` asserts the fixture version, whose digest is not the live books', is never presented as current. The closest management and executive tests passed on a fresh local PostgreSQL.
+
 ## 2026-10-11 — Coverage exclusions carry across captures and months (B01/B04)
 
 Slice 4 (takeover and coverage). Coverage decisions were bound to one capture, so every recapture and every new month asked again about every account the firm had excluded (accounts with no supported preparation can only be excluded, one decision each). An account with no decision on the current capture now keeps its latest decision from an earlier capture of the month, or else from the client's latest earlier month, when that decision was an exclusion; the reason says "Carried from …" and the person can change it. Only a decision on the same ledger company counts (another company, such as a sandbox, may reuse account IDs). Mappings to jobs are not carried.

@@ -287,6 +287,24 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Your reports are unavailable.")
 			return
 		}
+		// The newest versions of the months Home rechecks (the latest ended month and this one) say whether they still
+		// stand: the books may have changed since, so a correction is due. Rebuilding every month's live pack would not fit
+		// the page's budget, so an older month's version shows its standing when it is opened.
+		now := time.Now()
+		if tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err == nil {
+			for _, p := range published {
+				if p["period"].(string) >= endedMonth(now) {
+					p["state"] = publicationState(r, tx, p["close_id"].(string), p["publication_id"].(string))
+				}
+			}
+			tx.Rollback()
+		} else {
+			for _, p := range published {
+				if p["period"].(string) >= endedMonth(now) {
+					p["state"] = "unverified"
+				}
+			}
+		}
 		jsonReply(w, 200, map[string]any{"executive": true, "closes": closes, "published": published})
 	})
 	// One published version as it was frozen, to read in the page.
@@ -306,19 +324,7 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 		p.State = "unverified"
 		if tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err == nil {
 			defer tx.Rollback()
-			// Without the current pack only the newest version is unverified: an older one is superseded regardless.
-			current, stands := "", false
-			if pack, err := closeManagementPack(r.Context(), tx, r.PathValue("id")); err == nil {
-				current, _ = pack["digest"].(string)
-				stands = pack["overall"] == "signed_off" && pack["stale"] != true
-			}
-			if list, err := publications(r, tx, r.PathValue("id"), current, stands); err == nil {
-				for _, q := range list {
-					if q.ID == p.ID {
-						p.State = q.State
-					}
-				}
-			}
+			p.State = publicationState(r, tx, r.PathValue("id"), p.ID)
 		}
 		jsonReply(w, 200, map[string]any{"publication": p, "pack": p.Pack})
 	})
@@ -467,4 +473,24 @@ func publicationRows(p publication) ([][]string, error) {
 		rows = append(rows, []string{"Cash flow", "Reconciliation", tie})
 	}
 	return rows, nil
+}
+
+// publicationState is a version's standing against the close's live books: current, needs_correction, signoff_lapsed or
+// superseded, or unverified when the live figures cannot be read (only the newest version can be; an older one is
+// superseded regardless).
+func publicationState(r *http.Request, tx *sql.Tx, closeID, publicationID string) string {
+	current, stands := "", false
+	if pack, err := closeManagementPack(r.Context(), tx, closeID); err == nil {
+		current, _ = pack["digest"].(string)
+		stands = pack["overall"] == "signed_off" && pack["stale"] != true
+	}
+	state := "unverified"
+	if list, err := publications(r, tx, closeID, current, stands); err == nil {
+		for _, q := range list {
+			if q.ID == publicationID {
+				state = q.State
+			}
+		}
+	}
+	return state
 }
