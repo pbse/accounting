@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"close.local/backend/internal/auth"
 	"github.com/golang-jwt/jwt/v5"
@@ -72,6 +73,12 @@ func TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews(t *testing.T
 	must(json.Unmarshal(call("user_ceo", ceo, "GET", "/v1/closes/executive", nil, 200), &overview))
 	if !overview.Executive || len(overview.Closes) != 1 || overview.Closes[0]["entity"] != "Alpha" || len(overview.Published) != 1 || overview.Published[0]["net_income"] != "300.00" || overview.Published[0]["book_cash"] != "1500.00" || overview.Published[0]["acknowledged"] != false {
 		t.Fatalf("an executive sees their assigned client's newest published pack: %+v", overview)
+	}
+	// The fixture's published digest is not the live books', so the version is never presented as current (its standing
+	// is computed while its month is the latest ended one or later, as Home rechecks sign-offs).
+	recent := "2026-09" >= endedMonth(time.Now())
+	if state, ok := overview.Published[0]["state"]; recent && state != "needs_correction" && state != "unverified" || !recent && ok {
+		t.Fatalf("a recent version the books no longer match is not presented as current; an older one is checked when opened: %v", state)
 	}
 	base := "/v1/closes/" + alpha
 	call("user_ceo", ceo, "GET", base+"/management-pack/publications", nil, 200)
