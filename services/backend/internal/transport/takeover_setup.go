@@ -97,26 +97,9 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 	case len(check.Companies) == 0 && disconnected != "":
 		problems = append(problems, "The client's "+disconnected+" connection was disconnected: reconnect it on the client's page, as the takeover confirms where its books are read from.")
 	case len(check.Companies) == 0 && profile.State == "confirmed":
-		// Books that come as files are read from the month's file: the takeover confirms the file and its confirmed
-		// reading, and waits until one reads cleanly (balanced, with no problem) and has not been replaced.
+		// Books that come as files become a month's books with months on files: until then the takeover waits.
 		content["books"] = "files"
-		var file, layout, currency sql.NullString
-		err = tx.QueryRowContext(ctx, `SELECT i.id::text,l.id::text,upper(COALESCE(l.layout->>'currency','')) FROM books_imports i JOIN client_closes c ON c.id::text=$1
- JOIN LATERAL (SELECT b.id,b.reading,b.layout FROM books_layouts b WHERE b.import_id=i.id ORDER BY b.id DESC LIMIT 1) l ON true
- WHERE i.organization_id=c.organization_id AND client_identity(i.organization_id,i.client_entity)=client_identity(c.organization_id,c.entity) AND i.period=c.period
-  AND NOT EXISTS(SELECT 1 FROM books_imports n WHERE n.replaces=i.id) AND COALESCE((l.reading->>'balanced')::boolean,false) AND COALESCE(jsonb_array_length(l.reading->'problems'),0)=0
- ORDER BY i.id DESC LIMIT 1`, closeID).Scan(&file, &layout, &currency)
-		if err != nil && err != sql.ErrNoRows {
-			return nil, "", nil, err
-		}
-		switch {
-		case file.Valid && currency.String != profile.Currency:
-			problems = append(problems, "This month's file is read in "+currency.String+", but the client's books are kept in "+profile.Currency+": correct its reading or the client's profile.")
-		case file.Valid:
-			content["file"] = map[string]string{"import": file.String, "layout": layout.String}
-		default:
-			problems = append(problems, "Its books come as files: send this month's Trial Balance on the client's page and confirm how it is read; the takeover waits until it reads cleanly.")
-		}
+		problems = append(problems, "Its books come as files. A month's books are not read from a file yet, so its takeover waits until they are.")
 	case len(check.Companies) == 0:
 		problems = append(problems, "Connect the client's QuickBooks or Xero company, or, if its books come as files, confirm its currency and fiscal year on the client's page: the takeover confirms where its books are read from.")
 	case len(check.Companies) > 1:

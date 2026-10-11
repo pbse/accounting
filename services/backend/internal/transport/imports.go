@@ -428,8 +428,16 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		var id string
 		err = db.QueryRowContext(r.Context(), `INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,replaces,replaces_reason,actor)
- SELECT $1,$2,$3,$4,$5,$6,$7,(SELECT p.id FROM books_imports p WHERE p.id::text=$8 AND p.organization_id=$1 AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)),$10,$9 RETURNING id::text`,
+ SELECT $1,$2,$3,$4,$5,$6,$7,(SELECT p.id FROM books_imports p WHERE p.id::text=$8 AND p.organization_id=$1 AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)),$10,$9
+ ON CONFLICT DO NOTHING RETURNING id::text`,
 			organization(r), name, period, filename, hex.EncodeToString(sum[:]), body, format, replaces, reviewerName(r), why).Scan(&id)
+		// A retry that overlapped this one kept the file first: it is the import.
+		if err == sql.ErrNoRows {
+			if err = db.QueryRowContext(r.Context(), `SELECT id::text FROM books_imports WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND period=$3 AND digest=$4`, organization(r), name, period, hex.EncodeToString(sum[:])).Scan(&id); err == nil {
+				jsonReply(w, 200, map[string]any{"id": id, "repeat": true})
+				return
+			}
+		}
 		if err != nil {
 			problem(w, 503, "The file could not be kept.")
 			return

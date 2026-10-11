@@ -25,6 +25,8 @@ CREATE TABLE books_imports (
  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX books_imports_client ON books_imports(organization_id,lower(client_entity),period,id DESC);
+-- The same file sent again for the same month is the one kept: a retry, however it overlaps the first, adds nothing.
+CREATE UNIQUE INDEX books_imports_once ON books_imports(organization_id,lower(client_entity),period,digest);
 
 -- books_layouts: a client's confirmed layouts, as versions (bookfiles.Layout as JSON), the latest per client current and
 -- proposed again for its next file. An import read with a confirmed layout records it.

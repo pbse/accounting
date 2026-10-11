@@ -261,39 +261,4 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	upload("user_b", preparer, "Acme TB September corrected.csv", "2026-09", september+"Suspense,0.00,\n", 201)
 	replaces, why = "", ""
 
-	// A client whose books come as files is taken over once its month's file reads cleanly.
-	var opening string
-	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period,takeover) VALUES($1,'Acme Co','2026-04',true) RETURNING id::text`, org).Scan(&opening))
-	for _, q := range []string{`INSERT INTO client_profiles(organization_id,client_entity,effective_from,currency,fiscal_year_start,reason,actor) VALUES($1,'Acme Co','2026-01','USD',1,'Dollars','fixture')`,
-		`INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor,method) VALUES($1,'Acme Co','basis','Synthetic',true,'Synthetic basis','fixture','accrual')`} {
-		_, err = db.Exec(q, org)
-		must(err)
-	}
-	t.Cleanup(func() {
-		db.Exec(`DELETE FROM client_profiles WHERE organization_id=$1`, org)
-		db.Exec(`DELETE FROM procedure_versions WHERE organization_id=$1`, org)
-	})
-	takeover := "/v1/closes/" + opening + "/takeover-setup"
-	if p := call("user_a", partner, "GET", takeover, nil, 200)["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "come as files") {
-		t.Fatalf("a file-only takeover waits for its file: %v", p)
-	}
-	april := upload("user_b", preparer, "Acme TB April.csv", "2026-04", september, 201)["id"].(string)
-	aprilLayout := map[string]any{}
-	for k, v := range layout {
-		aprilLayout[k] = v
-	}
-	aprilLayout["table"] = call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+april, nil, 200)["tables"].([]any)[0].(map[string]any)["name"]
-	aprilLayout["as_of"] = "2026-04-30"
-	// Read in euros, the file does not match the client's dollars: the takeover says so.
-	aprilLayout["currency"] = "EUR"
-	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+april, map[string]any{"action": "confirm", "layout": aprilLayout, "reason": "Read in euros"}, 200)
-	if p := call("user_a", partner, "GET", takeover, nil, 200)["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "read in EUR") {
-		t.Fatalf("a file in another currency: %v", p)
-	}
-	aprilLayout["currency"] = "USD"
-	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+april, map[string]any{"action": "confirm", "layout": aprilLayout, "reason": "April's export"}, 200)
-	setup := call("user_a", partner, "GET", takeover, nil, 200)
-	if len(setup["problems"].([]any)) != 0 || setup["content"].(map[string]any)["file"].(map[string]any)["import"] != april {
-		t.Fatalf("a file-only takeover with its file read: %v", setup)
-	}
 }
