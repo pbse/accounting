@@ -148,7 +148,15 @@ func readImportAs(ctx context.Context, q rowReader, org, name, id string, asked 
 	// The client's earlier choice settles only what the reader is unsure of: a file it reads with certainty keeps the
 	// reader's reading, its dialect perhaps changed.
 	if err == nil && saved != nil && saved.CSV.Encoding != "" && summary.Format == "csv" && len(file.Unsure) > 0 {
-		if s, f, e := readImport(ctx, q, org, name, id, saved.CSV); e == nil {
+		// Only what the reader is unsure of takes the earlier choice; what it read with certainty stays its own.
+		as := csvChoice{Encoding: file.Encoding, Delimiter: file.Delimiter}
+		if slices.Contains(file.Unsure, "encoding") {
+			as.Encoding = saved.CSV.Encoding
+		}
+		if slices.Contains(file.Unsure, "delimiter") {
+			as.Delimiter = saved.CSV.Delimiter
+		}
+		if s, f, e := readImport(ctx, q, org, name, id, as); e == nil {
 			return s, f, nil
 		}
 	}
@@ -405,12 +413,12 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		if replaces != "" {
 			var found bool
-			if err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM books_imports p WHERE p.id::text=$1 AND p.organization_id=$2 AND client_identity(p.organization_id,p.client_entity)=client_identity($2,$3))`, replaces, organization(r), name).Scan(&found); err != nil {
+			if err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM books_imports p WHERE p.id::text=$1 AND p.organization_id=$2 AND client_identity(p.organization_id,p.client_entity)=client_identity($2,$3) AND p.period=$4)`, replaces, organization(r), name, period).Scan(&found); err != nil {
 				problem(w, 503, "The file could not be kept.")
 				return
 			}
 			if !found {
-				problem(w, 422, "The file it replaces is not one of "+name+"'s.")
+				problem(w, 422, "The file it replaces is not one of "+name+"'s for "+period+".")
 				return
 			}
 		}
