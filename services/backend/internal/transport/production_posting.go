@@ -110,10 +110,15 @@ func refuse(w http.ResponseWriter, err error) {
 // The client's currency comes from the connection. The grant and connection are the client's under any of its names
 // (a month opened under an alias posts through the client's), the month's own name first; the company's name must
 // match the name its connection is held under.
-func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedGrant string) (quickbooks.Sandbox, productionGrant, string, error) {
+func productionClient(ctx context.Context, db *sql.DB, org, entity, closeID, kind, savedGrant string) (quickbooks.Sandbox, productionGrant, string, error) {
 	var g productionGrant
 	var err error
-	if savedGrant != "" {
+	if savedGrant == "" && kind != "" {
+		// A new decision posts only through a grant on the connection this month's books are read from, so the proposal's
+		// source and its ledger effect are the same company.
+		g, err = scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND client_identity(g.organization_id,g.client_entity)=client_identity($1,$2) AND g.revoked_at IS NULL
+ AND g.connection_id=`+quickbooks.ReadingConnection("$3::bigint")+` ORDER BY g.id DESC LIMIT 1`, org, entity, closeID))
+	} else if savedGrant != "" {
 		g, err = scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.id=$1 AND g.organization_id=$2 AND client_identity(g.organization_id,g.client_entity)=client_identity($2,$3)`, savedGrant, org, entity))
 	} else {
 		g, err = readProductionGrant(ctx, db, org, entity)
@@ -642,7 +647,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 				savedGrant = record.GrantID
 			}
 		}
-		client, g, _, err := productionClient(r.Context(), db, a.Organization, entity, decision, savedGrant)
+		client, g, _, err := productionClient(r.Context(), db, a.Organization, entity, r.PathValue("id"), decision, savedGrant)
 		if err != nil {
 			refuse(w, err)
 			return

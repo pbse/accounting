@@ -126,7 +126,12 @@ func planXeroPosting(ctx context.Context, db *sql.DB, org, entity, closeID, pape
 	if err != nil {
 		return plan, err
 	}
-	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity))
+	// A grant on the organisation this month's books were captured from (before any capture, the month's working
+	// connection), so the proposal's source and its ledger effect are the same organisation.
+	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL
+ AND connection_id=COALESCE((SELECT s.connection_id FROM xero_snapshots s WHERE s.close_id::text=$3 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),
+  (SELECT x.id FROM xero_connections x JOIN client_closes c ON c.id::text=$3 WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active'
+   ORDER BY lower(x.client_entity)=lower(c.entity) DESC,x.id DESC LIMIT 1)) ORDER BY id DESC LIMIT 1`, org, entity, closeID))
 	if err != nil || time.Now().After(g.Expires) {
 		return plan, refusal{409, "An unexpired client-specific Xero posting grant is required."}
 	}

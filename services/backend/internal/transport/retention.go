@@ -72,6 +72,19 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
 	if opening {
 		out.Blockers = append(out.Blockers, "Later months of this client wait for its opening baseline or inherited cleanup here; review and resolve it before deleting this close.")
 	}
+	// A connection made on the client's page belongs to no month. While the client keeps a roster entry or another month
+	// its page stays reachable; deleting the last of them would leave such a connection active with no way to it.
+	var stranded bool
+	if err = tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM client_closes d WHERE d.organization_id=c.organization_id AND d.id<>c.id AND client_identity(d.organization_id,d.entity)=client_identity(c.organization_id,c.entity))
+ AND NOT EXISTS(SELECT 1 FROM current_client_roster r WHERE r.organization_id=c.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(c.organization_id,c.entity))
+ AND (EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND x.close_id IS NULL AND x.state<>'disconnected' AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity))
+  OR EXISTS(SELECT 1 FROM xero_connections x WHERE x.organization_id=c.organization_id AND x.close_id IS NULL AND x.state<>'disconnected' AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity)))
+ FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&stranded); err != nil {
+		return out, err
+	}
+	if stranded {
+		out.Blockers = append(out.Blockers, "This is the client's last month and it is not on the roster: disconnect its ledgers on the client's page before deleting it.")
+	}
 	if out.RetainUntil == "" {
 		out.Blockers = append(out.Blockers, "Set an approved retention date for this close.")
 	} else if !due {

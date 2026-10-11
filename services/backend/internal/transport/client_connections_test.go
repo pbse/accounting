@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 
 	"close.local/backend/internal/auth"
@@ -115,5 +117,28 @@ func TestTheClientPageManagesConnectionsHeldUnderAnAlias(t *testing.T) {
 	t.Cleanup(func() { db.Exec(`DELETE FROM production_posting_grants WHERE organization_id=$1`, org) })
 	if g, e := readProductionGrant(t.Context(), db, org, "Acme Services LLC"); e != nil || g.ConnectionID != production {
 		t.Fatalf("the alias month's grant: %+v %v", g, e)
+	}
+	// A new posting decision needs the grant on the connection the month's books are read from: here it is, so the
+	// decision goes on to the connection's sign-in; moved to another connection, it is refused.
+	if _, _, _, e := productionClient(t.Context(), db, org, "Acme Services LLC", september, "prepaid", ""); e == nil || strings.Contains(e.Error(), "grant") {
+		t.Fatalf("the books connection's grant is used: %v", e)
+	}
+	_, err = db.Exec(`UPDATE production_posting_grants SET connection_id=$2 WHERE organization_id=$1`, org, fresh)
+	must(err)
+	if _, _, _, e := productionClient(t.Context(), db, org, "Acme Services LLC", september, "prepaid", ""); e == nil || !strings.Contains(e.Error(), "grant") {
+		t.Fatalf("a grant on another connection is refused: %v", e)
+	}
+	// A client's last month, with no roster entry, keeps its deletion until the client-level connection is disconnected.
+	var lone string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Lone Ltd','2026-09') RETURNING id::text`, org).Scan(&lone))
+	_, err = db.Exec(`INSERT INTO xero_connections(organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at) VALUES($1,'Lone Ltd','fixture','active',$2,now())`, org, rand.Text())
+	must(err)
+	tx, err := db.BeginTx(t.Context(), nil)
+	must(err)
+	defer tx.Rollback()
+	status, err := readRetention(t.Context(), tx, lone, org)
+	must(err)
+	if !slices.ContainsFunc(status.Blockers, func(b string) bool { return strings.Contains(b, "disconnect its ledgers on the client's page") }) {
+		t.Fatalf("the last month keeps its deletion: %v", status.Blockers)
 	}
 }
