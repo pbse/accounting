@@ -73,12 +73,16 @@ func syncCredentials(ctx context.Context, db *sql.DB, job syncClaim) (string, st
 	var organization, realm, environment, state string
 	var encrypted []byte
 	var expires sql.NullTime
-	var reading bool
-	err := db.QueryRowContext(ctx, `SELECT x.organization_id,x.realm,x.environment,x.state,x.credential,x.access_expires_at,x.id=`+ReadingConnection("c.id")+`
+	var reading, switched bool
+	err := db.QueryRowContext(ctx, `SELECT x.organization_id,x.realm,x.environment,x.state,x.credential,x.access_expires_at,x.id=`+ReadingConnection("c.id")+`,`+ledgers.SwitchedSQL("x.organization_id", "quickbooks")+`
  FROM quickbooks_connections x JOIN client_closes c ON c.id=$1 AND c.organization_id=x.organization_id AND lower(c.entity)=lower(x.client_entity) JOIN organizations o ON o.id=x.organization_id AND o.enabled
- WHERE x.id=$2 AND c.period=$3`, job.closeID, job.connectionID, job.period).Scan(&organization, &realm, &environment, &state, &encrypted, &expires, &reading)
+ WHERE x.id=$2 AND c.period=$3`, job.closeID, job.connectionID, job.period).Scan(&organization, &realm, &environment, &state, &encrypted, &expires, &reading, &switched)
 	if err != nil || state != "active" || len(encrypted) == 0 {
 		return "", "", "", errors.New("Connected QuickBooks company or firm is no longer active")
+	}
+	// A connector switched off reads nothing, work queued before the switch included.
+	if !switched {
+		return "", "", "", errors.New("QuickBooks is switched off for this firm")
 	}
 	if !reading {
 		return "", "", "", errors.New("This client's books are now read from its production QuickBooks connection")

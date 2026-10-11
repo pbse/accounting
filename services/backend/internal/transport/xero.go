@@ -355,8 +355,13 @@ func xeroAccess(ctx context.Context, db *sql.DB, org, id string) (string, string
 	var state, tenant string
 	var encrypted []byte
 	var expires sql.NullTime
-	if err := db.QueryRowContext(ctx, `SELECT state,tenant_id,credential,access_expires_at FROM xero_connections WHERE id::text=$1 AND organization_id=$2`, id, org).Scan(&state, &tenant, &encrypted, &expires); err != nil {
+	var switched bool
+	if err := db.QueryRowContext(ctx, `SELECT state,tenant_id,credential,access_expires_at,`+ledgers.SwitchedSQL("organization_id", "xero")+` FROM xero_connections WHERE id::text=$1 AND organization_id=$2`, id, org).Scan(&state, &tenant, &encrypted, &expires, &switched); err != nil {
 		return "", "", refusal{404, "Xero connection not found for this client."}
+	}
+	// A connector switched off reads and writes nothing, work queued before the switch included.
+	if !switched {
+		return "", "", refusal{409, "Xero is switched off for your firm."}
 	}
 	if state != "active" {
 		return "", "", refusal{409, "Confirm the client's Xero organisation first."}
