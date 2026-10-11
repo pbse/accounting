@@ -54,4 +54,7 @@ CREATE POLICY tenant_add ON books_imports FOR INSERT WITH CHECK (current_setting
 ALTER TABLE books_layouts ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON books_layouts FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON books_layouts FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
+-- A file and its readings are removed only with the close of their month, when it is deleted under its retention.
+CREATE POLICY tenant_remove ON books_imports FOR DELETE USING (current_setting('app.organization',true) IN ('*',organization_id));
+CREATE POLICY tenant_remove ON books_layouts FOR DELETE USING (current_setting('app.organization',true) IN ('*',organization_id));
 COMMIT;

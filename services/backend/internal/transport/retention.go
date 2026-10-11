@@ -261,6 +261,9 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM daily_reviews WHERE close_id=$1`,
 			`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`,
 			`DELETE FROM quickbooks_snapshots WHERE close_id=$1`,
+			// The client's books sent as files for the close's month go with it: their readings, then the files.
+			`DELETE FROM books_layouts WHERE import_id IN (SELECT i.id FROM books_imports i JOIN client_closes c ON c.id=$1 WHERE i.organization_id=c.organization_id AND client_identity(i.organization_id,i.client_entity)=client_identity(c.organization_id,c.entity) AND i.period=c.period)`,
+			`DELETE FROM books_imports WHERE id IN (SELECT i.id FROM books_imports i JOIN client_closes c ON c.id=$1 WHERE i.organization_id=c.organization_id AND client_identity(i.organization_id,i.client_entity)=client_identity(c.organization_id,c.entity) AND i.period=c.period)`,
 			`DELETE FROM forwarded_files WHERE close_id=$1`,
 			`DELETE FROM forwarding_links WHERE close_id=$1`,
 			`DELETE FROM production_posting_grants WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
