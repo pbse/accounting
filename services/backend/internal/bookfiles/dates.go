@@ -29,8 +29,9 @@ var (
 // is read only when it reads one way alone (31/01/2026 is the 31st of January); one that could be read either way
 // (03/04/2026) is errEitherWays. A time after the date is left aside.
 func readDate(c Cell, order string) (string, error) {
-	if c.Kind == Date {
-		return c.Value, nil
+	// A workbook's date is stored as YYYY-MM-DD, with any time after it.
+	if c.Kind == Date && len(c.Value) >= 10 {
+		return c.Value[:10], nil
 	}
 	text := strings.TrimSpace(c.Value)
 	if fields := strings.Fields(text); len(fields) > 1 && numericDate.MatchString(fields[0]) {
@@ -43,6 +44,8 @@ func readDate(c Cell, order string) (string, error) {
 		c, _ := strconv.Atoi(m[3])
 		switch {
 		case len(m[1]) == 4:
+			year, month, day = a, b, c
+		case order == YMD && len(m[3]) <= 2:
 			year, month, day = a, b, c
 		case len(m[3]) < 2 || len(m[1]) > 2 || a > 12 && b > 12:
 			return "", errNotADate

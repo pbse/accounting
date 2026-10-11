@@ -33,7 +33,21 @@ type Layout = {
 type Cell = { column: number; ref: string; kind: string; value: string; formula?: string };
 type Row = { number: number; hidden?: boolean; cells: Cell[] };
 type Table = { name: string; hidden?: boolean; rows: Row[]; more: number };
-type Line = { row: number; ref: string; kind: "posting" | "total" | "heading"; number?: string; name: string; balance: string; cents: boolean; dimension?: string };
+type Line = {
+  row: number;
+  ref: string;
+  kind: "posting" | "total" | "heading";
+  number?: string;
+  name: string;
+  balance: string;
+  cents: boolean;
+  dimension?: string;
+  // A ledger line's date, transaction number, description and payee.
+  date?: string;
+  reference?: string;
+  memo?: string;
+  party?: string;
+};
 type Reading = { lines: Line[]; debits: string; credits: string; balanced: boolean; problems: string[]; notes: string[] };
 // Status is a confirmed layout's outcome, as the list shows it; Confirmed adds the layout and what it read.
 type Status = { id: string; reason: string; actor: string; at: string; balanced: boolean; problems: number };
@@ -712,6 +726,12 @@ function ReadingLines({ lines, total, page }: { lines: Line[]; total?: number; p
                   <td>
                     {[l.number, l.name].filter(Boolean).join(" ")}
                     {l.dimension ? ` (${l.dimension})` : ""}
+                    {(l.date || l.reference || l.party || l.memo) && (
+                      <>
+                        <br />
+                        {[l.date, l.reference && `#${l.reference}`, l.party, l.memo].filter(Boolean).join(" · ")}
+                      </>
+                    )}
                   </td>
                   <td>{l.kind === "heading" ? "" : l.balance}</td>
                 </tr>

@@ -935,4 +935,14 @@ func TestALedgerIsReadLineByLine(t *testing.T) {
 	if reading = layout.Read(early.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "outside the month of 2027-01-31") || reading.Lines[0].Date != "2027-01-05" {
 		t.Fatalf("a line dated in February: %v", reading.Problems)
 	}
+	// A workbook's date with its time is that day; a two-digit year written first reads when the order says so.
+	for _, c := range []struct {
+		cell  Cell
+		order string
+		want  string
+	}{{Cell{Kind: Date, Value: "2027-01-31T12:00:00"}, "", "2027-01-31"}, {Cell{Value: "27/01/31"}, YMD, "2027-01-31"}, {Cell{Value: "Jan 31, 2027"}, "", "2027-01-31"}} {
+		if got, err := readDate(c.cell, c.order); err != nil || got != c.want {
+			t.Fatalf("%v read as %q (%v), not %s", c.cell, got, err, c.want)
+		}
+	}
 }
