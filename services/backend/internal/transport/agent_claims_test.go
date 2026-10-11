@@ -349,6 +349,21 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		t.Fatalf("a two-letter client is still a client: %q", why)
 	}
 
+	// Round fifteen: a movement's evidence is the same client's; forecast wording scoped to its figure; a decline as
+	// its magnitude; directions per metric; a named variance.
+	reads["t36"] = read(`{"closes":[{"id":"12","entity":"Birch Dental","period":"2026-10","currency":"USD","name":"Net income","change":"500.00"}]}`, "List client closes", "list_closes", "", "")
+	rejected("Bluegrass Dental PLLC net income rose to 21,780.00.", "nothing cited shows it rose", e("t2", 0, ni+"/amount", "21780.00"), e("t36", 0, "/closes/0/change", "500.00"))
+	reads["t37"] = read(`{"state":"ready","currency":"USD","opening":{"amount":"64120.00","stale":false},"open_items":{"complete":true},"weeks":[{"start":"2026-12-20","closing":"23400.00","receipts":"14200.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Cash closed at 23,400.00, while receipts are forecast to rise.", "as an actual", e("t37", 0, "/weeks/0/closing", "23400.00"))
+	reads["t38"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-09","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"23780.00"}]}}`, "September pack", "management_pack", "Bluegrass Dental PLLC", "2026-09")
+	ok("Net income fell 2,000.00 from September to October.", derived(0, "difference", "-2000.00", "t2", ni+"/amount", "t38", "/profit_and_loss/measures/0/amount"))
+	ok("Net income fell 2,000.00 from September to October.", derived(0, "difference", "2000.00", "t2", ni+"/amount", "t38", "/profit_and_loss/measures/0/amount"))
+	rejected("Net income rose 2,000.00 from September to October.", "computed difference is -2000.00", derived(0, "difference", "2000.00", "t2", ni+"/amount", "t38", "/profit_and_loss/measures/0/amount"))
+	reads["t39"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"sections":[{"name":"Expense","total":{"name":"Total expense","change":"-300.00"}}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	ok("Revenue rose while expenses fell.", e("t6", 0, "/rows/0/change", "4940.00"), e("t39", 0, "/profit_and_loss/sections/0/total/change", "-300.00"))
+	rejected("Revenue fell while expenses rose.", "moved the other way", e("t6", 0, "/rows/0/change", "4940.00"), e("t39", 0, "/profit_and_loss/sections/0/total/change", "-300.00"))
+	ok("Rent's variance against budget is 500.00.", e("t4", 0, "/lines/0/month/variance", "500.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

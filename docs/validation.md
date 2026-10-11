@@ -4121,7 +4121,12 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - client names are found by plain search with whole-word edges: twenty figures checked against 5,000 firm clients take well under a second (the earlier per-client patterns took about 26 seconds in the reviewer's probe);
   - a changes read's `last_month` is the prior month;
   - attribution and cause are separate: "driven by", "from" and "including" attribute a change to drivers, which must add up or name the rest, while "because of", "due to" and "caused by" assert a cause, which needs a causal source or a hedge; a payee grouping is a driver, never a cause;
-  - a two-letter client ("GE") is matched in its own case as a whole word.
+  - a two-letter client ("GE") is matched in its own case as a whole word;
+  - "rose to" evidence must be the same client's line in the level's month (or the month before, for a prior amount);
+  - forecast and scenario wording qualifies only the figure's own clause or an introduction before it;
+  - a derived decline may be stated as its magnitude with "fell", held to the computed sign;
+  - figure-less directions are read in the clause that names each field ("revenue rose while expenses fell");
+  - a change named as a variance or difference needs no "up", "down" or "by", and a variance may be said to be against the budget.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.

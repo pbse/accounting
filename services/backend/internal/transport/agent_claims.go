@@ -418,6 +418,9 @@ var (
 	// Words that attribute a total to drivers, which must then add up or name the rest.
 	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|driven by|reflecting)\b`)
 	claimCausalEvidence = regexp.MustCompile(`\b(because|due to|caused|causes|driven|drove|drives|resulted|result of|results from|led to|leads to|owing to|thanks to|after|following|boosted|lifted|raised|increased|reduced|lowered|cut|added|brought|grew|rose|fell|dropped)\b`)
+	// Words that name a change as such, beside its figure ("Rent's variance against budget is 500.00").
+	claimVarianceNamed  = regexp.MustCompile(`\b(variance|difference|change|movement|swing|gap)\b`)
+	claimScenario       = regexp.MustCompile(`\b(scenario|what-if|if)\b`)
 	claimFromTo         = regexp.MustCompile(`(?i)\bfrom\s+(\w+(?:\s+\d{4})?)\s+to\s+(\w+(?:\s+\d{4})?)`)
 	claimNegation       = regexp.MustCompile(`\b(not|no|never|without|neither|nor|unrelated|isn't|wasn't|didn't|doesn't|don't|won't|cannot|can't|hasn't|haven't)\b|n't\b`)
 	claimIncompleteSaid = regexp.MustCompile(`\b(incomplete|missing|partial|not complete|provisional|not yet captured|not all)\b`)
@@ -699,7 +702,8 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 	field, _ := new(big.Rat).SetString(strings.TrimSuffix(normalizeFigure(got), "%"))
 	switch c.kind {
 	case "change":
-		if direction == "" || direction == "before" || direction == "rise-to" || direction == "fall-to" {
+		named := direction == "" && claimVarianceNamed.MatchString(lowerClause)
+		if !named && (direction == "" || direction == "before" || direction == "rise-to" || direction == "fall-to") {
 			return "the sentence states " + o.normalized + " as an amount, but the cited field is a change (" + c.describe() + ")"
 		}
 		if field != nil {
@@ -736,14 +740,16 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 	if c.kind == "budget" && !claimBudget.MatchString(lowerClause) {
 		return "the sentence states the budget " + o.normalized + " without saying it is the budget"
 	}
-	if c.kind != "budget" && len(o.before) > 0 && claimBudget.MatchString(strings.Join(o.before, " ")) {
+	// An actual amount is not called a budget; a variance is rightly said to be against the budget.
+	if (c.kind == "level" || c.kind == "prior") && len(o.before) > 0 && claimBudget.MatchString(strings.Join(o.before, " ")) {
 		return "the sentence calls " + o.normalized + " a budget, but the cited field is " + c.describe()
 	}
-	// A forecast is said to be one; an actual is never said to be forecast.
-	if c.forecast && !claimForecast.MatchString(lowerLine) {
+	// A forecast is said to be one, in the figure's own clause or an introduction before it ("cash closed at 23,400.00,
+	// while receipts are forecast to rise" says nothing of the cash); an actual is never said to be forecast.
+	if c.forecast && !claimForecast.MatchString(lowerClause) && !introduced(line, o, claimForecast) {
 		return "the sentence states the forecast " + o.normalized + " as an actual (" + c.describe() + ")"
 	}
-	if c.scenario && !strings.Contains(lowerLine, "scenario") && !strings.Contains(lowerLine, "if ") && !strings.Contains(lowerLine, "what-if") {
+	if c.scenario && !claimScenario.MatchString(lowerClause) && !introduced(line, o, claimScenario) {
 		return "the sentence states the scenario's " + o.normalized + " without saying it is a scenario"
 	}
 	if !c.forecast && claimForecast.MatchString(lowerClause) && !claimActual.MatchString(lowerClause) && (strings.Contains(lowerClause, "forecast") || strings.Contains(lowerClause, "projected") || strings.Contains(lowerClause, "will be") || strings.Contains(lowerClause, "expected")) {
@@ -953,8 +959,22 @@ func rowGroup(step, path string) string {
 // change, which a direction may then describe.
 func figurelessClaim(line string, c claim, got string, changeCited bool) string {
 	lower := strings.ToLower(line)
+	// The directions said of this field: those in the clauses that name it ("revenue rose while expenses fell"),
+	// else the sentence's.
+	scope := ""
+	start := 0
+	for _, b := range append(claimClause.FindAllStringIndex(line, -1), []int{len(line), len(line)}) {
+		clause := line[start:b[0]]
+		if labelNamed(clause, c.label) || overlaps(metricsIn(clause), c.keys) {
+			scope += " " + clause
+		}
+		start = b[1]
+	}
+	if scope == "" {
+		scope = line
+	}
 	rise, fall := false, false
-	for _, w := range wordsOf(line) {
+	for _, w := range wordsOf(scope) {
 		rise = rise || claimRiseVerb[w]
 		fall = fall || claimFallVerb[w]
 	}
@@ -1145,15 +1165,26 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 	if !ok {
 		return "a derived figure cannot be computed from its fields"
 	}
-	if !derivedMatches(s.derive, s.value, computed) {
+	// A difference may be stated as its magnitude ("fell 2,000.00" for -2,000.00); its direction is then checked
+	// against the sign below.
+	magnitude := new(big.Rat).Abs(computed)
+	if !derivedMatches(s.derive, s.value, computed) && !(s.derive == "difference" && derivedMatches(s.derive, s.value, magnitude)) {
 		return "the " + s.derive + " of the cited fields is " + computed.FloatString(2) + ", not " + s.value
 	}
 	stated := normalizeFigure(s.value)
-	found := false
+	if s.derive == "difference" && computed.Sign() < 0 && !strings.HasPrefix(stated, "-") {
+		stated = "-" + stated
+	}
+	found, matched := false, []string{}
 	for _, o := range figuresIn(line) {
 		// As written in the sentence, at its written precision.
-		if o.normalized == stated && derivedMatches(s.derive, line[o.start:o.end], computed) {
+		raw := line[o.start:o.end]
+		exact := o.normalized == stated && derivedMatches(s.derive, raw, computed)
+		// A magnitude needs a stated direction, which derivedResult holds to the sign.
+		asMagnitude := s.derive == "difference" && computed.Sign() < 0 && derivedMatches(s.derive, raw, magnitude) && o.direction() != ""
+		if exact || asMagnitude {
 			found = true
+			matched = append(matched, o.normalized)
 			if why := derivedResult(s.derive, o, claims, computed); why != "" {
 				return why
 			}
@@ -1312,7 +1343,9 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 			}
 		}
 	}
-	bound[stated] = true
+	for _, n := range matched {
+		bound[n] = true
+	}
 	return ""
 }
 
@@ -1419,8 +1452,19 @@ func movementShown(c claim, got, direction string, cited []moneyEntry) string {
 		return ""
 	}
 	for _, m := range cited {
-		if !strings.EqualFold(m.claim.label, c.label) {
+		if !strings.EqualFold(m.claim.label, c.label) || m.claim.entity != "" && c.entity != "" && !isSameClient(m.claim.entity, c.entity) {
 			continue
+		}
+		// A change is of the level's month; a prior amount is of the month before it.
+		if c.period != "" && m.claim.period != "" {
+			level, _ := time.Parse("2006-01", c.period)
+			want := c.period
+			if m.claim.kind == "prior" {
+				want = level.AddDate(0, -1, 0).Format("2006-01")
+			}
+			if m.claim.period != want {
+				continue
+			}
 		}
 		v, ok := new(big.Rat).SetString(strings.TrimSuffix(m.n, "%"))
 		if !ok {
