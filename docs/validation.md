@@ -4262,3 +4262,18 @@ Not verified:
 - the agent proposing a bill decision, payment date or collection message as a card in chat; the cash plan read exposes the questions and readiness, but chat proposals belong with one decision across chat and close (slice 3);
 - live QuickBooks books: every case here is a fixture capture;
 - a scheduled refresh of an affected forecast on a later capture beyond recomputation on read (the plan is computed when read, so a changed source changes it and its review shows inputs changed, while the reviewed version is kept).
+
+## 2026-10-11 — One decision and truthful counts (B02/B05/B06)
+
+Handoff slice 3 ([one decision across chat and close pages](agent-first-implementation-handoff.md#b02b06--one-decision-across-chat-and-close-pages)). A code read mapped each requirement to current code; most were already met (see the [backlog entry](implementation-backlog.md)). The gaps fixed:
+
+- Home's decision count skips notices that need no decision (a complete client reply, a goal reached), which stay unread news; snoozed decisions are counted and shown apart instead of dropped.
+- A partial client reply stays in the inbox past 14 days while the work it answers still waits on the client.
+- The decisions-and-notices list labels a notice that needs no decision as such, rather than hiding it (the same list is "All notices").
+- A partial reply to a coverage-only request (accounts, no work yet) is kept on the same terms.
+- The sidebar badge shows a dash, not nothing, when its read fails, including a failed refresh over a cached count.
+- The review queue's count comes from the same statement as its list.
+
+Tests: `TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState` gains two checks: a partial reply is a decision and still listed when 20 days old while its work waits (seen to fail without the fix); a complete reply is marked informational. The closest attention, Home, goal, handoff and request tests passed against a fresh local PostgreSQL migrated through 150.
+
+Not changed (follow-up): the chat card asking a person to review shows the draft's state only after the server refuses a stale request; approval requests have no unique index if a card's outcome fails to record after the request committed.

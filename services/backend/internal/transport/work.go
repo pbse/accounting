@@ -59,12 +59,9 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		where := ` FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4) AND w.review_state='pending' AND jsonb_array_length(COALESCE(w.paper->'sources','[]'))>0 AND jsonb_array_length(COALESCE(w.paper->'blockers','[]'))=0`
-		var count int
-		if err := db.QueryRowContext(r.Context(), `SELECT count(*)`+where, organization(r), firmAccess(r), subject(r), search).Scan(&count); err != nil {
-			problem(w, 503, "Review queue unavailable.")
-			return
-		}
-		rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.created_at,w.digest,w.review_id,`+bulkReason+`,COALESCE(c.due_on::text,''),c.priority,c.owner<>'' AND c.owner=$3,COALESCE((SELECT a.note FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),''),COALESCE((SELECT a.requested_by FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),''),COALESCE((SELECT a.agent FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),'')`+where+` ORDER BY c.due_on NULLS LAST,`+priorityOrder+`,w.id DESC LIMIT 100`, organization(r), firmAccess(r), subject(r), search)
+		// The count is read with the list, in one statement, so the two always describe the same moment.
+		count := 0
+		rows, err := db.QueryContext(r.Context(), `SELECT count(*) OVER (),w.id::text,c.id::text,c.entity,c.period,w.kind,w.created_at,w.digest,w.review_id,`+bulkReason+`,COALESCE(c.due_on::text,''),c.priority,c.owner<>'' AND c.owner=$3,COALESCE((SELECT a.note FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),''),COALESCE((SELECT a.requested_by FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),''),COALESCE((SELECT a.agent FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),'')`+where+` ORDER BY c.due_on NULLS LAST,`+priorityOrder+`,w.id DESC LIMIT 100`, organization(r), firmAccess(r), subject(r), search)
 		if err != nil {
 			problem(w, 503, "Review queue unavailable.")
 			return
@@ -75,7 +72,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			var id, closeID, entity, period, kind, digest, review, reason, dueOn, priority, approval, requester, agent string
 			var created time.Time
 			var mine bool
-			if err := rows.Scan(&id, &closeID, &entity, &period, &kind, &created, &digest, &review, &reason, &dueOn, &priority, &mine, &approval, &requester, &agent); err != nil {
+			if err := rows.Scan(&count, &id, &closeID, &entity, &period, &kind, &created, &digest, &review, &reason, &dueOn, &priority, &mine, &approval, &requester, &agent); err != nil {
 				problem(w, 503, "Review queue unavailable.")
 				return
 			}

@@ -19,7 +19,7 @@ export type HomeCounts = {
   can_add: boolean;
   can_review: boolean;
   signed_off: { done: number; total: number };
-  decisions: { count: number; unread: number; team: number };
+  decisions: { count: number; unread: number; team: number; snoozed: number };
   deadlines: { overdue: number; due_soon: number; no_due_date: number; not_opened_overdue: number; not_opened_upcoming: number };
   prepared: { total: number; done: number; failed: number; waiting_person: number; running: number; waiting_client: number; cancelled: number; no_draft: number };
   // exported: ended closes whose books are a complete set of labeled historical exports rather than a capture.
@@ -103,7 +103,8 @@ export function Decisions({ today, tick, snapshot, reopened, canReview, teamTota
   // The list the card opens holds the reader's own decisions; what waits on a teammate's authority sits apart below,
   // so the headline and the list name the same items.
   const groups = (inbox?.groups ?? []).map((g) => ({ ...g, events: g.events.filter((e) => e.yours) })).filter((g) => g.events.length > 0);
-  const team = (inbox?.groups ?? []).map((g) => ({ ...g, events: g.events.filter((e) => !e.yours) })).filter((g) => g.events.length > 0);
+  // A notice that needs no decision waits on no teammate, so it is not listed (or counted) as a teammate's.
+  const team = (inbox?.groups ?? []).map((g) => ({ ...g, events: g.events.filter((e) => !e.yours && !e.info) })).filter((g) => g.events.length > 0);
   // A reopened close has no read or snooze mark: it shows in All and, when it is the reader's, in Assigned to me.
   const reopenedShown = view === "all" || view === "mine" ? reopened.filter((item) => view !== "mine" || item.owner === "mine") : [];
   const teamReopened = canReview ? [] : reopenedShown;
@@ -162,7 +163,7 @@ export function Decisions({ today, tick, snapshot, reopened, canReview, teamTota
                 <li key={e.key}>
                   <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : e.account_id || e.kind === "unanswered" ? "#coverage-work" : ""}`}>{e.text}</Link>
                   <small>
-                    {!e.read && <span className="pill info">New</span>} {dates.dayMonth(e.at)}
+                    {!e.read && <span className="pill info">New</span>} {e.info && <span className="pill">Notice, no decision needed</span>} {dates.dayMonth(e.at)}
                     {e.snoozed_until && ` · snoozed until ${dates.dayMonth(e.snoozed_until)}`}
                   </small>
                   <button disabled={busy} onClick={() => mark(e.read ? "unread" : "read", [e.key])}>
