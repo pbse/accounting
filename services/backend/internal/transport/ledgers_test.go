@@ -40,6 +40,22 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 			}
 		}
 	})
+	// The counts are every firm's, so the fixtures' are read as what they add to those already in the database.
+	h := apiWithStore(db, token)
+	ledgerCounts := func() map[string]map[string]any {
+		t.Helper()
+		counts := adminJSON(t, h, token, "GET", "/v1/admin/ledgers", "", 200)
+		if raw := mustString(counts); strings.Contains(raw, "Secret") {
+			t.Fatalf("no client is named: %s", raw)
+		}
+		got := map[string]map[string]any{}
+		for _, c := range counts["ledgers"].([]any) {
+			c := c.(map[string]any)
+			got[c["ledger"].(string)+":"+c["name"].(string)] = c
+		}
+		return got
+	}
+	baseline := ledgerCounts()
 	// The firm records three clients: one on Xero, one on a ledger the catalog does not list, one not known yet, and
 	// corrects the Xero client to QuickBooks Desktop; the other firm keeps a client on Xero.
 	must(`INSERT INTO client_ledgers(organization_id,client_entity,ledger,other_name,actor) VALUES($1,'Acme Secret Co','xero','','fixture'),($1,'Beta Secret LLC','other','  Acumatica ','fixture'),
@@ -73,20 +89,21 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 		t.Fatalf("the catalog's switches: %v", connected)
 	}
 
-	h := apiWithStore(db, token)
-	counts := adminJSON(t, h, token, "GET", "/v1/admin/ledgers", "", 200)
-	if raw := mustString(counts); strings.Contains(raw, "Secret") {
-		t.Fatalf("no client is named: %s", raw)
+	got := ledgerCounts()
+	added := func(key string) float64 {
+		before := 0.0
+		if b := baseline[key]; b != nil {
+			before = b["clients"].(float64)
+		}
+		if got[key] == nil {
+			return -1
+		}
+		return got[key]["clients"].(float64) - before
 	}
-	got := map[string]map[string]any{}
-	for _, c := range counts["ledgers"].([]any) {
-		c := c.(map[string]any)
-		got[c["ledger"].(string)+":"+c["name"].(string)] = c
-	}
-	xero, desktop, acumatica, unknown := got["xero:Xero"], got["quickbooks_desktop:QuickBooks Desktop"], got["other:acumatica"], got["unknown:Not known yet"]
-	if xero == nil || xero["clients"] != 1.0 || xero["connector"] != "xero" || xero["connected"] != false || desktop == nil || desktop["clients"] != 1.0 || desktop["connector"] != "" ||
-		acumatica == nil || acumatica["clients"] != 1.0 || unknown == nil || unknown["clients"] != 1.0 {
-		t.Fatalf("counts by ledger, the correction counted once: %v", got)
+	xero, desktop := got["xero:Xero"], got["quickbooks_desktop:QuickBooks Desktop"]
+	if added("xero:Xero") != 1 || xero["connector"] != "xero" || xero["connected"] != false || added("quickbooks_desktop:QuickBooks Desktop") != 1 || desktop["connector"] != "" ||
+		added("other:acumatica") != 1 || added("unknown:Not known yet") != 1 {
+		t.Fatalf("counts by ledger, the correction counted once: %v (before %v)", got, baseline)
 	}
 
 	// Staff switch Xero on for the firm alone, with a reason; an unknown connector or no reason is refused.
