@@ -492,6 +492,13 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Net income is 8,000.00.", "bound to no read", e("t62", 0, "/data", `{"receivables":"8000.00"}`))
 	ok("The cash plan has 2 unapproved schedules.", e("t19", 0, "/unapproved_schedules", "2"))
 
+	// Round thirty-five: an unstated driver explains nothing; two receipts lines are two facts.
+	reads["t63"] = read(`{"state":"ready","changes":[{"account":"Patient fees","change":"4940.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}],"unattributed":{"this_month":"1940.00","last_month":"0.00"}}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Patient fees rose 4,940.00, driven by new patients at 3,000.00.", "account for 3000.00 of 4940.00",
+		e("t63", 0, "/changes/0/change", "4940.00"), e("t63", 0, "/changes/0/new/0/this_month", "3000.00"), e("t63", 0, "/changes/0/unattributed/last_month", "0.00"))
+	reads["t64"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","cash_flow":{"sections":[{"name":"Operating","lines":[{"name":"Customer receipts","amount":"9000.00"},{"name":"Other receipts","amount":"1000.00"}]}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	ok("Customer receipts and other receipts total 10,000.00.", derived(0, "sum", "10000.00", "t64", "/cash_flow/sections/0/lines/0/amount", "t64", "/cash_flow/sections/0/lines/1/amount"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

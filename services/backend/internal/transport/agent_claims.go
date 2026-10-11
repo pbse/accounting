@@ -1900,6 +1900,10 @@ func oneFact(a, b claim) bool {
 	// A named measure (net income) is one fact however it is read (an overview's net_income, a pack's measure),
 	// unless two different accounts are cited.
 	if len(a.keys) > 0 && len(a.keys) == len(b.keys) && overlaps(a.keys, b.keys) {
+		// Two differently named lines ("Customer receipts", "Other receipts") are different facts.
+		if a.label != "" && b.label != "" && !strings.EqualFold(a.label, b.label) {
+			return false
+		}
 		// Two different accounts, or two rows of one kind (two weeks), are different facts.
 		if a.account != "" && b.account != "" && a.account != b.account {
 			return false
@@ -1976,4 +1980,30 @@ func remainderAcross(lines []string, totals []map[string][]*big.Rat, drivers []m
 		}
 	}
 	return ""
+}
+
+// driverStated says whether a sentence states a driver row: names its payee, gives its movement or one of its months'
+// amounts, or, for the unattributed part, says it is unattributed.
+func driverStated(line string, read agentRead, row string, movement *big.Rat) bool {
+	figures := map[string]bool{}
+	for _, o := range figuresIn(line) {
+		figures[o.normalized] = true
+	}
+	abs := new(big.Rat).Abs(movement)
+	if figures[normalizeFigure(movement.FloatString(2))] || figures[normalizeFigure(abs.FloatString(2))] {
+		return true
+	}
+	if object, ok := valueNode(read.value, row).(map[string]any); ok {
+		for _, key := range []string{"this_month", "last_month"} {
+			if v, ok := object[key].(string); ok && figures[normalizeFigure(v)] && normalizeFigure(v) != "0" {
+				return true
+			}
+		}
+		for _, key := range claimLabelKeys {
+			if name, ok := object[key].(string); ok && name != "" && labelNamed(line, name) {
+				return true
+			}
+		}
+	}
+	return strings.HasSuffix(row, "/unattributed") && claimRemainder.MatchString(strings.ToLower(line))
 }

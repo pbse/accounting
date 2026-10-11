@@ -673,7 +673,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	}
 	driver := func(sentence int, step, path string) {
 		if read, ok := reads[step]; ok {
-			if row, movement, ok := driverMovement(read, path); ok {
+			// A driver counts toward a movement only when the sentence states it: its name, its figure, or (for the
+			// unattributed part) that it is unattributed. A cited row the sentence leaves unsaid explains nothing.
+			if row, movement, ok := driverMovement(read, path); ok && driverStated(lines[sentence], read, row, movement) {
 				addDriver(sentence, rowGroup(step, path), step+row, movement)
 			}
 		}
