@@ -51,7 +51,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM books_company_links WHERE organization_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+		for _, q := range []string{`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT w.id FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1)`, `DELETE FROM books_company_links WHERE organization_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM close_scopes WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
 			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM coverage_bindings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_versions WHERE organization_id=$1`, `DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM books_sources WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
 			`DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
@@ -503,6 +503,34 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if again := call("user_a", partner, "GET", "/v1/closes/"+februaryClose+"/files/ledger?account_id=n:6000", nil, 200); again["total"] != 1.0 {
 		t.Fatalf("the lines of a version written before them: %v", again)
 	}
+	// February's approved accrual has no ledger to post to: it is exported in a journal batch, each line's memo carrying
+	// the journal's reference, then recorded as entered in the client's ledger.
+	var accrual string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1::bigint,'accrual','feb-accrual','{"input":{"source_reference":"INV-55"},"proposal":{"date":"2027-02-28","debit_account":"6000 Rent","credit_account":"2100 Accrued expenses","amount":"150.00"},"blockers":[]}') RETURNING id::text`, februaryClose).Scan(&accrual))
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,decision,note,actor,paper_digest) VALUES($1::bigint,'approved','Synthetic approval','fixture','feb-accrual')`, accrual)
+	must(err)
+	journalsPath := "/v1/closes/" + februaryClose + "/journals"
+	toExport := call("user_a", partner, "GET", journalsPath, nil, 200)
+	if pending, _ := toExport["pending"].([]any); len(pending) != 1 || pending[0].(map[string]any)["held"] != nil || len(pending[0].(map[string]any)["lines"].([]any)) != 2 {
+		t.Fatalf("an approved entry waits to be exported: %v", toExport)
+	}
+	batch := call("user_a", partner, "POST", journalsPath, map[string]any{"action": "export", "confirmed": true}, 200)
+	reference := "KR-" + februaryClose + "-1-1"
+	if csvText := batch["csv"].(string); !strings.Contains(csvText, reference+",2027-02-28,6000 Rent,150.00,,"+reference+" accrual INV-55") || !strings.Contains(csvText, ",2100 Accrued expenses,,150.00,") {
+		t.Fatalf("the batch of journals: %v", batch)
+	}
+	call("user_a", partner, "POST", journalsPath, map[string]any{"action": "export", "confirmed": true}, 409)
+	exported := call("user_a", partner, "GET", journalsPath, nil, 200)
+	journal := exported["journals"].([]any)[0].(map[string]any)
+	if len(exported["pending"].([]any)) != 0 || journal["state"] != "exported" || journal["reference"] != reference {
+		t.Fatalf("the exported journal: %v", exported)
+	}
+	call("user_a", partner, "POST", journalsPath, map[string]any{"action": "entered", "journal": journal["id"], "ledger_reference": "JE-77", "confirmed": true}, 200)
+	if entered := call("user_a", partner, "GET", journalsPath, nil, 200)["journals"].([]any)[0].(map[string]any); entered["state"] != "entered" || entered["ledger_reference"] != "JE-77" {
+		t.Fatalf("an entered journal: %v", entered)
+	}
+	// A month whose books are a ledger's posts its entries instead.
+	call("user_a", partner, "GET", "/v1/closes/"+octoberClose+"/journals", nil, 409)
 	// March's ledger opens at February's derived balances, never at February's lines.
 	march := send1("2027-03", "Date,Number,Account,Description,Debit,Credit\n03/15/2027,1000,Business Checking,Cash sale,50.00,\n03/15/2027,4000,Sales,Cash sale,,50.00\n")
 	confirmColumns(march, "2027-03-31", map[string]string{"0": "date", "1": "account_number", "2": "account_name", "3": "memo", "4": "debit", "5": "credit"})

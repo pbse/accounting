@@ -147,7 +147,8 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 	var readErr error
 	switch {
 	case source == "files":
-		// A month whose books are its files ties out its accepted file's balances; nothing is posted to a file.
+		// A month whose books are its files ties out its accepted file's balances; nothing is posted to a file, and a
+		// journal entered in the client's ledger is not in them until it is verified.
 		b, month, err := fileMonthBooks(ctx, tx, id)
 		if err != nil {
 			return tieOutcome{}, tieRefusal{503, "The month's books are unavailable."}
@@ -187,7 +188,8 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 
 	// A posting already in the snapshot's company before the capture began is in the Trial Balance.
 	postings := map[string]string{}
-	rows, err := tx.QueryContext(ctx, `SELECT workpaper_id::text,CASE WHEN state='verified' AND verified_at<$3 THEN 'in_balance' WHEN state='verified' THEN 'posted_after_capture' WHEN state IN ('executing','unknown') THEN 'unknown' ELSE 'proposed' END FROM (SELECT workpaper_id,state,verified_at FROM production_postings WHERE close_id::text=$1 AND realm=$2 UNION ALL SELECT workpaper_id,state,verified_at FROM sandbox_postings WHERE close_id::text=$1 AND realm=$2 UNION ALL SELECT workpaper_id,state,verified_at FROM xero_postings WHERE close_id::text=$1 AND tenant_id=$4) p`, id, realm, started, tenant)
+	rows, err := tx.QueryContext(ctx, `SELECT workpaper_id::text,CASE WHEN state='verified' AND verified_at<$3 THEN 'in_balance' WHEN state='verified' THEN 'posted_after_capture' WHEN state IN ('executing','unknown') THEN 'unknown' ELSE 'proposed' END FROM (SELECT workpaper_id,state,verified_at FROM production_postings WHERE close_id::text=$1 AND realm=$2 UNION ALL SELECT workpaper_id,state,verified_at FROM sandbox_postings WHERE close_id::text=$1 AND realm=$2 UNION ALL SELECT workpaper_id,state,verified_at FROM xero_postings WHERE close_id::text=$1 AND tenant_id=$4
+ UNION ALL SELECT workpaper_id,CASE WHEN state IN ('entered','verified') THEN 'verified' ELSE 'proposed' END,entered_at FROM file_journals WHERE close_id::text=$1 AND $2='' AND $4='') p`, id, realm, started, tenant)
 	if err != nil {
 		return tieOutcome{}, tieRefusal{503, "Could not read posting records."}
 	}
