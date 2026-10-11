@@ -672,3 +672,21 @@ func TestSectionTotalsAndConfirmedParents(t *testing.T) {
 		t.Fatalf("a confirmed parent account stays an account: %+v", reading)
 	}
 }
+
+// Whole-column and whole-row references move with a copied formula; a row without its number takes its cells'.
+func TestRangesAndUnnumberedRows(t *testing.T) {
+	for formula, want := range map[string]string{"SUM(A:A)": "SUM(B:B)", "SUM($A:B)": "SUM($A:C)", "SUM(1:1)": "SUM(3:3)", "SUM(a:c)": "SUM(b:d)", "A1:B2": "B3:C4"} {
+		if got := shiftFormula(formula, 2, 1); got != want {
+			t.Fatalf("%s: %s, not %s", formula, got, want)
+		}
+	}
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	file, err := Read("tb.xlsx", workbook(t, map[string]string{
+		"xl/workbook.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml":   `<worksheet ` + main + `><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row><c r="A5"><v>5</v></c></row></sheetData></worksheet>`,
+	}))
+	if err != nil || file.Tables[0].Rows[1].Number != 5 || cells(file.Tables[0])["A5"].Value != "5" {
+		t.Fatalf("a row numbered by its cells: %+v %v", file.Tables, err)
+	}
+}

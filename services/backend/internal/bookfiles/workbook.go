@@ -226,6 +226,12 @@ func ReadWorkbook(body []byte) (File, error) {
 		previous := 0
 		for _, r := range data.Rows {
 			number := r.Number
+			// A row without its number takes its cells' (A5 is row 5), else follows the row before.
+			for _, c := range r.Cells {
+				if number == 0 {
+					number = rowOf(c.Ref)
+				}
+			}
 			if number == 0 {
 				number = previous + 1
 			}
@@ -330,6 +336,12 @@ func serialDate(epoch time.Time, serial float64) (string, bool) {
 	return at.Format("2006-01-02T15:04:05"), true
 }
 
+// columnRange and rowRange are whole-column (A:C) and whole-row (1:3) references, each end with the $ that fixes it.
+var (
+	columnRange = regexp.MustCompile(`(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})`)
+	rowRange    = regexp.MustCompile(`(\$?)([0-9]{1,7}):(\$?)([0-9]{1,7})`)
+)
+
 // cellReference is an A1 reference in a formula, in either case: its column and row, each with the $ that fixes it.
 var cellReference = regexp.MustCompile(`(\$?)([A-Za-z]{1,3})(\$?)([0-9]{1,7})`)
 
@@ -376,7 +388,13 @@ func shiftFormula(formula string, rows, columns int) string {
 			i = end
 			continue
 		}
-		loc := cellReference.FindStringSubmatchIndex(formula[i:])
+		// The earliest reference ahead: a cell (A1), a whole-column range (A:C) or a whole-row range (1:3).
+		kind, loc := 0, cellReference.FindStringSubmatchIndex(formula[i:])
+		for k, re := range []*regexp.Regexp{columnRange, rowRange} {
+			if l := re.FindStringSubmatchIndex(formula[i:]); l != nil && (loc == nil || l[0] < loc[0]) {
+				kind, loc = k+1, l
+			}
+		}
 		next := len(formula)
 		for _, q := range []byte{'"', '\'', '['} {
 			if k := strings.IndexByte(formula[i:], q); k >= 0 && i+k < next {
@@ -409,6 +427,49 @@ func shiftFormula(formula string, rows, columns int) string {
 			continue
 		}
 		m := formula[start:end]
+		// letters is a column's letters, in the case the reference was written in.
+		letters := func(column int, written string) string {
+			l := strings.TrimRight(cellRef(column, 1), "1")
+			if written != strings.ToUpper(written) {
+				l = strings.ToLower(l)
+			}
+			return l
+		}
+		switch kind {
+		case 1:
+			g := columnRange.FindStringSubmatch(m)
+			first, last := columnOf(strings.ToUpper(g[2])+"1"), columnOf(strings.ToUpper(g[4])+"1")
+			if g[1] == "" {
+				first += columns
+			}
+			if g[3] == "" {
+				last += columns
+			}
+			if first < 0 || last < 0 || first >= 16384 || last >= 16384 {
+				out.WriteString("#REF!")
+			} else {
+				out.WriteString(g[1] + letters(first, g[2]) + ":" + g[3] + letters(last, g[4]))
+			}
+			i = end
+			continue
+		case 2:
+			g := rowRange.FindStringSubmatch(m)
+			first, _ := strconv.Atoi(g[2])
+			last, _ := strconv.Atoi(g[4])
+			if g[1] == "" {
+				first += rows
+			}
+			if g[3] == "" {
+				last += rows
+			}
+			if first < 1 || last < 1 || first > 1048576 || last > 1048576 {
+				out.WriteString("#REF!")
+			} else {
+				out.WriteString(g[1] + strconv.Itoa(first) + ":" + g[3] + strconv.Itoa(last))
+			}
+			i = end
+			continue
+		}
 		groups := cellReference.FindStringSubmatch(m)
 		column, row := columnOf(strings.ToUpper(groups[2])+"1"), rowOf("A"+groups[4])
 		if groups[1] == "" {
