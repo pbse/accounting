@@ -40,7 +40,8 @@ const pendingFileVersions = `SELECT a.organization_id,a.client_entity,a.id::text
    AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id))
   AND (NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='files' AND v.source_id=a.id::text)
    OR EXISTS(SELECT 1 FROM books_versions v JOIN books_layouts l ON l.id=a.layout_id WHERE v.source='files' AND v.source_id=a.id::text
-    AND EXISTS(SELECT 1 FROM jsonb_each_text(l.layout->'columns') m WHERE m.value='date') AND NOT EXISTS(SELECT 1 FROM books_lines n WHERE n.version_id=v.id)))
+    AND EXISTS(SELECT 1 FROM jsonb_each_text(l.layout->'columns') m WHERE m.value='date') AND NOT EXISTS(SELECT 1 FROM books_lines n WHERE n.version_id=v.id)
+    AND EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(l.reading->'lines','[]'::jsonb)) e WHERE e->>'kind'='posting')))
  ORDER BY a.id LIMIT 50`
 
 // writeFileVersions writes the books versions pending for firm org (every firm, for ""), client name and month period
