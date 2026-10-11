@@ -442,6 +442,17 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	if want := []string{"The client answered part of request #" + request, "fixture recorded delivery of request #" + request, "fixture approved request #" + request + " to the client"}; !slices.Equal(history[:3], want) {
 		t.Fatalf("the history keeps the request's steps, newest first: %q", history)
 	}
+	// The goal records, once, what the reply led to: here a partial answer, with the statement still waiting on the client.
+	receipt := func() (n int) {
+		t.Helper()
+		must(db.QueryRow(`SELECT count(*) FROM close_goals g CROSS JOIN jsonb_array_elements(g.events) e WHERE g.close_id::text=$1 AND e->>'text'=$2`, beta, "Request #"+request+": the client answered part of it. statement.pdf: still waiting on the client.").Scan(&n))
+		return n
+	}
+	sweepCloseGoals(ctx, db)
+	sweepCloseGoals(ctx, db)
+	if n := receipt(); n != 1 {
+		t.Fatalf("a reply gets one receipt of what it led to: %d", n)
+	}
 
 	// The owner losing a client stops its goal; their other clients' goals carry on.
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Beta',false,'Moved to another client','fixture')`, org)

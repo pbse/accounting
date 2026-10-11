@@ -4374,6 +4374,12 @@ Reminders required an unused link and no reply at all, so a client who answered 
 
 Test: `TestApprovedEmailDurableRetryAndScope` records a partial reply on a used link: the reminder period restarts from it, the goal offers the reminder, approval succeeds and the worker sends it; seen to fail without the fix (and without the worker's change, cancelled). The closest email, attention, goal, partial-reply, inbound-reply and Work tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — A client reply leaves a receipt of what it led to (B05/B11)
+
+After a client replied, the goal's history said only that the client replied, so the person opened Work to learn what the answer did. The goal now records a receipt for a request's new replies, after the request's work settles (none of its documents still being read or prepared, and none of its files still waiting for scanning or release): "Request #N: the client answered 3 of 4 questions, 1 document to follow. invoice.pdf: draft #31 ready for review; statement.pdf: needs you." Each receipt is keyed by the reply's time, so a sweep never repeats it and a later reply gets its own.
+
+Test: `TestCloseGoalKeepsPreparationMovingUntilReadyForReview` records a partial reply and, over two sweeps, gets exactly one receipt, "Request #N: the client answered part of it. statement.pdf: still waiting on the client."; seen to fail (no receipt) without the fix. The goal, attention and Home tests passed on a fresh local PostgreSQL.
+
 ## 2026-10-11 — The original budget stays comparable beside a reforecast (B07/B10)
 
 The budget comparison always used the newest approved version, so approving a reforecast silently replaced the original plan in the comparison, with no way to see the month against the plan agreed first. The comparison now lists every approved version of the same books that budgets the month (newest first, the default) and compares with any of them on request (`?baseline=`, **Compare with**); a version that does not budget the month, or another ledger's, is refused. Executives keep the newest approved baseline only.
