@@ -175,4 +175,17 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	must(err)
 	newest := call("user_a", partner, "GET", "/v1/closes/client?name=Maple%20Co", nil, 200)["profiles"].([]any)[0].(map[string]any)["id"]
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Maple Co", "currency": "GBP", "fiscal_year_start": 1, "effective_from": "2026-02", "reason": "Earlier months were in pounds", "rev": newest}, 200)
+	// A client on files has approved work in pounds before any profile: confirming dollars would contradict it, so it
+	// waits; confirming pounds goes through.
+	var oak, paper string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Oak Ltd','2026-08') RETURNING id::text`, org).Scan(&oak))
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','oak-paper','{"input":{"currency":"GBP"}}') RETURNING id::text`, oak).Scan(&paper))
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,decision,note,actor,paper_digest) VALUES($1,'approved','Synthetic approval','fixture','oak-paper')`, paper)
+	must(err)
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id=$1`, paper)
+		db.Exec(`DELETE FROM workpapers WHERE id=$1`, paper)
+	})
+	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Oak Ltd", "currency": "USD", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Dollars", "rev": ""}, 409)
+	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Oak Ltd", "currency": "GBP", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Pounds, as its work is", "rev": ""}, 200)
 }

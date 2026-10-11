@@ -138,7 +138,7 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if len(held) > 0 {
-			problem(w, 409, "This would change the currency or fiscal year of months already reviewed or signed off ("+strings.Join(held, ", ")+"). Start the change after them, or reopen them first.")
+			problem(w, 409, "This would contradict months already reviewed or signed off ("+strings.Join(held, ", ")+"): their approved work or confirmed statements are in another currency, or they were signed off under another currency or fiscal year. Start the change after them, or reopen them first.")
 			return
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO client_profiles(organization_id,client_entity,effective_from,currency,fiscal_year_start,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7)`,
@@ -161,38 +161,51 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 }
 
 // profileChangeHolds is the months of the client the profile (currency, start) from month from would govern, up to the
-// next later profile, that are signed off or hold an approved workpaper and whose currency or fiscal year it would
-// change.
+// next later profile, whose reviewed work it would contradict: an approved workpaper or a confirmed bank statement in
+// another currency, or a signed-off month whose currency or fiscal year it would change.
 func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, currency string, start int) ([]string, error) {
 	// The new profile governs months from its own up to the next later profile's, which keeps the months after it.
-	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
+	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off',
+ EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved' AND upper(COALESCE(NULLIF(w.paper->'input'->>'currency',''),'USD'))<>$4)
+ OR EXISTS(SELECT 1 FROM statement_extractions s WHERE s.close_id=c.id AND s.confirmed IS NOT NULL AND COALESCE(s.confirmed->>'currency','')<>'' AND upper(s.confirmed->>'currency')<>$4)
+ FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
  AND c.period<COALESCE((SELECT min(f.effective_from) FROM client_profiles f WHERE f.organization_id=$1 AND client_identity(f.organization_id,f.client_entity)=client_identity($1,$2) AND f.effective_from>$3),'9999-99')
- AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off' OR EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'))
- ORDER BY c.period`, org, name, from)
+ ORDER BY c.period`, org, name, from, currency)
 	if err != nil {
 		return nil, err
 	}
-	type month struct{ id, period string }
-	var reviewed []month
+	type month struct {
+		id, period          string
+		signed, contradicts bool
+	}
+	var months []month
 	for rows.Next() {
 		var m month
-		if err = rows.Scan(&m.id, &m.period); err != nil {
+		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.contradicts); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		reviewed = append(reviewed, m)
+		months = append(months, m)
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	var held []string
-	for _, m := range reviewed {
+	for _, m := range months {
+		if m.contradicts {
+			held = append(held, m.period)
+			continue
+		}
+		if !m.signed {
+			continue
+		}
+		// A signed-off month was closed under the profile it reads now: a change to it waits for the month to reopen.
 		p, err := preparation.ClientProfile(ctx, tx, m.id)
 		if err != nil {
 			return nil, err
 		}
-		if p.Currency != currency || p.FiscalStart != start {
+		if p.FiscalStart != start || (p.State != "none" && p.Currency != currency) {
 			held = append(held, m.period)
 		}
 	}
