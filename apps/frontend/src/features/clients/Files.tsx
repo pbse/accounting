@@ -30,10 +30,12 @@ type Row = { number: number; hidden?: boolean; cells: Cell[] };
 type Table = { name: string; hidden?: boolean; rows: Row[]; more: number };
 type Line = { row: number; ref: string; kind: "posting" | "total" | "heading"; number?: string; name: string; balance: string; cents: boolean };
 type Reading = { lines: Line[]; debits: string; credits: string; balanced: boolean; problems: string[]; notes: string[] };
-type Confirmed = { id: string; layout: Layout; reading: Reading; reason: string; actor: string; at: string; balanced: boolean; problems: number };
-type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; confirmed?: Confirmed };
+// Status is a confirmed layout's outcome, as the list shows it; Confirmed adds the layout and what it read.
+type Status = { id: string; reason: string; actor: string; at: string; balanced: boolean; problems: number };
+type Confirmed = Status & { layout: Layout; reading: Reading };
+type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; confirmed?: Status };
 type ImportRead = {
-  import: ImportRow;
+  import: Omit<ImportRow, "confirmed"> & { confirmed?: Confirmed };
   tables: Table[];
   encoding?: string;
   unsure?: string[];
@@ -44,8 +46,11 @@ type ImportRead = {
   proposal?: { layout: Layout; questions: string[]; reused: boolean };
 };
 
-const meanings: [Meaning | "", string][] = [
-  ["", "Not used"],
+// A column is read for a meaning, left out on purpose (a memo, a note), or not chosen yet: values in a column not chosen
+// are problems, so nothing in the file is passed over unseen.
+const meanings: [Meaning | "" | "ignored", string][] = [
+  ["", "Not chosen"],
+  ["ignored", "Left out"],
   ["account_number", "Account number"],
   ["account_name", "Account name"],
   ["account_type", "Account type"],
@@ -67,7 +72,8 @@ const rowKinds: [RowKind, string][] = [
   ["ignored", "Left out"],
 ];
 // clean says a confirmed reading balances with no problem left.
-const clean = (c: Confirmed) => c.balanced && !c.problems;
+const clean = (c: Status) => c.balanced && !c.problems;
+const lineKinds = { posting: "Account", total: "Total", heading: "Heading" };
 const filesPath = (name: string) => `/client/imports?name=${encodeURIComponent(name)}`;
 const importPath = (name: string, id: string) => `/client/import?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`;
 
@@ -79,6 +85,7 @@ export function FilesCard({ client }: { client: string }) {
   const files = useQuery(workspaceQuery<{ imports: ImportRow[]; can_confirm: boolean }>(filesPath(client)));
   const [sending, setSending] = useState(false);
   const [open, setOpen] = useState("");
+  const [all, setAll] = useState(false);
   const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   const imports = files.data?.imports ?? [];
   const latest = imports[0];
@@ -102,7 +109,7 @@ export function FilesCard({ client }: { client: string }) {
             : `${monthName(latest.period)}: ${latest.name}, sent ${dates.dayMonth(latest.at)}${latest.confirmed ? (clean(latest.confirmed) ? ", read and balanced." : ", read, with problems to resolve.") : ", its layout not confirmed yet."}`}
         {imports.length > 0 && (
           <ul className="ks-filelist">
-            {imports.slice(0, 6).map((i) => (
+            {(all ? imports : imports.slice(0, 6)).map((i) => (
               <li key={i.id}>
                 <button type="button" className="link" onClick={() => setOpen(i.id)}>
                   {monthName(i.period)} · {i.name}
@@ -110,6 +117,13 @@ export function FilesCard({ client }: { client: string }) {
                 {i.confirmed ? clean(i.confirmed) ? <span className="pill">Balanced</span> : <span className="pill danger">Problems</span> : <span className="pill muted">Layout to confirm</span>}
               </li>
             ))}
+            {imports.length > 6 && (
+              <li>
+                <button type="button" className="link" onClick={() => setAll(!all)}>
+                  {all ? "Show the latest six" : `Show all ${imports.length} files`}
+                </button>
+              </li>
+            )}
           </ul>
         )}
       </Card>
@@ -186,9 +200,14 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const table = data.tables.find((t) => t.name === layout.table) ?? data.tables[0];
-  const header = table?.rows.find((r) => r.number === layout.header_row);
-  const width = Math.max(0, ...(table?.rows.slice(0, 40).flatMap((r) => r.cells.map((c) => c.column + 1)) ?? [0]));
+  // Rows come in pages: the first, or from a row a person asks for; the header keeps its names from the first page.
+  const [from, setFrom] = useState(1);
+  const [goTo, setGoTo] = useState("");
+  const later = useQuery({ ...workspaceQuery<ImportRead>(`${importPath(client, id)}&from=${from}`), enabled: from > 1 });
+  const first = data.tables.find((t) => t.name === layout.table) ?? data.tables[0];
+  const table = from > 1 ? (later.data?.tables.find((t) => t.name === first?.name) ?? undefined) : first;
+  const header = first?.rows.find((r) => r.number === layout.header_row);
+  const width = Math.max(0, ...(first?.rows.slice(0, 40).flatMap((r) => r.cells.map((c) => c.column + 1)) ?? [0]));
   const columns = Array.from({ length: width }, (_, i) => i);
   async function act(action: "preview" | "confirm") {
     setBusy(true);
@@ -247,12 +266,14 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
             <label key={c}>
               {header?.cells.find((cell) => cell.column === c)?.value || `Column ${c + 1}`}
               <select
-                value={layout.columns[String(c)] ?? ""}
+                value={layout.columns[String(c)] ?? (layout.ignored_columns?.includes(c) ? "ignored" : "")}
                 onChange={(e) => {
                   const next = { ...layout.columns };
-                  if (e.target.value) next[String(c)] = e.target.value as Meaning;
-                  else delete next[String(c)];
-                  set({ columns: next });
+                  delete next[String(c)];
+                  const ignored = (layout.ignored_columns ?? []).filter((x) => x !== c);
+                  if (e.target.value === "ignored") ignored.push(c);
+                  else if (e.target.value) next[String(c)] = e.target.value as Meaning;
+                  set({ columns: next, ignored_columns: ignored.sort((a, b) => a - b) });
                 }}
               >
                 {meanings.map(([value, label]) => (
@@ -317,7 +338,26 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
           ))}
         </tbody>
       </table>
-      {table && table.more > 0 && <p className="note">The first {table.rows.length} rows are shown; {table.more} more are read the same way.</p>}
+      {from > 1 && !table && <p role="status">{later.error ? "Those rows could not be read." : "Reading those rows…"}</p>}
+      <div className="setting-actions">
+        {from > 1 && (
+          <button type="button" onClick={() => setFrom(1)}>
+            First rows
+          </button>
+        )}
+        {table && table.more > 0 && table.rows.length > 0 && (
+          <button type="button" onClick={() => setFrom(table.rows[table.rows.length - 1].number + 1)}>
+            Next rows ({table.more} more)
+          </button>
+        )}
+        <label>
+          Rows from
+          <input type="number" min={1} value={goTo} onChange={(e) => setGoTo(e.target.value)} />
+        </label>
+        <button type="button" disabled={!(Number(goTo) >= 1)} onClick={() => setFrom(Number(goTo))}>
+          Show
+        </button>
+      </div>
       {reading && (
         <div className="ks-reading">
           <p>
@@ -341,6 +381,21 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
               ))}
             </ul>
           )}
+          <details>
+            <summary>How each row was read</summary>
+            <table className="ks-preview">
+              <tbody>
+                {reading.lines.map((l) => (
+                  <tr key={l.row}>
+                    <th>{l.row}</th>
+                    <td>{lineKinds[l.kind]}</td>
+                    <td>{[l.number, l.name].filter(Boolean).join(" ")}</td>
+                    <td>{l.kind === "heading" ? "" : l.balance}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
         </div>
       )}
       {error && <p role="alert">{error}</p>}

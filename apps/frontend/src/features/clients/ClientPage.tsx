@@ -316,7 +316,7 @@ export default function ClientPage() {
             {ledger.line}
             {managedIn || !client.can_connect ? "" : ` Open a month under ${ledger.held ?? name} to ${ledger.connected ? "manage" : "connect"} its ledger.`}
           </Card>
-          {client.file_imports && <FilesCard client={name} />}
+          {client.file_imports && client.whole && <FilesCard client={name} />}
           <Card
             icon="history"
             tone={!roster ? "wait" : "done"}

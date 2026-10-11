@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http/httptest"
 	"net/url"
@@ -162,4 +163,22 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	if p := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+next, nil, 200)["proposal"].(map[string]any); p["reused"] != true {
 		t.Fatalf("a layout confirmed by hand is proposed again: %v", p)
 	}
+
+	// A long file's rows come in pages, so a row past the first page can be seen and marked.
+	long := "Account,Debit,Credit\n"
+	for i := 1; i <= 249; i++ {
+		long += fmt.Sprintf("Account %d,1.00,\n", i)
+	}
+	big := upload("user_b", preparer, "Long.csv", "2026-06", long, 201)["id"].(string)
+	page := func(from string) map[string]any {
+		t.Helper()
+		return call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+big+from, nil, 200)["tables"].([]any)[0].(map[string]any)
+	}
+	if first := page(""); len(first["rows"].([]any)) != 200 || first["more"] != 50.0 {
+		t.Fatalf("the first page: %d rows, %v more", len(first["rows"].([]any)), first["more"])
+	}
+	if later := page("&from=240"); len(later["rows"].([]any)) != 11 || later["rows"].([]any)[0].(map[string]any)["number"] != 240.0 || later["more"] != 0.0 {
+		t.Fatalf("rows from 240: %v", later)
+	}
+	call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+big+"&from=0", nil, 422)
 }

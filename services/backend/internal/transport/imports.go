@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -33,6 +34,30 @@ type importSummary struct {
 	Actor     string         `json:"actor"`
 	At        time.Time      `json:"at"`
 	Confirmed *confirmedRead `json:"confirmed,omitempty"`
+}
+
+// listedImport is an import as the client's list shows it: what was sent, and whether its confirmed reading is clean,
+// without the reading itself, which an opened import reads.
+type listedImport struct {
+	ID        string           `json:"id"`
+	Period    string           `json:"period"`
+	Name      string           `json:"name"`
+	Format    string           `json:"format"`
+	Replaces  string           `json:"replaces,omitempty"`
+	Actor     string           `json:"actor"`
+	At        time.Time        `json:"at"`
+	Confirmed *confirmedStatus `json:"confirmed,omitempty"`
+}
+
+// confirmedStatus is a confirmed layout's outcome: who confirmed it and why, whether it balanced, and how many problems
+// its reading names.
+type confirmedStatus struct {
+	ID       string    `json:"id"`
+	Reason   string    `json:"reason"`
+	Actor    string    `json:"actor"`
+	At       time.Time `json:"at"`
+	Balanced bool      `json:"balanced"`
+	Problems int       `json:"problems"`
 }
 
 // confirmedRead is a layout a person confirmed for an import, with what it read.
@@ -229,28 +254,32 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT i.id::text,i.period,i.name,i.format,COALESCE(i.replaces::text,''),i.actor,i.created_at FROM books_imports i
+		rows, err := db.QueryContext(r.Context(), `SELECT i.id::text,i.period,i.name,i.format,COALESCE(i.replaces::text,''),i.actor,i.created_at,
+ l.id::text,COALESCE(l.reason,''),COALESCE(l.actor,''),l.created_at,COALESCE((l.reading->>'balanced')::boolean,false),COALESCE(jsonb_array_length(l.reading->'problems'),0)
+ FROM books_imports i LEFT JOIN LATERAL (SELECT * FROM books_layouts b WHERE b.import_id=i.id ORDER BY b.id DESC LIMIT 1) l ON true
  WHERE i.organization_id=$1 AND client_identity(i.organization_id,i.client_entity)=client_identity($1,$2) ORDER BY i.period DESC,i.id DESC LIMIT 100`, organization(r), name)
 		if err != nil {
 			problem(w, 503, "The client's files are unavailable.")
 			return
 		}
-		imports := []importSummary{}
+		imports := []listedImport{}
 		for rows.Next() {
-			var s importSummary
-			if err = rows.Scan(&s.ID, &s.Period, &s.Name, &s.Format, &s.Replaces, &s.Actor, &s.At); err != nil {
+			var s listedImport
+			var c confirmedStatus
+			var layoutID sql.NullString
+			var at sql.NullTime
+			if err = rows.Scan(&s.ID, &s.Period, &s.Name, &s.Format, &s.Replaces, &s.Actor, &s.At, &layoutID, &c.Reason, &c.Actor, &at, &c.Balanced, &c.Problems); err != nil {
 				break
+			}
+			if layoutID.Valid {
+				c.ID, c.At = layoutID.String, at.Time
+				s.Confirmed = &c
 			}
 			imports = append(imports, s)
 		}
 		rows.Close()
 		if err == nil {
 			err = rows.Err()
-		}
-		for i := range imports {
-			if err == nil {
-				imports[i].Confirmed, err = latestLayout(r.Context(), db, organization(r), name, imports[i].ID)
-			}
 		}
 		if err != nil {
 			problem(w, 503, "The client's files are unavailable.")
@@ -339,11 +368,27 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		summary.Confirmed = confirmed
+		// Rows come in pages: from the first, or from the row a person asks for (?from=), so any row can be seen and
+		// marked.
+		from := 1
+		if f := r.URL.Query().Get("from"); f != "" {
+			if from, err = strconv.Atoi(f); err != nil || from < 1 {
+				problem(w, 422, "Say which row to show from, as a number.")
+				return
+			}
+		}
 		tables := []previewTable{}
 		for _, t := range file.Tables {
-			p := previewTable{Name: t.Name, Hidden: t.Hidden, HiddenColumns: t.HiddenColumns, Rows: t.Rows}
-			if len(p.Rows) > previewRows {
-				p.More, p.Rows = len(p.Rows)-previewRows, p.Rows[:previewRows]
+			p := previewTable{Name: t.Name, Hidden: t.Hidden, HiddenColumns: t.HiddenColumns, Rows: []bookfiles.Row{}}
+			for i, row := range t.Rows {
+				if row.Number < from {
+					continue
+				}
+				if len(p.Rows) == previewRows {
+					p.More = len(t.Rows) - i
+					break
+				}
+				p.Rows = append(p.Rows, row)
 			}
 			tables = append(tables, p)
 		}
