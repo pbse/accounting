@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // cells is a table's cells by reference, for checking.
@@ -386,5 +387,31 @@ func TestColumnsAndStoredNumbers(t *testing.T) {
 	}
 	if a, err := cellAmount(Cell{Kind: Number, Value: "1.5E-03"}, NumberStyle{Scale: 1000}); err != nil || a.Value.Cmp(big.NewRat(3, 2)) != 0 || a.Cents {
 		t.Fatalf("a stored number in thousands too short to say each cent: %+v %v", a, err)
+	}
+}
+
+// Nothing is dropped unseen: a row shifted outside the chosen columns is a problem until a person marks it ignored; two
+// amounts on one side are a problem, not an overwrite; and a date-time keeps its time.
+func TestNothingIsDroppedUnseen(t *testing.T) {
+	shifted, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00\nCapital,-100.00\n,,Cash,50\nLoan,,-50\n"))
+	layout, _ := ProposeLayout(shifted.Tables[0])
+	reading := layout.Read(shifted.Tables[0])
+	if len(reading.Problems) != 2 || !strings.Contains(reading.Problems[0], "Row 4") || !strings.Contains(reading.Problems[1], "Row 5 (Loan)") {
+		t.Fatalf("rows shifted outside the columns: %+v", reading.Problems)
+	}
+	layout.Ignored = []int{4, 5}
+	if reading = layout.Read(shifted.Tables[0]); len(reading.Problems) != 0 {
+		t.Fatalf("rows a person marked ignored: %+v", reading.Problems)
+	}
+	twice, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,100 Cr,50\nCapital,150.00,\n"))
+	layout, _ = ProposeLayout(twice.Tables[0])
+	if reading = layout.Read(twice.Tables[0]); len(reading.Problems) == 0 || !strings.Contains(reading.Problems[0], "more than one credit") {
+		t.Fatalf("two credits on one row: %+v", reading)
+	}
+	epoch := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
+	for serial, want := range map[float64]string{46295: "2026-09-30", 46295.5: "2026-09-30T12:00:00", 46295.25 + 1.0/86400000*7: "2026-09-30T06:00:00.007"} {
+		if got := serialDate(epoch, serial); got != want {
+			t.Fatalf("%v: %s, not %s", serial, got, want)
+		}
 	}
 }

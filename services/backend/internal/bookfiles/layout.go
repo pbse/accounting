@@ -44,6 +44,9 @@ type Layout struct {
 	// a total is otherwise known by its name ("Total …"), never by its amount being a formula.
 	Headings []int `json:"headings,omitempty"`
 	Totals   []int `json:"totals,omitempty"`
+	// Ignored are rows a person confirmed are not part of the Trial Balance (a footer, a note) though they hold values
+	// outside the layout's columns; any other such row is a problem.
+	Ignored []int `json:"ignored,omitempty"`
 }
 
 // headerWords names what each column header usually says, for a proposal.
@@ -339,12 +342,29 @@ func (l Layout) Read(t Table) Reading {
 		if r.Number <= l.HeaderRow {
 			continue
 		}
+		if slices.Contains(l.Ignored, r.Number) {
+			continue
+		}
 		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cells: map[Meaning]string{}, Cents: true}
 		var debit, credit, balance *big.Rat
 		hasAmount, signed := false, false
+		// outside are the row's values in columns the layout does not name: nothing is dropped unseen.
+		var outside []string
+		// side keeps one amount per side: a second (a Cr-marked amount in the debit column beside a credit) is a problem,
+		// not an overwrite.
+		side := func(to **big.Rat, value *big.Rat, name string, ref string) {
+			if *to != nil {
+				reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d has more than one %s amount (%s)", r.Number, name, ref))
+				return
+			}
+			*to = value
+		}
 		for _, c := range r.Cells {
 			meaning, ok := l.Columns[c.Column]
 			if !ok {
+				if strings.TrimSpace(c.Value) != "" {
+					outside = append(outside, c.Ref)
+				}
 				continue
 			}
 			if line.Ref == "" {
@@ -375,14 +395,14 @@ func (l Layout) Read(t Table) Reading {
 				switch {
 				case a.Side != "" && (meaning == Debit || meaning == Credit):
 					if a.Value.Sign() >= 0 {
-						debit = a.Value
+						side(&debit, a.Value, "debit", c.Ref)
 					} else {
-						credit = new(big.Rat).Neg(a.Value)
+						side(&credit, new(big.Rat).Neg(a.Value), "credit", c.Ref)
 					}
 				case meaning == Debit:
-					debit = a.Value
+					side(&debit, a.Value, "debit", c.Ref)
 				case meaning == Credit:
-					credit = a.Value
+					side(&credit, a.Value, "credit", c.Ref)
 				case meaning == Balance:
 					balance = a.Value
 					signed = a.Side != ""
@@ -392,7 +412,14 @@ func (l Layout) Read(t Table) Reading {
 			}
 		}
 		if line.Name == "" && line.Number == "" && !hasAmount {
+			if len(outside) > 0 {
+				reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d has values only outside the chosen columns (%s): choose its columns, or mark it ignored", r.Number, strings.Join(outside, ", ")))
+			}
 			continue
+		}
+		// A row with an account but no amount in the chosen columns, and a value beside them, may have shifted.
+		if !hasAmount && len(outside) > 0 {
+			reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d (%s) has no amount in the chosen columns but values beside them (%s): choose its columns, or mark it ignored", r.Number, line.Name, strings.Join(outside, ", ")))
 		}
 		switch {
 		case balance != nil:
