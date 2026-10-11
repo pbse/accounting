@@ -247,6 +247,12 @@ func RunBooksVersions(ctx context.Context, db *sql.DB) {
 		if err != nil && ctx.Err() == nil {
 			log.Print("Books versions could not be written: ", err)
 		}
+		// Months on files: the books of each current acceptance a month reads, a month opened after its file included.
+		if n, fileErr := writeFileVersions(ctx, db, "", "", ""); fileErr != nil && ctx.Err() == nil {
+			log.Print("Books versions from files could not be written: ", fileErr)
+		} else if n == 50 {
+			more = true
+		}
 		wait := time.Minute
 		if err == nil && more {
 			wait = time.Second
@@ -349,7 +355,7 @@ type storedVersion struct {
 func storedVersions(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, org string, after, through int64, limit int) ([]storedVersion, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id,source,source_id,digest,unreadable FROM books_versions WHERE ($1='' OR organization_id=$1) AND id>$2 AND ($3=0 OR id<=$3) ORDER BY id LIMIT $4`, org, after, through, limit)
+	rows, err := q.QueryContext(ctx, `SELECT id,source,source_id,digest,unreadable FROM books_versions WHERE ($1='' OR organization_id=$1) AND source<>'files' AND id>$2 AND ($3=0 OR id<=$3) ORDER BY id LIMIT $4`, org, after, through, limit)
 	if err != nil {
 		return nil, err
 	}
