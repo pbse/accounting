@@ -105,6 +105,28 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 		v := view()
 		call("POST", path, token, map[string]any{"action": "bind", "digest": v.Digest, "account_id": account, "jobs": []string{jobs[n]}, "reason": "Complete required invoice set for this synthetic account", "confirmed": true}, 200)
 	}
+	// A decision on a QuickBooks capture is signed as it always was: the capture columns it leaves empty are not in the
+	// signed snapshot, so a column added for another source changes no digest already signed.
+	tx, err := db.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	must(err)
+	ready, err := closeReadiness(t.Context(), tx, cid)
+	tx.Rollback()
+	must(err)
+	var signed struct {
+		Coverage []map[string]any `json:"coverage"`
+	}
+	must(json.Unmarshal(ready.Snapshot, &signed))
+	for _, b := range signed.Coverage {
+		if _, ok := b["file_version_id"]; ok {
+			t.Fatalf("an empty capture column is signed: %v", b)
+		}
+		if _, ok := b["xero_snapshot_id"]; ok {
+			t.Fatalf("an empty capture column is signed: %v", b)
+		}
+	}
+	if len(signed.Coverage) != 2 {
+		t.Fatalf("the decisions are signed: %v", signed.Coverage)
+	}
 	v := view()
 	if v.Items[0].State != "awaiting_work" {
 		t.Fatal("unfinished work resolved")

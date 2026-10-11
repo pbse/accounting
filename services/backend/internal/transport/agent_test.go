@@ -261,6 +261,90 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 		t.Fatal("Selected CSV reconciliation did not prepare", state, matches, err)
 	}
 
+	// Under the client's applied reconciliation procedure, a bank account whose every statement and ledger row matches
+	// exactly once, with balances from the statement's PDF tying both roll-forwards, is prepared without confirmation; one
+	// with an unmatched row waits for a person, saying why.
+	var bank string
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES('Agent bank fixture','2026-09') RETURNING id::text`).Scan(&bank); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, table := range []string{"preparation_jobs", "workpapers", "evidence", "quickbooks_connections"} {
+			db.Exec("DELETE FROM "+table+" WHERE close_id=$1", bank)
+		}
+		db.Exec(`DELETE FROM client_closes WHERE id=$1`, bank)
+	}()
+	if _, err = db.Exec(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,home_currency,fiscal_year_start) VALUES($1,'local-development','Agent bank fixture','fixture','active',$2,now(),'agent-recon','USD',1)`, bank, "agent-recon-"+bank); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DELETE FROM procedure_versions WHERE organization_id='local-development' AND client_entity='Agent bank fixture'`)
+	if _, err = db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor) VALUES('local-development','Agent bank fixture','reconciliation','Exact bank matching',true,'Synthetic accountant approval','fixture')`); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ = db.Begin()
+	procedure, err := preparation.CurrentProcedure(context.Background(), tx, bank, "reconciliation")
+	if err == nil {
+		_, err = preparation.AttachProcedure(context.Background(), tx, bank, procedure, false, "fixture")
+	}
+	if err != nil || tx.Commit() != nil {
+		t.Fatal(err)
+	}
+	straight := func(account, statementRows, ledgerRows string) string {
+		t.Helper()
+		statement := insert(bank, account+" rows.csv", "id,date,amount\n"+statementRows)
+		ledger := insert(bank, account+" ledger.csv", "id,date,amount\n"+ledgerRows)
+		balances := account + " USD: statement opening balance 50.00, closing balance 70.00; expected pages 1, observed pages 1."
+		pdf := insert(bank, account+" statement balances.txt", balances)
+		books := account + " general ledger: opening balance 50.00, closing balance 70.00."
+		report := insert(bank, account+" ledger balances.txt", books)
+		tx, _ := db.Begin()
+		job, err = preparation.StartIntake(context.Background(), tx, bank, statement, "fixture")
+		if err != nil || tx.Commit() != nil {
+			t.Fatal(err)
+		}
+		http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
+			facts := []any{}
+			for field, value := range map[string]string{"account": account, "currency": "USD", "statement_opening": "50.00", "statement_closing": "70.00", "ledger_opening": "50.00", "ledger_closing": "70.00", "expected_pages": "1", "pages": "1"} {
+				source, quote := pdf, balances
+				if strings.HasPrefix(field, "ledger_") {
+					source, quote = report, books
+				}
+				facts = append(facts, map[string]string{"field": field, "value": value, "source_id": source, "quote": quote})
+			}
+			output, _ := json.Marshal(map[string]any{"kind": "reconciliation", "summary": "Reconcile " + account, "questions": []string{}, "sources": []any{map[string]string{"id": statement, "role": "statement"}, map[string]string{"id": ledger, "role": "ledger"}, map[string]string{"id": pdf, "role": "support"}, map[string]string{"id": report, "role": "support"}}, "facts": facts})
+			body, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
+		})
+		process()
+		var checkpoint string
+		if e := db.QueryRow(`SELECT COALESCE(agent_checkpoint->>'straight_through','') FROM preparation_intakes WHERE job_id=$1`, job).Scan(&checkpoint); e != nil {
+			t.Fatal(e)
+		}
+		return checkpoint
+	}
+	if checkpoint := straight("Savings", "v1,2026-09-04,20.00\n", "w1,2026-09-04,20.00\n"); !strings.HasPrefix(checkpoint, "Prepared without confirmation") {
+		t.Fatal("a clean bank reconciliation is prepared without confirmation:", checkpoint)
+	}
+	if _, state = read(); state != "queued" {
+		t.Fatal("the clean reconciliation is queued", state)
+	}
+	if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
+		t.Fatal(e)
+	}
+	if _, state = read(); state != "completed" {
+		t.Fatal("the clean reconciliation is drafted", state)
+	}
+	if err = db.QueryRow("SELECT jsonb_array_length(paper->'matches') FROM workpapers WHERE close_id=$1 AND kind='reconciliation' AND paper->'input'->>'account'='Savings'", bank).Scan(&matches); err != nil || matches != 1 {
+		t.Fatal("the Savings reconciliation was drafted from its rows", matches, err)
+	}
+	// A second account in the same close is not held by the first one's documents; its unmatched row holds it.
+	if checkpoint := straight("Payroll account", "p1,2026-09-04,20.00\n", "q1,2026-09-05,20.00\n"); !strings.HasPrefix(checkpoint, "Waiting for a person") || strings.Contains(checkpoint, "was not used") {
+		t.Fatal("a reconciliation with an unmatched row waits for a person:", checkpoint)
+	}
+	if _, state = read(); state != "needs_confirmation" {
+		t.Fatal("the unmatched reconciliation waits", state)
+	}
+
 }
 
 func TestAgentProposedDepreciationContinuesThroughItsForm(t *testing.T) {
