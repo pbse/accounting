@@ -6,7 +6,7 @@ import { workspaceRequest } from "./workspace";
 
 type Reply = { id: string; request_id: string; envelope_from: string; header_from: string; body: string; addresses_match: boolean; state: string; received_at: string; decision_note?: string };
 
-export function EmailReplies({ closeId, onReleased }: { closeId: string; onReleased: () => void }) {
+export function EmailReplies({ closeId, onReleased, open }: { closeId: string; onReleased: () => void; open?: boolean }) {
   const dates = useDates();
   const read = useQuery(workspaceQuery<Reply[]>(`/${closeId}/email-replies`));
   const items = read.data ?? [];
@@ -26,7 +26,7 @@ export function EmailReplies({ closeId, onReleased }: { closeId: string; onRelea
     } catch (e) { setError(e instanceof Error ? e.message : "Reply decision failed."); }
     finally { setBusy(false); }
   }
-  return <details><summary>Review email replies{loaded ? ` · ${items.filter(item => item.state === "held").length} held` : ""}</summary>
+  return <details open={open}><summary>Review email replies{loaded ? ` · ${items.filter(item => item.state === "held").length} held` : ""}</summary>
     <p>Email replies are held until a firm reviewer confirms the original request and independently verifies the sender through a known contact channel. Matching addresses and mail headers alone do not prove identity. A reply from someone other than the approved recipient can be released only after you verify that new sender with the client through a known contact channel; never trust the name they give.</p>
     <button disabled={busy} onClick={() => void load()}>Load replies</button>
     {error && <p role="alert">{error}</p>}
