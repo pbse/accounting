@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -29,6 +30,8 @@ type modelProxy struct {
 	schema                   json.RawMessage
 	researchTools            []any
 	refused                  atomic.Bool
+	upstreamStatus           atomic.Int32
+	invalidResponse          atomic.Bool
 }
 
 func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -182,6 +185,10 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	client := *p.client
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	// Clear an earlier outcome only when a new upstream call actually starts.
+	// A local budget/policy refusal must not overwrite the provider failure.
+	p.upstreamStatus.Store(0)
+	p.invalidResponse.Store(false)
 	res, err := client.Do(req)
 	if err != nil {
 		http.Error(w, "model unavailable", 502)
@@ -189,6 +196,7 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
+		p.upstreamStatus.Store(int32(res.StatusCode))
 		http.Error(w, "model request failed", res.StatusCode)
 		return
 	}
@@ -196,6 +204,14 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Research text is surfaced after the CLI turn, so buffering does not change its callback contract.
 	raw, err = io.ReadAll(io.LimitReader(res.Body, (4<<20)+1))
 	if err != nil || len(raw) > 4<<20 || !providerToolsAllowed(p.agent, raw, p.completion) {
+		code := "tool_policy"
+		if err != nil {
+			code = "response_read"
+		} else if len(raw) > 4<<20 {
+			code = "response_limit"
+		}
+		p.invalidResponse.Store(true)
+		log.Printf("context_machine_provider_failure code=%s", code)
 		http.Error(w, "invalid model response", 502)
 		return
 	}
@@ -205,6 +221,8 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.refused.Store(true)
 		}
 		if err != nil {
+			p.invalidResponse.Store(true)
+			log.Print("context_machine_provider_failure code=incomplete")
 			http.Error(w, "incomplete model response", 502)
 			return
 		}
