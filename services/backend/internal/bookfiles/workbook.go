@@ -569,8 +569,16 @@ func formatMark(code string) string {
 				j++
 			}
 			// A currency tag is [$symbol-locale]; any other bracket is a colour or a condition.
+			// Its locale says which currency a shared symbol is ($ in en-CA is Canadian dollars); one the reader knows is
+			// kept beside the symbol as its code.
 			if tag := string(runes[i+1 : min(j, len(runes))]); strings.HasPrefix(tag, "$") {
-				add(strings.SplitN(tag[1:], "-", 2)[0])
+				parts := strings.SplitN(tag[1:], "-", 2)
+				add(parts[0])
+				if len(parts) == 2 && parts[0] != "" {
+					if code, ok := localeCurrencies[strings.ToUpper(strings.SplitN(parts[1], ",", 2)[0])]; ok {
+						add(code)
+					}
+				}
 			}
 			i = j
 		case symbol(r):
@@ -582,3 +590,11 @@ func formatMark(code string) string {
 
 // wholeCode is a currency code written alone.
 var wholeCode = regexp.MustCompile(`^[A-Z]{3}$`)
+
+// localeCurrencies are the currencies of the Windows locales (by their hexadecimal identifier, as a format's currency tag
+// writes them) whose symbol other currencies share.
+var localeCurrencies = map[string]string{
+	"409": "USD", "1009": "CAD", "C0C": "CAD", "C09": "AUD", "1409": "NZD", "4809": "SGD", "1004": "SGD", "C04": "HKD", "3C09": "HKD",
+	"404": "TWD", "80A": "MXN", "2C0A": "ARS", "340A": "CLP", "240A": "COP", "380A": "UYU", "416": "BRL", "411": "JPY", "804": "CNY",
+	"809": "GBP", "407": "EUR", "40C": "EUR", "410": "EUR", "C0A": "EUR", "413": "EUR", "1809": "EUR", "4009": "INR", "439": "INR",
+}

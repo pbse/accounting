@@ -366,6 +366,11 @@ func coveredFrom(lines []Line, i int) int {
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
 	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}}
+	// A layout reads the sheet it was confirmed for: another with the same columns is another sheet's figures.
+	if l.Table != "" && t.Name != l.Table {
+		reading.Problems = append(reading.Problems, fmt.Sprintf("The layout reads the sheet %q, not %q", l.Table, t.Name))
+		return reading
+	}
 	localNoted := false
 	// The month-end balance is what a Trial Balance is read for: a layout naming no column for it reads nothing, rather
 	// than every account as zero.

@@ -704,7 +704,7 @@ func TestATotalOfSignedColumns(t *testing.T) {
 // A workbook amount's currency is the one its number format shows: a euro format in a dollar Trial Balance is a
 // problem, a local-currency format a note to confirm.
 func TestAWorkbookAmountsCurrencyIsItsFormats(t *testing.T) {
-	for code, want := range map[string]string{`[$€-407] #,##0.00`: "€", `"USD" #,##0`: "USD", `\£#,##0.00`: "£", `[Red]#,##0;[$-409]0`: "", `#,##0.00 "Dr"`: "", `_-$* #,##0.00_-`: "$"} {
+	for code, want := range map[string]string{`[$€-407] #,##0.00`: "€ EUR", `"USD" #,##0`: "USD", `\£#,##0.00`: "£", `[Red]#,##0;[$-409]0`: "", `#,##0.00 "Dr"`: "", `_-$* #,##0.00_-`: "$"} {
 		if got := formatMark(code); got != want {
 			t.Fatalf("%s: %q, not %q", code, got, want)
 		}
@@ -849,5 +849,23 @@ func TestALeftOutFooterTotalsNothing(t *testing.T) {
 	}
 	if !bank {
 		t.Fatalf("Bank is an account: %+v", reading.Lines)
+	}
+}
+
+// A layout reads its own sheet; a dollar tagged with its locale says which dollar it is.
+func TestTheSheetAndTheLocale(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nCapital,,100.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	layout.Table = "Another sheet"
+	if reading := layout.Read(file.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Another sheet") {
+		t.Fatalf("another sheet: %+v", reading)
+	}
+	for code, want := range map[string]string{`[$$-409]#,##0.00`: "$ USD", `[$$-1009]#,##0.00`: "$ CAD", `[$$-9999]#,##0`: "$"} {
+		if got := formatMark(code); got != want {
+			t.Fatalf("%s: %q, not %q", code, got, want)
+		}
+	}
+	if MarkAgrees("$ USD", "CAD") || !MarkAgrees("$ CAD", "CAD") {
+		t.Fatal("a dollar's locale decides which it is")
 	}
 }
