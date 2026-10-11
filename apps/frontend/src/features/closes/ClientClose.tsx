@@ -62,6 +62,10 @@ const basisLabels = { cash: "Cash basis", modified_cash: "Modified cash basis", 
 
 function profileLabel(p: Profile) {
   if (p.state === "conflict") return "Connected ledgers disagree on currency or fiscal year; disconnect the wrong one";
+  if (p.state === "differs")
+    return p.ledger?.conflict
+      ? `${p.currency} confirmed, but the connected ledgers disagree with each other: disconnect the wrong one`
+      : `${p.currency} confirmed, but the ledger reports ${p.ledger?.currency}: correct the client's profile or its connection`;
   if (p.state === "unknown") return "USD assumed until the ledger's currency is read: reconnect QuickBooks, or capture a Xero snapshot";
   return `${p.currency} · fiscal year starts ${new Date(2000, p.fiscal_year_start - 1).toLocaleString("en-US", { month: "long" })}`;
 }
@@ -216,7 +220,7 @@ export default function ClientClose() {
       <CloseLede close={close} onPlanSaved={() => void reload()} />
       <p className="ks-lede-notes">
         {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]}</span>}
-        {close.profile && close.profile.state !== "none" && <span className={close.profile.state === "conflict" || close.profile.state === "unknown" ? "chip warn" : "chip"} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
+        {close.profile && close.profile.state !== "none" && <span className={close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown" ? "chip warn" : "chip"} role={close.profile.state === "conflict" || close.profile.state === "differs" ? "alert" : undefined} title={close.profile.state === "confirmed" || close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>{profileLabel(close.profile)}</span>}
       </p>
       <nav className="ks-tabs" aria-label="Close sections">
         {tabs.map(([key, label]) => (

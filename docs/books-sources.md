@@ -190,6 +190,10 @@ The management pack's basis label is hard-coded as `Accrual` today (`transport/m
 
 `preparation.ClientProfile` takes the client's currency and fiscal-year start from its active QuickBooks or Xero connection, and without one falls back to USD and January with state `none`. A file-only client needs a **confirmed client profile independent of connections**: entity, currency and fiscal-year start, versioned with effective dates, and referring to the approved basis procedure rather than holding a basis of its own. Where a connection reports different values, the difference is a question, not an override. Currency checks, fiscal-year calculations, statement confirmation, takeover setup and the year-end handoff read the profile. No file-only client gets a placeholder connection to satisfy them.
 
+As built (delivery step 4): `client_profiles` holds each confirmed profile with the month it takes effect, as a history; a month reads the profile with the latest effective month up to it, so earlier months keep the profile they were closed under. `preparation.ClientProfile` returns it with state `confirmed`, or `differs` when a connected ledger reports another currency or fiscal year (the confirmed values stand; drafts, statement binding, budget year-to-date and the year-end handoff wait on the question). Without one it reads the connections as before. A member who reviews confirms or changes it on the client's page (the Currency and year card), under the client's own name, against the profile they read; the firm export includes it.
+
+Source selection (each client's default source and month overrides) is recorded with the readers that honour it in step 5: about thirteen readers choose between QuickBooks and Xero captures themselves today, so a default no reader followed would leave parts of the product disagreeing about one month.
+
 ## Architecture
 
 ### One month-books record

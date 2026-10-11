@@ -116,18 +116,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		// open when any of its names is, showing the months they could open. What belongs to the client as a whole (its
 		// roster entry, the months it owes, its connections, currency and basis) is shown under its own name only, as the
 		// roster and a close's connection read show it.
-		var name string
-		var known, allowed, whole bool
-		err = tx.QueryRowContext(ctx, `WITH client AS (SELECT client_identity($1,$2) AS id),
- names AS (SELECT r.client_entity AS name,0 AS rank,'' AS period FROM current_client_roster r,client WHERE r.organization_id=$1 AND client_identity(r.organization_id,r.client_entity)=client.id
-  UNION ALL SELECT c.entity,CASE WHEN lower(c.entity)=client.id THEN 1 ELSE 3 END,c.period FROM client_closes c,client WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client.id
-  UNION ALL SELECT a.client_entity,2,'' FROM client_aliases a,client WHERE a.organization_id=$1 AND a.retired_at IS NULL AND lower(a.client_entity)=client.id),
- own AS (SELECT name FROM names ORDER BY rank,period DESC LIMIT 1),
- granted AS (SELECT lower(g.client_entity) AS name FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$4 AND g.granted)
- SELECT COALESCE((SELECT name FROM own),''),EXISTS(SELECT 1 FROM names),
-  $3 OR EXISTS(SELECT 1 FROM granted WHERE name IN (SELECT lower(name) FROM names)),
-  $3 OR EXISTS(SELECT 1 FROM granted WHERE name=(SELECT lower(name) FROM own))`,
-			org, asked, firm, who).Scan(&name, &known, &allowed, &whole)
+		name, known, allowed, whole, err := clientNamed(ctx, tx, org, asked, firm, who)
 		if err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
@@ -136,7 +125,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client not found.")
 			return
 		}
-		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r)}
+		out := map[string]any{"entity": name, "whole": whole, "can_manage": canManageRoster(r), "can_connect": canConnect(r), "can_review": canReview(r)}
 
 		// Every month opened under any of the client's names that the reader could open, newest first, each with where
 		// its books come from now: the newer of its QuickBooks period capture (from the connection its books are read
@@ -274,7 +263,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		out["requests"] = requests
 		// A member who can open only some of the client's months, under another of its names, sees those alone.
 		if !whole {
-			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"] = nil, nil, true, []any{}, []any{}, nil, nil
+			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["profiles"], out["basis"] = nil, nil, true, []any{}, []any{}, nil, []any{}, nil
 			jsonReply(w, 200, out)
 			return
 		}
@@ -335,14 +324,19 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		out["quickbooks"], out["xero"] = json.RawMessage(quickbooksRaw), json.RawMessage(xeroRaw)
 
-		// The client's currency and fiscal year as its connected ledgers report them, under any of its names, and its
-		// approved basis (a client override first, then the firm's), as a close reads it.
-		profile, err := preparation.ClientProfileOf(ctx, tx, org, name)
+		// The client's currency and fiscal year in force this month (its confirmed profile, else as its connected ledgers
+		// report them, under any of its names), its confirmed profile's history, and its approved basis (a client override
+		// first, then the firm's), as a close reads it.
+		profile, err := preparation.ClientProfileOf(ctx, tx, org, name, time.Now().UTC().Format("2006-01"))
 		if err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
 		out["profile"] = profile
+		if out["profiles"], err = profileHistory(ctx, tx, org, name); err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
 		// The approved basis, as a close reads it for the name it was opened under: the client's own override, else the
 		// firm's. An override approved under a name since confirmed as the client's alias is that name's months' basis,
 		// so each is listed with the name it was approved under rather than folded into one client-wide value.

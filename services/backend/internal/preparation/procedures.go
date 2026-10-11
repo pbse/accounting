@@ -35,42 +35,79 @@ func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Pr
 	return p, err
 }
 
-// Profile is the client's home currency and first fiscal month from its active ledger connections.
-// State is detected, none (no ledger connected), unknown (a connection predates detection; USD) or conflict.
+// Profile is the client's home currency and first fiscal month for a month: its confirmed profile in force then, else
+// what its active ledger connections report. State is confirmed (a confirmed profile, which no connection contradicts),
+// differs (a confirmed profile a connection contradicts: a question, never an override), detected, none (no ledger
+// connected), unknown (a connection predates detection; USD) or conflict (connections disagree, nothing confirmed).
 type Profile struct {
 	Currency    string `json:"currency"`
 	FiscalStart int    `json:"fiscal_year_start"`
 	State       string `json:"state"`
+	// EffectiveFrom is the month the confirmed profile in force took effect, when one is.
+	EffectiveFrom string `json:"effective_from,omitempty"`
+	// Ledger is what the connected ledgers report when it differs from the confirmed profile; Conflict says they also
+	// disagree with one another.
+	Ledger *LedgerProfile `json:"ledger,omitempty"`
 }
 
+// LedgerProfile is what a client's connected ledgers report.
+type LedgerProfile struct {
+	Currency    string `json:"currency,omitempty"`
+	FiscalStart int    `json:"fiscal_year_start,omitempty"`
+	Conflict    bool   `json:"conflict,omitempty"`
+}
+
+// Unsettled says the profile has an open question that holds what depends on it: connected ledgers that disagree with
+// one another, or with the confirmed profile.
+func (p Profile) Unsettled() bool { return p.State == "conflict" || p.State == "differs" }
+
+// Question says what the open question is, plainly, or "" when there is none.
+func (p Profile) Question() string {
+	switch {
+	case p.State == "conflict":
+		return "This client's connected ledgers report different home currencies or fiscal years; disconnect the wrong one, or confirm the client's profile"
+	case p.State == "differs" && p.Ledger.Conflict:
+		return fmt.Sprintf("This client's confirmed profile is %s from month %d, but its connected ledgers disagree with each other; disconnect the wrong one", p.Currency, p.FiscalStart)
+	case p.State == "differs":
+		return fmt.Sprintf("This client's confirmed profile is %s with its year from month %d, but its connected ledger reports %s from month %d; correct the profile or the connection", p.Currency, p.FiscalStart, p.Ledger.Currency, p.Ledger.FiscalStart)
+	}
+	return ""
+}
+
+// ClientProfile is the profile of a close's client for the close's month.
 func ClientProfile(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID string) (Profile, error) {
-	return clientProfile(ctx, q, `WITH c AS (SELECT organization_id,entity FROM client_closes WHERE id::text=$1)`, `lower(%[1]s.client_entity)=lower(c.entity)`, closeID)
+	return clientProfile(ctx, q, `WITH c AS (SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1)`, `lower(%[1]s.client_entity)=lower(c.entity)`, closeID)
 }
 
-// ClientProfileOf is ClientProfile for a client by its name in firm org, with no close needed, read from its
-// connections under any of its names (a connection is kept under the name of the close it was made from, which may since
-// have been confirmed as an alias): the client page reads it before any month is opened.
+// ClientProfileOf is ClientProfile for a client by its name in firm org, with no close needed, for month (YYYY-MM), read
+// from its connections under any of its names (a connection is kept under the name of the close it was made from, which
+// may since have been confirmed as an alias): the client page reads it before any month is opened.
 func ClientProfileOf(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, org, entity string) (Profile, error) {
-	return clientProfile(ctx, q, `WITH c AS (SELECT $1::text AS organization_id,$2::text AS entity)`, `client_identity(%[1]s.organization_id,%[1]s.client_entity)=client_identity(c.organization_id,c.entity)`, org, entity)
+}, org, entity, month string) (Profile, error) {
+	return clientProfile(ctx, q, `WITH c AS (SELECT $1::text AS organization_id,$2::text AS entity,$3::text AS period)`, `client_identity(%[1]s.organization_id,%[1]s.client_entity)=client_identity(c.organization_id,c.entity)`, org, entity, month)
 }
 
-// clientProfile reads the profile of the one client the WITH clause c names (its organization_id and entity), from its
-// connections matched by match (SQL with %[1]s for the connection's alias).
+// clientProfile reads the profile of the one client the WITH clause c names (its organization_id, entity and the month,
+// period), from its confirmed profile, matched by client identity, and its connections, matched by match (SQL with
+// %[1]s for the connection's alias).
 func clientProfile(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, client, match string, args ...any) (Profile, error) {
 	p := Profile{Currency: "USD", FiscalStart: 1}
 	var total, known, currencies, starts int
-	var currency sql.NullString
-	var start sql.NullInt64
+	var currency, confirmed, effective sql.NullString
+	var start, confirmedStart sql.NullInt64
 	err := q.QueryRowContext(ctx, client+`,
  x AS (SELECT q.home_currency,q.fiscal_year_start FROM quickbooks_connections q JOIN c ON c.organization_id=q.organization_id AND `+fmt.Sprintf(match, "q")+` WHERE q.state='active'
  UNION ALL SELECT r.home_currency,r.fiscal_year_start FROM xero_connections r JOIN c ON c.organization_id=r.organization_id AND `+fmt.Sprintf(match, "r")+` WHERE r.state='active')
- SELECT count(*),count(home_currency),count(DISTINCT home_currency),count(DISTINCT fiscal_year_start),min(home_currency),min(fiscal_year_start) FROM x`, args...).Scan(&total, &known, &currencies, &starts, &currency, &start)
+ SELECT count(*),count(home_currency),count(DISTINCT home_currency),count(DISTINCT fiscal_year_start),min(home_currency),min(fiscal_year_start),
+  (SELECT f.currency FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1),
+  (SELECT f.fiscal_year_start FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1),
+  (SELECT f.effective_from FROM client_profiles f, c WHERE f.organization_id=c.organization_id AND client_identity(f.organization_id,f.client_entity)=client_identity(c.organization_id,c.entity) AND f.effective_from<=c.period ORDER BY f.effective_from DESC,f.id DESC LIMIT 1)
+ FROM x`, args...).Scan(&total, &known, &currencies, &starts, &currency, &start, &confirmed, &confirmedStart, &effective)
 	switch {
 	case err != nil:
 		return p, err
@@ -85,6 +122,18 @@ func clientProfile(ctx context.Context, q interface {
 		if start.Valid {
 			p.FiscalStart = int(start.Int64)
 		}
+	}
+	if !confirmed.Valid {
+		return p, nil
+	}
+	// The confirmed profile stands; a connection that reports otherwise asks a question.
+	ledger := p
+	p = Profile{Currency: confirmed.String, FiscalStart: int(confirmedStart.Int64), State: "confirmed", EffectiveFrom: effective.String}
+	switch {
+	case ledger.State == "conflict":
+		p.State, p.Ledger = "differs", &LedgerProfile{Conflict: true}
+	case ledger.State == "detected" && (ledger.Currency != p.Currency || ledger.FiscalStart != p.FiscalStart):
+		p.State, p.Ledger = "differs", &LedgerProfile{Currency: ledger.Currency, FiscalStart: ledger.FiscalStart}
 	}
 	return p, nil
 }
@@ -102,8 +151,8 @@ func CurrencyIssue(ctx context.Context, q interface {
 	}
 	json.Unmarshal(paper, &money)
 	currency := cmp.Or(money.Input.Currency, "USD")
-	if profile.State == "conflict" {
-		return fmt.Errorf("This client's connected ledgers report different home currencies or fiscal years; disconnect the wrong one before saving drafts")
+	if profile.Unsettled() {
+		return fmt.Errorf("%s before saving drafts", profile.Question())
 	}
 	if profile.State != "none" && currency != profile.Currency {
 		return fmt.Errorf("This draft is in %s but the client's books are kept in %s; prepare it in %s", currency, profile.Currency, profile.Currency)
