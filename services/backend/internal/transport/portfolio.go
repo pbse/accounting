@@ -31,7 +31,7 @@ var portfolioFiller = strings.Fields("all the closes close clients client work e
 // waitingStatements is SQL: close c has statement reconciliation work waiting on the client, or a current request
 // (on the close's latest QuickBooks capture of the connection its books are read from, or its Xero capture in use) with an open, unused link for a bank or card
 // account's coverage. A Xero capture's coverage is proposed on read, so its bank and card accounts are those Xero
-// types BANK (xero.Coverage).
+// types BANK (xero.Coverage); a month on files', those its books version types Bank or Credit Card (fileCoverage).
 const waitingStatements = `(EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=c.id AND j.state='waiting_client' AND i.proposal->>'kind'='reconciliation')
  OR EXISTS(SELECT 1 FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id
   CROSS JOIN LATERAL (SELECT s.id,s.payload->'coverage' AS coverage FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND ` + quickbooksReading + ` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) snap
@@ -43,7 +43,12 @@ const waitingStatements = `(EXISTS(SELECT 1 FROM preparation_jobs j JOIN prepara
   WHERE d.close_id=c.id AND s.close_id=c.id AND ` + preparation.RequestCoverageIsCurrent + `
   AND EXISTS(SELECT 1 FROM client_request_links l WHERE l.request_id=q.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now())
   AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(q.coverage_scope->'bindings')='array' THEN q.coverage_scope->'bindings' ELSE '[]' END) b
-   WHERE s.payload->'accounts'->'Accounts' @> jsonb_build_array(jsonb_build_object('AccountID',b->>'account_id','Type','BANK')))))`
+   WHERE s.payload->'accounts'->'Accounts' @> jsonb_build_array(jsonb_build_object('AccountID',b->>'account_id','Type','BANK'))))
+ OR EXISTS(SELECT 1 FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN books_versions v ON '` + fileCapture + `'||v.id=q.coverage_scope->>'snapshot_id'
+  WHERE d.close_id=c.id AND v.close_id=c.id AND ` + preparation.RequestCoverageIsCurrent + `
+  AND EXISTS(SELECT 1 FROM client_request_links l WHERE l.request_id=q.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now())
+  AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(q.coverage_scope->'bindings')='array' THEN q.coverage_scope->'bindings' ELSE '[]' END) b
+   WHERE v.accounts->(b->>'account_id')->>'type' IN ('Bank','Credit Card'))))`
 
 // parsePortfolioGoal reads a goal such as "prepare my clients due Friday" without a model; today resolves day names.
 func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
