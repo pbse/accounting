@@ -24,7 +24,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	var id, requestID, collectionID, closeID, org, provider string
 	var encrypted, credential []byte
 	var attempts int
-	var valid bool
+	var valid, partial bool
 	var until time.Time
 	err = tx.QueryRowContext(ctx, `SELECT m.id,COALESCE(m.request_id::text,''),COALESCE(m.collection_id::text,''),c.id::text,c.organization_id,m.payload,x.provider,x.credential,m.attempts,m.approved_until
  FROM email_outbox m JOIN email_connections x ON x.id=m.connection_id LEFT JOIN work_requests q ON q.id=m.request_id LEFT JOIN request_drafts d ON d.id=q.draft_id
@@ -56,10 +56,20 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			return false, err
 		}
 	} else {
-		if err = tx.QueryRowContext(ctx, `SELECT o.enabled AND x.enabled AND m.approved_until>now() AND (m.first_attempt_at IS NULL OR m.first_attempt_at>now()-interval '23 hours') AND m.attempts<3 AND l.revoked_at IS NULL AND l.used_at IS NULL AND l.expires_at>now() AND (q.coverage_scope IS NOT NULL OR (j.state='waiting_client' AND q.id=(SELECT max(id) FROM work_requests WHERE job_id=j.id))) AND NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=q.id) AND NOT EXISTS(SELECT 1 FROM inbound_replies i WHERE i.request_id=q.id AND i.state='held') AND (m.reminder_of IS NULL OR (EXISTS(SELECT 1 FROM email_delivery prior WHERE prior.id=m.reminder_of AND prior.state='accepted' AND prior.delivery='delivered') AND NOT EXISTS(SELECT 1 FROM email_delivery bad WHERE bad.request_id=q.id AND bad.delivery IN ('bounced','complained','failed','suppressed')))) AND (c.organization_id='local-development' OR EXISTS(SELECT 1 FROM current_organization_members om WHERE om.organization_id=c.organization_id AND om.subject=m.approved_by AND om.granted)) AND (m.firm_authority OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=m.approved_by AND lower(g.client_entity)=lower(c.entity) AND g.granted)) FROM email_outbox m JOIN email_connections x ON x.id=m.connection_id JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id LEFT JOIN preparation_jobs j ON j.id=q.job_id JOIN organizations o ON o.id=c.organization_id JOIN client_request_links l ON l.digest=m.link_digest WHERE m.id=$1`, id).Scan(&valid); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT o.enabled AND x.enabled AND m.approved_until>now() AND (m.first_attempt_at IS NULL OR m.first_attempt_at>now()-interval '23 hours') AND m.attempts<3 AND l.revoked_at IS NULL AND (l.used_at IS NULL OR m.reminder_of IS NOT NULL AND `+preparation.PartialReply+`) AND l.expires_at>now() AND (q.coverage_scope IS NOT NULL OR (j.state='waiting_client' AND q.id=(SELECT max(id) FROM work_requests WHERE job_id=j.id))) AND (NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=q.id) OR m.reminder_of IS NOT NULL AND `+preparation.PartialReply+`) AND NOT EXISTS(SELECT 1 FROM inbound_replies i WHERE i.request_id=q.id AND i.state='held') AND (m.reminder_of IS NULL OR NOT EXISTS(SELECT 1 FROM request_submissions s WHERE s.request_id=q.id AND s.created_at>m.created_at)) AND (m.reminder_of IS NULL OR (EXISTS(SELECT 1 FROM email_delivery prior WHERE prior.id=m.reminder_of AND prior.state='accepted' AND prior.delivery='delivered') AND NOT EXISTS(SELECT 1 FROM email_delivery bad WHERE bad.request_id=q.id AND bad.delivery IN ('bounced','complained','failed','suppressed')))) AND (c.organization_id='local-development' OR EXISTS(SELECT 1 FROM current_organization_members om WHERE om.organization_id=c.organization_id AND om.subject=m.approved_by AND om.granted)) AND (m.firm_authority OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=m.approved_by AND lower(g.client_entity)=lower(c.entity) AND g.granted)),
+ m.reminder_of IS NOT NULL AND l.used_at IS NOT NULL AND `+preparation.PartialReply+`
+ FROM email_outbox m JOIN email_connections x ON x.id=m.connection_id JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id LEFT JOIN preparation_jobs j ON j.id=q.job_id JOIN organizations o ON o.id=c.organization_id JOIN client_request_links l ON l.digest=m.link_digest WHERE m.id=$1`, id).Scan(&valid, &partial); err != nil {
 			return false, err
 		}
-		freshErr = preparation.FreshClientRequest(ctx, tx, closeID, requestID)
+		// A reminder after a partial reply needs the request still taking answers; anything else needs it exactly as
+		// approved.
+		if partial {
+			if open, e := preparation.RequestOpen(ctx, tx, closeID, requestID); e != nil || !open {
+				freshErr = fmt.Errorf("request no longer takes answers")
+			}
+		} else {
+			freshErr = preparation.FreshClientRequest(ctx, tx, closeID, requestID)
+		}
 	}
 	if !valid || freshErr != nil {
 		state := "cancelled"

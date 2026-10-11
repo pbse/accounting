@@ -4344,3 +4344,9 @@ Slice 4 (per-method automatic preparation). A reviewed recurring accrual's month
 
 Test: `TestRecurringAccrualRequiresCurrentMonthAndApprovedRule` queues the prefilled month by the sweep once, and a second pass queues nothing; the person's request then reaches the same job. The closest recurring-accrual, standing-approval and comparison tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — A partial reply can be reminded for the rest (B04/B05)
+
+Reminders required an unused link and no reply at all, so a client who answered part of a request was never reminded about the rest. A reminder is now also due, and can be approved, while the request's latest submission is partial and its work still waits on the client (`partialReply`), the link is live and the request still takes answers; the firm's reminder period counts from the later of delivery and that reply. Work's goal says "approve a reminder for the rest" when one is due after a partial reply, and both Requests surfaces (Work and Coverage) offer the reminder then. The delivery worker applies the same rule at send time (a partial-reply reminder needs the request still taking answers, `preparation.RequestOpen`), so it is sent, not cancelled; a reply after the reminder's approval cancels it, and a consolidated request is reminded only while one of its jobs still waits on the client (or it covers accounts alone).
+
+Test: `TestApprovedEmailDurableRetryAndScope` records a partial reply on a used link: the reminder period restarts from it, the goal offers the reminder, approval succeeds and the worker sends it; seen to fail without the fix (and without the worker's change, cancelled). The closest email, attention, goal, partial-reply, inbound-reply and Work tests passed on a fresh local PostgreSQL.
+
