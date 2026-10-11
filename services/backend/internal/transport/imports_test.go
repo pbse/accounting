@@ -295,4 +295,12 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	if receipts != 1 {
 		t.Fatalf("a deleted file leaves a receipt: %d", receipts)
 	}
+
+	// Another client's file, its rows kept under the key Acme's own requests would use, is never read through Acme.
+	var otherClient, acmeLayout string
+	must(db.QueryRow(`INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,actor) VALUES($1,'Other Co','2026-09','other.csv',md5(random()::text)||md5(random()::text),'x','csv','fixture') RETURNING id::text`, org).Scan(&otherClient))
+	must(db.QueryRow(`SELECT max(id)::text FROM books_layouts WHERE organization_id=$1 AND lower(client_entity)='acme co'`, org).Scan(&acmeLayout))
+	_, err = db.Exec(`INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows) VALUES($1,$2::bigint,$3,0,'other.csv',false,'[]',2,0,1,'[{"number":2,"cells":[{"column":0,"ref":"R2C1","kind":"text","value":"Secret"}]}]')`, org, otherClient, "||s"+acmeLayout)
+	must(err)
+	call("user_a", partner, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+otherClient+"&from=2", nil, 404)
 }
