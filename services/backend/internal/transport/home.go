@@ -215,7 +215,7 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 		// it is a decision here in its own right, listed first among the decisions: reopen and review, or find out why its
 		// sign-off could not be rechecked. It has no read mark, so it is never counted as new.
 		// Decisions are what the reader can decide; what waits on a teammate's authority is counted apart.
-		decisions, team, unread := 0, 0, 0
+		decisions, team, unread, snoozed := 0, 0, 0, 0
 		for _, o := range append(slices.Clone(owed), later...) {
 			if (o.State == "reopen_required" || o.State == "unknown") && canReview(r) {
 				decisions++
@@ -223,12 +223,22 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 				team++
 			}
 		}
+		// A notice with no decision behind it (a complete reply, a goal reached) is news for the notices, not a decision;
+		// snoozed decisions are still unresolved, so they are counted apart rather than dropped.
 		for _, e := range events {
-			if e.SnoozedUntil != nil {
+			if !e.Yours {
+				if e.SnoozedUntil == nil && !e.Info {
+					team++
+				}
 				continue
 			}
-			if !e.Yours {
-				team++
+			if e.SnoozedUntil != nil {
+				if !e.Info {
+					snoozed++
+				}
+				continue
+			}
+			if e.Info {
 				continue
 			}
 			decisions++
@@ -261,7 +271,7 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 			"can_add":        canManageRoster(r),
 			"can_review":     canReview(r),
 			"signed_off":     map[string]int{"done": signed, "total": len(cohort) + len(unopened)},
-			"decisions":      map[string]int{"count": decisions, "unread": unread, "team": team},
+			"decisions":      map[string]int{"count": decisions, "unread": unread, "team": team, "snoozed": snoozed},
 			"inbox":          attentionInbox(events, kinds, browser, "all", 0, true),
 			"deadlines":      map[string]int{"overdue": overdue, "due_soon": dueSoon, "no_due_date": undated, "not_opened_overdue": unopenedOverdue, "not_opened_upcoming": unopenedSoon},
 			"prepared":       map[string]int{"total": total, "done": done, "failed": failed, "waiting_person": waitingPerson, "running": running, "waiting_client": waitingClient, "cancelled": cancelled, "no_draft": noDraft},

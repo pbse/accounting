@@ -156,8 +156,14 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 	if later := call("user_a", acting, "GET", "/v1/closes/attention?page=9223372036854775807", nil, 200); later.Page != 0 || len(later.Groups) != 1 || later.HasMore || len(later.UnreadKeys) != 2 {
 		t.Fatalf("a page past the end is the last page, and the unread keys cover every item: %+v", later)
 	}
-	if got.Unread != 2 || len(events) != 2 || events["approve"].Key != "approve:"+alphaDraft || events["answered"].Text != "Client replied to request #"+request+" (partial)" {
+	if got.Unread != 2 || len(events) != 2 || events["approve"].Key != "approve:"+alphaDraft || events["answered"].Text != "Client replied to request #"+request+" (partial)" || events["answered"].Info {
 		t.Fatalf("the ready draft and the partial reply need a person, the waiting job does not: %+v", got)
+	}
+	// A partial reply stays a decision past two weeks while its work still waits on the client: no reminder can follow it.
+	_, err = db.Exec(`UPDATE request_submissions SET created_at=now()-interval '20 days' WHERE request_id::text=$1`, request)
+	must(err)
+	if _, events = mine(""); events["answered"].Key == "" {
+		t.Fatalf("an old partial reply whose work still waits is still listed: %+v", events)
 	}
 	if all := call("user_admin", []string{"clients:all", "workpapers:review", "requests:send"}, "GET", "/v1/closes/attention", nil, 200); len(all.Groups) != 2 || all.Unread != 3 {
 		t.Fatalf("firm access sees every client's events: %+v", all)
@@ -181,8 +187,8 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 		t.Fatalf("the unread view leaves read items out before paging: %+v", unread)
 	}
 	submit("second", true)
-	if got, events = mine(""); got.Unread != 2 || events["answered"].Read || events["answered"].Text != "Client replied to request #"+request {
-		t.Fatalf("the client's next reply is a new, unread event: %+v", got)
+	if got, events = mine(""); got.Unread != 2 || events["answered"].Read || events["answered"].Text != "Client replied to request #"+request || !events["answered"].Info {
+		t.Fatalf("the client's next reply is a new, unread event, news rather than a decision: %+v", got)
 	}
 	approve := events["approve"].Key
 	mark("snooze", []string{approve}, time.Now().Add(24*time.Hour).Format(time.RFC3339), 200)
