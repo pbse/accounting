@@ -29,3 +29,5 @@ Tool reference: [Tesseract command-line usage](https://tesseract-ocr.github.io/t
 ## Hosted validation
 
 Follow [staging setup](deployment.md) and the [acceptance matrix](onboarding.md#staging-acceptance-matrix). Verify a synthetic multipage PDF upload/extraction, a confirmed revised draft and its pending review state. Client-submitted attachments additionally require [malware scanning](cloudflare-upload-scanning.md) and firm release. CI or a deploy does not prove OCR accuracy, provider configuration or accountant acceptance.
+
+PDF image reading now follows the central `ocr` gateway purpose. `LLM_PROVIDER=context_machine` sends pages through the configured Codex/Claude agent and ignores the direct Gemini key; API mode uses configured paid Gemini, or explicitly opted-in OpenAI image reading (`LLM_API_IMAGE_ENABLED=true`). A text API key alone sends no page images. The worker attaches the uploader's identity and requires current membership/client access for context-machine images. Page labels record the actual model provider. Existing exact-text comparison, daily OCR-call budget, per-page timeout and local Tesseract recovery remain in force.

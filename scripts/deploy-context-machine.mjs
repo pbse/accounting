@@ -6,6 +6,16 @@ import { spawnSync } from "node:child_process";
 
 const provider = process.env.LLM_PROVIDER || "api";
 if (!["api", "context_machine"].includes(provider)) throw new Error("LLM_PROVIDER must be api or context_machine");
+const apiImages = process.env.LLM_API_IMAGE_ENABLED || "false";
+if (!["true", "false"].includes(apiImages)) throw new Error("LLM_API_IMAGE_ENABLED must be true or false");
+if (provider === "api" && apiImages !== "true") {
+ for (const name of ["LLM_MODELS", "LLM_REASONING_EFFORTS"]) {
+  if (!process.env[name]) continue;
+  let policy; try { policy=JSON.parse(process.env[name]); } catch { throw new Error(`Invalid ${name}`); }
+  if (!policy || Array.isArray(policy) || typeof policy !== "object") throw new Error(`Invalid ${name}`);
+  if (policy.ocr !== undefined) throw new Error("API OCR overrides require LLM_API_IMAGE_ENABLED=true; configure Gemini with GEMINI_OCR_MODEL");
+ }
+}
 const uncapped = process.env.LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS || "false";
 if (!["true", "false"].includes(uncapped)) throw new Error("LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS must be true or false");
 const enabled = process.env.CONTEXT_MACHINE_ENABLED || "true";
@@ -84,7 +94,7 @@ if (provider === "context_machine") {
  const mode = process.env[`${agent.toUpperCase()}_AUTH_MODE`] || "auto";
  const subscription = agent === "codex" && (mode === "subscription" || mode === "chatgpt" || (mode === "auto" && !has("OPENAI_API_KEY")));
  if (subscription && uncapped !== "true") throw new Error("Codex subscription completions require LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS=true");
- const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat"];
+ const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat", "ocr"];
  for (const name of ["LLM_MODELS", "LLM_REASONING_EFFORTS"]) {
   if (!process.env[name]) continue;
   let values; try { values=JSON.parse(process.env[name]); } catch { throw new Error(`Invalid ${name}`); }

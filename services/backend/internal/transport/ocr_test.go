@@ -140,3 +140,20 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 		t.Fatalf("a silent worker is not vouched for: %q", got)
 	}
 }
+
+func TestOCRLabelsAndDisclosureFollowWorkerRoute(t *testing.T) {
+	for _, tc := range []struct{ provider, model, label string }{
+		{"gemini", "gemini-3.8-flash", "Google Gemini"},
+		{"openai", "gpt-6.1-sol", "OpenAI API"},
+		{"context_machine", "context_machine/codex/gpt-6.1-sol", "Private context machine"},
+	} {
+		label := ocrLabel(tc.provider, tc.model)
+		name, evidence := ocrDisclosure(tc.provider, tc.model)
+		if !strings.Contains(label, tc.label) || !strings.Contains(label, tc.model) || !strings.Contains(name, tc.label) || !strings.Contains(evidence, tc.model) {
+			t.Fatal(label, name, evidence)
+		}
+		if tc.provider != "gemini" && (strings.Contains(label, "Gemini") || strings.Contains(name, "Gemini")) {
+			t.Fatal("wrong provider attribution")
+		}
+	}
+}

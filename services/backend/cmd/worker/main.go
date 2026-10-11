@@ -56,7 +56,7 @@ func main() {
 		"books_parity":    transport.RunBooksParity,
 		"workflow_engine": wf.Run,
 		"heartbeat": func(ctx context.Context, db *sql.DB) {
-			transport.RunHeartbeat(ctx, db, "worker", map[string]any{"ocr": llm.OCRSetting()})
+			transport.RunHeartbeat(ctx, db, "worker", map[string]any{"ocr": llm.OCRConfiguration(ctx)})
 		},
 	}
 	for name, loop := range loops {
