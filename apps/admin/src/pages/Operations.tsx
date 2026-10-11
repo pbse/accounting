@@ -149,6 +149,8 @@ type BooksRecord = {
   pending: number;
   unreadable: number;
   build: string;
+  // readers are those switched onto the record (BOOKS_RECORD_READERS), each reading only versions a clean run verified.
+  readers: string[];
   parity: { checked: number; pending: number; since: number; waiting: number; mismatched: string[]; finished_at: string; build: string; later: { started_at: string; stalled: boolean } | null } | null;
 };
 
@@ -196,6 +198,11 @@ function MonthBooks() {
               )}
             </>
           )}
+          <p>
+            {books.data.readers.length
+              ? `Reading from the record: ${books.data.readers.join(", ")}, for the versions the latest clean run of this build checked; the rest from their captures.`
+              : "No reader reads from the record yet: every one reads the captures."}
+          </p>
         </>
       )}
     </section>

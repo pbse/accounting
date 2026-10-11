@@ -277,7 +277,7 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 		if err != nil || m == nil {
 			return nil, "", err
 		}
-		b, err := readLedgerMonth(m)
+		b, err := recordBooks(r.Context(), db, m)
 		return b, m.Source + ":" + m.realm, err
 	}
 	versions := func(r *http.Request, org, entity string, accounts map[string]packAccount) ([]budgetVersion, error) {

@@ -10,7 +10,9 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"close.local/backend/internal/quickbooks"
@@ -481,7 +483,13 @@ func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		adminFirmProblem(w, err, "books read")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity, "build": wf.CodeVersion})
+	readers := []string{}
+	for _, name := range strings.Split(os.Getenv("BOOKS_RECORD_READERS"), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			readers = append(readers, name)
+		}
+	}
+	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity, "build": wf.CodeVersion, "readers": readers})
 }
 
 // runBooksParity checks every version against its capture and records the run, so staff read its outcome.
