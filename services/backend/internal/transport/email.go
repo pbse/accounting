@@ -19,9 +19,10 @@ import (
 )
 
 // reminderStatus is SQL for request q: the reminders its firm's rule still allows, when the next is due (null until
-// the latest email is delivered) and when that email's link expires.
+// the latest email is delivered; counted from the client's latest reply when later, so a partial reply is not nudged
+// at once) and when that email's link expires.
 const reminderStatus = `(SELECT jsonb_build_object('left',o.reminder_max-(SELECT count(*) FROM email_outbox WHERE request_id=q.id AND reminder_of IS NOT NULL),
- 'due_at',(SELECT min(e.occurred_at) FROM email_delivery_events e WHERE e.connection_id=m.connection_id AND e.provider_id=m.provider_id AND lower(e.recipient)=lower(q.recipient) AND e.kind='delivered')+make_interval(days=>o.reminder_after_days),
+ 'due_at',(SELECT GREATEST(d.at,(SELECT max(created_at) FROM request_submissions WHERE request_id=q.id)) FROM (SELECT min(e.occurred_at) AS at FROM email_delivery_events e WHERE e.connection_id=m.connection_id AND e.provider_id=m.provider_id AND lower(e.recipient)=lower(q.recipient) AND e.kind='delivered') d WHERE d.at IS NOT NULL)+make_interval(days=>o.reminder_after_days),
  'expires_at',(SELECT l.expires_at FROM client_request_links l WHERE l.digest=m.link_digest))
  FROM request_drafts rd JOIN client_closes rc ON rc.id=rd.close_id JOIN organizations o ON o.id=rc.organization_id
  LEFT JOIN LATERAL (SELECT connection_id,provider_id,link_digest FROM email_outbox WHERE request_id=q.id ORDER BY email_outbox.created_at DESC,email_outbox.id DESC LIMIT 1) m ON true WHERE rd.id=q.draft_id)`
@@ -29,16 +30,17 @@ const reminderStatus = `(SELECT jsonb_build_object('left',o.reminder_max-(SELECT
 // reminderFollow is SQL for waiting request q, in Work's order: held while an emailed reply waits for review (the client
 // has answered, so no reminder or other contact is due), exhausted once the firm's rule allows no more reminders,
 // expiring once the link lapsed or lapses before the next is due, and due while a reminder could be approved now, as the
-// approval checks it; ” before any email was sent, or while the next reminder is not due.
+// approval checks it (before any reply, or after a partial one); ” before any email was sent, or while the next reminder
+// is not due.
 const reminderFollow = `(SELECT CASE
  WHEN m.id IS NULL THEN ''
  WHEN EXISTS(SELECT 1 FROM inbound_replies i WHERE i.request_id=q.id AND i.state='held') THEN 'held'
  WHEN (s->>'left')::int<=0 THEN 'exhausted'
  WHEN (s->>'expires_at')::timestamptz<=now() OR (s->>'due_at')::timestamptz>=(s->>'expires_at')::timestamptz THEN 'expiring'
  WHEN (s->>'due_at')::timestamptz<=now() AND m.state='accepted' AND m.delivery='delivered'
-  AND EXISTS(SELECT 1 FROM client_request_links l WHERE l.digest=m.link_digest AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now())
+  AND EXISTS(SELECT 1 FROM client_request_links l WHERE l.digest=m.link_digest AND (l.used_at IS NULL OR ` + preparation.PartialReply + `) AND l.revoked_at IS NULL AND l.expires_at>now())
   AND NOT EXISTS(SELECT 1 FROM email_delivery bad WHERE bad.request_id=q.id AND bad.delivery IN ('bounced','complained','failed','suppressed'))
-  AND NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=q.id)
+  AND (NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=q.id) OR ` + preparation.PartialReply + `)
   AND NOT EXISTS(SELECT 1 FROM inbound_replies i WHERE i.request_id=q.id AND i.state='held')
   AND m.connection_id=(SELECT e.id FROM email_connections e JOIN request_drafts rd ON rd.id=q.draft_id JOIN client_closes rc ON rc.id=rd.close_id WHERE e.organization_id=rc.organization_id AND e.enabled) THEN 'due'
  ELSE '' END
@@ -282,15 +284,22 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		var unanswered bool
-		err = tx.QueryRowContext(r.Context(), `SELECT NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=$1) AND ($2::boolean=false OR EXISTS(SELECT 1 FROM client_request_links WHERE request_id=$1 AND revoked_at IS NULL AND used_at IS NULL AND expires_at>now()))`, r.PathValue("request"), grouped).Scan(&unanswered)
-		if err != nil || !unanswered {
+		// A reminder may also follow a partial reply, for the questions still open, while the request takes answers.
+		var unanswered, partial bool
+		err = tx.QueryRowContext(r.Context(), `SELECT NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=$1) AND ($2::boolean=false OR EXISTS(SELECT 1 FROM client_request_links WHERE request_id=$1 AND revoked_at IS NULL AND used_at IS NULL AND expires_at>now())),
+ $3::boolean AND EXISTS(SELECT 1 FROM work_requests q WHERE q.id=$1::bigint AND `+preparation.PartialReply+`)`, r.PathValue("request"), grouped, in.PreviousID != "").Scan(&unanswered, &partial)
+		if err == nil && partial {
+			partial, err = requestOpen(r.Context(), tx, closeID, r.PathValue("request"))
+		}
+		if err != nil || !unanswered && !partial {
 			problem(w, 409, "Request was answered, withdrawn or expired. Review before issuing a new request.")
 			return
 		}
-		if err = preparation.FreshClientRequest(r.Context(), tx, closeID, r.PathValue("request")); err != nil {
-			problem(w, 409, err.Error())
-			return
+		if unanswered {
+			if err = preparation.FreshClientRequest(r.Context(), tx, closeID, r.PathValue("request")); err != nil {
+				problem(w, 409, err.Error())
+				return
+			}
 		}
 		var provider string
 		if connection, sender, provider, err = firmSender(r.Context(), tx, org); err != nil || connection != in.ConnectionID {
@@ -324,7 +333,7 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 		}
 		if in.PreviousID != "" {
 			var prior []byte
-			err = tx.QueryRowContext(r.Context(), `SELECT m.payload,m.link_digest FROM email_delivery m JOIN client_request_links l ON l.digest=m.link_digest WHERE m.id=$1 AND m.request_id::text=$2 AND m.connection_id::text=$3 AND m.state='accepted' AND m.delivery='delivered' AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now() AND NOT EXISTS(SELECT 1 FROM email_delivery bad WHERE bad.request_id=m.request_id AND bad.delivery IN ('bounced','complained','failed','suppressed')) AND NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=m.request_id) AND NOT EXISTS(SELECT 1 FROM inbound_replies i WHERE i.request_id=m.request_id AND i.state='held')`, in.PreviousID, r.PathValue("request"), connection).Scan(&prior, &digest)
+			err = tx.QueryRowContext(r.Context(), `SELECT m.payload,m.link_digest FROM email_delivery m JOIN client_request_links l ON l.digest=m.link_digest WHERE m.id=$1 AND m.request_id::text=$2 AND m.connection_id::text=$3 AND m.state='accepted' AND m.delivery='delivered' AND (l.used_at IS NULL OR EXISTS(SELECT 1 FROM work_requests q WHERE q.id=m.request_id AND `+preparation.PartialReply+`)) AND l.revoked_at IS NULL AND l.expires_at>now() AND NOT EXISTS(SELECT 1 FROM email_delivery bad WHERE bad.request_id=m.request_id AND bad.delivery IN ('bounced','complained','failed','suppressed')) AND (NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=m.request_id) OR EXISTS(SELECT 1 FROM work_requests q WHERE q.id=m.request_id AND `+preparation.PartialReply+`)) AND NOT EXISTS(SELECT 1 FROM inbound_replies i WHERE i.request_id=m.request_id AND i.state='held')`, in.PreviousID, r.PathValue("request"), connection).Scan(&prior, &digest)
 			if err != nil {
 				problem(w, 409, "Reminder blocked: confirm delivery, an unanswered current request, the same sender and an unexpired link first.")
 				return

@@ -900,7 +900,7 @@ function WorkDetails({
       {item.state === "waiting_client" && latest?.consolidated && <p>Manage this consolidated request in <a href={`/dashboard/closes/${item.close_id}#coverage-work`}>Coverage and client evidence</a>.</p>}
       {item.state === "waiting_client" && latest && !latest.consolidated && !item.stale && (
         <fieldset disabled={busy}>
-          {(!latest.email || (latest.email.state === "accepted" && latest.email.delivery === "delivered") || (latest.reminder?.left ?? 1) <= 0) && !latest.link?.used_at && !latest.link?.revoked_at && (
+          {(!latest.email || (latest.email.state === "accepted" && latest.email.delivery === "delivered") || (latest.reminder?.left ?? 1) <= 0) && (!latest.link?.used_at || (latest.partial && !!latest.email)) && !latest.link?.revoked_at && (
             <SendRequestEmail
               key={latest.email?.id ?? "initial"}
               previousId={latest.email?.id}

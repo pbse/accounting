@@ -457,6 +457,37 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	}
 	_, err = db.Exec(`UPDATE preparation_intakes SET revision=revision-1 WHERE job_id::text=$1`, jobA)
 	must(err)
+	// After a partial reply through the link, a reminder for the questions still open may follow, its period counted
+	// from that reply.
+	_, err = db.Exec(`INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,'client','client@example.test')`, group.ID, ledger)
+	must(err)
+	_, err = db.Exec(`INSERT INTO request_submissions(request_id,receipt,source_id,complete) VALUES($1,'partial-fixture',$2,false)`, group.ID, ledger)
+	must(err)
+	_, err = db.Exec(`UPDATE client_request_links SET used_at=now() WHERE digest=$1`, firstDigest)
+	must(err)
+	rule(1, 3)
+	if _, due, _ := reminderState(); due == nil || due.Before(time.Now().Add(23*time.Hour)) {
+		t.Fatalf("a partial reply restarts the reminder period: %v", due)
+	}
+	rule(0, 3)
+	if got := followUp(); got != "needs_you: The client answered part of request #"+group.ID+". Resume now from Work, or approve a reminder for the rest on the Requests tab." {
+		t.Fatalf("a partial reply can be reminded for the rest: %q", got)
+	}
+	partialReminder := approve(reminder, 200)
+	_, err = delivery.ProcessOne(context.Background(), db)
+	must(err)
+	must(db.QueryRow(`SELECT state FROM email_outbox WHERE id=$1`, partialReminder).Scan(&state))
+	if state != "accepted" {
+		t.Fatalf("the reminder after a partial reply is sent, not cancelled: %s", state)
+	}
+	_, err = db.Exec(`DELETE FROM email_outbox WHERE id=$1`, partialReminder)
+	must(err)
+	_, err = db.Exec(`DELETE FROM request_submissions WHERE request_id=$1`, group.ID)
+	must(err)
+	_, err = db.Exec(`UPDATE client_request_links SET used_at=NULL WHERE digest=$1`, firstDigest)
+	must(err)
+	_, err = db.Exec(`DELETE FROM work_replies WHERE request_id=$1`, group.ID)
+	must(err)
 	// A staff-recorded answer also blocks a reminder even with an unused link.
 	_, err = db.Exec(`INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,'fixture','client@example.test')`, group.ID, ledger)
 	must(err)

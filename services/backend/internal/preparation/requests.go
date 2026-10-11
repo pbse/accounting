@@ -208,6 +208,26 @@ func RequestCoverageCurrent(ctx context.Context, tx *sql.Tx, closeID, requestID 
 	return requestCoverage(ctx, tx, closeID, requestID, RequestCoverageIsCurrent)
 }
 
+// RequestOpen reports whether a replied request still takes additions: no job it covers has a newer request, the work it
+// was approved for is unfinished, and a consolidated request's coverage has moved only by the request's own progress.
+// A request for accounts alone covers no job, so it stays open while its coverage does.
+func RequestOpen(ctx context.Context, tx *sql.Tx, closeID, requestID string) (bool, error) {
+	var open bool
+	err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN work_requests q ON q.id=rj.request_id JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=$1 AND ((j.state IN ('completed','cancelled') AND NOT `+RequestReleased+`) OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))`, requestID).Scan(&open)
+	if err == nil && open {
+		open = RequestCoverageFollows(ctx, tx, closeID, requestID) == nil
+	}
+	return open, err
+}
+
+// PartialReply is SQL for whether request q stands at a partial reply: its latest submission leaves questions open and
+// its work (any of a consolidated request's jobs) still waits on the client, so a reminder for the rest may follow. A
+// request for accounts alone has no work to wait.
+const PartialReply = `(COALESCE((SELECT NOT s.complete FROM request_submissions s WHERE s.request_id=q.id ORDER BY s.id DESC LIMIT 1),false)
+ AND (q.job_id IS NOT NULL AND EXISTS(SELECT 1 FROM preparation_jobs pj WHERE pj.id=q.job_id AND pj.state='waiting_client')
+  OR q.job_id IS NULL AND (NOT EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id)
+   OR EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs pj ON pj.id=rj.job_id WHERE rj.request_id=q.id AND pj.state='waiting_client'))))`
+
 // RequestCoverageFollows is RequestCoverageCurrent for a request that has a reply, letting it take the rest of the
 // client's answers and documents while the firm works on the first ones.
 func RequestCoverageFollows(ctx context.Context, tx *sql.Tx, closeID, requestID string) error {
