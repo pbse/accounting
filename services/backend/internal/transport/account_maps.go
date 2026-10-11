@@ -83,7 +83,7 @@ func latestAccountMap(ctx context.Context, q rowReader, org, name string) (*acco
 	var m accountMap
 	var raw []byte
 	err := q.QueryRowContext(ctx, `SELECT id::text,id::text||':'||md5(accounts::text),period,reason,actor,created_at,accounts FROM books_account_maps
- WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) ORDER BY id DESC LIMIT 1`, org, name).
+ WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) ORDER BY books_account_maps.id DESC LIMIT 1`, org, name).
 		Scan(&m.ID, &m.Stamp, &m.Period, &m.Reason, &m.Actor, &m.At, &raw)
 	if err == sql.ErrNoRows {
 		return nil, nil
