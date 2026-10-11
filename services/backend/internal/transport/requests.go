@@ -24,6 +24,27 @@ type requestDraft struct {
 }
 
 func registerRequests(mux *http.ServeMux, db *sql.DB) {
+	// The close's approved requests, newest first, each with where it stands: when it reached the client (or why it
+	// did not), whether it was answered in part or in full, a reply held for review, its private link and reminders,
+	// and the work it is handled in (none for a request about accounts alone, handled in coverage).
+	mux.HandleFunc("GET /v1/closes/{id}/requests/approved", func(w http.ResponseWriter, r *http.Request) {
+		var body []byte
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',q.id::text,'body',d.body,'recipient',q.recipient,'approved_at',q.approved_at,'approved_by',q.approved_by,
+ 'sent_at',COALESCE(q.delivered_at,(SELECT min(COALESCE(m.finished_at,m.created_at)) FROM email_delivery m WHERE m.request_id=q.id AND m.state='accepted' AND m.delivery NOT IN ('bounced','complained','failed','suppressed'))),
+ 'email',COALESCE((SELECT CASE WHEN m.state IN ('failed','unknown') OR m.delivery IN ('bounced','complained','failed','suppressed') THEN 'failed' WHEN m.state IN ('queued','sending') THEN 'sending' END
+  FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
+ 'answer',COALESCE((SELECT CASE WHEN s.complete THEN 'answered' ELSE 'answered_in_part' END FROM request_submissions s WHERE s.request_id=q.id ORDER BY s.id DESC LIMIT 1),''),
+ 'held',EXISTS(SELECT 1 FROM inbound_replies i WHERE i.request_id=q.id AND i.state='held'),
+ 'link',(SELECT jsonb_build_object('used_at',used_at,'revoked_at',revoked_at,'expires_at',expires_at) FROM client_request_links WHERE request_id=q.id ORDER BY issued_at DESC LIMIT 1),
+ 'reminder',`+reminderStatus+`,
+ 'job',CASE WHEN `+aboutAccounts+` THEN '' ELSE COALESCE((SELECT j.id::text FROM `+openJobs+` ORDER BY j.state='waiting_client' DESC,j.id LIMIT 1),(SELECT min(job_id)::text FROM request_jobs WHERE request_id=q.id),'') END)
+ ORDER BY q.id DESC),'[]'::jsonb) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id::text=$1`, r.PathValue("id")).Scan(&body)
+		if err != nil {
+			problem(w, 503, "The close's requests are unavailable.")
+			return
+		}
+		jsonReply(w, 200, json.RawMessage(body))
+	})
 	path := "/v1/closes/{id}/requests"
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})

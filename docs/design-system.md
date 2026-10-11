@@ -85,6 +85,14 @@ Documents (`Documents.tsx`, the tab keyed `evidence`):
 
 `#source-<id>` and `#historical-exports` open their views.
 
+Requests (`RequestsTab.tsx`):
+- **Lede:** where the requests stand: a reply held until the person checks who sent it, requests that have not reached the client, how many wait on it, a drafted request waiting for approval, or that every one is answered. Under it: to whom, and the longest wait.
+- **Left column:** the decisions on Requests, then the requests as one table: the agent's draft waiting for approval, then every approved request, newest first. The list comes from `GET /v1/closes/{id}/requests/approved`, with when each reached the client, any answer, a held reply, its link, reminders and the work it is handled in. Each row shows a title from its questions, the recipient, when it was sent and where it stands: Waiting for client · N days, Partly answered, Reply held for review, Approved · not sent, Not delivered, Link expired, Answered or Withdrawn. A filter sits beside New request; rows open the work the request is handled in.
+- **Rail:** replies held, requests not with the client or waiting, and the longest wait.
+- **More on Requests:** drafting a request, email replies, and the client's requests across months.
+
+`#client-request` opens the draft view. The canvas's contact name and role, the client's usual reply time and stopping reminders are not shown: no contact or reply-time record exists, and reminders are sent only when a person approves each one.
+
 A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
 
 Below 860px the sidebar is a sheet opened from the brand button, the composer spans the width, and the stage's positions become flow.

@@ -1222,6 +1222,10 @@ body {
 .ks-docs .ks-tr {
   --ks-columns: minmax(0, 2fr) minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 1.5fr) 24px;
 }
+/* Requests: each request, its recipient, when it reached the client, and where it stands. */
+.ks-requests .ks-tr {
+  --ks-columns: minmax(0, 2.2fr) minmax(0, 1.2fr) minmax(0, 0.7fr) minmax(0, 1.6fr) 24px;
+}
 .ks-tr .r {
   justify-self: end;
   text-align: right;
@@ -1660,6 +1664,13 @@ body {
   }
   .ks-docs .ks-tr > :nth-child(2),
   .ks-docs .ks-tr > :nth-child(3) {
+    display: none;
+  }
+  .ks-requests .ks-tr {
+    --ks-columns: minmax(0, 1fr) auto 24px;
+  }
+  .ks-requests .ks-tr > :nth-child(2),
+  .ks-requests .ks-tr > :nth-child(3) {
     display: none;
   }
 }
