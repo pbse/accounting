@@ -359,7 +359,7 @@ func (l Layout) Read(t Table) Reading {
 			case AccountType:
 				line.Type = strings.TrimSpace(c.Value)
 			default:
-				a, err := ParseAmount(c.Value, l.Style)
+				a, err := cellAmount(c, l.Style)
 				if err != nil {
 					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is not an amount", c.Ref, c.Value))
 					continue
@@ -400,16 +400,17 @@ func (l Layout) Read(t Table) Reading {
 			if l.BalanceSign == "credit" && !signed {
 				line.Balance.Neg(line.Balance)
 			}
-			// A row with its debit and credit beside its balance must agree with them.
+			// A row with its debit and credit beside its balance must agree with them; its columns are kept as written,
+			// for totals checked by column.
 			if debit != nil || credit != nil {
-				net := new(big.Rat)
+				line.Debit, line.Credit = new(big.Rat), new(big.Rat)
 				if debit != nil {
-					net.Add(net, debit)
+					line.Debit.Set(debit)
 				}
 				if credit != nil {
-					net.Sub(net, credit)
+					line.Credit.Set(credit)
 				}
-				if net.Cmp(line.Balance) != 0 {
+				if net := new(big.Rat).Sub(line.Debit, line.Credit); net.Cmp(line.Balance) != 0 {
 					reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d's balance (%s) is not its debit less its credit (%s)", r.Number, exact(line.Balance), exact(net)))
 				}
 			}
@@ -468,6 +469,15 @@ func (l Layout) Read(t Table) Reading {
 				credits.Sub(credits, line.Balance)
 			}
 		case Total:
+			// In a layout with both columns, a total with one side blank shows nothing on that side: both are checked.
+			if meanings[Debit] && meanings[Credit] && (debit != nil || credit != nil) {
+				if debit == nil {
+					debit = new(big.Rat)
+				}
+				if credit == nil {
+					credit = new(big.Rat)
+				}
+			}
 			if line.Balance != nil {
 				reading.Problems = append(reading.Problems, checkTotal(reading.Lines, i, debit, credit)...)
 			}

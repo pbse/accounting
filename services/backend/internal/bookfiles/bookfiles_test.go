@@ -357,3 +357,34 @@ func TestTotalsAndBalancesAgree(t *testing.T) {
 		t.Fatalf("Total for Assets covers the Assets section: %+v", reading)
 	}
 }
+
+// Totals by column use the columns as written even beside a balance column, a blank side of a total counts as nothing,
+// and a workbook's number cells are read exactly as stored, exponent notation included, whatever the layout's style.
+func TestColumnsAndStoredNumbers(t *testing.T) {
+	gross, _ := Read("tb.csv", []byte("Account,Debit,Credit,Balance\nBank,150.00,50.00,100.00\nCapital,,100.00,-100.00\nTotal,150.00,150.00,0.00\n"))
+	layout := Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountName, 1: Debit, 2: Credit, 3: Balance}, Style: NumberStyle{Scale: 1}}
+	if reading := layout.Read(gross.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {
+		t.Fatalf("a total of gross columns beside a balance: %+v", reading)
+	}
+	blank, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,150.00,\nCapital,,50.00\nLoan,,100.00\nTotal,100.00,\n"))
+	layout, _ = ProposeLayout(blank.Tables[0])
+	if reading := layout.Read(blank.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Row 5") {
+		t.Fatalf("a total with a blank side is checked on both: %+v", reading)
+	}
+	sheet := Table{Name: "TB", Rows: []Row{
+		{Number: 1, Cells: []Cell{{Column: 0, Ref: "A1", Kind: Text, Value: "Account"}, {Column: 1, Ref: "B1", Kind: Text, Value: "Balance"}}},
+		{Number: 2, Cells: []Cell{{Column: 0, Ref: "A2", Kind: Text, Value: "Bank"}, {Column: 1, Ref: "B2", Kind: Number, Value: "1.23E+07"}}},
+		{Number: 3, Cells: []Cell{{Column: 0, Ref: "A3", Kind: Text, Value: "Capital"}, {Column: 1, Ref: "B3", Kind: Number, Value: "-12300000.5"}}},
+		{Number: 4, Cells: []Cell{{Column: 0, Ref: "A4", Kind: Text, Value: "Fees"}, {Column: 1, Ref: "B4", Kind: Number, Value: "0.5"}}},
+	}}
+	layout = Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountName, 1: Balance}, Style: NumberStyle{DecimalComma: true, Scale: 1}}
+	if reading := layout.Read(sheet); len(reading.Problems) != 0 || reading.Lines[0].Amount != "12300000" || reading.Lines[1].Amount != "-12300000.5" {
+		t.Fatalf("stored numbers are exact, in their own notation: %+v", reading)
+	}
+	if a, err := cellAmount(Cell{Kind: Number, Value: "1.23456E+00"}, NumberStyle{Scale: 1000}); err != nil || a.Value.Cmp(big.NewRat(123456, 100)) != 0 || !a.Cents {
+		t.Fatalf("a stored number in thousands, to the cent: %+v %v", a, err)
+	}
+	if a, err := cellAmount(Cell{Kind: Number, Value: "1.5E-03"}, NumberStyle{Scale: 1000}); err != nil || a.Value.Cmp(big.NewRat(3, 2)) != 0 || a.Cents {
+		t.Fatalf("a stored number in thousands too short to say each cent: %+v %v", a, err)
+	}
+}

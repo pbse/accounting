@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -96,22 +97,55 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 	if !ok {
 		return Amount{}, ErrNotAmount
 	}
-	scale := style.Scale
-	if scale == 0 {
-		scale = 1
-	}
-	value.Mul(value, new(big.Rat).SetInt64(scale))
 	if negative {
 		value.Neg(value)
 	}
-	// Exact to the cent: the amount is a whole number of cents and, when it is stated in thousands or millions, written
-	// with enough decimals to say each cent (1.23456 thousand does; 1.2 thousand was rounded at its source).
+	value, cents := scaled(value, len(fraction), style.Scale)
+	return Amount{Value: value, Cents: cents, Side: side, Mark: strings.Join(marks, " ")}, nil
+}
+
+// scaled is value, written with places decimals, multiplied by scale (0 is 1), and whether it is exact to the cent: a
+// whole number of cents and, when stated in thousands or millions, written with enough decimals to say each cent
+// (1.23456 thousand does; 1.2 thousand was rounded at its source).
+func scaled(value *big.Rat, places int, scale int64) (*big.Rat, bool) {
+	if scale == 0 {
+		scale = 1
+	}
+	value = new(big.Rat).Mul(value, new(big.Rat).SetInt64(scale))
 	cents := new(big.Rat).Mul(value, big.NewRat(100, 1)).IsInt()
 	if scale > 1 {
-		resolution := new(big.Rat).SetFrac(big.NewInt(scale), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(len(fraction))), nil))
+		resolution := new(big.Rat).SetFrac(big.NewInt(scale), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(places)), nil))
 		cents = cents && resolution.Cmp(big.NewRat(1, 100)) <= 0
 	}
-	return Amount{Value: value, Cents: cents, Side: side, Mark: strings.Join(marks, " ")}, nil
+	return value, cents
+}
+
+// storedNumber is how a workbook stores a number cell: plain or in exponent notation, always with a decimal point.
+var storedNumber = regexp.MustCompile(`^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$`)
+
+// cellAmount reads a cell's amount: a workbook's number cell as the exact number it stores (1.23E+07 included, in its
+// own notation whatever the layout's style), scaled; any other cell as text in the layout's style.
+func cellAmount(c Cell, style NumberStyle) (Amount, error) {
+	if c.Kind != Number {
+		return ParseAmount(c.Value, style)
+	}
+	text := strings.TrimSpace(c.Value)
+	m := storedNumber.FindStringSubmatch(text)
+	if m == nil {
+		return Amount{}, ErrNotAmount
+	}
+	value, ok := new(big.Rat).SetString(text)
+	if !ok {
+		return Amount{}, ErrNotAmount
+	}
+	// The decimals it is written to: those after the point, less the exponent (1.23E+07 has none; 1.5E-03 has four).
+	places := len(m[2])
+	if m[3] != "" {
+		exponent, _ := strconv.Atoi(m[3])
+		places = max(places-exponent, 0)
+	}
+	value, cents := scaled(value, places, style.Scale)
+	return Amount{Value: value, Cents: cents}, nil
 }
 
 // symbolCurrencies are the currencies each mark can stand for.
