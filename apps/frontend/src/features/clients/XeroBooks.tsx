@@ -230,6 +230,10 @@ export function XeroPostingCard({ client, connection, onChanged }: { client: Cli
   const [phrase, setPhrase] = useState("");
   if (!c && !grant) return null;
   const ready = c?.state === "active";
+  // The organisation the grant is for, named on the card and in its dialogs, so a client with two connected tells them
+  // apart.
+  const organisation = c?.tenant_name || (grant?.tenant_id ? `organisation ${grant.tenant_id}` : "");
+  const target = organisation ? `the Xero organisation ${organisation}` : `${name}’s Xero organisation`;
   const close = () => {
     setOpen("");
     setError("");
@@ -265,7 +269,7 @@ export function XeroPostingCard({ client, connection, onChanged }: { client: Cli
       <Card
         icon="shield"
         tone={grant ? "reply" : "done"}
-        title="Xero posting"
+        title={organisation ? `Xero posting · ${organisation}` : "Xero posting"}
         chip={grant ? <span className="pill">Granted</span> : <span className="pill neutral">Not granted</span>}
         action={
           client.can_grant ? (
@@ -283,13 +287,13 @@ export function XeroPostingCard({ client, connection, onChanged }: { client: Cli
       >
         {grant
           ? `Approved ${grant.kinds.map((k) => (labels[k] ?? k).toLowerCase()).join(", ")} may post to ${grant.account_ids.length} Xero accounts, up to ${money(grant.max_amount, currency)} each, until ${dates.date(grant.expires_at)}.`
-          : `Nothing posts to ${name}’s Xero organisation: there is no grant. Each posting is still approved on its own.`}
+          : `Nothing posts to ${target}: there is no grant. Each posting is still approved on its own.`}
       </Card>
       <Dialog
         open={open === "grant"}
         onClose={close}
         title="Grant Xero posting"
-        description={`Which approved drafts may post to ${name}’s Xero organisation, to which accounts, up to what, and until when.`}
+        description={`Which approved drafts may post to ${target}, to which accounts, up to what, and until when.`}
       >
         <form
           onSubmit={(event) => {
@@ -337,7 +341,7 @@ export function XeroPostingCard({ client, connection, onChanged }: { client: Cli
         </form>
       </Dialog>
       {grant && (
-        <Dialog open={open === "revoke"} onClose={close} title="Revoke the grant" description={`Approved drafts stop posting to ${name}’s Xero organisation at once. Postings already made stay.`}>
+        <Dialog open={open === "revoke"} onClose={close} title="Revoke the grant" description={`Approved drafts stop posting to ${target} at once. Postings already made stay.`}>
           {error && <p role="alert">{error}</p>}
           <p className="note">
             Granted by {grant.granted_by}: {grant.reason}

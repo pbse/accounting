@@ -279,6 +279,9 @@ export function PostingCard({ client, connection, onChanged }: { client: Client;
   const [phrase, setPhrase] = useState("");
   if (!production && !grant) return null;
   const ready = production?.state === "active" && production.company_name === production.client_entity;
+  // The company the grant is for, named on the card and in its dialogs, so a client with two connected tells them apart.
+  const realm = production?.realm || grant?.realm || "";
+  const company = `${production?.company_name || grant?.company || name}’s QuickBooks company${realm ? ` (realm ${realm})` : ""}`;
   const close = () => {
     setOpen("");
     setError("");
@@ -314,7 +317,7 @@ export function PostingCard({ client, connection, onChanged }: { client: Client;
       <Card
         icon="shield"
         tone={grant ? "reply" : "done"}
-        title="Posting"
+        title={`Posting · ${production?.company_name || grant?.company || "QuickBooks"}${realm ? ` (${realm})` : ""}`}
         chip={grant ? <span className="pill">Granted</span> : <span className="pill neutral">Not granted</span>}
         action={
           client.can_grant ? (
@@ -332,13 +335,13 @@ export function PostingCard({ client, connection, onChanged }: { client: Client;
       >
         {grant
           ? `Approved ${grant.kinds.map((k) => (labels[k] ?? k).toLowerCase()).join(", ")} may post to QuickBooks accounts ${grant.account_ids.join(", ")}, up to ${money(grant.max_amount, currency)} each, until ${dates.date(grant.expires_at)}.`
-          : `Nothing posts to ${name}’s QuickBooks company: there is no grant. Each posting is still approved on its own.`}
+          : `Nothing posts to ${company}: there is no grant. Each posting is still approved on its own.`}
       </Card>
       <Dialog
         open={open === "grant"}
         onClose={close}
         title="Grant production posting"
-        description={`Which approved drafts may post to ${name}’s QuickBooks company, to which accounts, up to what, and until when.`}
+        description={`Which approved drafts may post to ${company}, to which accounts, up to what, and until when.`}
       >
         <form
           onSubmit={(event) => {
@@ -386,7 +389,7 @@ export function PostingCard({ client, connection, onChanged }: { client: Client;
         </form>
       </Dialog>
       {grant && (
-        <Dialog open={open === "revoke"} onClose={close} title="Revoke the grant" description={`Approved drafts stop posting to ${name}’s QuickBooks company at once. Postings already made stay.`}>
+        <Dialog open={open === "revoke"} onClose={close} title="Revoke the grant" description={`Approved drafts stop posting to ${company} at once. Postings already made stay.`}>
           {error && <p role="alert">{error}</p>}
           <p className="note">
             Granted by {grant.granted_by}: {grant.reason}
