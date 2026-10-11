@@ -340,6 +340,15 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		t.Fatalf("twenty figures over 5,000 clients took %s", took)
 	}
 
+	// Round fourteen: last month is the prior month; a payee grouping is no cause; a two-letter client.
+	rejected("New patients were 0.00 in October.", "in another month", e("t10", 0, "/changes/0/new/0/last_month", "0.00"))
+	reads["t35"] = read(`{"state":"ready","changes":[{"account":"Revenue","change":"3000.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Revenue rose 3,000.00 because of new patients.", "cause the reads do not show", e("t35", 0, "/changes/0/change", "3000.00"), e("t35", 0, "/changes/0/new/0/name", "New patients"))
+	ok("Revenue rose 3,000.00, all of it from new patients.", e("t35", 0, "/changes/0/change", "3000.00"), e("t35", 0, "/changes/0/new/0/name", "New patients"))
+	if _, why := agentSupport("facts", "GE net income is 21,780.00.", []agentSupportEntry{e("t2", 0, ni+"/amount", "21780.00")}, reads, nil, "GE", "Bluegrass Dental PLLC"); !strings.Contains(why, "to GE") {
+		t.Fatalf("a two-letter client is still a client: %q", why)
+	}
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

@@ -175,6 +175,8 @@ type claim struct {
 	currency string
 	basis    string
 	stale    bool
+	// driver says the field is a driver of a movement (a payee row of a changes read), attributing it, not explaining it.
+	driver bool
 	// variance says a percentage is a variance against a budget (the budget comparison's signed percent).
 	variance bool
 	// incomplete is a forecast built while some of its inputs were not captured.
@@ -185,13 +187,13 @@ type claim struct {
 
 var (
 	claimChangeKeys  = map[string]bool{"change": true, "variance": true, "difference": true, "delta": true, "movement": true, "net_change": true, "increase": true, "decrease": true, "unexplained": true}
-	claimPriorKeys   = map[string]bool{"prior": true, "prior_month": true, "previous": true, "prior_amount": true}
+	claimPriorKeys   = map[string]bool{"prior": true, "prior_month": true, "previous": true, "prior_amount": true, "last_month": true}
 	claimPercentKeys = map[string]bool{"percent": true, "ratio": true, "margin_percent": true}
 	claimMoneyKeys   = map[string]bool{"amount": true, "balance": true, "ledger_balance": true, "statement_balance": true, "supported": true, "trial_balance": true, "total": true, "actual": true, "budget": true, "opening": true, "closing": true, "lowest": true, "receipts": true, "disbursements": true, "net": true, "open": true, "due": true}
 	// A cash plan's week fields name what they measure.
 	claimKeyMetrics = map[string]string{"opening": "cash", "closing": "cash", "lowest": "cash", "receipts": "receipts", "disbursements": "disbursements"}
 	claimLabelKeys  = []string{"name", "payee", "account", "label", "line", "title", "customer", "vendor"}
-	claimCauseRe    = regexp.MustCompile(`driver|cause|reason|explanation|because|why|note`)
+	claimCauseRe    = regexp.MustCompile(`cause|reason|explanation|because|why`)
 	claimMoneyValue = regexp.MustCompile(`^[(−-]?\$?\d[\d,]*\.\d{2}\)?$`)
 )
 
@@ -324,8 +326,13 @@ func claimOf(read agentRead, path string) claim {
 		case k == "prior_month" && i == len(keys)-1:
 			c.kind = "prior"
 		}
-		if claimCauseRe.MatchString(k) || i == 2 && keys[0] == "changes" && (k == "new" || k == "missing" || k == "changed" || k == "unattributed") {
+		// A field that states a cause (a reason, an explanation) supports one; a driver row (a changes read's payees,
+		// a row's drivers) attributes a movement without establishing why.
+		if claimCauseRe.MatchString(k) {
 			c.cause = true
+		}
+		if k == "drivers" || i == 2 && keys[0] == "changes" && (k == "new" || k == "missing" || k == "changed" || k == "unattributed") {
+			c.driver = true
 		}
 	}
 	// A cash plan is a forecast, except the captured opening balance it starts from. Every figure of it is as fresh as
@@ -400,14 +407,16 @@ var (
 	// Words that disclose a figure is not current: never a bare "as of", which dates without disclosing.
 	claimStaleSaid = regexp.MustCompile(`\b(stale|superseded|out of date|outdated|not current|no longer current|earlier version|older version|before the latest|needs correction|needs a correction|sign-off lapsed|lapsed|unverified|not verified|could not be verified|may have changed|has changed since)\b`)
 	claimAvailable = regexp.MustCompile(`\b(available|in the bank|spendable|on hand at the bank)\b`)
-	claimCausal    = regexp.MustCompile(`\b(because|due to|driven by|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|led by|on the back of)\b`)
-	claimHedge     = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
+	// Words that assert a cause, which needs causal evidence or a hedge. "Driven by", "from" and "including" attribute
+	// a change to its drivers instead, which must add up or name the rest.
+	claimCausal = regexp.MustCompile(`\b(because|due to|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|on the back of)\b`)
+	claimHedge  = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
 	// The remainder named: words that state what is left unexplained, not qualifiers ("including", "mostly").
 	claimRemainder = regexp.MustCompile(`\b(the rest|remainder|remaining|unexplained|unattributed|not explained|unaccounted|other changes|other movements|everything else)\b`)
 	// Words that say a computed figure is a difference.
 	claimDifferenceSaid = regexp.MustCompile(`\b(difference|differ|differs|gap|less|leave|leaves|leaving|left|net of|minus|exceed|exceeds|short|more than|less than|over|under|after|change|changed|up|down|higher|lower|ahead|behind)\b`)
 	// Words that attribute a total to drivers, which must then add up or name the rest.
-	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|reflecting)\b`)
+	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|driven by|reflecting)\b`)
 	claimCausalEvidence = regexp.MustCompile(`\b(because|due to|caused|causes|driven|drove|drives|resulted|result of|results from|led to|leads to|owing to|thanks to|after|following|boosted|lifted|raised|increased|reduced|lowered|cut|added|brought|grew|rose|fell|dropped)\b`)
 	claimFromTo         = regexp.MustCompile(`(?i)\bfrom\s+(\w+(?:\s+\d{4})?)\s+to\s+(\w+(?:\s+\d{4})?)`)
 	claimNegation       = regexp.MustCompile(`\b(not|no|never|without|neither|nor|unrelated|isn't|wasn't|didn't|doesn't|don't|won't|cannot|can't|hasn't|haven't)\b|n't\b`)
@@ -1229,7 +1238,9 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 			}
 		}
 	}
-	if len(months) > 1 {
+	// Figures of several months are named month by month, except one line's change between its two months.
+	movement := s.derive == "difference" && len(claims) == 2 && strings.EqualFold(claims[0].label, claims[1].label) && strings.EqualFold(claims[0].entity, claims[1].entity)
+	if len(months) > 1 && !movement {
 		named := namedMonths(line)
 		ordered := []string{}
 		for m := range months {
@@ -1473,24 +1484,30 @@ func clientsNamed(text string, clients []string) []string {
 		r := rune(b[i])
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r < 0x80
 	}
+	original := []byte(text)
 	for _, name := range ordered {
 		want := strings.ToLower(strings.TrimSpace(name))
-		if len(want) < 3 {
+		if want == "" {
 			continue
 		}
-		// A plain search, then whole-word edges: no pattern is compiled per client.
+		// A plain search, then whole-word edges: no pattern is compiled per client. A short name ("GE") is matched in
+		// its own case, so the word "ge" in a sentence is not a client.
+		haystack := lower
+		if len(want) < 3 {
+			want, haystack = strings.TrimSpace(name), original
+		}
 		from := 0
 		for {
-			i := strings.Index(string(lower[from:]), want)
+			i := strings.Index(string(haystack[from:]), want)
 			if i < 0 {
 				break
 			}
 			i += from
-			if boundary(lower, i-1) && boundary(lower, i+len(want)) {
+			if boundary(haystack, i-1) && boundary(haystack, i+len(want)) {
 				out = append(out, strings.TrimSpace(name))
 				for j := i; j < i+len(want); j++ {
 					if lower[j] != ' ' {
-						lower[j] = '#'
+						lower[j], original[j] = '#', '#'
 					}
 				}
 				break

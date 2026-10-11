@@ -791,7 +791,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 					if m.claim.kind == "change" {
 						if r, ok := new(big.Rat).SetString(m.n); ok {
 							group := rowGroup(m.step, m.path)
-							if m.claim.cause {
+							if m.claim.driver || m.claim.cause {
 								addDriver(i, group, m.step+m.path, r)
 							} else {
 								sentenceTotals[i][group] = append(sentenceTotals[i][group], r)
