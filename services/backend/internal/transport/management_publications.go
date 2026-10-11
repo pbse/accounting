@@ -306,13 +306,16 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 		p.State = "unverified"
 		if tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err == nil {
 			defer tx.Rollback()
+			// Without the current pack only the newest version is unverified: an older one is superseded regardless.
+			current, stands := "", false
 			if pack, err := closeManagementPack(r.Context(), tx, r.PathValue("id")); err == nil {
-				current, _ := pack["digest"].(string)
-				if list, err := publications(r, tx, r.PathValue("id"), current, pack["overall"] == "signed_off" && pack["stale"] != true); err == nil {
-					for _, q := range list {
-						if q.ID == p.ID {
-							p.State = q.State
-						}
+				current, _ = pack["digest"].(string)
+				stands = pack["overall"] == "signed_off" && pack["stale"] != true
+			}
+			if list, err := publications(r, tx, r.PathValue("id"), current, stands); err == nil {
+				for _, q := range list {
+					if q.ID == p.ID {
+						p.State = q.State
 					}
 				}
 			}

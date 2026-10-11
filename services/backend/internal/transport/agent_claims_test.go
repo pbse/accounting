@@ -482,6 +482,11 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Patient fees rose 4,940.00. Of that, new patients brought 3,000.00 and the rest is unexplained.",
 		e("t10", 0, "/changes/0/change", "4940.00"), e("t10", 1, "/changes/0/new/0/this_month", "3000.00"))
 
+	// Round thirty-three: the side stated before the figure.
+	rejected("Supplies are over budget by 630.00.", "but the variance is -630", e("t47", 0, "/lines/0/month/variance", "-630.00"))
+	ok("Supplies are under budget by 630.00.", e("t47", 0, "/lines/0/month/variance", "-630.00"))
+	rejected("Supplies are over budget by 6.3%.", "but the variance is -6.3", e("t29", 0, "/lines/0/month/percent", "-6.3"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

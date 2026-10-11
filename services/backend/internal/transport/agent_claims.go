@@ -855,11 +855,20 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 		if !claimBudget.MatchString(lowerClause) {
 			return "the sentence states the budget variance " + o.normalized + " without saying it is against the budget"
 		}
-		if field != nil && len(o.after) > 0 {
-			over := o.after[0] == "over" || o.after[0] == "above" || o.after[0] == "ahead"
-			under := o.after[0] == "under" || o.after[0] == "below" || o.after[0] == "behind" || o.after[0] == "short"
+		// "630.00 over budget" or "over budget by 630.00": the side stated, before or after the figure, is its sign.
+		if field != nil {
+			words := append(append([]string{}, o.before...), o.after...)
+			over, under := false, false
+			for _, w := range words {
+				over = over || w == "over" || w == "above" || w == "ahead" || w == "exceeds" || w == "exceeded"
+				under = under || w == "under" || w == "below" || w == "behind" || w == "short"
+			}
 			if over && field.Sign() < 0 || under && field.Sign() > 0 {
-				return "the sentence states " + o.normalized + " " + o.after[0] + " budget, but the variance is " + normalizeFigure(got)
+				side := "over"
+				if under {
+					side = "under"
+				}
+				return "the sentence states " + o.normalized + " " + side + " budget, but the variance is " + normalizeFigure(got)
 			}
 		}
 	}
