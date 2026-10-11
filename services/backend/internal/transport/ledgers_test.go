@@ -99,6 +99,10 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM platform_audit WHERE organization_id=$1 AND action='connector.pilot'`, firm).Scan(&audited); err != nil || audited != 1 {
 		t.Fatalf("the pilot is audited: %d %v", audited, err)
 	}
+	var by string
+	if err := db.QueryRow(`SELECT actor FROM connector_pilots WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, firm).Scan(&by); err != nil || !strings.HasPrefix(by, "staff:") || by == "staff:" {
+		t.Fatalf("the pilot names the staff member: %q %v", by, err)
+	}
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/connector-pilot", `{"connector":"xero","enabled":false,"reason":"Pilot finished for now"}`, 200)
 	if connected := catalog(); connected["xero"] {
 		t.Fatalf("switched off again: %v", connected)

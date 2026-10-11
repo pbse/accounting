@@ -284,7 +284,7 @@ func adminConnectorPilot(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "connector.pilot", TargetType: "firm", TargetID: firm, Reason: strings.TrimSpace(in.Reason), Request: map[string]any{"connector": in.Connector, "enabled": in.Enabled}},
 		func(ctx context.Context, tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `INSERT INTO connector_pilots(organization_id,connector,enabled,reason,actor) VALUES($1,$2,$3,$4,$5)`, firm, in.Connector, in.Enabled, strings.TrimSpace(in.Reason), subject(r))
+			_, err := tx.ExecContext(ctx, `INSERT INTO connector_pilots(organization_id,connector,enabled,reason,actor) VALUES($1,$2,$3,$4,$5)`, firm, in.Connector, in.Enabled, strings.TrimSpace(in.Reason), "staff:"+staffOf(r.Context()).Subject)
 			return err
 		})
 	if err != nil {

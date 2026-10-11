@@ -10,6 +10,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { Mark } from "@close/ui/components/Mark";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { FirmEnrollment } from "./Enterprise";
+import { LedgerPicker, type LedgerChoice } from "./Roster";
 import { workspaceRequest } from "./workspace";
 import type { Close } from "./WorkpaperView";
 
@@ -94,6 +95,8 @@ export default function ClosesList() {
   const shown = [...rows.values()]
     .filter((r) => !needle || r.entity.toLowerCase().includes(needle) || r.closes.some((c) => found.has(c.id) || c.entity.toLowerCase().includes(needle) || c.period === needle) || r.owed.includes(needle))
     .sort((a, b) => Number(b.active ?? true) - Number(a.active ?? true) || a.entity.localeCompare(b.entity));
+  // The ledger a client being added keeps, recorded with it (docs/books-sources.md, Ledger catalog and onboarding).
+  const [ledger, setLedger] = useState<LedgerChoice>({ ledger: "unknown", other_name: "" });
   async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -101,8 +104,9 @@ export default function ClosesList() {
     setBusy("add");
     setError("");
     try {
-      await workspaceRequest("/roster", { entity, active: true, since: String(data.get("since") || thisMonth), due_days: null, owner: null, reason: "", rev: "" });
+      await workspaceRequest("/roster", { entity, active: true, since: String(data.get("since") || thisMonth), due_days: null, owner: null, reason: "", rev: "", ledger: ledger.ledger, other_name: ledger.other_name.trim() });
       setAdding(false);
+      setLedger({ ledger: "unknown", other_name: "" });
       reread();
     } catch (e) {
       // The dialog stays, with what was typed, so the person corrects it rather than starting over.
@@ -209,11 +213,12 @@ export default function ClosesList() {
             First month to close
             <input name="since" type="month" defaultValue={thisMonth} />
           </label>
+          <LedgerPicker value={ledger} onChange={setLedger} />
           <DialogActions>
             <button type="button" disabled={busy === "add"} onClick={() => setAdding(false)}>
               Cancel
             </button>
-            <button className="primary" disabled={busy === "add"}>
+            <button className="primary" disabled={busy === "add" || (ledger.ledger === "other" && !ledger.other_name.trim())}>
               {busy === "add" ? "Adding…" : "Add client"}
             </button>
           </DialogActions>
