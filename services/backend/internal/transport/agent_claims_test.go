@@ -264,6 +264,16 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		t.Fatalf("a derived figure's inputs link to their rows: %v", cited)
 	}
 
+	// Round eight: each figure's own month; a negated passage; one client's movement.
+	rejected("Net income was 21,780.00 in September versus 19,940.00 in October.", "in another month", e("t2", 0, ni+"/amount", "21780.00"), e("t2", 0, ni+"/prior", "19940.00"))
+	ok("Net income was 21,780.00 in October versus 19,940.00 in September.", e("t2", 0, ni+"/amount", "21780.00"), e("t2", 0, ni+"/prior", "19940.00"))
+	reads["t24"] = agentRead{text: "The marketing campaign did not affect revenue this month.", doc: true, link: chatCitation{"Evidence #10", "/dashboard/closes/7"}, title: "Read evidence text"}
+	rejected("Revenue rose 4,940.00 because of the marketing campaign.", "cause the reads do not show",
+		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t24", sentence: 0, quote: "The marketing campaign did not affect revenue"})
+	reads["t25"] = read(`{"closes":[{"id":"10","entity":"Birch Dental","period":"2026-09","currency":"USD","name":"Net income","amount":"19000.00"}]}`, "List client closes", "list_closes", "", "")
+	rejected("Net income rose 2,780.00 from Birch Dental in September to Bluegrass Dental PLLC in October.", "between different lines as a movement",
+		derived(0, "difference", "2780.00", "t2", ni+"/amount", "t25", "/closes/0/amount"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

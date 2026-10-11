@@ -380,6 +380,7 @@ var (
 	claimDifferenceSaid = regexp.MustCompile(`\b(difference|differ|differs|gap|less|leave|leaves|leaving|left|net of|minus|exceed|exceeds|short|more than|less than|over|under|after|change|changed|up|down|higher|lower|ahead|behind)\b`)
 	// Words that attribute a total to drivers, which must then add up or name the rest.
 	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|reflecting)\b`)
+	claimNegation       = regexp.MustCompile(`\b(not|no|never|without|neither|nor|unrelated|isn't|wasn't|didn't|doesn't|don't|won't|cannot|can't|hasn't|haven't)\b|n't\b`)
 	claimIncompleteSaid = regexp.MustCompile(`\b(incomplete|missing|partial|not complete|provisional|not yet captured|not all)\b`)
 	// Month names in any case, except "may", which is a month only as May.
 	claimMonth    = regexp.MustCompile(`\b((?i:january|february|march|april|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)|May)\b(?:\s+(\d{4}))?|\b(\d{4})-(\d{2})\b(?:-\d{2})?`)
@@ -501,6 +502,31 @@ func (o occurrence) direction() string {
 		return "before"
 	}
 	return ""
+}
+
+// nearestMonth is the month named closest to a figure within its clause, by distance either side; none when the clause
+// names no month.
+func nearestMonth(line string, o occurrence) [][2]int {
+	start := strings.Index(line, o.clause)
+	if start < 0 {
+		return nil
+	}
+	best, distance := [][2]int(nil), -1
+	for _, at := range claimMonth.FindAllStringSubmatchIndex(o.clause, -1) {
+		from, to := start+at[0], start+at[1]
+		d := o.start - to
+		if from >= o.end {
+			d = from - o.end
+		}
+		if d < 0 {
+			continue
+		}
+		if distance < 0 || d < distance {
+			distance = d
+			best = namedMonths(line[from:to])
+		}
+	}
+	return best
 }
 
 // namedMonths is the months a text names, as month numbers with the year when given (0 when not).
@@ -669,9 +695,10 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 	if c.keys["cash"] && claimAvailable.MatchString(lowerClause) {
 		return "the sentence calls book cash of " + o.normalized + " available at the bank"
 	}
-	// The month named is the field's month.
+	// The month named is the field's month: the month nearest the figure in its clause ("21,780.00 in October versus
+	// 19,940.00 in September" gives each its own), else any month the sentence names.
 	if !c.forecast && len(c.period) == 7 {
-		if months := namedMonths(o.clause); len(months) > 0 || len(namedMonths(line)) > 0 {
+		if months := nearestMonth(line, o); len(months) > 0 || len(namedMonths(line)) > 0 {
 			if len(months) == 0 {
 				months = namedMonths(line)
 			}
@@ -776,6 +803,8 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 		supported := false
 		for i, s := range entries {
 			switch {
+			case s.quote != "" && claimNegation.MatchString(strings.ToLower(s.quote)):
+				// "The campaign did not affect revenue" contradicts the cause rather than supporting it.
 			case s.quote != "" && labelNamed(cause, s.quote):
 				supported = true
 			case claims[i].cause:
@@ -1243,7 +1272,7 @@ func derivedResult(op string, o occurrence, claims []claim, computed *big.Rat) s
 	// The same line at two times: two months' amounts, or one row's current and prior fields (amount and prior,
 	// this month and last month).
 	sameLine := false
-	if len(claims) == 2 && strings.EqualFold(claims[0].label, claims[1].label) {
+	if len(claims) == 2 && strings.EqualFold(claims[0].label, claims[1].label) && strings.EqualFold(claims[0].entity, claims[1].entity) {
 		a, b := claims[0], claims[1]
 		sameLine = a.period != "" && b.period != "" && a.period != b.period ||
 			a.kind != b.kind && (a.kind == "prior" || b.kind == "prior") ||
