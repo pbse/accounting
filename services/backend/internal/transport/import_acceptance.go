@@ -564,6 +564,30 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "The file's reading, scope or account map changed since you opened its checks: reopen them to see what changed.")
 			return
 		}
+		// For a month whose books are its files, a new acceptance changes them: a month signed off, or with approved work,
+		// keeps its books until it or its work is reopened, and drafts still in review are asked for again.
+		var monthClose sql.NullInt64
+		var settled bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT c.id,COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')='signed_off'
+  OR EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved')
+ FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period=$3 AND books_source(c.organization_id,c.entity,c.period)='files'
+ ORDER BY c.id DESC LIMIT 1 FOR UPDATE`, org, name, state.reading.Period).Scan(&monthClose, &settled); err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "The acceptance could not be saved.")
+			return
+		}
+		if monthClose.Valid && settled {
+			problem(w, 409, "This month's books are its files, and it is signed off or has approved work: reopen it, or its work, before accepting another reading.")
+			return
+		}
+		if monthClose.Valid {
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO workpaper_reviews(workpaper_id,decision,note,actor,paper_digest)
+ SELECT w.id::bigint,'changes_requested',$2,$3,w.digest FROM workpaper_review_state w WHERE w.close_id=$1 AND w.review_state='pending'
+  AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`,
+				monthClose.Int64, "The month's books are now another accepted reading of its files: prepare this from those books.", reviewerName(r)); err != nil {
+				problem(w, 503, "The acceptance could not be saved.")
+				return
+			}
+		}
 		checks := fileChecks(state, in.Explained)
 		raw, _ := json.Marshal(checks)
 		var accepted string

@@ -80,20 +80,36 @@ func writeFileVersion(ctx context.Context, db *sql.DB, org, name, acceptance, fi
 	if err != nil {
 		return err
 	}
-	var layoutID, scopeID, period string
+	var layoutID, scopeID, period, stamp string
 	var acceptedAt sql.NullTime
-	if err = tx.QueryRowContext(ctx, `SELECT layout_id::text,scope_id::text,period,created_at FROM books_import_acceptances WHERE id::text=$1`, acceptance).Scan(&layoutID, &scopeID, &period, &acceptedAt); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT layout_id::text,scope_id::text,period,created_at,map_stamp FROM books_import_acceptances WHERE id::text=$1`, acceptance).Scan(&layoutID, &scopeID, &period, &acceptedAt, &stamp); err != nil {
 		return err
+	}
+	// The classes and types are the map the acceptance was given on, never one confirmed since.
+	accepted := map[string]mappedAccount{}
+	if mapID, _, ok := strings.Cut(stamp, ":"); ok {
+		var raw []byte
+		if err = tx.QueryRowContext(ctx, `SELECT accounts FROM books_account_maps WHERE id::text=$1`, mapID).Scan(&raw); err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		json.Unmarshal(raw, &accepted)
 	}
 	// An acceptance no longer on the file's reading or scope is not its month's books: nothing is written for it.
 	if !found || state.scope == nil || state.reading.ID != layoutID || state.scope.ID != scopeID {
 		return nil
 	}
+	// The reading's accounts as the accepted map maps them, for the accounts and the activity alike.
+	for i, a := range state.reading.Accounts {
+		state.reading.Accounts[i].Mapped = nil
+		if m, ok := accepted[a.Key]; ok {
+			state.reading.Accounts[i].Mapped = &m
+		}
+	}
 	accounts, balances := map[string]booksAccount{}, map[string]string{}
 	for _, a := range state.reading.Accounts {
 		account := booksAccount{Name: strings.TrimSpace(a.Number + " " + a.Name)}
-		if a.Mapped != nil {
-			account.Class, account.Type = a.Mapped.Class, a.Mapped.Type
+		if m, ok := accepted[a.Key]; ok {
+			account.Class, account.Type = m.Class, m.Type
 		}
 		accounts[a.Key], balances[a.Key] = account, a.Balance
 	}

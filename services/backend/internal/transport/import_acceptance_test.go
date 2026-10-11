@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -320,11 +321,22 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
 		t.Fatalf("parity leaves a file's books alone: %v %v", mismatched, err)
 	}
-	// A month signed off on the file's books holds the file; reopened, deleting the file takes its books with it.
+	// A month whose books are its files is not signed off yet.
+	tx, err := db.BeginTx(t.Context(), nil)
+	must(err)
+	readiness, err := closeReadiness(t.Context(), tx, januaryClose)
+	tx.Rollback()
+	must(err)
+	if !slices.ContainsFunc(readiness.Blockers, func(b string) bool { return strings.HasPrefix(b, "Books from files") }) {
+		t.Fatalf("a files month waits to be signed off: %v", readiness.Blockers)
+	}
+	// A month signed off on the file's books holds the file, and another reading of it; reopened, deleting the file
+	// takes its books with it.
 	manager := []string{"workpapers:review", "clients:all", "data:manage"}
 	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1::bigint,'signed_off',repeat('a',64),'{}','Signed off','fixture')`, januaryClose)
 	must(err)
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+january, map[string]any{"reason": "Sent in error"}, 409)
+	call("user_a", partner, "POST", januaryPath, with(call("user_a", partner, "GET", januaryPath, nil, 200), map[string]any{"exported_on": "2026-10-06"}), 409)
 	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1::bigint,'reopened',repeat('a',64),'{}','Reopened','fixture')`, januaryClose)
 	must(err)
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+january, map[string]any{"reason": "Sent in error"}, 200)

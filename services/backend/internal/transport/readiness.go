@@ -110,6 +110,13 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	if out.profile.Unsettled() {
 		out.Blockers = append(out.Blockers, "Client profile: "+out.profile.Question()+".")
 	}
+	// A month whose books are its files is not signed off yet: the readers, and the file's checks, come to readiness
+	// with the next steps (docs/books-sources.md, delivery step 9).
+	if source, err := closeBooksSource(ctx, tx, id); err != nil {
+		return out, err
+	} else if source == "files" {
+		out.Blockers = append(out.Blockers, "Books from files: a month whose books are its files cannot be signed off yet.")
+	}
 	var snapshot struct {
 		Scope *struct {
 			Scope closeScope `json:"scope"`

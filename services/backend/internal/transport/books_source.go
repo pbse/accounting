@@ -27,8 +27,8 @@ func closeBooksSource(ctx context.Context, q rowReader, closeID string) (string,
 }
 
 // readsQuickBooks and readsXero say whether a month whose source is source may read that provider's captures.
-func readsQuickBooks(source string) bool { return source != "xero" }
-func readsXero(source string) bool       { return source != "quickbooks" }
+func readsQuickBooks(source string) bool { return source == "newest" || source == "quickbooks" }
+func readsXero(source string) bool       { return source == "newest" || source == "xero" }
 
 // sourceAllows is preparation.SourceAllows.
 func sourceAllows(closeExpr, provider string) string {
