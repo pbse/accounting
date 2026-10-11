@@ -82,48 +82,52 @@ func periodBooks(ctx context.Context, db rowReader, closeID, period string) (*fl
 // Each month uses its close's newest snapshot, from QuickBooks or Xero; Xero payees come from the captured transactions.
 func flux(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		wait := func(reason string) { jsonReply(w, 200, map[string]any{"state": "waiting", "reason": reason}) }
-		var org, entity, period string
-		if err := db.QueryRowContext(ctx, `SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&org, &entity, &period); err != nil {
-			problem(w, 404, "Close not found.")
+		out, status, message := fluxReport(r.Context(), db, r.PathValue("id"), 8)
+		if status != 0 {
+			problem(w, status, message)
 			return
+		}
+		jsonReply(w, 200, out)
+	}
+}
+
+// fluxReport is the month's largest profit and loss movements (at most limit) against last month with what the ledger
+// attributes each to by payee, or why they cannot be compared (state waiting), or a problem's status and message.
+func fluxReport(ctx context.Context, db *sql.DB, closeID string, limit int) (map[string]any, int, string) {
+	{
+		waiting := func(reason string) map[string]any { return map[string]any{"state": "waiting", "reason": reason} }
+		var org, entity, period string
+		if err := db.QueryRowContext(ctx, `SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1`, closeID).Scan(&org, &entity, &period); err != nil {
+			return nil, 404, "Close not found."
 		}
 		month := func(closeID, period string) (*fluxMonth, error) { return periodBooks(ctx, db, closeID, period) }
-		this, err := month(r.PathValue("id"), period)
+		this, err := month(closeID, period)
 		if err != nil {
-			problem(w, 503, "Period snapshot unavailable.")
-			return
+			return nil, 503, "Period snapshot unavailable."
 		}
 		if this == nil {
-			wait("Capture this month's QuickBooks period snapshot or Xero Trial Balance first.")
-			return
+			return waiting("Capture this month's QuickBooks period snapshot or Xero Trial Balance first."), 0, ""
 		}
 		previous := shiftMonth(period, -1)
 		var priorClose string
 		err = db.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, previous).Scan(&priorClose)
 		if err != nil && err != sql.ErrNoRows {
-			problem(w, 503, "Last month's close is unavailable.")
-			return
+			return nil, 503, "Last month's close is unavailable."
 		}
 		var last *fluxMonth
 		if err == nil {
 			if last, err = month(priorClose, previous); err != nil {
-				problem(w, 503, "Last month's snapshot is unavailable.")
-				return
+				return nil, 503, "Last month's snapshot is unavailable."
 			}
 		}
 		if last == nil {
-			wait("Last month (" + previous + ") has no close with a month-end snapshot to compare against.")
-			return
+			return waiting("Last month (" + previous + ") has no close with a month-end snapshot to compare against."), 0, ""
 		}
 		if last.Source != this.Source {
-			wait("The two months' newest books come from different ledgers (QuickBooks and Xero), so they are not compared.")
-			return
+			return waiting("The two months' newest books come from different ledgers (QuickBooks and Xero), so they are not compared."), 0, ""
 		}
 		if last.realm != this.realm {
-			wait("The two months were captured from different companies.")
-			return
+			return waiting("The two months were captured from different companies."), 0, ""
 		}
 		classes := map[string]string{}
 		monthly := func(m *fluxMonth) (string, map[string]quickbooks.Activity, error) {
@@ -152,12 +156,10 @@ func flux(db *sql.DB) http.HandlerFunc {
 			err = lastErr
 		}
 		if err != nil {
-			wait("A Profit and Loss report could not be read: " + err.Error() + ".")
-			return
+			return waiting("A Profit and Loss report could not be read: " + err.Error() + "."), 0, ""
 		}
 		if currency != lastCurrency {
-			wait("The two months' reports are in different currencies.")
-			return
+			return waiting("The two months' reports are in different currencies."), 0, ""
 		}
 
 		type change struct {
@@ -189,7 +191,7 @@ func flux(db *sql.DB) http.HandlerFunc {
 		slices.SortStableFunc(changes, func(a, b change) int {
 			return new(big.Rat).Abs(b.delta).Cmp(new(big.Rat).Abs(a.delta))
 		})
-		changes = changes[:min(8, len(changes))]
+		changes = changes[:min(limit, len(changes))]
 		ids := []string{}
 		for _, c := range changes {
 			ids = append(ids, c.id)
@@ -285,6 +287,6 @@ func flux(db *sql.DB) http.HandlerFunc {
 			item["questions"] = questions
 			out = append(out, item)
 		}
-		jsonReply(w, 200, map[string]any{"state": "ready", "currency": currency, "this": this, "last": last, "last_close_id": priorClose, "changes": out, "note": "Figures are as captured in each month's snapshot; later postings are not included."})
+		return map[string]any{"state": "ready", "currency": currency, "this": this, "last": last, "last_close_id": priorClose, "changes": out, "note": "Figures are as captured in each month's snapshot; later postings are not included."}, 0, ""
 	}
 }

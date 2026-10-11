@@ -159,7 +159,7 @@ export default function Executive({ view }: { view: ExecutiveView }) {
 // citation opens the version it cited), and any other can be opened.
 function PublishedReport({ closeId, newest }: { closeId: string; newest?: string }) {
   const [open, setOpen] = useState(newest);
-  const [shown, setShown] = useState<{ publication: { version: number; commentary: string }; pack: Extract<Pack, { state: "ready" }> }>();
+  const [shown, setShown] = useState<{ publication: { version: number; commentary: string; explanations?: { account_id: string; text: string }[] }; pack: Extract<Pack, { state: "ready" }> }>();
   const [error, setError] = useState("");
   useEffect(() => {
     if (!open) return;
@@ -179,6 +179,7 @@ function PublishedReport({ closeId, newest }: { closeId: string; newest?: string
         <>
           <SectionHeader title={`Version ${shown.publication.version}, as published`} />
           <p>{shown.publication.commentary}</p>
+          {(shown.publication.explanations?.length ?? 0) > 0 && <ul aria-label="Line explanations">{shown.publication.explanations!.map((e) => <li key={e.account_id}>{e.text}</li>)}</ul>}
           <PackView closeId={closeId} pack={shown.pack} />
         </>
       )}

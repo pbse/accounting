@@ -494,6 +494,17 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 	if body := string(call("GET", base+"/management-pack/publications/"+first.ID, nil, 200)); !strings.Contains(body, `"state":"superseded"`) {
 		t.Fatalf("a superseded version read on its own says so: %s", body)
 	}
+	// Changed commentary on unchanged figures is a reviewed successor version, never an edit of the published one.
+	successor := map[string]any{"action": "publish", "digest": publish["digest"], "commentary": "Rent rose to 600 under the new lease.", "confirmed": true}
+	if body := call("POST", base+"/management-pack/publications", successor, 422); !strings.Contains(string(body), "Say why") {
+		t.Fatalf("a successor version says why: %s", body)
+	}
+	successor["reason"] = "Commentary corrected after the client confirmed the lease."
+	var third struct{ Version int }
+	must(json.Unmarshal(call("POST", base+"/management-pack/publications", successor, 200), &third))
+	if got := list(); third.Version != 3 || got.Publications[0].State != "current" || got.Publications[1].State != "superseded" {
+		t.Fatalf("the successor version is current and the earlier one kept: %d %+v", third.Version, got)
+	}
 }
 
 func TestManagementPackShowsTheLedgersCashFlowOnlyAsItTies(t *testing.T) {

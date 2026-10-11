@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,10 +30,12 @@ func figuresDigest(pack map[string]any) string {
 }
 
 type publication struct {
-	ID              string           `json:"id"`
-	Version         int              `json:"version"`
-	Digest          string           `json:"digest"`
-	Commentary      string           `json:"commentary"`
+	ID         string `json:"id"`
+	Version    int    `json:"version"`
+	Digest     string `json:"digest"`
+	Commentary string `json:"commentary"`
+	// Explanations are the reviewed explanation of each line the version explains, frozen with its figures.
+	Explanations    json.RawMessage  `json:"explanations"`
 	Supersedes      *string          `json:"supersedes"`
 	Reason          string           `json:"reason"`
 	PublishedBy     string           `json:"published_by"`
@@ -51,7 +54,7 @@ type acknowledgment struct {
 // (or unverified while the live figures cannot be read), and every earlier one is superseded.
 // current is the live figures' digest; stands is whether the close's sign-off still stands over them.
 func publications(r *http.Request, tx *sql.Tx, closeID, current string, stands bool) ([]publication, error) {
-	rows, err := tx.QueryContext(r.Context(), `SELECT p.id::text,p.version,p.digest,p.commentary,p.supersedes::text,p.reason,p.published_by,p.published_at,p.pack,
+	rows, err := tx.QueryContext(r.Context(), `SELECT p.id::text,p.version,p.digest,p.commentary,p.explanations,p.supersedes::text,p.reason,p.published_by,p.published_at,p.pack,
  COALESCE((SELECT jsonb_agg(jsonb_build_object('subject',a.subject,'at',a.acknowledged_at) ORDER BY a.acknowledged_at) FROM management_acknowledgments a WHERE a.publication_id=p.id),'[]')
  FROM management_publications p WHERE p.close_id::text=$1 ORDER BY p.version DESC`, closeID)
 	if err != nil {
@@ -62,7 +65,7 @@ func publications(r *http.Request, tx *sql.Tx, closeID, current string, stands b
 	for rows.Next() {
 		var p publication
 		var acks []byte
-		if err = rows.Scan(&p.ID, &p.Version, &p.Digest, &p.Commentary, &p.Supersedes, &p.Reason, &p.PublishedBy, &p.PublishedAt, &p.Pack, &acks); err != nil {
+		if err = rows.Scan(&p.ID, &p.Version, &p.Digest, &p.Commentary, &p.Explanations, &p.Supersedes, &p.Reason, &p.PublishedBy, &p.PublishedAt, &p.Pack, &acks); err != nil {
 			return nil, err
 		}
 		if err = json.Unmarshal(acks, &p.Acknowledgments); err != nil {
@@ -124,6 +127,11 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			Reason        string `json:"reason"`
 			Confirmed     bool   `json:"confirmed"`
 			PublicationID string `json:"publication_id"`
+			// Explanations are the reviewed text of each line the pack explains, by account.
+			Explanations []struct {
+				AccountID string `json:"account_id"`
+				Text      string `json:"text"`
+			} `json:"explanations"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -200,14 +208,34 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Only a complete pack (every account classified, every total reconciled and a reconciled cash-flow statement) from a current capture whose sign-off stands for every month shown can be published.")
 			return
 		}
-		var latest sql.NullString
-		var latestDigest string
-		var version int
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,version,digest FROM management_publications WHERE close_id::text=$1 ORDER BY version DESC LIMIT 1`, closeID).Scan(&latest, &version, &latestDigest); err != nil && err != sql.ErrNoRows {
+		// Each explanation is of a line that moved; every material movement is explained, saying plainly when its cause
+		// is not known, and each is frozen with the line's figures.
+		var materiality sql.NullString
+		if err = tx.QueryRowContext(r.Context(), `SELECT materiality_amount::text FROM organizations WHERE id=$1`, org).Scan(&materiality); err != nil {
 			problem(w, 503, "Publishing is unavailable.")
 			return
 		}
-		if latestDigest == in.Digest {
+		pl, _ := pack["profit_and_loss"].(statement)
+		given := []lineExplanation{}
+		for _, e := range in.Explanations {
+			given = append(given, lineExplanation{AccountID: e.AccountID, Text: e.Text})
+		}
+		explained, refusal := reviewedExplanations(pl, materiality.String, given)
+		if refusal != "" {
+			problem(w, 422, refusal)
+			return
+		}
+		frozenExplanations, _ := json.Marshal(explained)
+		var latest sql.NullString
+		var latestDigest, latestCommentary string
+		var latestExplanations []byte
+		var version int
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,version,digest,commentary,explanations FROM management_publications WHERE close_id::text=$1 ORDER BY version DESC LIMIT 1`, closeID).Scan(&latest, &version, &latestDigest, &latestCommentary, &latestExplanations); err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "Publishing is unavailable.")
+			return
+		}
+		// Unchanged figures with changed commentary or explanations are a reviewed successor version, never an edit.
+		if latestDigest == in.Digest && latestCommentary == in.Commentary && jsonEqual(latestExplanations, frozenExplanations) {
 			problem(w, 409, "This pack is already published; nothing has changed since.")
 			return
 		}
@@ -217,8 +245,8 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 		}
 		frozen, _ := json.Marshal(pack)
 		var id string
-		if err = tx.QueryRowContext(r.Context(), `INSERT INTO management_publications(organization_id,close_id,version,pack,digest,commentary,supersedes,reason,published_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`,
-			org, closeID, version+1, frozen, in.Digest, in.Commentary, latest, in.Reason, actor).Scan(&id); err != nil || tx.Commit() != nil {
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO management_publications(organization_id,close_id,version,pack,digest,commentary,supersedes,reason,published_by,explanations) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id::text`,
+			org, closeID, version+1, frozen, in.Digest, in.Commentary, latest, in.Reason, actor, string(frozenExplanations)).Scan(&id); err != nil || tx.Commit() != nil {
 			problem(w, 503, "The pack could not be published.")
 			return
 		}
@@ -316,9 +344,9 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/management-pack/publications/{publication}", func(w http.ResponseWriter, r *http.Request) {
 		var p publication
 		var acks []byte
-		err := db.QueryRowContext(r.Context(), `SELECT p.id::text,p.version,p.digest,p.commentary,p.supersedes::text,p.reason,p.published_by,p.published_at,p.pack,
+		err := db.QueryRowContext(r.Context(), `SELECT p.id::text,p.version,p.digest,p.commentary,p.explanations,p.supersedes::text,p.reason,p.published_by,p.published_at,p.pack,
  COALESCE((SELECT jsonb_agg(jsonb_build_object('subject',a.subject,'at',a.acknowledged_at) ORDER BY a.acknowledged_at) FROM management_acknowledgments a WHERE a.publication_id=p.id),'[]')
- FROM management_publications p WHERE p.id::text=$1 AND p.close_id::text=$2`, r.PathValue("publication"), r.PathValue("id")).Scan(&p.ID, &p.Version, &p.Digest, &p.Commentary, &p.Supersedes, &p.Reason, &p.PublishedBy, &p.PublishedAt, &p.Pack, &acks)
+ FROM management_publications p WHERE p.id::text=$1 AND p.close_id::text=$2`, r.PathValue("publication"), r.PathValue("id")).Scan(&p.ID, &p.Version, &p.Digest, &p.Commentary, &p.Explanations, &p.Supersedes, &p.Reason, &p.PublishedBy, &p.PublishedAt, &p.Pack, &acks)
 		if err != nil || json.Unmarshal(acks, &p.Acknowledgments) != nil {
 			problem(w, 404, "Publication not found.")
 			return
@@ -340,8 +368,8 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/management-pack/publications/{publication}/export", func(w http.ResponseWriter, r *http.Request) {
 		var p publication
 		var entity, period string
-		err := db.QueryRowContext(r.Context(), `SELECT p.version,p.commentary,p.published_by,p.published_at,p.pack,c.entity,c.period FROM management_publications p JOIN client_closes c ON c.id=p.close_id WHERE p.id::text=$1 AND p.close_id::text=$2`,
-			r.PathValue("publication"), r.PathValue("id")).Scan(&p.Version, &p.Commentary, &p.PublishedBy, &p.PublishedAt, &p.Pack, &entity, &period)
+		err := db.QueryRowContext(r.Context(), `SELECT p.version,p.commentary,p.explanations,p.published_by,p.published_at,p.pack,c.entity,c.period FROM management_publications p JOIN client_closes c ON c.id=p.close_id WHERE p.id::text=$1 AND p.close_id::text=$2`,
+			r.PathValue("publication"), r.PathValue("id")).Scan(&p.Version, &p.Commentary, &p.Explanations, &p.PublishedBy, &p.PublishedAt, &p.Pack, &entity, &period)
 		if err != nil {
 			problem(w, 404, "Publication not found.")
 			return
@@ -466,9 +494,16 @@ func publicationRows(p publication) ([][]string, error) {
 		{"Figures", figures, priorCaptured, "status " + pack.Overall},
 		published,
 		{"Commentary", p.Commentary},
+	}
+	var explained []lineExplanation
+	json.Unmarshal(p.Explanations, &explained)
+	for _, e := range explained {
+		rows = append(rows, []string{"Explanation", e.Name, e.Change, e.Text})
+	}
+	rows = append(rows, [][]string{
 		{"Note", pack.Note},
 		{"Statement", "Section", "Line", pack.Period, prior, "Change"},
-	}
+	}...)
 	optional := func(v *string) string {
 		if v == nil {
 			return ""
@@ -545,4 +580,10 @@ func forExecutive(r *http.Request, p *publication) {
 		delete(pack, "draft_commentary")
 		p.Pack, _ = json.Marshal(pack)
 	}
+}
+
+// jsonEqual says whether two JSON documents hold the same value, whatever their spacing.
+func jsonEqual(a, b []byte) bool {
+	var x, y any
+	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
 }

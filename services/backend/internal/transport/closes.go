@@ -296,6 +296,7 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 	mux.HandleFunc("POST /v1/closes/{id}/cash-flow", importCashFlow(db))
 	registerBudget(mux, db)
 	registerManagementPublications(mux, db)
+	registerExplanations(mux, db)
 	registerExamples(mux, db)
 	mux.HandleFunc("GET /v1/closes/{id}/workpapers/{paper}/standing-approval", standingApproval(db))
 	mux.HandleFunc("POST /v1/closes/{id}/workpapers/{paper}/standing-approval", standingApproval(db))
