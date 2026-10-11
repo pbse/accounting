@@ -390,7 +390,14 @@ func sameHeaders(t bookfiles.Table, l bookfiles.Layout) bool {
 
 // headersOf is the table's header row's text for each of the layout's columns.
 func headersOf(t bookfiles.Table, l bookfiles.Layout) map[int]string {
+	// Every column read or left out has a header, blank when its cell is: a later file with a header there differs.
 	headers := map[int]string{}
+	for column := range l.Columns {
+		headers[column] = ""
+	}
+	for _, column := range l.IgnoredColumns {
+		headers[column] = ""
+	}
 	for _, r := range t.Rows {
 		if r.Number != l.HeaderRow {
 			continue

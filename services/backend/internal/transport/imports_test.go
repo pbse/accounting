@@ -303,4 +303,14 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows) VALUES($1,$2::bigint,$3,0,'other.csv',false,'[]',2,0,1,'[{"number":2,"cells":[{"column":0,"ref":"R2C1","kind":"text","value":"Secret"}]}]')`, org, otherClient, "||s"+acmeLayout)
 	must(err)
 	call("user_a", partner, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+otherClient+"&from=2", nil, 404)
+
+	// A column read under a blank header keeps it blank: a later file with a header there is asked about afresh.
+	blank := upload("user_b", preparer, "Blank May.csv", "2026-05", "Account,,Credit\nCash,100.00,\nCapital,,100.00\n", 201)["id"].(string)
+	blankTable := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+blank, nil, 200)["tables"].([]any)[0].(map[string]any)["name"]
+	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+blank, map[string]any{"action": "confirm", "reason": "Debit column unheaded", "layout": map[string]any{"table": blankTable, "header_row": 1,
+		"columns": map[string]string{"0": "account_name", "1": "debit", "2": "credit"}, "style": map[string]any{"decimal_comma": false, "scale": 1}, "as_of": "2026-05-31", "currency": "USD"}}, 200)
+	headed := upload("user_b", preparer, "Headed June.csv", "2026-06", "Account,Memo,Credit\nCash,100.00,\nCapital,,100.00\n", 201)["id"].(string)
+	if p := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+headed, nil, 200)["proposal"].(map[string]any); p["reused"] != false {
+		t.Fatalf("a header where there was none is asked about: %v", p)
+	}
 }
