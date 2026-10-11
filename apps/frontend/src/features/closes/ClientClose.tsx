@@ -325,7 +325,7 @@ export default function ClientClose() {
       {tab === "settings" && (
         <div className="stack">
           <Memory key={`memory-${close.id}`} closeId={close.id} />
-          <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} onApplied={() => void reload()} />
+          <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} onApplied={() => void reload()} />
           <Replay key={`replay-${close.id}`} closeId={close.id} />
           <RetentionControls close={close} onDeleted={setDeleted} />
         </div>

@@ -55,10 +55,10 @@ func latestImportScope(ctx context.Context, q rowReader, org, name, id string) (
 	return &s, err
 }
 
-// approvedBasis is client name's approved basis, as a close reads it: the client's own override, else the firm's, with
-// which it is; "" when none is approved.
-func approvedBasis(ctx context.Context, q rowReader, org, name string) (method, scope string, err error) {
-	err = q.QueryRowContext(ctx, `SELECT p.method,CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END FROM procedure_versions p WHERE p.organization_id=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower($2)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, org, name).Scan(&method, &scope)
+// approvedBasis is client name's approved basis for month period (this month when ""), as a close reads it: the client's
+// own override, else the firm's, with which it is; "" when none is approved.
+func approvedBasis(ctx context.Context, q rowReader, org, name, period string) (method, scope string, err error) {
+	err = q.QueryRowContext(ctx, `SELECT p.method,CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END FROM procedure_versions p WHERE p.organization_id=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower($2)) AND (p.effective_from IS NULL OR p.effective_from<=COALESCE(NULLIF($3,''),to_char(now(),'YYYY-MM'))) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, org, name, period).Scan(&method, &scope)
 	if err == sql.ErrNoRows {
 		return "", "", nil
 	}
@@ -101,7 +101,7 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 			scope, err = latestImportScope(r.Context(), db, org, name, id)
 		}
 		if err == nil {
-			method, basisScope, err = approvedBasis(r.Context(), db, org, name)
+			method, basisScope, err = approvedBasis(r.Context(), db, org, name, importMonth(r.Context(), db, org, id))
 		}
 		// How many of the reading's month-end amounts are formula results: the attestation of a recalculated copy is
 		// asked only of a file that has them.
@@ -197,11 +197,18 @@ func registerImportScopes(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The file's scope could not be saved.")
 			return
 		}
-		method, _, err := approvedBasis(r.Context(), db, org, name)
+		method, _, err := approvedBasis(r.Context(), db, org, name, importMonth(r.Context(), db, org, id))
 		if err != nil {
 			problem(w, 503, "The client's basis is unavailable.")
 			return
 		}
 		jsonReply(w, 200, map[string]any{"id": attested, "note": scopeNote(&importScope{Basis: in.Basis}, method)})
 	})
+}
+
+// importMonth is import id's month, or "" when it cannot be read (the basis is then this month's).
+func importMonth(ctx context.Context, q rowReader, org, id string) string {
+	var period string
+	q.QueryRowContext(ctx, `SELECT period FROM books_imports WHERE id::text=$1 AND organization_id=$2`, id, org).Scan(&period)
+	return period
 }
