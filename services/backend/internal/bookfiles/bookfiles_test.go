@@ -777,3 +777,15 @@ func TestSubtotalsGrandTotalsAndSymbols(t *testing.T) {
 		t.Fatalf("a prefixed dollar: %+v %v", a, err)
 	}
 }
+
+// A plus sign is a sign: with another sign or a side marker the amount is not read.
+func TestAPlusSignIsASign(t *testing.T) {
+	for _, text := range []string{"-+100", "+-100", "+100 Cr", "Dr +100", "(+100)"} {
+		if _, err := ParseAmount(text, NumberStyle{}); err != ErrNotAmount {
+			t.Fatalf("%s: %v", text, err)
+		}
+	}
+	if a, err := ParseAmount("+100", NumberStyle{}); err != nil || a.Value.Cmp(big.NewRat(100, 1)) != 0 {
+		t.Fatalf("+100: %v %v", a, err)
+	}
+}
