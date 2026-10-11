@@ -100,18 +100,21 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 		// Books that come as files are read from the month's file: the takeover confirms the file and its confirmed
 		// reading, and waits until one reads cleanly (balanced, with no problem) and has not been replaced.
 		content["books"] = "files"
-		var file, layout sql.NullString
-		err = tx.QueryRowContext(ctx, `SELECT i.id::text,l.id::text FROM books_imports i JOIN client_closes c ON c.id::text=$1
- JOIN LATERAL (SELECT b.id,b.reading FROM books_layouts b WHERE b.import_id=i.id ORDER BY b.id DESC LIMIT 1) l ON true
+		var file, layout, currency sql.NullString
+		err = tx.QueryRowContext(ctx, `SELECT i.id::text,l.id::text,upper(COALESCE(l.layout->>'currency','')) FROM books_imports i JOIN client_closes c ON c.id::text=$1
+ JOIN LATERAL (SELECT b.id,b.reading,b.layout FROM books_layouts b WHERE b.import_id=i.id ORDER BY b.id DESC LIMIT 1) l ON true
  WHERE i.organization_id=c.organization_id AND client_identity(i.organization_id,i.client_entity)=client_identity(c.organization_id,c.entity) AND i.period=c.period
   AND NOT EXISTS(SELECT 1 FROM books_imports n WHERE n.replaces=i.id) AND COALESCE((l.reading->>'balanced')::boolean,false) AND COALESCE(jsonb_array_length(l.reading->'problems'),0)=0
- ORDER BY i.id DESC LIMIT 1`, closeID).Scan(&file, &layout)
+ ORDER BY i.id DESC LIMIT 1`, closeID).Scan(&file, &layout, &currency)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, "", nil, err
 		}
-		if file.Valid {
+		switch {
+		case file.Valid && currency.String != profile.Currency:
+			problems = append(problems, "This month's file is read in "+currency.String+", but the client's books are kept in "+profile.Currency+": correct its reading or the client's profile.")
+		case file.Valid:
 			content["file"] = map[string]string{"import": file.String, "layout": layout.String}
-		} else {
+		default:
 			problems = append(problems, "Its books come as files: send this month's Trial Balance on the client's page and confirm how it is read; the takeover waits until it reads cleanly.")
 		}
 	case len(check.Companies) == 0:

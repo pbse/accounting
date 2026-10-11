@@ -284,6 +284,13 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	}
 	aprilLayout["table"] = call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+april, nil, 200)["tables"].([]any)[0].(map[string]any)["name"]
 	aprilLayout["as_of"] = "2026-04-30"
+	// Read in euros, the file does not match the client's dollars: the takeover says so.
+	aprilLayout["currency"] = "EUR"
+	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+april, map[string]any{"action": "confirm", "layout": aprilLayout, "reason": "Read in euros"}, 200)
+	if p := call("user_a", partner, "GET", takeover, nil, 200)["problems"].([]any); len(p) != 1 || !strings.Contains(p[0].(string), "read in EUR") {
+		t.Fatalf("a file in another currency: %v", p)
+	}
+	aprilLayout["currency"] = "USD"
 	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+april, map[string]any{"action": "confirm", "layout": aprilLayout, "reason": "April's export"}, 200)
 	setup := call("user_a", partner, "GET", takeover, nil, 200)
 	if len(setup["problems"].([]any)) != 0 || setup["content"].(map[string]any)["file"].(map[string]any)["import"] != april {

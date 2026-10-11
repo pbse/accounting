@@ -285,7 +285,10 @@ function LayoutForm({
   const [layout, setLayout] = useState<Layout>(
     start ?? { table: data.tables[0]?.name ?? "", header_row: 1, columns: {}, style: { decimal_comma: false, scale: 1 }, as_of: "", currency: "" },
   );
-  const [reading, setReading] = useState<Reading | undefined>(data.import.confirmed?.reading);
+  // The confirmed reading shows only beside the parse it was confirmed with: a file read another way is previewed afresh.
+  const confirmedCsv = data.import.confirmed?.csv;
+  const sameParse = !csv || (csv.encoding === confirmedCsv?.encoding && csv.delimiter === confirmedCsv?.delimiter);
+  const [reading, setReading] = useState<Reading | undefined>(sameParse ? data.import.confirmed?.reading : undefined);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

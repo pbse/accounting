@@ -145,7 +145,9 @@ func readImportAs(ctx context.Context, q rowReader, org, name, id string, asked 
 		return readImport(ctx, q, org, name, id, confirmed.CSV)
 	}
 	summary, file, err := readImport(ctx, q, org, name, id, csvChoice{})
-	if err == nil && saved != nil && saved.CSV.Encoding != "" && summary.Format == "csv" {
+	// The client's earlier choice settles only what the reader is unsure of: a file it reads with certainty keeps the
+	// reader's reading, its dialect perhaps changed.
+	if err == nil && saved != nil && saved.CSV.Encoding != "" && summary.Format == "csv" && len(file.Unsure) > 0 {
 		if s, f, e := readImport(ctx, q, org, name, id, saved.CSV); e == nil {
 			return s, f, nil
 		}
