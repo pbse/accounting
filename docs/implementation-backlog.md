@@ -90,3 +90,20 @@ B01/B03/B04/B11 mixed evidence, October 11 (handoff slice 4, first part): a corr
 
 Slice 4, second part (October 11): a credit note or amended invoice uploaded after a prepaid draft was saved did not reopen the draft, since a draft's review state followed only the sources it cites. A database trigger now links a later, readable work document that names a prepaid draft's invoice and speaks of a credit, cancellation, refund, adjustment, reversal, void or amendment; the draft's review state is then source_changed (it cannot be approved as it is) and its notice names the document. A trigger covers every way a document arrives. Re-preparing makes a new draft; replacing the document releases the old one ([validation](validation.md#2026-10-11--a-later-credit-reopens-the-draft-it-names-b03b04)).
 
+Slices 4 and 5 continued (October 11): on main, each with its validation entry:
+- recurring accruals prepared by the sweep;
+- documents answering client questions, emailed answers after partial replies, reminders after partial replies, and new senders released after verification;
+- executive content scoping;
+- rescans not prepared twice;
+- one notice per cause;
+- clean bank reconciliations straight through;
+- reply receipts;
+- reclassified accounts holding file acceptances;
+- procedure rollback and effective months;
+- budget baselines;
+- payroll amendments and payroll approved with its two confirmations after the checks;
+- the goal drafting one client request;
+- reviewed line explanations published with the pack.
+
+Slice 6 (October 11): **prepared for execution, not complete.** `scripts/evidence-run.sh` and `cmd/provider-check` record dated evidence for a revision. The live runs wait on named dependencies (model and OCR access, provider sandboxes, authorized records, an independent accountant, a hosted drill window), listed in [slice 6 evidence](slice6-evidence.md). Real-statement reconciliation acceptance and the other live outcomes stay unverified until a recorded run shows them.
+
