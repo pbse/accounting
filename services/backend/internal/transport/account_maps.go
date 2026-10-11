@@ -177,6 +177,9 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			} `json:"accounts"`
 			Accept bool   `json:"accept"`
 			Reason string `json:"reason"`
+			// BasedOn is the version of the map the reviewer saw ("" for none): one confirmed since is never overwritten
+			// by choices made before it.
+			BasedOn string `json:"based_on"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -204,6 +207,10 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		current, err := latestAccountMap(r.Context(), tx, org, name)
+		if err == nil && (current == nil && in.BasedOn != "" || current != nil && current.ID != in.BasedOn) {
+			problem(w, 409, "The map was confirmed again since you opened it: reopen it to see what changed.")
+			return
+		}
 		var period string
 		var accounts []fileAccount
 		var found bool

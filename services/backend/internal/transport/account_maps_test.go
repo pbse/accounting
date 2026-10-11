@@ -115,10 +115,15 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	}
 	// Only a reviewer confirms, with a reason, classes and types that belong together, for the file's own accounts.
 	call("user_b", preparer, "POST", accountsPath, map[string]any{"accept": true, "reason": "Checked"}, 403)
+	// A confirmation says which version of the map it was made on: none yet, here.
+	call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "reason": "Checked", "based_on": "1"}, 409)
 	call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "reason": " "}, 422)
 	call("user_a", partner, "POST", accountsPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Asset", "type": "Expense"}}, "reason": "Checked"}, 422)
 	call("user_a", partner, "POST", accountsPath, map[string]any{"accounts": map[string]any{"n:9999": map[string]string{"class": "Expense", "type": "Expense"}}, "reason": "Checked"}, 422)
 	confirmed := call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Other Expense"}}, "reason": "Rent is below the line here"}, 200)
+	// Choices made on the map before that confirmation never overwrite it.
+	call("user_a", partner, "POST", accountsPath, map[string]any{"accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Expense"}}, "reason": "Stale"}, 409)
+	firstMap := confirmed["id"].(string)
 	if confirmed["unmapped"] != 0.0 {
 		t.Fatalf("every account mapped: %v", confirmed)
 	}
@@ -127,7 +132,7 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		t.Fatalf("the map in force: %v", read)
 	}
 	// Confirming nothing new is refused: a version is a change.
-	call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "reason": "Again"}, 422)
+	call("user_a", partner, "POST", accountsPath, map[string]any{"accept": true, "reason": "Again", "based_on": firstMap}, 422)
 
 	// Next month's file finds its accounts mapped, as set, and asks only about the new one.
 	october := month("2026-10", "Number,Account,Type,Debit,Credit\n1000,Business Checking,Bank,1600.25,\n1100,Trade debtors,Current Asset,200.00,\n2000,Amex,Credit Card,,300.00\n3000,Owner's Equity,,,1000.00\n4000,Sales,,,900.25\n6000,Rent,,300.00,\n6100,Utilities,,100.00,\n")
@@ -144,7 +149,7 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 			t.Fatalf("utilities is new: %v", a)
 		}
 	}
-	call("user_a", partner, "POST", "/v1/closes/client/import/accounts?name=Acme%20Co&id="+october, map[string]any{"accept": true, "reason": "Utilities added"}, 200)
+	call("user_a", partner, "POST", "/v1/closes/client/import/accounts?name=Acme%20Co&id="+october, map[string]any{"accept": true, "reason": "Utilities added", "based_on": firstMap}, 200)
 	var versions int
 	var rent string
 	must(db.QueryRow(`SELECT count(*),(SELECT accounts->'n:6000'->>'type' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1) FROM books_account_maps WHERE organization_id=$1`, org).Scan(&versions, &rent))

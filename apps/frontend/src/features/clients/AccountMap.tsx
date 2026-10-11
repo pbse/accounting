@@ -70,7 +70,7 @@ export function AccountMap({ client, id, onClose }: { client: string; id: string
     setBusy(true);
     setError("");
     try {
-      const out: { unmapped: number } = await workspaceRequest(accountsPath(client, id), { accept: true, accounts: set, reason: reason.trim() });
+      const out: { unmapped: number } = await workspaceRequest(accountsPath(client, id), { accept: true, accounts: set, reason: reason.trim(), based_on: data.map?.id ?? "" });
       setSet({});
       setReason("");
       setLater(undefined);
