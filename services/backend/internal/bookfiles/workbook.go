@@ -80,15 +80,26 @@ func ReadWorkbook(body []byte) (File, error) {
 	type relationships struct {
 		Rel []struct {
 			ID         string `xml:"Id,attr"`
+			Type       string `xml:"Type,attr"`
 			Target     string `xml:"Target,attr"`
 			TargetMode string `xml:"TargetMode,attr"`
 		} `xml:"Relationship"`
 	}
+	// The package's relationships say where the workbook part is; Excel puts it at xl/workbook.xml.
+	workbookPart := "xl/workbook.xml"
+	var root relationships
+	if files["_rels/.rels"] != nil && read("_rels/.rels", &root) == nil {
+		for _, r := range root.Rel {
+			if strings.HasSuffix(r.Type, "/officeDocument") && r.TargetMode != "External" {
+				workbookPart = strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(r.Target, "\\", "/")), "/")
+			}
+		}
+	}
 	var rels relationships
-	if err = read("xl/workbook.xml", &workbook); err != nil || len(workbook.Sheet) == 0 {
+	if err = read(workbookPart, &workbook); err != nil || len(workbook.Sheet) == 0 {
 		return file, errors.New("the workbook lists no sheets")
 	}
-	if err = read("xl/_rels/workbook.xml.rels", &rels); err != nil {
+	if err = read(path.Join(path.Dir(workbookPart), "_rels", path.Base(workbookPart)+".rels"), &rels); err != nil {
 		return file, errors.New("the workbook's sheets cannot be found")
 	}
 	// Either flag asks Excel to recalculate every formula: the stored results may be stale.
@@ -100,11 +111,22 @@ func ReadWorkbook(body []byte) (File, error) {
 				if strings.HasPrefix(t, "/") {
 					return strings.TrimPrefix(path.Clean(t), "/")
 				}
-				return path.Join("xl", t)
+				return path.Join(path.Dir(workbookPart), t)
 			}
 		}
 		return ""
 	}
+	// partOf is the workbook's part of a kind (sharedStrings, styles) where its relationships put it, else where Excel
+	// puts it.
+	partOf := func(kind, conventional string) string {
+		for _, r := range rels.Rel {
+			if strings.HasSuffix(r.Type, "/"+kind) && r.TargetMode != "External" {
+				return target(r.ID)
+			}
+		}
+		return conventional
+	}
+	sharedPart, stylesPart := partOf("sharedStrings", "xl/sharedStrings.xml"), partOf("styles", "xl/styles.xml")
 	// Each external link names the workbook it reads in its own relationships.
 	for _, e := range workbook.External {
 		part := target(e.ID + e.Strict)
@@ -113,10 +135,15 @@ func ReadWorkbook(body []byte) (File, error) {
 			file.LinkedWorkbooks = append(file.LinkedWorkbooks, "an external workbook")
 			continue
 		}
+		found := false
 		for _, r := range linked.Rel {
 			if r.TargetMode == "External" || strings.Contains(r.Target, ".xls") {
-				file.LinkedWorkbooks = append(file.LinkedWorkbooks, r.Target)
+				file.LinkedWorkbooks, found = append(file.LinkedWorkbooks, r.Target), true
 			}
+		}
+		// A link that names no workbook is still a link: its results came from somewhere else.
+		if !found {
+			file.LinkedWorkbooks = append(file.LinkedWorkbooks, "an external workbook")
 		}
 	}
 	// Shared strings, rich text included, in order.
@@ -128,8 +155,8 @@ func ReadWorkbook(body []byte) (File, error) {
 			} `xml:"r"`
 		} `xml:"si"`
 	}
-	if files["xl/sharedStrings.xml"] != nil {
-		if err = read("xl/sharedStrings.xml", &shared); err != nil {
+	if files[sharedPart] != nil {
+		if err = read(sharedPart, &shared); err != nil {
 			return file, errors.New("the workbook's text cannot be read")
 		}
 	}
@@ -150,8 +177,8 @@ func ReadWorkbook(body []byte) (File, error) {
 			Format int `xml:"numFmtId,attr"`
 		} `xml:"cellXfs>xf"`
 	}
-	if files["xl/styles.xml"] != nil {
-		if err = read("xl/styles.xml", &styles); err != nil {
+	if files[stylesPart] != nil {
+		if err = read(stylesPart, &styles); err != nil {
 			return file, errors.New("the workbook's formats cannot be read")
 		}
 	}
@@ -526,7 +553,8 @@ func formatMark(code string) string {
 				j++
 			}
 			literal := strings.TrimSpace(string(runes[i+1 : min(j, len(runes))]))
-			if wholeCode.MatchString(literal) || strings.ContainsFunc(literal, symbol) {
+			_, word := wordCurrencies[literal]
+			if wholeCode.MatchString(literal) || word || strings.ContainsFunc(literal, symbol) {
 				add(literal)
 			}
 			i = j
@@ -541,8 +569,16 @@ func formatMark(code string) string {
 				j++
 			}
 			// A currency tag is [$symbol-locale]; any other bracket is a colour or a condition.
+			// Its locale says which currency a shared symbol is ($ in en-CA is Canadian dollars); one the reader knows is
+			// kept beside the symbol as its code.
 			if tag := string(runes[i+1 : min(j, len(runes))]); strings.HasPrefix(tag, "$") {
-				add(strings.SplitN(tag[1:], "-", 2)[0])
+				parts := strings.SplitN(tag[1:], "-", 2)
+				add(parts[0])
+				if len(parts) == 2 && parts[0] != "" {
+					if code, ok := localeCurrencies[strings.ToUpper(strings.SplitN(parts[1], ",", 2)[0])]; ok {
+						add(code)
+					}
+				}
 			}
 			i = j
 		case symbol(r):
@@ -554,3 +590,11 @@ func formatMark(code string) string {
 
 // wholeCode is a currency code written alone.
 var wholeCode = regexp.MustCompile(`^[A-Z]{3}$`)
+
+// localeCurrencies are the currencies of the Windows locales (by their hexadecimal identifier, as a format's currency tag
+// writes them) whose symbol other currencies share.
+var localeCurrencies = map[string]string{
+	"409": "USD", "1009": "CAD", "C0C": "CAD", "C09": "AUD", "1409": "NZD", "4809": "SGD", "1004": "SGD", "C04": "HKD", "3C09": "HKD",
+	"404": "TWD", "80A": "MXN", "2C0A": "ARS", "340A": "CLP", "240A": "COP", "380A": "UYU", "416": "BRL", "411": "JPY", "804": "CNY",
+	"809": "GBP", "407": "EUR", "40C": "EUR", "410": "EUR", "C0A": "EUR", "413": "EUR", "1809": "EUR", "4009": "INR", "439": "INR",
+}

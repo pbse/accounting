@@ -704,7 +704,7 @@ func TestATotalOfSignedColumns(t *testing.T) {
 // A workbook amount's currency is the one its number format shows: a euro format in a dollar Trial Balance is a
 // problem, a local-currency format a note to confirm.
 func TestAWorkbookAmountsCurrencyIsItsFormats(t *testing.T) {
-	for code, want := range map[string]string{`[$€-407] #,##0.00`: "€", `"USD" #,##0`: "USD", `\£#,##0.00`: "£", `[Red]#,##0;[$-409]0`: "", `#,##0.00 "Dr"`: "", `_-$* #,##0.00_-`: "$"} {
+	for code, want := range map[string]string{`[$€-407] #,##0.00`: "€ EUR", `"USD" #,##0`: "USD", `\£#,##0.00`: "£", `[Red]#,##0;[$-409]0`: "", `#,##0.00 "Dr"`: "", `_-$* #,##0.00_-`: "$"} {
 		if got := formatMark(code); got != want {
 			t.Fatalf("%s: %q, not %q", code, got, want)
 		}
@@ -787,5 +787,85 @@ func TestAPlusSignIsASign(t *testing.T) {
 	}
 	if a, err := ParseAmount("+100", NumberStyle{}); err != nil || a.Value.Cmp(big.NewRat(100, 1)) != 0 {
 		t.Fatalf("+100: %v %v", a, err)
+	}
+}
+
+// A total marked in the number column is a total; word marks are read in text and in a workbook's formats.
+func TestTotalsInEitherColumnAndWordMarks(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Number,Account,Debit,Credit\n1000,Cash,100.00,\n3000,Capital,,100.00\nTOTAL,Assets,100.00,100.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	if reading := layout.Read(file.Tables[0]); !reading.Balanced || reading.Debits != "100" || len(reading.Problems) != 0 {
+		t.Fatalf("a total in the number column: %+v", reading)
+	}
+	for text, mark := range map[string]string{"100.00 kr": "kr", "zł 100.00": "zł", "Rs 100": "Rs", "R 100": "R"} {
+		if a, err := ParseAmount(text, NumberStyle{}); err != nil || a.Mark != mark {
+			t.Fatalf("%s: %+v %v", text, a, err)
+		}
+	}
+	if got := formatMark(`#,##0.00 "kr"`); got != "kr" {
+		t.Fatalf("a word in a format: %q", got)
+	}
+}
+
+// The workbook's parts are found where its relationships put them, not only where Excel does.
+func TestWorkbookPartsByRelationship(t *testing.T) {
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	const rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+	file, err := Read("tb.xlsx", workbook(t, map[string]string{
+		"_rels/.rels":              `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="` + rel + `officeDocument" Target="book/main.xml"/></Relationships>`,
+		"book/main.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"book/_rels/main.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="` + rel + `worksheet" Target="sheets/one.xml"/><Relationship Id="rId2" Type="` + rel + `sharedStrings" Target="text/strings.xml"/><Relationship Id="rId3" Type="` + rel + `styles" Target="look/styles.xml"/></Relationships>`,
+		"book/text/strings.xml":    `<sst ` + main + `><si><t>Cash</t></si></sst>`,
+		"book/look/styles.xml":     `<styleSheet ` + main + `><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>`,
+		"book/sheets/one.xml":      `<worksheet ` + main + `><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" s="1"><v>46295</v></c></row></sheetData></worksheet>`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cells(file.Tables[0])
+	if got["A1"].Value != "Cash" || got["B1"].Kind != Date {
+		t.Fatalf("parts by relationship: %+v", got)
+	}
+}
+
+// A credit written with its Cr marker counts in its column's total as the amount shown.
+func TestCrMarkedCreditsTotal(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nCapital,,100.00 Cr\nTOTAL,100.00,100.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	if reading := layout.Read(file.Tables[0]); !reading.Balanced || len(reading.Problems) != 0 {
+		t.Fatalf("a Cr-marked credit and its total: %+v", reading)
+	}
+}
+
+// A footer left out totals nothing: the account it names keeps its zero balance.
+func TestALeftOutFooterTotalsNothing(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nBank,,\nCapital,,100.00\nTotal Bank,,\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	layout.Ignored = []int{5}
+	reading := layout.Read(file.Tables[0])
+	bank := false
+	for _, l := range reading.Lines {
+		bank = bank || (l.Name == "Bank" && l.Kind == Posting)
+	}
+	if !bank {
+		t.Fatalf("Bank is an account: %+v", reading.Lines)
+	}
+}
+
+// A layout reads its own sheet; a dollar tagged with its locale says which dollar it is.
+func TestTheSheetAndTheLocale(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nCapital,,100.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	layout.Table = "Another sheet"
+	if reading := layout.Read(file.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Another sheet") {
+		t.Fatalf("another sheet: %+v", reading)
+	}
+	for code, want := range map[string]string{`[$$-409]#,##0.00`: "$ USD", `[$$-1009]#,##0.00`: "$ CAD", `[$$-9999]#,##0`: "$"} {
+		if got := formatMark(code); got != want {
+			t.Fatalf("%s: %q, not %q", code, got, want)
+		}
+	}
+	if MarkAgrees("$ USD", "CAD") || !MarkAgrees("$ CAD", "CAD") {
+		t.Fatal("a dollar's locale decides which it is")
 	}
 }

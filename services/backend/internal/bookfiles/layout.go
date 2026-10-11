@@ -369,6 +369,11 @@ func coveredFrom(lines []Line, i int) int {
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
 	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}}
+	// A layout reads the sheet it was confirmed for: another with the same columns is another sheet's figures.
+	if l.Table != "" && t.Name != l.Table {
+		reading.Problems = append(reading.Problems, fmt.Sprintf("The layout reads the sheet %q, not %q", l.Table, t.Name))
+		return reading
+	}
 	localNoted := false
 	// The month-end balance is what a Trial Balance is read for: a layout naming no column for it reads nothing, rather
 	// than every account as zero.
@@ -392,9 +397,12 @@ func (l Layout) Read(t Table) Reading {
 		return reading
 	}
 	// The names a total row totals ("Total Current Assets" totals "Current Assets"): a row by such a name with no amounts
-	// heads what the total covers.
+	// heads what the total covers. Rows above the header, left out, or marked accounts total nothing.
 	totalled := map[string]bool{}
 	for _, r := range t.Rows {
+		if r.Number <= l.HeaderRow || slices.Contains(l.Ignored, r.Number) || slices.Contains(l.Postings, r.Number) {
+			continue
+		}
 		for _, c := range r.Cells {
 			if (l.Columns[c.Column] == AccountName || l.Columns[c.Column] == AccountNumber) && totalName.MatchString(strings.TrimSpace(c.Value)) {
 				totalled[strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(strings.TrimSpace(c.Value), "")))] = true
@@ -487,8 +495,12 @@ func (l Layout) Read(t Table) Reading {
 				}
 				// A Dr or Cr marker says the side itself, whichever column the amount sits in: its value is then already
 				// signed as balances are, a credit negative.
+				// The column's amount as a total row adds it: signed as its column reads, so a Dr or Cr marker counts as
+				// that side (100 Cr in the credit column is 100 there; 100 Dr in it is a debit, -100 there).
 				if meaning == Debit {
 					line.writtenDebit = a.Value
+				} else if meaning == Credit && a.Side != "" {
+					line.writtenCredit = new(big.Rat).Neg(a.Value)
 				} else if meaning == Credit {
 					line.writtenCredit = a.Value
 				}
@@ -572,8 +584,12 @@ func (l Layout) Read(t Table) Reading {
 		}
 		// A row with no amounts heads a section when a total names it or a person said it does; otherwise it is an
 		// account with a zero balance (an export leaves a zero blank), said so when it has no number to show it is one.
-		// A total is named so ("Total …") or marked so, unless a person marked the row an account.
-		total := (totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number)) && !slices.Contains(l.Postings, r.Number)
+		// A total is named so ("Total …", in either account column) or marked so, unless a person marked the row an
+		// account. One named so in its number column ("TOTAL", "Assets") is the total of what its name says.
+		total := (totalName.MatchString(line.Name) || totalName.MatchString(line.Number) || slices.Contains(l.Totals, r.Number)) && !slices.Contains(l.Postings, r.Number)
+		if total && !totalName.MatchString(line.Name) && totalName.MatchString(line.Number) {
+			line.Name, line.Number = strings.TrimSpace(line.Number+" "+line.Name), ""
+		}
 		if line.Balance == nil && !total && (!totalled[strings.ToLower(line.Label())] || slices.Contains(l.Postings, r.Number)) && !slices.Contains(l.Headings, r.Number) {
 			line.Balance = new(big.Rat)
 			if line.Number == "" {
