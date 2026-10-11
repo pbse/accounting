@@ -5,7 +5,7 @@ import { Assistant, useSignedIn } from "./Assistant";
 import { closeOf, isHomePath, openSession } from "./assistantStore";
 import { SideChats } from "./SideChats";
 import { SideNotices } from "./SideNotices";
-import { PageComposer } from "./PageComposer";
+import { ComposerBand } from "./PageComposer";
 import { AttentionBadge } from "../closes/Attention";
 import { useQuery } from "@tanstack/react-query";
 import { workspaceQuery } from "../../data/queries";
@@ -135,13 +135,15 @@ export default function WorkspaceLayout() {
         </Sidebar>
       )}
       <main id="main" className="app-main">
-        <div className="page">
-          <Suspense fallback={<p role="status">Opening…</p>}>
-            {known ? <Outlet /> : <p role="status">Opening…</p>}
-          </Suspense>
+        <div className="ks-scroll">
+          <div className="page">
+            <Suspense fallback={<p role="status">Opening…</p>}>
+              {known ? <Outlet /> : <p role="status">Opening…</p>}
+            </Suspense>
+          </div>
         </div>
-        {/* The composer at the foot of every page; Home has its own, the stage. */}
-        {known && signedIn && !isHomePath(location.pathname) && <PageComposer closeId={closeId} executive={!!executive} />}
+        {/* The agent's own section at the foot of every page; Home has its own, the stage. */}
+        {known && signedIn && !isHomePath(location.pathname) && <ComposerBand closeId={closeId} executive={!!executive} />}
       </main>
       {executive !== undefined && <Assistant executive={executive} />}
     </div>

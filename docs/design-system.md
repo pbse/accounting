@@ -51,7 +51,7 @@ Pages build from these instead of repeating markup and class names. Each takes i
 | Component | Use it for |
 | --- | --- |
 | `Sidebar`, `NavItem`, `NavGroup`, `ChatList`, `Notices`, `SidebarFoot` | The shell's sidebar and its parts, in the fixed order above. |
-| `Composer`, `Suggestions`, `ActionsMenu` | The agent's input: the floating box with plus, scope and send; the three offers on Home; the plus menu (attach, actions, Preview before acting, Move to the side). |
+| `Composer`, `Suggestions`, `ActionsMenu` | The agent's input: the box with plus, scope and send (on Home's stage, or in its own band at a page's foot); the three offers on Home; the plus menu (attach, actions, Preview before acting, Move to the side). |
 | `Stage`, `Thread`, `Steps`, `Citations` | Home before the first message; a conversation; what the agent is doing while it runs; where an answer came from. |
 | `Breadcrumbs`, `Lede`, `Task`, `DoneLine` | A page's head, its one sentence, the things left, what the agent already did. |
 | `RecordsHead`, `Segmented`, `Tabs`, `Table` | A records page: its title row, its filter, page tabs, the table. |
@@ -67,7 +67,7 @@ To add a component, put `Name.tsx` and `Name.css` in `packages/ui/components/`, 
 
 - **Use tokens, not literals.** Every colour, radius, spacing step, shadow and size comes from `tokens.css`, named as in the artifact. A new colour becomes a token first, with a usage note in both places.
 - **One thing per screen.** A page states where things stand in one sentence, then shows only what is left. Numbers, tables and history come after, or on a records page.
-- **Hairlines, not shadows.** A card, a task, a notice, a table, an input and a white button have a 1px `ring` and no shadow. Hover adds depth (`raised`, `lift`), not colour. Only the composer and the actions menu float; a dialog sits on the overlay.
+- **Hairlines, not shadows.** A card, a task, a notice, a table, an input and a white button have a 1px `ring` and no shadow. Hover adds depth (`raised`, `lift`), not colour. Only Home's composer and the actions menu float; a page's composer sits in its own band, and a dialog sits on the overlay.
 - **Graphite is the action.** One `primary` button per view. The send button, the task numerals and the firm and agent marks are graphite too. Never two primaries, never a primary in a table row.
 - **Blue means alive.** `accent` is the working and unread dots, the up-next dot, the wordmark's rule, the focus ring and links. Never a fill behind words, never the current nav item, never a switch.
 - **Current is white.** The current page and the current chat are `surface` with a `ring` at weight 500.
@@ -89,7 +89,7 @@ To add a component, put `Name.tsx` and `Name.css` in `packages/ui/components/`, 
 The [close-page implementation refinements](agent-first-implementation-handoff.md#b02b10--concrete-changes-to-the-close-page-design) preserve the existing tabs and shell, replace generic human tasks with prepared decisions, clarify counts and forecast readiness, and reduce repeated summaries. They also specify that the scoped composer must not obscure page content.
 
 - **Home opens on the composer.** The greeting says how the week stands; the composer is the first control; the three suggestions are the agent's own offers, worded as asks ("What needs me today?"). Send turns the stage into the thread.
-- **Every page has the composer at its foot**, scoped to the page ("Acme · September", "Firm-wide"). The scope is a quiet control inside the box; the person can widen it.
+- **Every page has the composer at its foot**, scoped to the page ("Acme · September", "Firm-wide"). The scope is a quiet control inside the box; the person can widen it. The box sits on a band of its own below the page (the side surface, a hairline above it), so the page scrolls above it and it never covers a row, a control or a dialog. Hide folds the band to one "Show the agent" line on that page only, for the browser tab; Show, or `/` typed outside a field, brings it back.
 - **The composer has three controls**: plus, scope, send. Enter sends, Shift+Enter breaks, the box grows to seven lines. Send is disabled until there is text and becomes Stop while a turn runs. Preview before acting and Move to the side live in the plus menu and the open thread.
 - **The agent shows its work.** While it runs: the mark breathes, "Looking at your closes" shimmers, each step slides in with a spinner that becomes a tick, the text streams with a caret. Done: the steps fold to one line with Show, citations follow the text as chips, an action row has at most one primary. The steps come from the chat's existing `application/x-ndjson` event stream ([agent chat](agent-chat.md)); the words stream only once the provider sends text deltas, which that doc says is not yet the case, so until then the text appears whole after the steps, with the same fold, and no caret.
 - **Needs you is what the agent noticed**, one line each, at most four showing, with "All notices" beneath for the rest and for taken ones. Notices are live: a long-lived NDJSON request (`/attention/stream`) says when the person's unread items change, and the block reads again; the read with the page and every 60 seconds stand behind it.
