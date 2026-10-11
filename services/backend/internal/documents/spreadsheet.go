@@ -143,7 +143,7 @@ func SpreadsheetText(body []byte) (string, error) {
 	}
 	dated := make([]bool, len(styles.Cells))
 	for i, c := range styles.Cells {
-		dated[i] = (c.Format >= 14 && c.Format <= 17) || c.Format == 22 || showsDate(custom[c.Format])
+		dated[i] = (c.Format >= 14 && c.Format <= 17) || c.Format == 22 || ShowsDate(custom[c.Format])
 	}
 	var data struct {
 		Rows []struct {
@@ -229,9 +229,9 @@ var formatTokens = regexp.MustCompile(`(?i)y+|m+|d+|h+|s+`)
 // count as a month.
 var elapsed = regexp.MustCompile(`(?i)\[(h+|m+|s+)\]`)
 
-// showsDate says whether a number format shows a calendar date: a year or day, or a month (an m that is not the minutes
+// ShowsDate says whether a number format shows a calendar date: a year or day, or a month (an m that is not the minutes
 // after an hour or before seconds).
-func showsDate(code string) bool {
+func ShowsDate(code string) bool {
 	tokens := formatTokens.FindAllString(formatNoise.ReplaceAllString(elapsed.ReplaceAllString(code, "h"), ""), -1)
 	for i, t := range tokens {
 		switch strings.ToLower(t[:1]) {
