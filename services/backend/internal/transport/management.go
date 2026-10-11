@@ -766,7 +766,7 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 			case fileBooks.ActivityUnavailable != "":
 				comparison = "Last month's activity is unavailable: " + fileBooks.ActivityUnavailable + "."
 			default:
-				if b, missing := relinked(fileBooks, link.Accounts, thisBooks.Typed); missing != "" {
+				if b, missing := relinked(fileBooks, link.Accounts, thisBooks.Accounts, thisBooks.Typed); missing != "" {
 					comparison = "Last month's account " + missing + " is not mapped to this company's accounts."
 				} else if b.Currency != thisBooks.Currency {
 					comparison = "Last month's books are in a different currency."

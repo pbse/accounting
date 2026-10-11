@@ -889,15 +889,21 @@ func TestBooksAreRelinkedThroughTheMappedAccounts(t *testing.T) {
 	amount := func(s string) *big.Rat { r, _ := new(big.Rat).SetString(s); return r }
 	b := &books{Currency: "USD", Accounts: map[string]packAccount{"1": {Name: "Checking", Class: "Asset"}, "4": {Name: "Sales", Class: "Revenue"}, "9": {Name: "Old", Class: "Asset"}},
 		Balances: map[string]*big.Rat{"1": amount("100"), "4": amount("-50"), "9": amount("0")}, Activity: map[string]*big.Rat{"4": amount("50")}}
-	out, missing := relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, false)
+	out, missing := relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, nil, false)
 	if missing != "" || out.Balances["n:1000"].Cmp(amount("100")) != 0 || out.Activity["n:4000"].Cmp(amount("50")) != 0 || out.Accounts["n:4000"].Name != "Sales" {
 		t.Fatalf("books relinked: %v %v", out, missing)
 	}
-	b.Balances["9"] = amount("10")
 	if out.Typed || out.group("n:1000", nil) != "Assets" {
 		t.Fatalf("relinked books group as an untyped pack does: %v", out.group("n:1000", nil))
 	}
-	if out, missing = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, true); out != nil || missing != "Old" {
+	// Into typed books, an account the other side describes takes its description; one it does not, its class's
+	// general type: revenue is Income.
+	out, _ = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, map[string]packAccount{"n:1000": {Name: "1000 Business Checking", Class: "Asset", Type: "Bank"}}, true)
+	if out.Accounts["n:1000"].Type != "Bank" || out.Accounts["n:4000"].Type != "Income" {
+		t.Fatalf("relinked into typed books: %v", out.Accounts)
+	}
+	b.Balances["9"] = amount("10")
+	if out, missing = relinked(b, map[string]string{"1": "n:1000", "4": "n:4000"}, nil, true); out != nil || missing != "Old" {
 		t.Fatalf("an unmapped account with a balance: %v %q", out, missing)
 	}
 }

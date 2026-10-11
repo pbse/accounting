@@ -348,7 +348,18 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 				for key, id := range link.Accounts {
 					back[id] = key
 				}
-				if b, missing := relinked(captured, back, thisBooks.Typed); missing != "" {
+				// Each account as the client's files describe it: this month's file, else the account map.
+				described := maps.Clone(thisBooks.Accounts)
+				if current, err := latestAccountMap(ctx, tx, org, entity); err != nil {
+					return nil, tieRefusal{503, "Last month's books are unavailable."}
+				} else if current != nil {
+					for key, m := range current.Accounts {
+						if _, ok := described[key]; !ok {
+							described[key] = packAccount{Name: strings.TrimSpace(m.Number + " " + m.Name), Class: m.Class, Type: m.Type}
+						}
+					}
+				}
+				if b, missing := relinked(captured, back, described, thisBooks.Typed); missing != "" {
 					comparison = "Last month's account " + missing + " is not mapped to the files' accounts."
 				} else if b.Currency != thisBooks.Currency {
 					comparison = "Last month's books are in a different currency."

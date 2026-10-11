@@ -256,11 +256,13 @@ func currentLink(ctx context.Context, q rowReader, org, name, ledger, company st
 	return l, nil
 }
 
-// relinked is books b re-keyed through a confirmed company link, from b's account ids to the other side's, grouped as
-// that side groups its accounts (typed, by account type, or else by class), so an account only last month has is shown
-// under a section this month's pack has. An account carrying a balance or activity that the mapping leaves out keeps
-// the months apart: its name is returned, with no books.
-func relinked(b *books, mapping map[string]string, typed bool) (*books, string) {
+// relinked is books b re-keyed through a confirmed company link, from b's account ids to the other side's, each
+// account described as that side describes it (target), so an account only last month has is shown under a section
+// this month's pack has; one the other side does not describe keeps its class, with the class's general type when that
+// side's books are typed (Revenue is Income, never Other Income). An account carrying a balance or activity that the
+// mapping leaves out keeps the months apart: its name is returned, with no books.
+func relinked(b *books, mapping map[string]string, target map[string]packAccount, typed bool) (*books, string) {
+	general := map[string]string{"Asset": "Other Current Asset", "Liability": "Other Current Liability", "Equity": "Equity", "Revenue": "Income", "Expense": "Expense"}
 	out := &books{Currency: b.Currency, Typed: typed, Accounts: map[string]packAccount{}, Balances: map[string]*big.Rat{}, Activity: map[string]*big.Rat{},
 		CashFlow: b.CashFlow, Imported: b.Imported, Uncounted: b.Uncounted, ActivityUnavailable: b.ActivityUnavailable}
 	ids := map[string]bool{}
@@ -283,7 +285,14 @@ func relinked(b *books, mapping map[string]string, typed bool) (*books, string) 
 			}
 			continue
 		}
-		if a, ok := b.Accounts[id]; ok {
+		switch a, ok := target[to]; {
+		case ok:
+			out.Accounts[to] = a
+		default:
+			a := b.Accounts[id]
+			if typed && a.Type == "" {
+				a.Type = general[a.Class]
+			}
 			out.Accounts[to] = a
 		}
 		if v := b.Balances[id]; v != nil {
