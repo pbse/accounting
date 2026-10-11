@@ -68,12 +68,16 @@ const attentionQuery = `WITH scope AS (
  UNION ALL
  SELECT 'fix:'||x.id||':'||x.review_id,'fix',x.close_id,(SELECT created_at FROM workpaper_reviews WHERE id::text=x.review_id),'Changes were requested on draft #'||x.id,x.id::text FROM drafts x WHERE x.review_state='changes_requested'
  UNION ALL
- SELECT 'changed:'||x.id||':'||left(md5(COALESCE(c.sources,'')||'|'||COALESCE(c.parent,'')),16),'changed',x.close_id,GREATEST(x.created_at,c.replaced_at),
-  'A source of draft #'||x.id||' changed'||CASE WHEN (SELECT decision FROM workpaper_reviews WHERE workpaper_id=x.id ORDER BY workpaper_reviews.id DESC LIMIT 1)='approved' THEN ' after it was approved' ELSE '' END,x.id::text
+ SELECT 'changed:'||x.id||':'||left(md5(COALESCE(c.sources,'')||'|'||COALESCE(c.parent,'')||'|'||COALESCE(c.later,'')),16),'changed',x.close_id,GREATEST(x.created_at,c.replaced_at,c.later_at),
+  CASE WHEN c.later IS NOT NULL THEN 'A later document, '||c.later_name||', names the invoice of draft #'||x.id||' and speaks of a credit or change; check it before approving'
+   ELSE 'A source of draft #'||x.id||' changed' END||CASE WHEN (SELECT decision FROM workpaper_reviews WHERE workpaper_id=x.id ORDER BY workpaper_reviews.id DESC LIMIT 1)='approved' THEN ' after it was approved' ELSE '' END,x.id::text
   FROM drafts x CROSS JOIN LATERAL (SELECT
    (SELECT string_agg(e.id||'/'||e.digest||'/'||COALESCE(e.superseded_by::text,''),',' ORDER BY e.id) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src JOIN evidence e ON e.id::text=src->>'id') AS sources,
    (SELECT max(e.replaced_at) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(x.paper->'sources')='array' THEN x.paper->'sources' ELSE '[]'::jsonb END) src JOIN evidence e ON e.id::text=src->>'id') AS replaced_at,
-   (SELECT p.review_id||'/'||p.digest FROM workpaper_source_review_state p WHERE p.id::text=COALESCE(x.paper->'carry_forward'->>'paper_id',x.paper->'recurring_accrual'->>'paper_id')) AS parent) c
+   (SELECT p.review_id||'/'||p.digest FROM workpaper_source_review_state p WHERE p.id::text=COALESCE(x.paper->'carry_forward'->>'paper_id',x.paper->'recurring_accrual'->>'paper_id')) AS parent,
+   (SELECT string_agg(l.evidence_id::text,',' ORDER BY l.evidence_id) FROM workpaper_later_evidence l JOIN evidence e ON e.id=l.evidence_id WHERE l.workpaper_id=x.id AND e.superseded_by IS NULL) AS later,
+   (SELECT max(e.created_at) FROM workpaper_later_evidence l JOIN evidence e ON e.id=l.evidence_id WHERE l.workpaper_id=x.id AND e.superseded_by IS NULL) AS later_at,
+   (SELECT e.name FROM workpaper_later_evidence l JOIN evidence e ON e.id=l.evidence_id WHERE l.workpaper_id=x.id AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1) AS later_name) c
   WHERE x.review_state='source_changed'
  UNION ALL
  SELECT 'release:'||a.id,'release',a.close_id,COALESCE(a.scanned_at,a.created_at),'Scanned client file '||a.name||' is waiting for release','' FROM client_attachments a WHERE a.close_id IN (SELECT id FROM scope) AND a.state='clean'
