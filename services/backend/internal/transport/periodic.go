@@ -24,8 +24,8 @@ import (
 // ones. They live in the worker running the day's run; another worker starts again from the beginning.
 var sweepCursors = struct {
 	sync.Mutex
-	standing, comparisons, xeroRows string
-}{standing: "0", comparisons: "0", xeroRows: "0"}
+	standing, comparisons, accruals, xeroRows string
+}{standing: "0", comparisons: "0", accruals: "0", xeroRows: "0"}
 
 // cursorSweep runs a sweep from the cursor at *at and keeps where it stopped.
 func cursorSweep(ctx context.Context, at *string, sweep func(context.Context, string) (string, int, error)) error {
@@ -46,9 +46,11 @@ func init() {
 		})
 	}
 	schedule_comparisons.Sweep = func(ctx context.Context) error {
-		return cursorSweep(ctx, &sweepCursors.comparisons, func(ctx context.Context, cursor string) (string, int, error) {
+		return errors.Join(cursorSweep(ctx, &sweepCursors.comparisons, func(ctx context.Context, cursor string) (string, int, error) {
 			return sweepComparisons(ctx, wf.DB(ctx), cursor)
-		})
+		}), cursorSweep(ctx, &sweepCursors.accruals, func(ctx context.Context, cursor string) (string, int, error) {
+			return sweepRecurringAccruals(ctx, wf.DB(ctx), cursor)
+		}))
 	}
 	stripe_reports.Sweep = func(ctx context.Context) error { return sweepStripeReports(ctx, wf.DB(ctx)) }
 	operations_alerts.Sweep = func(ctx context.Context) error {

@@ -122,6 +122,13 @@ func TestRecurringAccrualFreshReviewAndPortfolioDependency(t *testing.T) {
 	if chosen.BookedBalance != "25.00" || chosen.ReverseNextMonth != input.ReverseNextMonth || chosen.SuggestedEvidence != currentSource {
 		t.Fatalf("the preview prefills what the records show: %+v", chosen)
 	}
+	// The scheduled sweep queues the month the records already give in full, once; nothing is approved by it.
+	if n, e := queueRecurringAccruals(context.Background(), db, next); e != nil || n != 1 {
+		t.Fatalf("the sweep queues the prefilled month: %d %v", n, e)
+	}
+	if n, e := queueRecurringAccruals(context.Background(), db, next); e != nil || n != 0 {
+		t.Fatalf("a rule already tried against this capture is not queued again: %d %v", n, e)
+	}
 	request := map[string]any{"paper_id": chosen.ID, "digest": chosen.Digest, "review_id": chosen.ReviewID, "snapshot_id": preview.Snapshot.ID, "evidence_id": currentSource, "booked_balance": "25.00", "reverse_next_month": false, "confirmed": true}
 	call("POST", path, request, 202)
 	if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
