@@ -226,15 +226,24 @@ func registerEmailReplies(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Sender did not match the approved recipient. Keep this reply held and ask the client to use the secure link.")
 				return
 			}
-			var current bool
-			err = tx.QueryRowContext(r.Context(), `SELECT l.revoked_at IS NULL AND l.used_at IS NULL AND l.expires_at>now() AND (q.job_id IS NULL OR EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.id=q.job_id AND j.state='waiting_client' AND q.id=(SELECT max(id) FROM work_requests WHERE job_id=q.job_id))) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id WHERE l.digest=$1 FOR UPDATE OF l`, link).Scan(&current)
-			if err != nil || !current {
+			// The first reply needs the request exactly as approved and its work waiting; a later one (after a partial
+			// reply on the link) needs the request still taking answers, as the client's link does.
+			var live, used, waiting bool
+			err = tx.QueryRowContext(r.Context(), `SELECT l.revoked_at IS NULL AND l.expires_at>now(),l.used_at IS NOT NULL,(q.job_id IS NULL OR EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.id=q.job_id AND j.state='waiting_client' AND q.id=(SELECT max(id) FROM work_requests WHERE job_id=q.job_id))) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id WHERE l.digest=$1 FOR UPDATE OF l`, link).Scan(&live, &used, &waiting)
+			current := err == nil && live && (used || waiting)
+			if current && used {
+				current, err = requestOpen(r.Context(), tx, closeID, requestID)
+				current = err == nil && current
+			}
+			if !current {
 				problem(w, 409, "Request is no longer open; retain the held reply for manual review.")
 				return
 			}
-			if err = preparation.FreshClientRequest(r.Context(), tx, closeID, requestID); err != nil {
-				problem(w, 409, err.Error())
-				return
+			if !used {
+				if err = preparation.FreshClientRequest(r.Context(), tx, closeID, requestID); err != nil {
+					problem(w, 409, err.Error())
+					return
+				}
 			}
 			status, saveErr := saveWorkReply(r.Context(), tx, closeID, jobID, requestID, body, actor, "Email from "+from+" (reviewed, identity not independently verified)")
 			if saveErr != nil {
@@ -242,7 +251,17 @@ func registerEmailReplies(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if err = preparation.ResumeRequestJobs(r.Context(), tx, requestID); err == nil {
-				_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET used_at=now(),reply_digest=$2 WHERE digest=$1`, link, preparation.Digest([]byte(body)))
+				_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET used_at=COALESCE(used_at,now()),reply_digest=$2 WHERE digest=$1`, link, preparation.Digest([]byte(body)))
+			}
+			// After a partial reply on the link, the released email completes the request: its open questions are answered
+			// in it and a complete submission names it, so Work and the goal no longer call the request partial. Earlier
+			// answers and submissions stay as they were.
+			if err == nil && used {
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO work_request_answers(request_id,position,state,answer) SELECT $1::text::bigint,a.position,'answered','Answered in the emailed reply the firm released'
+ FROM work_request_answers a WHERE a.request_id::text=$1::text AND a.state<>'answered' ON CONFLICT (request_id,position) DO UPDATE SET state=EXCLUDED.state,answer=EXCLUDED.answer`, requestID)
+				if err == nil {
+					_, err = tx.ExecContext(r.Context(), `INSERT INTO request_submissions(request_id,receipt,source_id,complete) SELECT $1::text::bigint,$2,source_id,true FROM work_replies WHERE request_id::text=$1::text ORDER BY id DESC LIMIT 1`, requestID, preparation.Digest([]byte("released-email:"+r.PathValue("reply"))))
+				}
 			}
 			if err != nil {
 				problem(w, 503, "Reply could not resume work.")
