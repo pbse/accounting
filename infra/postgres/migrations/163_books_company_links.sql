@@ -10,8 +10,10 @@ CREATE TABLE books_company_links (
  ledger text NOT NULL CHECK (ledger IN ('quickbooks','xero')),
  -- company is the ledger's own company: a QuickBooks realm or a Xero tenant.
  company text NOT NULL CHECK (length(company) BETWEEN 1 AND 200),
- -- accounts maps each file account key the client's account map holds to the ledger's account id.
+ -- accounts maps each file account key the client's account map holds to the ledger's account id; map_stamp is the
+ -- account map it was confirmed on: once the map changes, the link waits to be reviewed again.
  accounts jsonb NOT NULL CHECK (jsonb_typeof(accounts)='object'),
+ map_stamp text NOT NULL,
  reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 500),
  actor text NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now()

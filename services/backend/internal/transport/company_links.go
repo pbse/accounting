@@ -20,18 +20,23 @@ import (
 type companyLink struct {
 	ID       string            `json:"id"`
 	Accounts map[string]string `json:"accounts"`
-	Reason   string            `json:"reason"`
-	Actor    string            `json:"actor"`
-	At       time.Time         `json:"at"`
+	// MapStamp is the account map it was confirmed on, and Current that the map in force is still that one: a link on
+	// an earlier map waits to be reviewed again, and is not used.
+	MapStamp string    `json:"map_stamp"`
+	Current  bool      `json:"current"`
+	Reason   string    `json:"reason"`
+	Actor    string    `json:"actor"`
+	At       time.Time `json:"at"`
 }
 
 // latestCompanyLink is client name's newest confirmation for ledger company, or nil.
 func latestCompanyLink(ctx context.Context, q rowReader, org, name, ledger, company string) (*companyLink, error) {
 	var l companyLink
 	var raw []byte
-	err := q.QueryRowContext(ctx, `SELECT id::text,accounts,reason,actor,created_at FROM books_company_links
+	err := q.QueryRowContext(ctx, `SELECT id::text,accounts,map_stamp,reason,actor,created_at,map_stamp=COALESCE((SELECT m.id::text||':'||md5(m.accounts::text) FROM books_account_maps m
+   WHERE m.organization_id=$1 AND client_identity(m.organization_id,m.client_entity)=client_identity($1,$2) ORDER BY m.id DESC LIMIT 1),'') FROM books_company_links
  WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND ledger=$3 AND company=$4 ORDER BY books_company_links.id DESC LIMIT 1`, org, name, ledger, company).
-		Scan(&l.ID, &raw, &l.Reason, &l.Actor, &l.At)
+		Scan(&l.ID, &raw, &l.MapStamp, &l.Reason, &l.Actor, &l.At, &l.Current)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -54,7 +59,7 @@ type ledgerCompany struct {
 }
 
 // ledgerCompanies are the ledger companies client name's months were captured from, newest month first, each read
-// from its newest month whose books are that company's.
+// from its own newest capture, whatever source its month reads now (a client that moved to files keeps its captures).
 func ledgerCompanies(ctx context.Context, q rowReader, org, name string) ([]ledgerCompany, error) {
 	var raw []byte
 	if err := q.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('ledger',u.ledger,'company',u.company,'name',u.name,'period',u.period,'close',u.close) ORDER BY u.period DESC,u.ledger,u.company),'[]') FROM (
@@ -73,13 +78,21 @@ func ledgerCompanies(ctx context.Context, q rowReader, org, name string) ([]ledg
 	companies := []ledgerCompany{}
 	for _, f := range found {
 		c := ledgerCompany{Ledger: f.Ledger, Company: f.Company, Name: f.Name, Period: f.Period, closeID: f.Close}
-		// The month's books as the readers take them, when they are this company's.
-		if m, err := periodBooks(ctx, q, f.Close, f.Period); err != nil {
+		m := fluxMonth{Period: f.Period, Source: f.Ledger, realm: f.Company}
+		var err error
+		if f.Ledger == "quickbooks" {
+			err = q.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,s.payload->'accounts',s.payload->'reports'->'ProfitAndLoss',s.payload->'reports'->'GeneralLedger',COALESCE(s.payload->'reports'->'TrialBalance','null'),COALESCE(s.payload->'reports'->'CashFlow','null')
+ FROM quickbooks_snapshots s WHERE s.close_id::text=$1 AND s.realm=$2 AND s.payload ? 'period' ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, f.Close, f.Company).Scan(&m.SnapshotID, &m.CapturedAt, &m.accounts, &m.pl, &m.gl, &m.tb, &m.cashFlow)
+		} else {
+			err = q.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,s.payload FROM xero_snapshots s WHERE s.close_id::text=$1 AND s.tenant_id=$2 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, f.Close, f.Company).
+				Scan(&m.SnapshotID, &m.CapturedAt, &m.xero)
+		}
+		if err != nil {
 			return nil, err
-		} else if m != nil && m.Source == f.Ledger && m.realm == f.Company {
-			if c.books, err = recordBooks(ctx, q, m); err != nil {
-				c.books = nil
-			}
+		}
+		// A capture that cannot be read leaves the company's accounts unknown, said so.
+		if b, err := readLedgerMonth(&m); err == nil {
+			c.books = b
 		}
 		companies = append(companies, c)
 	}
@@ -130,7 +143,11 @@ func registerCompanyLinks(mux *http.ServeMux, db *sql.DB) {
 			}
 			out = append(out, entry)
 		}
-		jsonReply(w, 200, map[string]any{"file_accounts": fileAccounts, "companies": out, "can_confirm": canReview(r)})
+		stamp := ""
+		if current != nil {
+			stamp = current.Stamp
+		}
+		jsonReply(w, 200, map[string]any{"file_accounts": fileAccounts, "companies": out, "can_confirm": canReview(r), "map": stamp})
 	})
 	// A reviewer confirms a ledger company is the client's files' company, mapping the file accounts the map holds to the
 	// company's, each at most once. An account left unmapped (one the ledger no longer has, say) is not compared.
@@ -148,8 +165,10 @@ func registerCompanyLinks(mux *http.ServeMux, db *sql.DB) {
 			Company  string            `json:"company"`
 			Accounts map[string]string `json:"accounts"`
 			Reason   string            `json:"reason"`
-			// BasedOn is the link the reviewer saw ("" for none): a confirmation over one made since is refused.
+			// BasedOn is the link the reviewer saw ("" for none), and Map the account map they saw it on by its stamp: a
+			// confirmation over a link or a map made since is refused.
 			BasedOn string `json:"based_on"`
+			Map     string `json:"map"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -196,6 +215,9 @@ func registerCompanyLinks(mux *http.ServeMux, db *sql.DB) {
 		case current == nil:
 			problem(w, 409, "Map the client's file accounts first: the link maps them to the ledger's.")
 			return
+		case current.Stamp != in.Map:
+			problem(w, 409, "The client's account map was confirmed again since you opened it: reopen it to see what changed.")
+			return
 		case companies[at].books == nil:
 			problem(w, 409, "The newest month captured from this company cannot be read, so its accounts cannot be mapped yet.")
 			return
@@ -214,8 +236,8 @@ func registerCompanyLinks(mux *http.ServeMux, db *sql.DB) {
 		}
 		accounts, _ := json.Marshal(in.Accounts)
 		var id string
-		if err = tx.QueryRowContext(r.Context(), `INSERT INTO books_company_links(organization_id,client_entity,ledger,company,accounts,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`,
-			org, name, in.Ledger, in.Company, string(accounts), in.Reason, reviewerName(r)).Scan(&id); err != nil || tx.Commit() != nil {
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO books_company_links(organization_id,client_entity,ledger,company,accounts,map_stamp,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text`,
+			org, name, in.Ledger, in.Company, string(accounts), current.Stamp, in.Reason, reviewerName(r)).Scan(&id); err != nil || tx.Commit() != nil {
 			problem(w, 503, "The link could not be saved.")
 			return
 		}

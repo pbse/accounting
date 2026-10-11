@@ -604,12 +604,13 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	}
 	confirm := func(accounts map[string]any, basedOn string, want int) map[string]any {
 		t.Helper()
-		return call("user_a", partner, "POST", linksPath, map[string]any{"ledger": "quickbooks", "company": "123", "accounts": accounts, "reason": "The same company, moved to QuickBooks", "based_on": basedOn}, want)
+		return call("user_a", partner, "POST", linksPath, map[string]any{"ledger": "quickbooks", "company": "123", "accounts": accounts, "reason": "The same company, moved to QuickBooks", "based_on": basedOn, "map": links["map"]}, want)
 	}
+	call("user_a", partner, "POST", linksPath, map[string]any{"ledger": "quickbooks", "company": "123", "accounts": proposal, "reason": "On an earlier map", "based_on": "", "map": "1:stale"}, 409)
 	confirm(map[string]any{"n:1000": "1", "n:3000": "1"}, "", 422)
 	linked := confirm(proposal, "", 200)["id"]
 	confirm(proposal, "", 409)
-	if link := call("user_a", partner, "GET", linksPath, nil, 200)["companies"].([]any)[0].(map[string]any)["link"].(map[string]any); link["id"] != linked || link["accounts"].(map[string]any)["n:4000"] != "4" {
+	if link := call("user_a", partner, "GET", linksPath, nil, 200)["companies"].([]any)[0].(map[string]any)["link"].(map[string]any); link["id"] != linked || link["current"] != true || link["accounts"].(map[string]any)["n:4000"] != "4" {
 		t.Fatalf("the confirmed link: %v", link)
 	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.

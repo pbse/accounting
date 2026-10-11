@@ -10,7 +10,7 @@ import { workspaceRequest } from "../closes/workspace";
 // from a live ledger company is compared across them only once a reviewer confirms both are the same company, mapping
 // each of the file's accounts to the ledger's, once.
 
-type Link = { id: string; accounts: Record<string, string>; reason: string; actor: string; at: string };
+type Link = { id: string; accounts: Record<string, string>; map_stamp: string; current: boolean; reason: string; actor: string; at: string };
 type Company = {
   ledger: "quickbooks" | "xero";
   company: string;
@@ -21,7 +21,7 @@ type Company = {
   proposal: Record<string, string>;
   unreadable?: string;
 };
-type LinksRead = { file_accounts: { key: string; name: string; class: string }[]; companies: Company[]; can_confirm: boolean };
+type LinksRead = { file_accounts: { key: string; name: string; class: string }[]; companies: Company[]; can_confirm: boolean; map: string };
 
 const linksPath = (client: string) => `/client/company-links?name=${encodeURIComponent(client)}`;
 const ledgerName = (c: Company) => `${c.ledger === "xero" ? "Xero" : "QuickBooks"}${c.name ? ` (${c.name})` : ""}`;
@@ -31,9 +31,15 @@ export function CompanyLinksCard({ client }: { client: string }) {
   const read = useQuery(workspaceQuery<LinksRead>(linksPath(client)));
   const [open, setOpen] = useState<Company | null>(null);
   const companies = read.data?.companies ?? [];
+  if (read.error)
+    return (
+      <Card icon="link" tone="wait" title="Same company across sources">
+        {read.error.message || "Whether the client's ledger companies are its files' company could not be read."}
+      </Card>
+    );
   // Only a client with file accounts and a ledger company has anything to link.
   if (!read.data || !read.data.file_accounts.length || !companies.length) return null;
-  const unlinked = companies.filter((c) => !c.link);
+  const unlinked = companies.filter((c) => !c.link?.current);
   return (
     <>
       <Card
@@ -45,9 +51,11 @@ export function CompanyLinksCard({ client }: { client: string }) {
         {companies.map((c) => (
           <p key={`${c.ledger}:${c.company}`}>
             {ledgerName(c)}, captured through {monthName(c.period)}:{" "}
-            {c.link
+            {c.link?.current
               ? `confirmed as the files' company ${dates.dayMonth(c.link.at)} by ${c.link.actor}, ${Object.keys(c.link.accounts).length} accounts mapped.`
-              : "not confirmed as the files' company, so its months and the months on files are not compared."}{" "}
+              : c.link
+                ? "confirmed as the files' company, but the client's account map has changed since: review the mapping before its months are compared."
+                : "not confirmed as the files' company, so its months and the months on files are not compared."}{" "}
             {read.data.can_confirm && !c.unreadable && (
               <button type="button" className="link" onClick={() => setOpen(c)}>
                 {c.link ? "Review the mapping" : "Confirm and map the accounts"}
@@ -59,14 +67,14 @@ export function CompanyLinksCard({ client }: { client: string }) {
       </Card>
       {open && (
         <Dialog open onClose={() => setOpen(null)} title="Same company across sources" description={`Confirm ${ledgerName(open)} is the company the client's files are of, and map each file account to its account there.`}>
-          <LinkForm client={client} company={open} fileAccounts={read.data.file_accounts} onClose={() => setOpen(null)} />
+          <LinkForm client={client} company={open} fileAccounts={read.data.file_accounts} map={read.data.map} onClose={() => setOpen(null)} />
         </Dialog>
       )}
     </>
   );
 }
 
-function LinkForm({ client, company, fileAccounts, onClose }: { client: string; company: Company; fileAccounts: LinksRead["file_accounts"]; onClose: () => void }) {
+function LinkForm({ client, company, fileAccounts, map, onClose }: { client: string; company: Company; fileAccounts: LinksRead["file_accounts"]; map: string; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [accounts, setAccounts] = useState<Record<string, string>>(() => ({ ...company.proposal, ...(company.link?.accounts ?? {}) }));
   const [reason, setReason] = useState("");
@@ -78,7 +86,7 @@ function LinkForm({ client, company, fileAccounts, onClose }: { client: string; 
     setError("");
     try {
       const mapped = Object.fromEntries(Object.entries(accounts).filter(([, id]) => id));
-      await workspaceRequest(linksPath(client), { ledger: company.ledger, company: company.company, accounts: mapped, reason: reason.trim(), based_on: company.link?.id ?? "" });
+      await workspaceRequest(linksPath(client), { ledger: company.ledger, company: company.company, accounts: mapped, reason: reason.trim(), based_on: company.link?.id ?? "", map });
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
       onClose();
     } catch (e) {
