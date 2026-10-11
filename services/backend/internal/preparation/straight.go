@@ -1012,7 +1012,8 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 			amount = strings.ReplaceAll(strings.TrimSpace(f.Value), ",", "")
 		}
 	}
-	rows, err := q.QueryContext(ctx, `SELECT e.id::text,COALESCE(e.content,''),i.proposal FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
+	rows, err := q.QueryContext(ctx, `SELECT e.id::text,COALESCE(e.content,''),i.proposal,e.id>COALESCE((SELECT source_id FROM preparation_intakes WHERE job_id::text=$2),0) OR EXISTS(SELECT 1 FROM preparation_jobs oj WHERE oj.id=i.job_id AND oj.state IN ('failed','cancelled'))
+ FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
 
  WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
 	if err != nil {
@@ -1024,7 +1025,9 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 		var id, text string
 		var raw []byte
 		var other Proposal
-		if err = rows.Scan(&id, &text, &raw); err != nil {
+		// yields: the other document is a later one, or its own work will not prepare anything (failed or cancelled).
+		var yields bool
+		if err = rows.Scan(&id, &text, &raw, &yields); err != nil {
 			return nil, err
 		}
 		if json.Unmarshal(raw, &other) != nil || strings.TrimSpace(text) == "" || strings.Contains(text, documents.UnreadPage) {
@@ -1043,6 +1046,12 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 			}
 			continue
 		}
+		// A later copy of this same invoice (a rescan), or an earlier one whose work stopped, cannot change what it says:
+		// the invoice is prepared from this one, never weighed against the copy or prepared again.
+		if yields && sameInvoice(p, other) && !mentionsAny(strings.ReplaceAll(lower, "credit card", ""), []string{"credit", "cancel", "refund", "adjust", "revers", "void", "amend"}) {
+			out[id] = true
+			continue
+		}
 		v, n := identity(other)
 		if v == "" || n == "" || v == vendor || n == number || !wholeWord(v).MatchString(normal) || !wholeWord(n).MatchString(lower) {
 			continue
@@ -1054,6 +1063,61 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 		out[id] = true
 	}
 	return out, rows.Err()
+}
+
+// sameInvoice reports whether two readings are copies of one invoice: the same vendor, invoice number, amount, currency,
+// service dates and bill-to, the first three read.
+func sameInvoice(a, b Proposal) bool {
+	read := func(p Proposal) []string {
+		vendor, number := identity(p)
+		out := []string{vendor, number}
+		for _, field := range []string{"amount", "currency", "service_start", "service_end", "billed_to"} {
+			value := ""
+			for _, f := range p.Facts {
+				if f.Field == field {
+					value = strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(f.Value), ",", ""))
+					if field == "billed_to" {
+						value = documents.NormalizeEntity(f.Value)
+					}
+				}
+			}
+			out = append(out, value)
+		}
+		if out[0] == "" || out[1] == "" || out[2] == "" {
+			return nil
+		}
+		return out
+	}
+	x := read(a)
+	return x != nil && slices.Equal(x, read(b))
+}
+
+// EarlierCopy names the close's earlier current prepaid document this job's reading is a copy of (a rescan of the same
+// invoice) whose work has not failed or been cancelled, or "" when there is none; that document's work prepares the
+// invoice.
+func EarlierCopy(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, closeID, jobID string, p Proposal) (string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT e.name,i.proposal FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
+ JOIN preparation_jobs j ON j.id=i.job_id AND j.state NOT IN ('failed','cancelled')
+ WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind'='prepaid'
+ AND e.id<(SELECT source_id FROM preparation_intakes WHERE job_id::text=$2) ORDER BY e.id`, closeID, jobID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var raw []byte
+		var other Proposal
+		if err = rows.Scan(&name, &raw); err != nil {
+			return "", err
+		}
+		if json.Unmarshal(raw, &other) == nil && sameInvoice(p, other) {
+			return name, nil
+		}
+	}
+	return "", rows.Err()
 }
 
 // identity is a proposal's normalized vendor and lower-cased invoice number.
