@@ -14,7 +14,7 @@ import { FilesCard } from "./Files";
 import { workspaceRequest } from "../closes/workspace";
 
 type Books = {
-  source: "quickbooks" | "xero" | "exports";
+  source: "quickbooks" | "xero" | "files" | "exports";
   at: string;
   stale?: boolean;
 };
@@ -134,6 +134,7 @@ const basisLabels = {
 const sources = {
   quickbooks: "QuickBooks",
   xero: "Xero",
+  files: "Files",
   exports: "Exports, as reported",
 };
 const fiscalMonth = (start: number) =>
@@ -222,7 +223,7 @@ export default function ClientPage() {
             : signed.length
               ? `${name} is signed off through ${monthName(signed[0].period)}.`
               : `${name} has no months yet.`;
-  const ledger = books(client, dates.dayMonth);
+  const ledger = books(client, dates.dayMonth, dates.calendarDate);
   // The ledger the client keeps, as recorded, said first on the Books card; a ledger the firm cannot connect is served by
   // files once they reach the firm, with its export steps.
   const kept = client.ledger;
@@ -496,7 +497,7 @@ export default function ClientPage() {
               </span>
               <span role="cell">{monthState(row.month, today)}</span>
               <span role="cell" className="ks-mut">
-                {row.month.books ? `${sources[row.month.books.source]} · ${dates.dayMonth(row.month.books.at)}${row.month.books.stale ? " · out of date" : ""}` : "—"}
+                {row.month.books ? `${sources[row.month.books.source]} · ${row.month.books.source === "files" ? dates.calendarDate(row.month.books.at) : dates.dayMonth(row.month.books.at)}${row.month.books.stale ? " · out of date" : ""}` : "—"}
               </span>
               <span role="cell" className="ks-mut">
                 {row.month.due_on ? dates.calendarDate(row.month.due_on) : "—"}
@@ -632,14 +633,16 @@ function connectOffer(client: ClientRead) {
 
 // How the client's books arrive, from its connections (the QuickBooks one its books are read from first, then Xero),
 // and the newest month's books: one line, a chip, and where the connection is managed today.
-function books(client: ClientRead, day: (value: string) => string) {
+function books(client: ClientRead, day: (value: string) => string, calendarDate: (value: string) => string) {
   const heldUnder = (c: { client_entity: string }) =>
     c.client_entity.toLowerCase() === client.entity.toLowerCase() ? "" : ` It is held under ${c.client_entity}, the name of the month it was made from.`;
   const newest = client.months.find((m) => m.books);
   const latest = newest?.books
     ? newest.books.source === "exports"
       ? ` ${monthName(newest.period)}’s exports were labeled ${day(newest.books.at)}, as reported${newest.books.stale ? ", and one has been replaced since" : ""}.`
-      : ` ${monthName(newest.period)}’s books were captured from ${sources[newest.books.source]} ${day(newest.books.at)}${newest.books.stale ? " and are out of date" : ""}.`
+      : newest.books.source === "files"
+        ? ` ${monthName(newest.period)}’s books are its accepted file, exported ${calendarDate(newest.books.at)}.`
+        : ` ${monthName(newest.period)}’s books were captured from ${sources[newest.books.source]} ${day(newest.books.at)}${newest.books.stale ? " and are out of date" : ""}.`
     : "";
   const state = (s: string, confirm: string): [string, string] =>
     live(s)
@@ -688,6 +691,16 @@ function books(client: ClientRead, day: (value: string) => string) {
   // after it with its own state; each ledger's own action on the card manages it.
   const source = newest?.books?.source;
   const also = (others: Ledger[]) => others.map((o) => ` ${o.name} is also connected (${o.status}).`).join("");
+  // A month on files has its books from its accepted file, managed on this page; any connection is said after it.
+  if (newest?.books && source === "files") {
+    return {
+      short: "books from files",
+      line: `${latest.trim()}${also(ledgers)}`,
+      month: undefined as ClientRead["months"][number] | undefined,
+      chip: ["From files", "pill neutral"] as [string, string],
+      attention: false,
+    };
+  }
   if (newest?.books && source === "exports") {
     const failing = ledgers.filter((l) => !l.ok);
     return {

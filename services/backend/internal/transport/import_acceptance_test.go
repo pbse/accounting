@@ -421,6 +421,48 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if row := tie["rows"].([]any)[0].(map[string]any); row["status"] != "ties" || row["account"] != "1000 Business Checking" || len(tie["unmatched"].([]any)) != 0 {
 		t.Fatalf("a reconciliation supports the file's bank: %v", tie)
 	}
+	// The client's page shows the month's books from files, and the plan reads them from the file.
+	for _, raw := range call("user_a", partner, "GET", "/v1/closes/client?name=Acme%20Co", nil, 200)["months"].([]any) {
+		if month := raw.(map[string]any); month["period"] == "2027-01" && fmt.Sprint(month["books"]) != "map[at:2026-10-05T00:00:00Z source:files]" {
+			t.Fatalf("January's books on the client's page: %v", month["books"])
+		}
+	}
+	planOf := func() planStep {
+		t.Helper()
+		tx, err := db.BeginTx(t.Context(), nil)
+		must(err)
+		defer tx.Rollback()
+		b, err := readBooks(t.Context(), tx, januaryClose)
+		must(err)
+		return booksStep(b, januaryClose, "Acme Co", "2027-01")
+	}
+	if step := planOf(); step.State != "done" || step.Text != "Read from the accepted file Acme 2027-01.csv, exported Oct 5." {
+		t.Fatalf("the plan reads January's books from its file: %v", step)
+	}
+	// While the accepted file's books are being written, the plan waits on them rather than asking for another acceptance.
+	pendingTx, err := db.BeginTx(t.Context(), nil)
+	must(err)
+	_, err = pendingTx.Exec(`DELETE FROM books_versions WHERE close_id=$1::bigint AND source='files'`, januaryClose)
+	must(err)
+	pending, err := readBooks(t.Context(), pendingTx, januaryClose)
+	pendingTx.Rollback()
+	must(err)
+	if step := booksStep(pending, januaryClose, "Acme Co", "2027-01"); step.State != "agent" || !strings.Contains(step.Text, "being written") {
+		t.Fatalf("the plan waits on an accepted file's books: %v", step)
+	}
+	// The brief says the books are read from the file, with no ledger certification.
+	ledgerLine := func() map[string]any {
+		t.Helper()
+		for _, raw := range call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/brief", nil, 200)["lines"].([]any) {
+			if line := raw.(map[string]any); line["area"] == "ledger" {
+				return line
+			}
+		}
+		return nil
+	}
+	if line := ledgerLine(); line["state"] != "done" || line["text"] != "Books read from the accepted file Acme 2027-01.csv, exported Oct 5." {
+		t.Fatalf("the brief reads January's books from its file: %v", line)
+	}
 	// Its exceptions check the file's balances, named as from the file.
 	exceptions := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/quickbooks/exceptions", nil, 200)["balances"].(map[string]any)
 	if snapshot := exceptions["snapshot"].(map[string]any); snapshot["source"] != "files" || snapshot["file"] != "Acme 2027-01.csv" || len(exceptions["items"].([]any)) != 0 {
@@ -484,6 +526,12 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	}
 	if exceptions = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/quickbooks/exceptions", nil, 200)["balances"].(map[string]any); !strings.Contains(fmt.Sprint(exceptions["error"]), "Debits equal credits") {
 		t.Fatalf("a held file's balances name its checks: %v", exceptions)
+	}
+	if step := planOf(); step.State != "you" || !strings.Contains(step.Text, "Debits equal credits") {
+		t.Fatalf("the plan names a held file's checks: %v", step)
+	}
+	if line := ledgerLine(); line["state"] != "attention" || !strings.Contains(line["text"].(string), "Debits equal credits") {
+		t.Fatalf("the brief names a held file's checks: %v", line)
 	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
