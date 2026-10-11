@@ -82,7 +82,10 @@ type xeroRecode struct {
 // The digest covers what was checked, so any change before approval or execution refuses.
 func planXeroRecode(ctx context.Context, db *sql.DB, org, entity, closeID, period, invoiceID, lineID, targetID, reason, rule string) (xeroRecode, error) {
 	var p xeroRecode
-	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND revoked_at IS NULL`, org, entity))
+	// The client's grant under any of its names, the month's own first; that the month's capture came from the granted
+	// connection is checked below.
+	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL
+ ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity))
 	if err != nil || time.Now().After(g.Expires) || !slices.Contains(g.Kinds, "bill_correction") {
 		return p, refusal{409, "An unexpired Xero grant that covers bill corrections is required."}
 	}
