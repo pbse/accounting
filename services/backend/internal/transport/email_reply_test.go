@@ -168,4 +168,10 @@ func TestInboundReplyHeldUntilSenderAndReviewerMatch(t *testing.T) {
 	if err = db.QueryRow(`SELECT count(*) FROM inbound_replies WHERE close_id=$1 AND header_from='client@example.test'`, closeID).Scan(&replies); err != nil || replies != 3 {
 		t.Fatalf("a separately sent email with the same text is held separately: %d %v", replies, err)
 	}
+	// The link is used now, but the request still takes answers, so a later emailed answer can be released too.
+	var later string
+	if err = db.QueryRow(`SELECT id::text FROM inbound_replies WHERE close_id=$1 AND state='held' AND addresses_match ORDER BY id LIMIT 1`, closeID).Scan(&later); err != nil {
+		t.Fatal(err)
+	}
+	staff("POST", base+"/"+later, map[string]any{"action": "release", "reason": "Reviewed the later answer", "verification_reference": "Confirmed with known contact on 2026-09-25", "confirmed": true}, 200)
 }
