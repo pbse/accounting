@@ -445,8 +445,9 @@ var (
 	// Words that say a computed figure is a difference.
 	claimDifferenceSaid = regexp.MustCompile(`\b(difference|differ|differs|gap|less|leave|leaves|leaving|left|net of|minus|exceed|exceeds|short|more than|less than|over|under|after|change|changed|up|down|higher|lower|ahead|behind)\b`)
 	// Words that attribute a total to drivers, which must then add up or name the rest.
-	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|driven by|reflecting)\b`)
-	claimCausalEvidence = regexp.MustCompile(`\b(because|due to|caused|causes|driven|drove|drives|resulted|result of|results from|led to|leads to|owing to|thanks to|after|following|boosted|lifted|raised|increased|reduced|lowered|cut|added|brought|grew|rose|fell|dropped)\b`)
+	claimAttribution = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|driven by|reflecting)\b`)
+	// Words by which a passage attributes an effect to a cause; timing ("after") or a movement alone ("rose") does not.
+	claimCausalEvidence = regexp.MustCompile(`\b(because|due to|caused|causes|driven by|drove|drives|resulted in|result of|results from|led to|leads to|owing to|thanks to|attributable to|attributed to|as a result of|boosted|lifted|raised|reduced|lowered|cut)\b`)
 	// Words that name a change as such, beside its figure ("Rent's variance against budget is 500.00").
 	claimVarianceNamed = regexp.MustCompile(`\b(variance|difference|change|movement|swing|gap)\b`)
 	// Verbs that state a cause acting on a measure ("marketing raised revenue").
@@ -1320,6 +1321,10 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		if s.derive == "difference" && o.direction() == "change" {
 			continue
 		}
+		// "Rent and payroll total 9,040.00" lists its inputs; "net income including rent totals …" names its result.
+		if operandList(line, o, claims) {
+			continue
+		}
 		if label := resultLabel(line, o); len(label) > 0 && !overlaps(label, shared) {
 			return "the sentence calls the " + s.derive + " " + stated + " " + keysNamed(label) + ", which its fields do not all measure"
 		}
@@ -1712,14 +1717,18 @@ func strconvBool(b bool) string {
 }
 
 // figureClauses is a figure's clause with the figure-less clauses joined before it, which share its subject ("Bluegrass
-// and Birch each had net income of 21,780.00").
+// and Birch each had net income of 21,780.00"), as written.
 func figureClauses(line string, o occurrence) string {
 	start := strings.Index(line, o.clause)
 	if start < 0 {
 		return o.clause
 	}
+	return line[joinedStart(line, start) : start+len(o.clause)]
+}
+
+// joinedStart is where the figure-less clauses joined before a clause starting at start begin.
+func joinedStart(line string, start int) int {
 	bounds := claimClause.FindAllStringIndex(line, -1)
-	text := o.clause
 	end := start
 	for i := len(bounds) - 1; i >= 0; i-- {
 		if bounds[i][1] > end {
@@ -1729,12 +1738,34 @@ func figureClauses(line string, o occurrence) string {
 		if i > 0 {
 			from = bounds[i-1][1]
 		}
-		previous := line[from:bounds[i][0]]
-		if agentFigure.MatchString(previous) {
+		if agentFigure.MatchString(line[from:bounds[i][0]]) {
 			break
 		}
-		text = previous + " " + text
 		end = from
 	}
-	return text
+	return end
+}
+
+var (
+	claimCoordinated = regexp.MustCompile(`\b(and|plus|together|combined|along with)\b`)
+	claimModifier    = regexp.MustCompile(`\b(including|includes|incl|with|excluding|less|net of|after)\b`)
+)
+
+// operandList says whether the words before a computed figure in its clause list all its inputs joined as a set ("rent
+// and payroll total 9,040.00"), rather than name one measure and modify it ("net income including rent totals …").
+func operandList(line string, o occurrence, claims []claim) bool {
+	start := strings.Index(line, o.clause)
+	if start < 0 || o.start < start {
+		return false
+	}
+	before := strings.ToLower(line[joinedStart(line, start):o.start])
+	if !claimCoordinated.MatchString(before) || claimModifier.MatchString(before) {
+		return false
+	}
+	for _, c := range claims {
+		if !labelNamed(before, c.label) && !overlaps(metricsIn(before), c.keys) {
+			return false
+		}
+	}
+	return true
 }
