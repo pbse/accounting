@@ -4374,6 +4374,12 @@ Reminders required an unused link and no reply at all, so a client who answered 
 
 Test: `TestApprovedEmailDurableRetryAndScope` records a partial reply on a used link: the reminder period restarts from it, the goal offers the reminder, approval succeeds and the worker sends it; seen to fail without the fix (and without the worker's change, cancelled). The closest email, attention, goal, partial-reply, inbound-reply and Work tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — An amended payroll summary reopens the payroll draft (B04/B08)
+
+The later-evidence link (migration 155) covered prepaid drafts only, so an amended payroll summary arriving as a new document left an approved payroll draft standing unless someone recorded a replacement. Migration 159 extends `link_later_evidence_for`: a document read after a payroll draft, naming its provider (whole words) and speaking of an amendment, correction, revision, reissue, void or adjustment, is linked to the draft, which shows as changed at source and cannot be approved as it is; the attention notice says it names the payroll provider. The prepaid rule is unchanged, and documents already readable are not linked.
+
+Test: `TestPayrollDraftsNeedTheFirmsPayrollProcedure` adds next month's ordinary Gusto summary (draft stays as it was) and an amended September register (draft reopened); seen to fail without the migration. The payroll, attention and mixed-close tests passed on a fresh local PostgreSQL. Not covered here: preparing a difference-only successor after a payroll draft was posted.
+
 ## 2026-10-11 — Procedure versions take effect from a month (B08)
 
 A new procedure version, published or activated from learning, applied at once to every month, earlier ones included, so a method changed mid-year could reach a month closed under the old one. A version can now name the first month it applies to (`effective_from`, migration 158): every query that picks a close's current procedure (CurrentProcedure, the basis, method, owner and pinned checks, the close and takeover views) takes the newest version in effect for the close's month; client-level views use the current month, and a books file's basis check uses the file's own month. The firm-wide preview counts a client's closes from before its override takes effect, and the procedures panel (and learning activation) choose and set the month the same way. The publish and activation impact previews count only the closes from that month on, and their digest binds it. A version without a month applies to every month, as before.

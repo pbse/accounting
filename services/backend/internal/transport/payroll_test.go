@@ -80,6 +80,34 @@ func TestPayrollDraftsNeedTheFirmsPayrollProcedure(t *testing.T) {
 	if saved.Paper.Unpaid != "500.00" || len(saved.Paper.Proposals) != 3 || saved.Paper.Proposals[2].CreditAccount != "Payroll liabilities" || saved.Paper.Proposals[2].Amount != "500.00" {
 		t.Fatalf("the saved payroll draft leaves the unremitted deductions owed: %+v", saved.Paper)
 	}
+	// A later document naming the provider and speaking of an amendment reopens the draft's review; next month's
+	// ordinary summary from the same provider does not.
+	var draft string
+	if err = db.QueryRow(`SELECT id::text FROM workpapers WHERE close_id=$1 AND kind='payroll' ORDER BY id DESC LIMIT 1`, closeID).Scan(&draft); err != nil {
+		t.Fatal(err)
+	}
+	state := func() (s string) {
+		t.Helper()
+		if err := db.QueryRow(`SELECT review_state FROM workpaper_review_state WHERE id::text=$1`, draft).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	defer db.Exec(`DELETE FROM evidence WHERE close_id=$1`, closeID)
+	evidence := func(content string) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,'payroll.txt',$2,$3,'fixture','ready')`, closeID, rand.Text(), content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evidence("Gusto payroll summary for October 2026")
+	if s := state(); s == "source_changed" {
+		t.Fatalf("an ordinary summary from the same provider does not reopen the draft: %s", s)
+	}
+	evidence("Gusto amended payroll register for September 2026: gross wages corrected")
+	if s := state(); s != "source_changed" {
+		t.Fatalf("an amended summary from the draft's provider reopens its review: %s", s)
+	}
 	if paperKey("payroll", json.RawMessage(`{"input":{"provider":"Gusto","source_reference":"Sep summary"}}`)) != paperKey("payroll", json.RawMessage(`{"input":{"provider":" gusto","source_reference":"Sep summary, corrected"}}`)) {
 		t.Fatal("a corrected summary replaces the provider's payroll for the month, whatever its title")
 	}
