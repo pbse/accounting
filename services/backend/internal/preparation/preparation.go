@@ -300,7 +300,46 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				break
 			}
 		}
-		if p.Procedure != "" {
+		// A straight-through reconciliation stands only while its procedure version is the client's current, enabled one and
+		// nothing arrived in the close for a person to weigh; its rows and balances are the plan's own, checked by digest below.
+		if p.Procedure != "" && p.Kind == "reconciliation" {
+			current, e := CurrentProcedure(ctx, tx, closeID, "reconciliation")
+			if e != nil && e != sql.ErrNoRows {
+				return false, e
+			}
+			if current.ID != p.Procedure || !current.Enabled {
+				failure = "The reconciliation procedure this draft was prepared under (v" + p.Procedure + ") is no longer the client's current enabled one; a person confirms the facts."
+				break
+			}
+			if other, e := OtherEvidence(ctx, tx, closeID, id); e != nil {
+				return false, e
+			} else if other {
+				failure = "Evidence arrived in the close that a person must weigh before this draft is prepared."
+				break
+			}
+			// Each document the plan left unused must still be another matter, as the other jobs now read them.
+			if len(p.Unrelated) > 0 {
+				var in struct {
+					Account string `json:"account"`
+				}
+				json.Unmarshal(p.Input, &in)
+				still, e := ReconciliationOtherMatter(ctx, tx, closeID, id, in.Account)
+				if e != nil {
+					return false, e
+				}
+				if slices.ContainsFunc(p.Unrelated, func(s string) bool { return !still[s] }) {
+					failure, changed = "Another document in the close may now bear on this account; reading the close again.", true
+					break
+				}
+			}
+			// Another job may have drafted this account since this one was queued; the close is locked, so one wins.
+			if drafted, e := ReconciliationDrafted(ctx, tx, closeID, p); e != nil {
+				return false, e
+			} else if drafted != "" {
+				failure = strings.ToUpper(drafted[:1]) + drafted[1:] + "."
+				break
+			}
+		} else if p.Procedure != "" {
 			current, e := CurrentProcedure(ctx, tx, closeID, p.Kind)
 			if e != nil && e != sql.ErrNoRows {
 				return false, e
