@@ -13,7 +13,7 @@ import { ImportScope } from "./ImportScope";
 // to read it, a person previews the reading, and a reviewer confirms the layout, which is proposed again for the next
 // month's file. Nothing here is a month's books yet: accepting an import arrives with a later step.
 
-type Meaning = "account_number" | "account_name" | "account_type" | "debit" | "credit" | "balance" | "opening" | "movement" | "year_to_date";
+type Meaning = "account_number" | "account_name" | "account_type" | "debit" | "credit" | "balance" | "opening" | "movement" | "year_to_date" | "dimension";
 export type Layout = {
   table: string;
   header_row: number;
@@ -31,7 +31,7 @@ export type Layout = {
 type Cell = { column: number; ref: string; kind: string; value: string; formula?: string };
 type Row = { number: number; hidden?: boolean; cells: Cell[] };
 type Table = { name: string; hidden?: boolean; rows: Row[]; more: number };
-type Line = { row: number; ref: string; kind: "posting" | "total" | "heading"; number?: string; name: string; balance: string; cents: boolean };
+type Line = { row: number; ref: string; kind: "posting" | "total" | "heading"; number?: string; name: string; balance: string; cents: boolean; dimension?: string };
 type Reading = { lines: Line[]; debits: string; credits: string; balanced: boolean; problems: string[]; notes: string[] };
 // Status is a confirmed layout's outcome, as the list shows it; Confirmed adds the layout and what it read.
 type Status = { id: string; reason: string; actor: string; at: string; balanced: boolean; problems: number };
@@ -69,6 +69,7 @@ const meanings: [Meaning | "" | "ignored", string][] = [
   ["opening", "Opening balance"],
   ["movement", "Movement"],
   ["year_to_date", "Year to date"],
+  ["dimension", "Department, location or class"],
 ];
 // A row the reader cannot place is marked by a person: an account it took for a total, a total or heading it cannot name,
 // or a footer to leave out.
@@ -690,7 +691,10 @@ function ReadingLines({ lines, total, page }: { lines: Line[]; total?: number; p
                 <tr key={l.row}>
                   <th>{l.row}</th>
                   <td>{lineKinds[l.kind]}</td>
-                  <td>{[l.number, l.name].filter(Boolean).join(" ")}</td>
+                  <td>
+                    {[l.number, l.name].filter(Boolean).join(" ")}
+                    {l.dimension ? ` (${l.dimension})` : ""}
+                  </td>
                   <td>{l.kind === "heading" ? "" : l.balance}</td>
                 </tr>
               ))}

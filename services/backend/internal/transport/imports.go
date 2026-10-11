@@ -1149,7 +1149,7 @@ func checkLayout(l bookfiles.Layout) string {
 		return "Say what the columns hold."
 	}
 	for column, meaning := range l.Columns {
-		if column < 0 || column > 16383 || !strings.Contains(" account_number account_name account_type debit credit balance opening movement year_to_date ", " "+string(meaning)+" ") {
+		if column < 0 || column > 16383 || !strings.Contains(" account_number account_name account_type debit credit balance opening movement year_to_date dimension ", " "+string(meaning)+" ") {
 			return "Choose each column's meaning from the list."
 		}
 	}

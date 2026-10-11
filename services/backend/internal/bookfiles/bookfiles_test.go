@@ -273,6 +273,15 @@ func TestTheReaderTakesNothingForGranted(t *testing.T) {
 	if reading := layout.Read(summed); reading.Lines[0].Kind != Posting || !reading.Balanced || len(reading.Problems) != 0 {
 		t.Fatalf("an account whose balance is a SUM formula is an account: %+v", reading)
 	}
+	// An account repeated once per department and location is read once per split, each line keeping its dimensions.
+	split, _ := Read("tb.csv", []byte("Account,Department,Location,Debit,Credit\nRent,Retail,East,100.00,\nRent,Wholesale,West,50.00,\nBank,,,,150.00\n"))
+	layout, _ = ProposeLayout(split.Tables[0])
+	if layout.Columns[1] != Dimension || layout.Columns[2] != Dimension {
+		t.Fatalf("department and location are dimensions: %v", layout.Columns)
+	}
+	if reading := layout.Read(split.Tables[0]); !reading.Balanced || len(reading.Problems) != 0 || reading.Lines[0].Dimension != "Retail · East" || reading.Lines[1].Dimension != "Wholesale · West" || reading.Lines[2].Dimension != "" {
+		t.Fatalf("each split read with its dimensions: %+v", reading)
+	}
 	both, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,100.00,50.00\nCapital,,50.00\nTOTAL,100.00,100.00\n"))
 	layout, _ = ProposeLayout(both.Tables[0])
 	if reading := layout.Read(both.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {

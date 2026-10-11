@@ -28,6 +28,10 @@ const (
 	Opening    Meaning = "opening"
 	Movement   Meaning = "movement"
 	YearToDate Meaning = "year_to_date"
+	// Dimension is the department, location or class a row's balance belongs to: an account repeated once per dimension
+	// is one account whose balance is the sum, the split kept on its lines (docs/books-sources.md, Hierarchy, dimensions
+	// and entities).
+	Dimension Meaning = "dimension"
 )
 
 // Layout is how to read one table as a Trial Balance: which row heads it, what each column means, how its amounts are
@@ -66,6 +70,7 @@ var headerWords = []struct {
 }{
 	{AccountNumber, regexp.MustCompile(`(?i)^(account\s*)?(no\.?|number|code|#|nominal code|acct\.?\s*(no|#)?)$`)},
 	{AccountType, regexp.MustCompile(`(?i)^(account\s*)?(type|class|category)$`)},
+	{Dimension, regexp.MustCompile(`(?i)^(department|dept\.?|location|division|tracking(\s*category)?|cost\s*cent(re|er)|segment|branch|region)$`)},
 	{AccountName, regexp.MustCompile(`(?i)^(account(\s*name)?|name|description|ledger|particulars|account title)$`)},
 	{Opening, regexp.MustCompile(`(?i)opening|beginning|brought forward|b/f`)},
 	{Movement, regexp.MustCompile(`(?i)movement|activity|net change|period|this month`)},
@@ -93,7 +98,7 @@ func ProposeLayout(t Table) (Layout, []string) {
 				if h.words.MatchString(text) {
 					// A header repeated (a multi-period export's Balance for each month) proposes its first column only,
 					// and asks which one is meant.
-					if len(repeated[h.meaning]) == 0 {
+					if len(repeated[h.meaning]) == 0 || h.meaning == Dimension {
 						columns[c.Column] = h.meaning
 					}
 					repeated[h.meaning] = append(repeated[h.meaning], c.Column)
@@ -213,6 +218,8 @@ type Line struct {
 	Unread []Meaning `json:"unread,omitempty"`
 	Cents  bool      `json:"cents"`
 	Hidden bool      `json:"hidden,omitempty"`
+	// Dimension is the department, location or class the row's balance belongs to, when the layout reads one.
+	Dimension string `json:"dimension,omitempty"`
 }
 
 // Label is what names the row: its account name, else its account number (a Trial Balance with codes alone writes its
@@ -389,7 +396,8 @@ func (l Layout) Read(t Table) Reading {
 	meanings := map[Meaning]bool{}
 	var twice []string
 	for _, m := range l.Columns {
-		if meanings[m] && !slices.Contains(twice, string(m)) {
+		// Dimensions alone may be several columns (department and location), read together as one split.
+		if m != Dimension && meanings[m] && !slices.Contains(twice, string(m)) {
 			twice = append(twice, string(m))
 		}
 		meanings[m] = true
@@ -471,6 +479,13 @@ func (l Layout) Read(t Table) Reading {
 				line.Name = strings.TrimSpace(c.Value)
 			case AccountType:
 				line.Type = strings.TrimSpace(c.Value)
+			case Dimension:
+				// Several dimensions (department and location) are one split, read together.
+				if v := strings.TrimSpace(c.Value); v != "" && line.Dimension != "" {
+					line.Dimension += " · " + v
+				} else if v != "" {
+					line.Dimension = v
+				}
 			default:
 				a, err := cellAmount(c, l.Style)
 				if err != nil && (meaning == Debit || meaning == Credit || meaning == Balance) {
