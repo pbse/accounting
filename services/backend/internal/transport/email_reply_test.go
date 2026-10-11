@@ -174,4 +174,18 @@ func TestInboundReplyHeldUntilSenderAndReviewerMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	staff("POST", base+"/"+later, map[string]any{"action": "release", "reason": "Reviewed the later answer", "verification_reference": "Confirmed with known contact on 2026-09-25", "confirmed": true}, 200)
+	// A new sender (a colleague of the client) is released only once the firm confirms it verified them through a known
+	// contact channel, and the saved reply says so.
+	internal("colleague@example.test", "Here are the remaining figures.")
+	var colleague string
+	if err = db.QueryRow(`SELECT id::text FROM inbound_replies WHERE close_id=$1 AND state='held' AND header_from='colleague@example.test'`, closeID).Scan(&colleague); err != nil {
+		t.Fatal(err)
+	}
+	newSender := map[string]any{"action": "release", "reason": "Colleague answered for the client", "verification_reference": "Called the client's known number on 2026-09-26", "confirmed": true}
+	staff("POST", base+"/"+colleague, newSender, 409)
+	newSender["new_sender_verified"] = true
+	staff("POST", base+"/"+colleague, newSender, 200)
+	if err = db.QueryRow(`SELECT count(*) FROM work_replies WHERE request_id=$1 AND received_from='Email from colleague@example.test (new sender, firm-verified)'`, request).Scan(&replies); err != nil || replies != 1 {
+		t.Fatalf("the released reply names its new, verified sender: %d %v", replies, err)
+	}
 }

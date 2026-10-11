@@ -188,7 +188,10 @@ func registerEmailReplies(mux *http.ServeMux, db *sql.DB) {
 		var in struct {
 			Action, Reason        string
 			VerificationReference string `json:"verification_reference"`
-			Confirmed             bool
+			// NewSenderVerified confirms a sender other than the approved recipient was verified with the client
+			// through a known contact channel; their claimed name is never enough.
+			NewSenderVerified bool `json:"new_sender_verified"`
+			Confirmed         bool
 		}
 		if !decode(w, r, &in) {
 			return
@@ -210,9 +213,9 @@ func registerEmailReplies(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close unavailable.")
 			return
 		}
-		var closeID, requestID, jobID, body, from, link string
+		var closeID, requestID, jobID, body, from, header, link string
 		var authorized bool
-		err = tx.QueryRowContext(r.Context(), `SELECT i.close_id::text,i.request_id::text,COALESCE(q.job_id::text,''),i.body,i.envelope_from,i.addresses_match,l.digest FROM inbound_replies i JOIN work_requests q ON q.id=i.request_id JOIN email_outbox m ON m.id=i.outbox_id JOIN client_request_links l ON l.digest=m.link_digest WHERE i.id::text=$1 AND i.close_id::text=$2 AND i.state='held' FOR UPDATE OF i`, r.PathValue("reply"), r.PathValue("id")).Scan(&closeID, &requestID, &jobID, &body, &from, &authorized, &link)
+		err = tx.QueryRowContext(r.Context(), `SELECT i.close_id::text,i.request_id::text,COALESCE(q.job_id::text,''),i.body,i.envelope_from,i.header_from,i.addresses_match,l.digest FROM inbound_replies i JOIN work_requests q ON q.id=i.request_id JOIN email_outbox m ON m.id=i.outbox_id JOIN client_request_links l ON l.digest=m.link_digest WHERE i.id::text=$1 AND i.close_id::text=$2 AND i.state='held' FOR UPDATE OF i`, r.PathValue("reply"), r.PathValue("id")).Scan(&closeID, &requestID, &jobID, &body, &from, &header, &authorized, &link)
 		if err != nil {
 			problem(w, 409, "Reply already decided or unavailable.")
 			return
@@ -222,8 +225,8 @@ func registerEmailReplies(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Record how you independently verified the sender using a known contact channel.")
 				return
 			}
-			if !authorized {
-				problem(w, 409, "Sender did not match the approved recipient. Keep this reply held and ask the client to use the secure link.")
+			if !authorized && !in.NewSenderVerified {
+				problem(w, 409, "This sender is not the approved recipient. Verify the new sender with the client through a known contact channel and confirm it, or keep this reply held and ask the client to use the secure link.")
 				return
 			}
 			// The first reply needs the request exactly as approved and its work waiting; a later one (after a partial
@@ -245,7 +248,16 @@ func registerEmailReplies(mux *http.ServeMux, db *sql.DB) {
 					return
 				}
 			}
-			status, saveErr := saveWorkReply(r.Context(), tx, closeID, jobID, requestID, body, actor, "Email from "+from+" (reviewed, identity not independently verified)")
+			receivedFrom := replySender(from, " (reviewed, identity not independently verified)")
+			if !authorized {
+				// The message's From is who wrote it; the envelope is named too when it differs.
+				sender := header
+				if !strings.EqualFold(header, from) {
+					sender = header + " via " + from
+				}
+				receivedFrom = replySender(sender, newSenderVerified)
+			}
+			status, saveErr := saveWorkReply(r.Context(), tx, closeID, jobID, requestID, body, actor, receivedFrom)
 			if saveErr != nil {
 				problem(w, status, saveErr.Error())
 				return
@@ -275,4 +287,16 @@ func registerEmailReplies(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]string{"state": map[string]string{"release": "released", "reject": "rejected"}[in.Action]})
 	})
+}
+
+// newSenderVerified ends the sender line of a reply from a new sender the firm verified through a known contact channel.
+const newSenderVerified = " (new sender, firm-verified)"
+
+// replySender is a released email's sender line, shortening the address (never the label) to recordReply's limit.
+func replySender(address, label string) string {
+	for room := 254 - len("Email from ") - len(label); len(address) > room; {
+		_, size := utf8.DecodeLastRuneInString(address)
+		address = address[:len(address)-size]
+	}
+	return "Email from " + address + label
 }
