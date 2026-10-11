@@ -336,6 +336,11 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if pack["source"] != "files" || pack["file"] != "Acme 2027-01.csv" || pack["overall"] != "provisional" || pack["basis"] != "Accrual" || len(net) == 0 || net[len(net)-1].Amount != "500.25" || pack["profit_and_loss_unavailable"] != nil {
 		t.Fatalf("January's pack from its file: %v", pack)
 	}
+	// Published, its export names the file and the date its books are as of.
+	frozen, _ := json.Marshal(pack)
+	if rows, err := publicationRows(publication{Pack: frozen}); err != nil || !strings.Contains(fmt.Sprint(rows), "from the accepted file Acme 2027-01.csv, as of 2027-01-31") {
+		t.Fatalf("a files month's pack is exported: %v %v", rows, err)
+	}
 	// Its files give no statement of cash flows: the firm's, imported, completes it, checked against the file's bank.
 	if flow := pack["cash_flow"].(map[string]any); !strings.Contains(fmt.Sprint(flow["unavailable"]), "import the firm's statement") {
 		t.Fatalf("a files month's pack asks for the firm's statement: %v", flow)
