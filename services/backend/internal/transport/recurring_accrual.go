@@ -55,7 +55,7 @@ func recurringAccrualPreview(ctx context.Context, tx *sql.Tx, closeID, org strin
 		Reports  map[string]json.RawMessage `json:"reports"`
 		SourceID string                     `json:"source_id"`
 	}
-	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload,s.captured_at::text,COALESCE(e.digest,''),COALESCE(x.state='active' AND e.superseded_by IS NULL AND e.extraction_state='ready',false) FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.payload->>'period'=$2 ORDER BY s.id DESC LIMIT 1`, closeID, period).Scan(&snapshot.ID, &raw, &snapshot.CapturedAt, &snapshot.SourceDigest, &snapshot.Active)
+	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload,s.captured_at::text,COALESCE(e.digest,''),COALESCE(x.state='active' AND e.superseded_by IS NULL AND e.extraction_state='ready',false) FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.payload->>'period'=$2 AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.id DESC LIMIT 1`, closeID, period).Scan(&snapshot.ID, &raw, &snapshot.CapturedAt, &snapshot.SourceDigest, &snapshot.Active)
 	if err != nil && err != sql.ErrNoRows {
 		return snapshot, nil, "", "", err
 	}

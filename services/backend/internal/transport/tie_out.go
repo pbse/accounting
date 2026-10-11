@@ -114,13 +114,24 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 	var started, capturedAt, xeroAt time.Time
 	var stale, xeroStale bool
 	var accounts, trialBalance, xeroPayload []byte
-	err := tx.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.started_at,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
+	// The month's books come from its source: the newest capture, or only QuickBooks' or Xero's.
+	source, err := closeBooksSource(ctx, tx, id)
+	if err != nil && err != sql.ErrNoRows {
+		return tieOutcome{}, tieRefusal{503, "The month's books source is unavailable."}
+	}
+	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.started_at,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
  WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, id).Scan(&snapshotID, &realm, &started, &capturedAt, &stale, &accounts, &trialBalance)
 	if err != nil && err != sql.ErrNoRows {
 		return tieOutcome{}, tieRefusal{503, "Period snapshot unavailable."}
 	}
+	if !readsQuickBooks(source) {
+		err = sql.ErrNoRows
+	}
 	var tenant string
-	xeroErr := tx.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,x.state<>'active',s.payload,s.tenant_id FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, id).Scan(&xeroID, &xeroAt, &xeroStale, &xeroPayload, &tenant)
+	xeroErr := sql.ErrNoRows
+	if readsXero(source) {
+		xeroErr = tx.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,x.state<>'active',s.payload,s.tenant_id FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, id).Scan(&xeroID, &xeroAt, &xeroStale, &xeroPayload, &tenant)
+	}
 	if xeroErr != nil && xeroErr != sql.ErrNoRows {
 		return tieOutcome{}, tieRefusal{503, "Xero snapshot unavailable."}
 	}

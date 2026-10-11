@@ -58,11 +58,11 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
  FROM client_closes c
  LEFT JOIN quickbooks_connections x ON x.id=`+quickbooks.ReadingConnection("c.id")+`
  LEFT JOIN LATERAL (SELECT s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR k.state<>'active' AS stale FROM quickbooks_snapshots s JOIN quickbooks_connections k ON k.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
-  WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=COALESCE(x.id,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) q ON true
+  WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=COALESCE(x.id,s.connection_id) AND `+sourceAllows("c.id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) q ON true
  LEFT JOIN LATERAL (SELECT z.state,z.error,z.finished_at FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.connection_id=x.id AND z.period=c.period ORDER BY z.id DESC LIMIT 1) s ON true
  LEFT JOIN LATERAL (SELECT h.state FROM xero_connections h WHERE h.organization_id=c.organization_id AND client_identity(h.organization_id,h.client_entity)=client_identity(c.organization_id,c.entity) AND h.state<>'disconnected'
   ORDER BY h.state='active' DESC,h.id DESC LIMIT 1) h ON true
- LEFT JOIN LATERAL (SELECT s.captured_at,k.state<>'active' AS stale FROM xero_snapshots s JOIN xero_connections k ON k.id=s.connection_id WHERE s.close_id=c.id ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) xs ON true
+ LEFT JOIN LATERAL (SELECT s.captured_at,k.state<>'active' AS stale FROM xero_snapshots s JOIN xero_connections k ON k.id=s.connection_id WHERE s.close_id=c.id AND `+sourceAllows("c.id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) xs ON true
  WHERE c.id=$1`, closeID).Scan(&b.quickbooks, &qbAt, &qbStale, &b.sync, &b.failure, &b.failed, &b.synced, &b.xero, &xeroAt, &xeroStale, &b.ended, &b.daily, &b.elsewhere)
 	b.elsewhere = b.elsewhere && !qbAt.Valid
 	switch {

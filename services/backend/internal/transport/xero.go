@@ -459,7 +459,8 @@ func latestXeroBooks(ctx context.Context, db *sql.DB, closeID string) (*xeroBook
 	var payload []byte
 	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period
  JOIN xero_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state<>'disconnected'
- WHERE s.close_id::text=$1 AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs q JOIN evidence e ON e.id=q.evidence_id AND e.close_id=q.close_id AND e.superseded_by IS NULL WHERE q.close_id=s.close_id AND q.state IN ('completed','unchanged') AND q.finished_at>s.captured_at AND q.connection_id=`+quickbooks.ReadingConnection("s.close_id")+`)
+ WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "xero")+`
+  AND (NOT `+sourceAllows("s.close_id", "quickbooks")+` OR NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs q JOIN evidence e ON e.id=q.evidence_id AND e.close_id=q.close_id AND e.superseded_by IS NULL WHERE q.close_id=s.close_id AND q.state IN ('completed','unchanged') AND q.finished_at>s.captured_at AND q.connection_id=`+quickbooks.ReadingConnection("s.close_id")+`))
  ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&b.ID, &b.Tenant, &captured, &payload)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -557,8 +558,8 @@ func nativeReconciliation(ctx context.Context, q interface {
 	var quickbooksAt, xeroAt sql.NullTime
 	var snapshotID string
 	var payload []byte
-	if err := q.QueryRowContext(ctx, `SELECT (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+`),
- x.captured_at,COALESCE(x.id::text,''),x.payload FROM client_closes c LEFT JOIN LATERAL (SELECT s.id,s.captured_at,s.payload FROM xero_snapshots s JOIN xero_connections k ON k.id=s.connection_id AND k.state='active' WHERE s.close_id=c.id AND s.period=c.period ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) x ON true WHERE c.id::text=$1`, closeID).Scan(&quickbooksAt, &xeroAt, &snapshotID, &payload); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+`),
+ x.captured_at,COALESCE(x.id::text,''),x.payload FROM client_closes c LEFT JOIN LATERAL (SELECT s.id,s.captured_at,s.payload FROM xero_snapshots s JOIN xero_connections k ON k.id=s.connection_id AND k.state='active' WHERE s.close_id=c.id AND s.period=c.period AND `+sourceAllows("c.id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) x ON true WHERE c.id::text=$1`, closeID).Scan(&quickbooksAt, &xeroAt, &snapshotID, &payload); err != nil {
 		return nil, err
 	}
 	if !xeroAt.Valid || quickbooksAt.Valid && !xeroAt.Time.After(quickbooksAt.Time) {

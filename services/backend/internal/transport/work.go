@@ -847,7 +847,8 @@ func ledgerDiffers(r *http.Request, db *sql.DB, search string) ([]map[string]any
 	type candidate struct{ id, entity, period string }
 	var closes []candidate
 	rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period FROM client_closes c
- CROSS JOIN LATERAL (SELECT GREATEST((SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id)),(SELECT max(captured_at) FROM xero_snapshots WHERE close_id=c.id)) AS captured) l
+ CROSS JOIN LATERAL (SELECT GREATEST((SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id) AND `+sourceAllows("c.id", "quickbooks")+`),
+  (SELECT max(captured_at) FROM xero_snapshots WHERE close_id=c.id AND `+sourceAllows("c.id", "xero")+`)) AS captured) l
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4)
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
  AND EXISTS(SELECT 1 FROM workpaper_review_state w JOIN workpaper_reviews v ON v.id::text=w.review_id WHERE w.close_id=c.id AND w.review_state='approved' AND v.created_at<l.captured)

@@ -43,7 +43,7 @@ func ValidateRecurringAccrual(ctx context.Context, tx *sql.Tx, p Plan, targetID,
 		return fmt.Errorf("Current incurred-service and period-ledger evidence are required")
 	}
 	var latestLedger string
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT CASE WHEN x.state='active' THEN s.payload->>'source_id' ELSE '' END FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 AND s.payload->>'period'=$2 ORDER BY s.id DESC LIMIT 1),'')`, targetID, period).Scan(&latestLedger)
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT CASE WHEN x.state='active' THEN s.payload->>'source_id' ELSE '' END FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 AND s.payload->>'period'=$2 AND COALESCE((SELECT books_source(sc.organization_id,sc.entity,sc.period) FROM client_closes sc WHERE sc.id=s.close_id),'newest') IN ('newest','quickbooks') ORDER BY s.id DESC LIMIT 1),'')`, targetID, period).Scan(&latestLedger)
 	if err != nil || latestLedger != p.Sources[1].ID {
 		return fmt.Errorf("Current period ledger capture changed; refresh the recurring accrual")
 	}
