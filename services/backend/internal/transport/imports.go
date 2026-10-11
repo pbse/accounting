@@ -139,6 +139,102 @@ func importOwner(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, bo
 	return name, true
 }
 
+// parseKey names what decides how an import is read for a request: the choice asked for, its own confirmed layout and
+// the client's last one, by their ids. Its rows read under the same key are the same rows.
+func parseKey(asked csvChoice, confirmed, saved *confirmedRead) string {
+	key := asked.Encoding + "|" + asked.Delimiter
+	if confirmed != nil {
+		key += "|c" + confirmed.ID
+	}
+	if saved != nil {
+		key += "|s" + saved.ID
+	}
+	return key
+}
+
+// storeImportPages keeps the file's tables as read under key, two hundred rows to a chunk, unless they are kept already.
+func storeImportPages(ctx context.Context, db *sql.DB, org, id, key string, file bookfiles.File) error {
+	type chunk struct {
+		Position      int             `json:"position"`
+		Table         string          `json:"table_name"`
+		Hidden        bool            `json:"hidden"`
+		HiddenColumns []int           `json:"hidden_columns"`
+		Total         int             `json:"total"`
+		Chunk         int             `json:"chunk"`
+		First         int             `json:"first_row"`
+		Rows          []bookfiles.Row `json:"rows"`
+	}
+	var kept bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM books_import_pages WHERE import_id::text=$1 AND parse=$2)`, id, key).Scan(&kept); err != nil || kept {
+		return err
+	}
+	var chunks []chunk
+	for position, t := range file.Tables {
+		hidden := t.HiddenColumns
+		if hidden == nil {
+			hidden = []int{}
+		}
+		for start := 0; start == 0 || start < len(t.Rows); start += previewRows {
+			rows := t.Rows[min(start, len(t.Rows)):min(start+previewRows, len(t.Rows))]
+			first := 0
+			if len(rows) > 0 {
+				first = rows[0].Number
+			}
+			chunks = append(chunks, chunk{position, t.Name, t.Hidden, hidden, len(t.Rows), start / previewRows, first, rows})
+		}
+	}
+	raw, err := json.Marshal(chunks)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows)
+ SELECT $1,$2::bigint,$3,c.position,c.table_name,c.hidden,c.hidden_columns,c.total,c.chunk,c.first_row,c.rows FROM jsonb_to_recordset($4::jsonb)
+  AS c(position int,table_name text,hidden boolean,hidden_columns jsonb,total int,chunk int,first_row int,rows jsonb)
+ WHERE NOT EXISTS(SELECT 1 FROM books_import_pages p WHERE p.import_id=$2::bigint AND p.parse=$3) ON CONFLICT DO NOTHING`, org, id, key, string(raw))
+	return err
+}
+
+// storedImportPage is each table's rows from row number from, up to two hundred, read under key from the chunks kept,
+// and false when none are kept.
+func storedImportPage(ctx context.Context, db *sql.DB, id, key string, from int) ([]previewTable, bool, error) {
+	rows, err := db.QueryContext(ctx, `SELECT p.position,p.table_name,p.hidden,p.hidden_columns,p.total,p.chunk,p.rows FROM books_import_pages p
+ WHERE p.import_id::text=$1 AND p.parse=$2 AND p.chunk BETWEEN COALESCE((SELECT max(q.chunk) FROM books_import_pages q WHERE q.import_id=p.import_id AND q.parse=p.parse AND q.position=p.position AND q.first_row<=$3),0)
+  AND COALESCE((SELECT max(q.chunk) FROM books_import_pages q WHERE q.import_id=p.import_id AND q.parse=p.parse AND q.position=p.position AND q.first_row<=$3),0)+1
+ ORDER BY p.position,p.chunk`, id, key, from)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var tables []previewTable
+	position := -1
+	for rows.Next() {
+		var at, total, chunk int
+		var name string
+		var hidden bool
+		var hiddenColumns, raw []byte
+		if err = rows.Scan(&at, &name, &hidden, &hiddenColumns, &total, &chunk, &raw); err != nil {
+			return nil, false, err
+		}
+		if at != position {
+			position = at
+			t := previewTable{Name: name, Hidden: hidden, Rows: []bookfiles.Row{}}
+			json.Unmarshal(hiddenColumns, &t.HiddenColumns)
+			tables = append(tables, t)
+		}
+		t := &tables[len(tables)-1]
+		var chunkRows []bookfiles.Row
+		json.Unmarshal(raw, &chunkRows)
+		for i, row := range chunkRows {
+			if row.Number < from || len(t.Rows) == previewRows {
+				continue
+			}
+			t.Rows = append(t.Rows, row)
+			t.More = total - (chunk*previewRows + i + 1)
+		}
+	}
+	return tables, len(tables) > 0, rows.Err()
+}
+
 // readImportAs reads import id the way a person sees it: a CSV as asked, else as its own layout was confirmed, else as
 // the client's last file was confirmed (its exports keep their format) when that reads it, else as the reader reads it.
 func readImportAs(ctx context.Context, q rowReader, org, name, id string, asked csvChoice, confirmed, saved *confirmedRead) (importSummary, bookfiles.File, error) {
@@ -486,7 +582,29 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		summary, file, err := readImportAs(r.Context(), db, org, name, id, csvChoice{Encoding: r.URL.Query().Get("encoding"), Delimiter: r.URL.Query().Get("delimiter")}, confirmed, saved)
+		asked := csvChoice{Encoding: r.URL.Query().Get("encoding"), Delimiter: r.URL.Query().Get("delimiter")}
+		key := parseKey(asked, confirmed, saved)
+		// Rows come in pages: from the first, or from the row a person asks for (?from=), so any row can be seen and
+		// marked. A later page is read from the rows kept the first time the file was read this way.
+		from := 1
+		if f := r.URL.Query().Get("from"); f != "" {
+			if from, err = strconv.Atoi(f); err != nil || from < 1 {
+				problem(w, 422, "Say which row to show from, as a number.")
+				return
+			}
+		}
+		if from > 1 {
+			tables, kept, err := storedImportPage(r.Context(), db, id, key, from)
+			if err != nil {
+				problem(w, 503, "The file's rows are unavailable.")
+				return
+			}
+			if kept {
+				jsonReply(w, 200, map[string]any{"tables": tables})
+				return
+			}
+		}
+		summary, file, err := readImportAs(r.Context(), db, org, name, id, asked, confirmed, saved)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
 			return
@@ -508,14 +626,9 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			confirmed = &brief
 		}
 		summary.Confirmed = confirmed
-		// Rows come in pages: from the first, or from the row a person asks for (?from=), so any row can be seen and
-		// marked.
-		from := 1
-		if f := r.URL.Query().Get("from"); f != "" {
-			if from, err = strconv.Atoi(f); err != nil || from < 1 {
-				problem(w, 422, "Say which row to show from, as a number.")
-				return
-			}
+		if err = storeImportPages(r.Context(), db, org, id, key, file); err != nil {
+			problem(w, 503, "The file's rows could not be kept.")
+			return
 		}
 		tables := []previewTable{}
 		for _, t := range file.Tables {

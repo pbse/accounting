@@ -198,6 +198,12 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	if first := page(""); len(first["rows"].([]any)) != 200 || first["more"] != 50.0 {
 		t.Fatalf("the first page: %d rows, %v more", len(first["rows"].([]any)), first["more"])
 	}
+	// The first read keeps the rows in chunks, and later pages are read from them.
+	var chunks int
+	must(db.QueryRow(`SELECT count(*) FROM books_import_pages WHERE import_id::text=$1`, big).Scan(&chunks))
+	if chunks != 2 {
+		t.Fatalf("the long file's rows are kept in two chunks: %d", chunks)
+	}
 	if later := page("&from=240"); len(later["rows"].([]any)) != 11 || later["rows"].([]any)[0].(map[string]any)["number"] != 240.0 || later["more"] != 0.0 {
 		t.Fatalf("rows from 240: %v", later)
 	}
