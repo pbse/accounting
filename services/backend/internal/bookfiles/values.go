@@ -31,6 +31,10 @@ type Amount struct {
 	Mark string
 }
 
+// maxDigits bounds an amount's digits and a stored number's exponent: no ledger amount has more, and a cell claiming
+// one is refused before its value is built.
+const maxDigits = 30
+
 // ErrNotAmount is a value that is not an amount in the stated style.
 var ErrNotAmount = errors.New("not an amount")
 
@@ -95,7 +99,7 @@ func ParseAmount(text string, style NumberStyle) (Amount, error) {
 		grouped = commaGrouped
 	}
 	m := grouped.FindStringSubmatch(s)
-	if m == nil || (m[1] == "" && m[2] == "") {
+	if m == nil || (m[1] == "" && m[2] == "") || len(m[1])+len(m[2]) > maxDigits+10 {
 		return Amount{}, ErrNotAmount
 	}
 	whole, fraction := strings.NewReplacer(",", "", ".", "", " ", "", "'", "").Replace(m[1]), m[2]
@@ -137,8 +141,14 @@ func cellAmount(c Cell, style NumberStyle) (Amount, error) {
 	}
 	text := strings.TrimSpace(c.Value)
 	m := storedNumber.FindStringSubmatch(text)
-	if m == nil {
+	if m == nil || len(m[1])+len(m[2]) > maxDigits {
 		return Amount{}, ErrNotAmount
+	}
+	// An exponent no amount has (1e1000000000) is refused before it is expanded.
+	if m[3] != "" {
+		if exponent, err := strconv.Atoi(m[3]); err != nil || exponent > maxDigits || exponent < -maxDigits {
+			return Amount{}, ErrNotAmount
+		}
 	}
 	value, ok := new(big.Rat).SetString(text)
 	if !ok {

@@ -608,3 +608,18 @@ func TestScopeColumnsAndUnreadComparatives(t *testing.T) {
 		t.Fatalf("an unread comparative holds nothing else: %+v", reading)
 	}
 }
+
+// A number no amount has is refused before it is built.
+func TestHugeNumbersAreRefused(t *testing.T) {
+	for _, v := range []string{"1e1000000000", "1E-1000000000", strings.Repeat("9", 100)} {
+		if _, err := cellAmount(Cell{Kind: Number, Value: v}, NumberStyle{Scale: 1}); err == nil {
+			t.Fatalf("%s is refused", v[:min(len(v), 20)])
+		}
+	}
+	if _, err := ParseAmount(strings.Repeat("9", 100), NumberStyle{Scale: 1}); err == nil {
+		t.Fatal("a hundred digits are refused")
+	}
+	if a, err := cellAmount(Cell{Kind: Number, Value: "1.5E+09"}, NumberStyle{Scale: 1}); err != nil || exact(a.Value) != "1500000000" {
+		t.Fatalf("an ordinary exponent: %v %v", a, err)
+	}
+}
