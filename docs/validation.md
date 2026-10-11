@@ -4610,3 +4610,29 @@ Tests and checks, on local PostgreSQL:
 - The layout check passes: 95 page views on a fresh migrated database, in Edge.
 - Screenshots of Documents with four documents: one read, one awaiting a decision, two in preparation.
 
+## 2026-10-11 — Close page Requests from the canvas (B02–B10)
+
+Requests is the fifth tab, board 5. Before this, the tab only edited drafts; sent requests and their replies lived in coverage and in each document's work.
+- **API:** a new `GET /v1/closes/{id}/requests/approved` lists every approved request of the close. Each has its body, recipient, approval time and when it reached the client. It also has its latest email outcome, its answer (in part or in full), whether a reply is held, its latest link, its reminders and the work it is handled in. It reuses the SQL the client page and coverage already use.
+- **Header:**
+  - The tab's lede: a held reply, requests not with the client, how many wait, a drafted request, or every one answered or withdrawn.
+  - A fact line with the recipients and the longest wait.
+  - The ⋯ menu: new request and email replies.
+- **Body:**
+  - The decisions on Requests.
+  - One table: the agent's draft first, then each request with its title, recipient, sent date and status, a status filter and New request. Rows open the request's work.
+  - The rail: held, not with the client, waiting, longest wait.
+- **Status rules:**
+  - A held reply shows even after a link answer.
+  - Sending, not sent and not delivered are "not with the client", never a wait on it.
+  - An expired link shows even on a partly answered request.
+  - Withdrawn is never "answered".
+- **Views:** drafting a request (the existing editor with the agent's draft) and email replies, which opens when shown. `#client-request` opens the draft view.
+- **Not shown:** the canvas's contact name and role, usual reply time and "stop the reminder". No contact or reply-time record exists, and reminders are each approved by a person.
+
+Tests and checks, on local PostgreSQL:
+- `TestTheGoalDraftsOneClientRequestAPersonApproves` checks that the approved request is listed: not yet sent, unanswered, handled in its document's work.
+- `tsc` passes.
+- The layout check passes: 95 page views on a fresh migrated database, in Edge.
+- A screenshot of Requests with one request waiting three days and one approved, not sent.
+

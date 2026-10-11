@@ -120,7 +120,8 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
         instructions: [`/${id}/preparations`, `/${id}/jobs`],
       } as Record<string, string[]>
     )[url.searchParams.get("view") ?? ""] ?? [`/${id}/evidence?checks=1`, `/${id}/forwarding`, `/${id}/preparations`],
-    requests: [`/${id}/requests`, `/${id}/email-replies`],
+    // Requests reads what its open view shows; the list reads the approved requests and the agent's draft.
+    requests: ({ draft: [`/${id}/requests`, `/${id}/requests/proposed`], replies: [`/${id}/email-replies`] } as Record<string, string[]>)[url.searchParams.get("view") ?? ""] ?? [`/${id}/requests/approved`, `/${id}/requests/proposed`],
     reports: [`/${id}/management-pack`, `/${id}/management-pack/publications`, `/${id}/budget`],
     signoff: [`/${id}/takeover-setup`, `/${id}/opening-baseline`, `/${id}/readiness`, `/${id}/effort`],
     settings: [`/${id}/memory`, `/${id}/replay`],

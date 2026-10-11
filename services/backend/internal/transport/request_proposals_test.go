@@ -110,4 +110,14 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 		t.Fatalf("an approved draft is no longer proposed: %+v", proposed.Proposal)
 	}
 	call("POST", "/v1/closes/"+closeID+"/requests/"+opened.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true}, 409)
+	// The close's Requests lists it: approved, not yet sent, unanswered, handled in the document's work.
+	var approved []struct {
+		ID, Recipient, Email, Answer, Job string
+		SentAt                            *string `json:"sent_at"`
+		Held                              bool
+	}
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/requests/approved", nil, 200), &approved))
+	if len(approved) != 1 || approved[0].ID != opened.ID || approved[0].Recipient != "owner@example.test" || approved[0].SentAt != nil || approved[0].Email != "" || approved[0].Answer != "" || approved[0].Held || approved[0].Job != job {
+		t.Fatalf("an approved request is listed with where it stands: %+v", approved)
+	}
 }
