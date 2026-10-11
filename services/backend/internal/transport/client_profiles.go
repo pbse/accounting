@@ -160,10 +160,13 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// profileChangeHolds is the months of the client, from month from, that are signed off or hold an approved workpaper and
-// whose currency or fiscal year the profile (currency, start) would change.
+// profileChangeHolds is the months of the client the profile (currency, start) from month from would govern, up to the
+// next later profile, that are signed off or hold an approved workpaper and whose currency or fiscal year it would
+// change.
 func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, currency string, start int) ([]string, error) {
+	// The new profile governs months from its own up to the next later profile's, which keeps the months after it.
 	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
+ AND c.period<COALESCE((SELECT min(f.effective_from) FROM client_profiles f WHERE f.organization_id=$1 AND client_identity(f.organization_id,f.client_entity)=client_identity($1,$2) AND f.effective_from>$3),'9999-99')
  AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off' OR EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'))
  ORDER BY c.period`, org, name, from)
 	if err != nil {

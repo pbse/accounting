@@ -166,4 +166,13 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 		t.Fatalf("a differing fiscal year with the currency unread: %+v", p)
 	}
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Nobody Ltd", "currency": "GBP", "fiscal_year_start": 4, "effective_from": "2026-04", "reason": "x", "rev": ""}, 404)
+	// September is signed off under CAD: a change from February that the September profile still overrides there is
+	// not held by it.
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, september)
+	must(err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, september) })
+	_, err = db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, august)
+	must(err)
+	newest := call("user_a", partner, "GET", "/v1/closes/client?name=Maple%20Co", nil, 200)["profiles"].([]any)[0].(map[string]any)["id"]
+	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Maple Co", "currency": "GBP", "fiscal_year_start": 1, "effective_from": "2026-02", "reason": "Earlier months were in pounds", "rev": newest}, 200)
 }
