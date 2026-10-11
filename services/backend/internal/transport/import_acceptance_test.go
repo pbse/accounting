@@ -3,6 +3,7 @@ package transport
 import (
 	"archive/zip"
 	"bytes"
+	"close.local/backend/internal/bookfiles"
 	"close.local/backend/internal/preparation"
 	"crypto/rand"
 	"database/sql"
@@ -594,12 +595,19 @@ func TestAFilesMonthsBalancesAreReviewed(t *testing.T) {
 
 // A file with openings rolls from the prior accepted month account by account: an opening column, or the month-end
 // balance less the month's movement. A difference is unexplained and named; at the fiscal year's start the profit and
-// loss opens at zero, the year's result carried into retained earnings.
+// loss opens at zero, the year's result carried into retained earnings. An amount not given exactly is never zero.
 func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	account := func(number, name, balance, movement, class string) fileAccount {
 		return fileAccount{Key: "n:" + number, Number: number, Name: name, Balance: balance, Movement: movement, Mapped: &mappedAccount{Class: class}}
 	}
-	s := fileState{prior: "2026-11", priorBalances: map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"},
+	columns := func(meanings ...bookfiles.Meaning) *confirmedRead {
+		read := &confirmedRead{Layout: bookfiles.Layout{Columns: map[int]bookfiles.Meaning{0: bookfiles.AccountNumber, 1: bookfiles.Balance}}}
+		for i, m := range meanings {
+			read.Layout.Columns[2+i] = m
+		}
+		return read
+	}
+	s := fileState{layout: columns(bookfiles.Movement), prior: "2026-11", priorBalances: map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"},
 		classes: map[string]string{"n:1000": "Asset", "n:3000": "Equity", "n:4000": "Revenue", "n:6000": "Expense"}}
 	s.reading = fileReading{Period: "2026-12", Accounts: []fileAccount{
 		account("1000", "Business Checking", "1200", "200", "Asset"),
@@ -614,6 +622,11 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	if c := rollForward(s); c.State != "holds" || c.Detail != "1 account does not roll from November 2026's accepted books, unexplained: 1000 Business Checking opens at 1050.00, closed at 1000.00 (50.00)." {
 		t.Fatalf("a month that does not roll: %+v", c)
 	}
+	// A movement the file does not give exactly is never taken as zero.
+	s.reading.Accounts[0].Movement, s.reading.Accounts[0].MovementHeld = "", "unreadable"
+	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking: unreadable") {
+		t.Fatalf("an unreadable movement: %+v", c)
+	}
 	// January, the fiscal year's first month: the profit and loss opens at zero, last year's result in retained earnings.
 	s.fiscalStart, s.prior, s.reading.Period = 1, "2026-12", "2027-01"
 	s.priorBalances = map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-800", "n:6000": "500"}
@@ -626,12 +639,11 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	if c := rollForward(s); c.State != "passes" || !strings.Contains(c.Detail, "the year's result carried into retained earnings") {
 		t.Fatalf("the year's closing entries are modelled: %+v", c)
 	}
-	// An opening column with a movement column: the opening and the movement make the balance, and the opening rolls.
-	s.reading.Accounts[0].Opening = "1000"
-	for i := range s.reading.Accounts[1:] {
-		s.reading.Accounts[i+1].Opening = "0"
+	// Opening and movement columns: the opening and the movement make the balance, a blank movement being zero.
+	s.layout = columns(bookfiles.Opening, bookfiles.Movement)
+	for i, o := range []string{"1000", "-1300", "0", "0"} {
+		s.reading.Accounts[i].Opening = o
 	}
-	s.reading.Accounts[1].Opening = "-1300"
 	if c := rollForward(s); c.State != "passes" {
 		t.Fatalf("openings that roll and make the balances: %+v", c)
 	}
@@ -639,8 +651,9 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking opens at 1000.00 and moves by 200.00, but closes at 1250.00") {
 		t.Fatalf("an opening and movement that do not make the balance: %+v", c)
 	}
-	// A formula's opening holds until a recalculated copy is attested; with no prior month, nothing is checked.
-	s.reading.Accounts[0].Balance, s.reading.Accounts[0].OpeningHeld = "1200", "formula"
+	s.reading.Accounts[0].Balance = "1200"
+	// A formula's opening holds until a recalculated copy is attested.
+	s.reading.Accounts[0].OpeningHeld = "formula"
 	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking: formula") {
 		t.Fatalf("a formula's opening: %+v", c)
 	}
@@ -648,29 +661,27 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	if c := rollForward(s); c.State != "passes" {
 		t.Fatalf("a recalculated copy's opening: %+v", c)
 	}
-	// A movement the file does not give exactly is never taken as zero.
-	movement := s.reading.Accounts[2].Movement
-	s.reading.Accounts[2].Movement, s.reading.Accounts[2].MovementHeld = "", "unreadable"
-	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "4000 Sales: unreadable") {
-		t.Fatalf("an unreadable movement: %+v", c)
-	}
-	s.reading.Accounts[2].Movement, s.reading.Accounts[2].MovementHeld = movement, ""
-	s.reading.Accounts[0].OpeningHeld = "rounded"
+	// With no prior month the openings are not compared, but the file's own figures must agree: an amount that cannot be
+	// read, or an opening and movement that do not make the balance, hold.
 	s.prior = ""
 	if c := rollForward(s); c.State != "note" {
 		t.Fatalf("no prior month to roll from: %+v", c)
 	}
-	// With no prior month, the file's own openings and movements must still make its balances.
-	s.reading.Accounts[0].OpeningHeld, s.reading.Accounts[0].Balance = "", "1250"
-	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking opens at 1000.00 and moves by 200.00, but closes at 1250.00") {
-		t.Fatalf("a first month's own arithmetic: %+v", c)
+	s.reading.Accounts[0].OpeningHeld = "rounded"
+	if c := rollForward(s); c.State != "holds" {
+		t.Fatalf("a first month whose figures cannot be checked: %+v", c)
 	}
-	for i := range s.reading.Accounts {
-		s.reading.Accounts[i].Opening = ""
+	s.reading.Accounts[0].OpeningHeld, s.reading.Accounts[0].Movement = "", ""
+	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking opens at 1000.00 and moves by 0.00, but closes at 1200.00") {
+		t.Fatalf("a blank movement is zero in a first month's arithmetic: %+v", c)
 	}
-	for i := range s.reading.Accounts {
-		s.reading.Accounts[i].Movement = ""
+	// With only an opening column, a first month's openings are a note, whatever they are.
+	s.layout = columns(bookfiles.Opening)
+	s.reading.Accounts[0].OpeningHeld = "rounded"
+	if c := rollForward(s); c.State != "note" {
+		t.Fatalf("a first month with openings alone: %+v", c)
 	}
+	s.layout = columns()
 	if c := rollForward(s); c.Key != "" {
 		t.Fatalf("a file without openings has no roll-forward: %+v", c)
 	}
