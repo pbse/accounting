@@ -220,6 +220,9 @@ type Line struct {
 	Hidden bool      `json:"hidden,omitempty"`
 	// Dimension is the department, location or class the row's balance belongs to, when the layout reads one.
 	Dimension string `json:"dimension,omitempty"`
+	// Formulas are the amounts read from a formula's stored result, by meaning: the last calculation, which may not be
+	// the current one (docs/books-sources.md, Formulas).
+	Formulas []Meaning `json:"formulas,omitempty"`
 }
 
 // Label is what names the row: its account name, else its account number (a Trial Balance with codes alone writes its
@@ -242,6 +245,9 @@ type Reading struct {
 	Problems []string `json:"problems"`
 	// Notes are how the reader read what it could have read another way, for a person to confirm.
 	Notes []string `json:"notes"`
+	// FormulasMarked says each line marks the amounts read from formula results: a reading saved before lines did says
+	// nothing of its formulas.
+	FormulasMarked bool `json:"formulas_marked"`
 }
 
 var totalName = regexp.MustCompile(`(?i)^(grand\s+|sub[\s-]?)?totals?\b|\b(sub[\s-]?)?totals?$`)
@@ -384,7 +390,7 @@ func coveredFrom(lines []Line, i int) int {
 // then left out of the balances, and every amount is read exactly in the layout's style. Nothing is dropped: a value
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
-	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}}
+	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}, FormulasMarked: true}
 	// A layout reads the sheet it was confirmed for: another with the same columns is another sheet's figures.
 	if l.Table != "" && t.Name != l.Table {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("The layout reads the sheet %q, not %q", l.Table, t.Name))
@@ -487,6 +493,9 @@ func (l Layout) Read(t Table) Reading {
 					line.Dimension = v
 				}
 			default:
+				if c.Formula != "" {
+					line.Formulas = append(line.Formulas, meaning)
+				}
 				a, err := cellAmount(c, l.Style)
 				if err != nil && (meaning == Debit || meaning == Credit || meaning == Balance) {
 					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is not an amount", c.Ref, c.Value))

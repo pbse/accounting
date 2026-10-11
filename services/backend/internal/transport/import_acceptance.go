@@ -51,6 +51,7 @@ type fileAcceptance struct {
 // reading), the client's approved basis and currency for the month, the map as it stands, and the accounts with a
 // balance in the prior month's accepted books that this reading does not name.
 type fileState struct {
+	format   string
 	reading  fileReading
 	layout   *confirmedRead
 	brief    *confirmedRead
@@ -92,6 +93,9 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 		return s, found, err
 	}
 	s.reading = reading
+	if s.format, err = importFormat(ctx, q, org, name, id); err != nil {
+		return s, false, err
+	}
 	if s.layout, err = latestLayout(ctx, q, org, name, id); err != nil {
 		return s, false, err
 	}
@@ -246,6 +250,26 @@ func fileChecks(s fileState, explained string) []importCheck {
 		add(importCheck{Key: "currency", Title: "In the client's currency, to the cent", State: "holds", Detail: "Some amounts are not exact to the cent: the file may be rounded.", Holds: "Its use as the month's books."})
 	default:
 		add(importCheck{Key: "currency", Title: "In the client's currency, to the cent", State: "passes", Detail: "In " + got + ", every amount exact to the cent."})
+	}
+	// Formula amounts are the last calculation, which the reader does not repeat: a values-only export has none, and a
+	// reviewer's attestation of a recalculated copy releases them.
+	var formulas []string
+	for _, a := range s.reading.Accounts {
+		if a.Formula {
+			formulas = append(formulas, strings.TrimSpace(a.Number+" "+a.Name))
+		}
+	}
+	switch {
+	case s.format != "csv" && !s.brief.Reading.FormulasMarked:
+		add(importCheck{Key: "formulas", Title: "Amounts are stored values", State: "holds", Detail: "This workbook's reading was confirmed before the reader marked formula results: confirm its layout again to see which amounts are formulas.",
+			Holds: "Its use as the month's books, until its layout is confirmed again."})
+	case len(formulas) == 0:
+		add(importCheck{Key: "formulas", Title: "Amounts are stored values", State: "passes", Detail: "No month-end amount is a formula's result."})
+	case s.scope != nil && s.scope.Recalculated:
+		add(importCheck{Key: "formulas", Title: "Amounts are stored values", State: "note", Detail: fmt.Sprintf("%d account%s' amounts are formula results, released by the reviewer's attestation that the file is a recalculated copy.", len(formulas), suffix(len(formulas))), Items: formulas})
+	default:
+		add(importCheck{Key: "formulas", Title: "Amounts are stored values", State: "holds", Detail: fmt.Sprintf("%d account%s' amounts are formula results, the workbook's last calculation, which the reader does not repeat.", len(formulas), suffix(len(formulas))),
+			Holds: "Its use as the month's books, until a values-only export from the ledger replaces it, or a reviewer attests, with its scope, that it is a copy recalculated after every linked workbook was refreshed.", Items: formulas})
 	}
 	switch {
 	case s.scope == nil:

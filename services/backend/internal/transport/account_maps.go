@@ -35,6 +35,16 @@ type mappedAccount struct {
 	Readings []string `json:"readings,omitempty"`
 }
 
+// monthEndFormula says whether a line's month-end balance was read from a formula's stored result.
+func monthEndFormula(l bookfiles.Line) bool {
+	for _, m := range l.Formulas {
+		if m == bookfiles.Debit || m == bookfiles.Credit || m == bookfiles.Balance {
+			return true
+		}
+	}
+	return false
+}
+
 // sameMapping says whether two entries map an account alike, whichever readings they were confirmed on.
 func sameMapping(a, b mappedAccount) bool {
 	return a.Class == b.Class && a.Type == b.Type && a.Name == b.Name && a.Number == b.Number
@@ -76,8 +86,10 @@ type fileAccount struct {
 	Ref      string             `json:"ref"`
 	Proposal bookfiles.Proposal `json:"proposal"`
 	Mapped   *mappedAccount     `json:"mapped,omitempty"`
-	// Cents says every amount the account was read from is exact to the cent.
-	Cents bool `json:"-"`
+	// Cents says every amount the account was read from is exact to the cent, and Formula that one of its month-end
+	// amounts is a formula's stored result.
+	Cents   bool `json:"-"`
+	Formula bool `json:"-"`
 }
 
 // latestAccountMap is client name's map in force, or nil.
@@ -172,10 +184,11 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 			if at, ok := seen[key]; ok {
 				accounts[at].Balance = addAmounts(accounts[at].Balance, l.Amount)
 				accounts[at].Cents = accounts[at].Cents && l.Cents
+				accounts[at].Formula = accounts[at].Formula || monthEndFormula(l)
 				continue
 			}
 			seen[key] = len(accounts)
-			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents}
+			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents, Formula: monthEndFormula(l)}
 			if current != nil {
 				if m, ok := current.Accounts[key]; ok {
 					a.Mapped = &m

@@ -10,10 +10,23 @@ import { workspaceRequest } from "../closes/workspace";
 // the authority; a file on another basis is said to hold what is built on it.
 
 type Basis = "accrual" | "cash" | "modified_cash";
-type Scope = { id: string; layout_id: string; book: string; filters: string; complete: boolean; missing: string; basis: Basis; reason: string; actor: string; at: string };
+type Scope = {
+  id: string;
+  layout_id: string;
+  book: string;
+  filters: string;
+  complete: boolean;
+  missing: string;
+  basis: Basis;
+  recalculated: boolean;
+  reason: string;
+  actor: string;
+  at: string;
+};
 type ScopeRead = {
   scope: Scope | null;
   confirmed: boolean;
+  formulas: number;
   current: boolean;
   approved_basis: { method: Basis; scope: "client" | "firm" } | null;
   note: string;
@@ -39,6 +52,7 @@ function ScopeForm({ client, id, data, onClose }: { client: string; id: string; 
   const [complete, setComplete] = useState(was?.complete ?? true);
   const [missing, setMissing] = useState(was?.missing ?? "");
   const [basis, setBasis] = useState<Basis | "">(was?.basis ?? "");
+  const [recalculated, setRecalculated] = useState(was?.recalculated ?? false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -47,7 +61,7 @@ function ScopeForm({ client, id, data, onClose }: { client: string; id: string; 
     setBusy(true);
     setError("");
     try {
-      await workspaceRequest(scopePath(client, id), { book, filters, complete, missing, basis, reason: reason.trim() });
+      await workspaceRequest(scopePath(client, id), { book, filters, complete, missing, basis, recalculated: data.formulas > 0 && recalculated, reason: reason.trim() });
       await queryClient.invalidateQueries({ queryKey: ["workspace"] });
     } catch (err) {
       setError(err instanceof Error ? err.message : "The scope could not be attested.");
@@ -63,7 +77,8 @@ function ScopeForm({ client, id, data, onClose }: { client: string; id: string; 
       ) : was ? (
         <p>
           Attested {dates.dayMonth(was.at)} by {was.actor}: {was.book || "the books"}
-          {was.filters ? `, filtered to ${was.filters}` : ", unfiltered"}, {was.complete ? "the client's complete books for the month" : `leaving out ${was.missing}`}, on a {basisLabels[was.basis].toLowerCase()} basis.{" "}
+          {was.filters ? `, filtered to ${was.filters}` : ", unfiltered"}, {was.complete ? "the client's complete books for the month" : `leaving out ${was.missing}`}, {was.basis === "accrual" ? "on an accrual basis" : `on a ${basisLabels[was.basis].toLowerCase()} basis`}
+          {was.recalculated ? ", a recalculated copy." : "."}{" "}
           {!data.current && <strong>That was of an earlier reading: attest it again for this one.</strong>}
         </p>
       ) : (
@@ -92,6 +107,12 @@ function ScopeForm({ client, id, data, onClose }: { client: string; id: string; 
             <label>
               What it leaves out
               <input value={missing} maxLength={500} onChange={(e) => setMissing(e.target.value)} />
+            </label>
+          )}
+          {data.formulas > 0 && (
+            <label className="checkbox-label">
+              <input type="checkbox" checked={recalculated} onChange={(e) => setRecalculated(e.target.checked)} /> {data.formulas} month-end amount{data.formulas === 1 ? " is a formula's" : "s are formulas'"}{" "}
+              stored result. This is a copy recalculated in a spreadsheet application after every linked workbook was refreshed from its confirmed version, its input cells matching the original's
             </label>
           )}
           <label>
