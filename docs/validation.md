@@ -4136,7 +4136,9 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - a change derived from an account row's this and last month is that row's total, so its drivers must add up or name the rest;
   - figures are normalized as exact decimals, never through a float (9,999,999,999,999,999.99 is not 10^16);
   - a payee that shares a client's name is the cited row, not that client;
-  - the month May is not a hedge.
+  - the month May is not a hedge;
+  - one fact read two ways (a report through the overview and the report itself) is counted once in a derived sum;
+  - "Revenue rose 4,940.00, because of …" keeps the effect before the comma.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.

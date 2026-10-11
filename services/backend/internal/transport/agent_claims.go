@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"maps"
 	"math/big"
 	"regexp"
@@ -175,6 +176,8 @@ type claim struct {
 	currency string
 	basis    string
 	stale    bool
+	// row is what identifies the row the field sits in (an id, a week's start, an account), when it has one.
+	row string
 	// driver says the field is a driver of a movement (a payee row of a changes read), attributing it, not explaining it.
 	driver bool
 	// variance says a percentage is a variance against a budget (the budget comparison's signed percent).
@@ -266,6 +269,21 @@ func claimOf(read agentRead, path string) claim {
 			switch strings.ToLower(text(pub, "state")) {
 			case "superseded", "needs_correction", "signoff_lapsed", "unverified":
 				c.stale = true
+			}
+		}
+	}
+	// The row's identity, from the nearest object that has one.
+	for i := len(ancestors) - 1; i >= 0 && c.row == ""; i-- {
+		for _, key := range []string{"id", "account_id", "start", "on", "date", "publication_id"} {
+			if v, ok := ancestors[i][key]; ok {
+				if t, isText := v.(string); isText && t != "" {
+					c.row = key + "=" + t
+				} else if n, isNumber := v.(json.Number); isNumber {
+					c.row = key + "=" + n.String()
+				}
+				if c.row != "" {
+					break
+				}
 			}
 		}
 	}
@@ -916,6 +934,9 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 		cause, effect := line[at[1]:clauseEnd], line[clauseStart:at[0]]
 		if len(at) > 2 {
 			cause, effect = line[clauseStart:at[0]], line[at[1]:clauseEnd]
+		} else if len(strings.TrimSpace(effect)) < 3 {
+			// "Revenue rose 4,940.00, because of …": the effect is what came before the comma.
+			effect = line[:at[0]]
 		}
 		supported := false
 		for i, s := range entries {
@@ -1194,7 +1215,7 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		return "a derived figure names too few or too many fields"
 	}
 	values, claims := []string{}, []claim{}
-	seenInputs := map[string]bool{}
+	seenInputs, seenFacts := map[string]bool{}, map[string]bool{}
 	for _, in := range s.of {
 		// A field counted twice is not a second figure.
 		if seenInputs[in.step+in.path] {
@@ -1214,6 +1235,14 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		}
 		values = append(values, got)
 		c := claimOf(read, in.path)
+		// Nor is one fact read two ways (a report through the overview and through the report itself).
+		if s.derive == "sum" && c.entity != "" && c.period != "" {
+			fact := strings.ToLower(strings.Join([]string{c.entity, c.period, c.label, c.kind, c.field, c.row, strconvBool(c.ytd), strconvBool(c.forecast), strconvBool(c.scenario), normalizeFigure(got)}, "|"))
+			if seenFacts[fact] {
+				return "a derived figure counts the same figure twice, read two ways"
+			}
+			seenFacts[fact] = true
+		}
 		// Money is computed with money and counts with counts; a ratio may compare two counts, never a count and money.
 		if len(claims) > 0 && c.money != claims[0].money {
 			return "a derived figure combines money with a count"
@@ -1664,4 +1693,11 @@ func effectNamed(effect, passage string, claims map[int]claim) bool {
 // month May is not a hedge.
 func hedged(text string) bool {
 	return claimHedge.MatchString(strings.ToLower(text)) || claimMayModal.MatchString(text)
+}
+
+func strconvBool(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
 }

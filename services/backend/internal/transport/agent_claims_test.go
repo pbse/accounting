@@ -397,6 +397,11 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("May bookings drove revenue, which rose 4,940.00.", "cause the reads do not show", e("t45", 0, "/rows/0/change", "4940.00"))
 	ok("Bookings may have driven revenue, which rose 4,940.00 in May.", e("t45", 0, "/rows/0/change", "4940.00"))
 
+	// Round nineteen: one fact read two ways is counted once; a comma before "because".
+	reads["t46"] = read(`{"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00"}]}}}`, "Published report", "read_publication", "", "")
+	rejected("Net income totals 43,560.00.", "read two ways", derived(0, "sum", "43560.00", "t2", ni+"/amount", "t46", "/pack/profit_and_loss/measures/0/amount"))
+	ok("Revenue rose 4,940.00, because of the marketing campaign.", e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "revenue rose after the marketing campaign started"})
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }
