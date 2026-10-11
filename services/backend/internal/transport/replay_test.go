@@ -295,24 +295,35 @@ func TestContextMachineReplaySelectsEligibleCreatorsBeforeBatchLimits(t *testing
 		return closeID
 	}
 	for i := 0; i < 21; i++ {
-		reading(fmt.Sprintf("org_A%s%d", seed, i), "", "other", "2026-10-03")
+		reading(fmt.Sprintf("org_A%s%d", seed, i), "", "user_other", "2026-10-03")
 	}
-	closeID := reading(owner, "", "owner", "2026-10-01")
+	closeID := reading(owner, "", "user_owner", "2026-10-01")
 	for i := 0; i < 4; i++ {
-		reading(owner, closeID, "other", "2026-10-02")
+		reading(owner, closeID, "user_other", "2026-10-02")
 	}
-	reading(owner, "", "other", "2026-10-03") // The newest close is ineligible too.
-	c, err := llm.New(llm.Config{Provider: "context_machine", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "fixed", Profiles: []llm.Scope{{Organization: owner, Subject: "owner", AccessProfile: "own"}}})
+	reading(owner, "", "user_other", "2026-10-03") // The newest close is ineligible too.
+	c, err := llm.New(llm.Config{Provider: "context_machine", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "fixed", Profiles: nil})
 	must(err)
+	// Inference requires no owner mapping; application grants select eligible creators.
+	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_owner',true,'replay test','test')`, owner)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) SELECT $1,'user_owner',entity,true,'replay test','test' FROM client_closes WHERE id::text=$2`, owner, closeID)
+	must(err)
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM client_access WHERE organization_id=$1`, owner)
+		db.Exec(`DELETE FROM organization_member_access WHERE organization_id=$1`, owner)
+	})
+	_, err = db.Exec(`UPDATE organizations SET disabled_at=now() WHERE id=$1 AND enabled`, owner)
+	must(err) // A resumed firm retains its historical suspension timestamp.
 	ctx := llm.WithClient(context.Background(), c)
 	must(sweepReplays(ctx, db))
 	var calls int
 	must(db.QueryRow(`SELECT calls FROM model_calls WHERE organization_id=$1`, owner).Scan(&calls))
 	if calls != 1 {
-		t.Fatalf("only the eligible owner's older reading should reserve budget: %d", calls)
+		t.Fatalf("only the currently authorized creator's older reading should reserve budget: %d", calls)
 	}
 	must(db.QueryRow(`SELECT COALESCE(sum(calls),0) FROM model_calls WHERE organization_id LIKE $1`, "org_A"+seed+"%").Scan(&calls))
 	if calls != 0 {
-		t.Fatalf("unconfigured firms spent budget: %d", calls)
+		t.Fatalf("firms without current client grants spent budget: %d", calls)
 	}
 }

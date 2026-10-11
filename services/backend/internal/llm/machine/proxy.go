@@ -27,6 +27,7 @@ type modelProxy struct {
 	completion               bool
 	images                   []llm.Image
 	schema                   json.RawMessage
+	researchTools            []any
 	refused                  atomic.Bool
 }
 
@@ -85,6 +86,24 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Only our two scoped MCP tools are advertised. Built-in shell, filesystem,
 	// web, subagents, and arbitrary remote MCP tools are never exposed to a model.
 	body["tools"] = readTools(body["tools"])
+	if p.researchTools != nil {
+		body["tools"] = p.researchTools
+	}
+	// New Codex models put tool definitions inside Responses input items.
+	// Remove every such carrier; only the trusted top-level policy may expose tools.
+	input, ok := body["input"].([]any)
+	if ok {
+		filtered := []any{}
+		for _, value := range input {
+			item, _ := value.(map[string]any)
+			kind, _ := item["type"].(string)
+			if kind == "additional_tools" || kind == "configuration_update" || kind == "tool_search_output" {
+				continue
+			}
+			filtered = append(filtered, value)
+		}
+		body["input"] = filtered
+	}
 	if p.completion {
 		body["tools"] = []any{}
 		if len(p.schema) > 0 {
@@ -173,13 +192,15 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model request failed", res.StatusCode)
 		return
 	}
+	// Validate a whole bounded provider turn before the CLI can execute a call.
+	// Research text is surfaced after the CLI turn, so buffering does not change its callback contract.
+	raw, err = io.ReadAll(io.LimitReader(res.Body, (4<<20)+1))
+	if err != nil || len(raw) > 4<<20 || !providerToolsAllowed(p.agent, raw, p.completion) {
+		http.Error(w, "invalid model response", 502)
+		return
+	}
 	if p.completion {
-		raw, err := io.ReadAll(io.LimitReader(res.Body, (4<<20)+1))
-		if err == nil && len(raw) <= 4<<20 {
-			err = completionProviderStatus(p.agent, raw)
-		} else {
-			err = llm.ErrLimit
-		}
+		err = completionProviderStatus(p.agent, raw)
 		if errors.Is(err, llm.ErrRefused) {
 			p.refused.Store(true)
 		}
@@ -187,28 +208,9 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "incomplete model response", 502)
 			return
 		}
-		w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
-		w.Write(raw)
-		return
 	}
 	w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
-	// Bound streamed provider output as well as the CLI's final output.
-	reader := &io.LimitedReader{R: res.Body, N: 4 << 20}
-	buf := make([]byte, 8192)
-	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			if _, e := w.Write(buf[:n]); e != nil {
-				return
-			}
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-		}
-		if err != nil || reader.N == 0 {
-			return
-		}
-	}
+	w.Write(raw)
 }
 
 // Codex uses Responses namespaces; Claude uses flat MCP function names.
@@ -250,7 +252,8 @@ func completionProviderStatus(agent string, raw []byte) error {
 	scan.Buffer(make([]byte, 4096), 4<<20)
 	complete, stopped := false, false
 	for scan.Scan() {
-		data, ok := strings.CutPrefix(scan.Text(), "data: ")
+		data, ok := strings.CutPrefix(scan.Text(), "data:")
+		data = strings.TrimSpace(data)
 		if !ok || data == "[DONE]" {
 			continue
 		}
@@ -319,4 +322,69 @@ func attachImages(body map[string]any, agent string, images []llm.Image) error {
 	}
 	body[key] = append(input, map[string]any{"role": "user", "content": parts})
 	return nil
+}
+
+// Tool calls are never executable in completion mode. Research may invoke only
+// the two scoped record tools, even if a model hallucinates a hidden CLI tool.
+func providerToolsAllowed(agent string, raw []byte, completion bool) bool {
+	var check func(any) bool
+	check = func(value any) bool {
+		switch value := value.(type) {
+		case map[string]any:
+			kind, _ := value["type"].(string)
+			if strings.HasSuffix(kind, "_call") || strings.HasSuffix(kind, "tool_use") {
+				if completion {
+					return false
+				}
+				name, _ := value["name"].(string)
+				namespace, _ := value["namespace"].(string)
+				allowed := agent == "codex" && kind == "function_call" && namespace == "mcp__records" && (name == "list_closes" || name == "read_evidence")
+				allowed = allowed || (namespace == "" && (kind == "function_call" || agent == "claude" && kind == "tool_use") && (name == "mcp__records__list_closes" || name == "mcp__records__read_evidence"))
+				if !allowed {
+					return false
+				}
+			}
+			if kind == "additional_tools" || kind == "tool_search_output" {
+				return false
+			}
+			for _, child := range value {
+				if !check(child) {
+					return false
+				}
+			}
+		case []any:
+			for _, child := range value {
+				if !check(child) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	var value any
+	if json.Unmarshal(raw, &value) == nil {
+		return check(value)
+	}
+	scan := bufio.NewScanner(bytes.NewReader(raw))
+	scan.Buffer(make([]byte, 4096), 4<<20)
+	seen := false
+	for scan.Scan() {
+		data, ok := strings.CutPrefix(scan.Text(), "data:")
+		data = strings.TrimSpace(data)
+		if !ok {
+			line := scan.Text()
+			if line == "" || strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") || strings.HasPrefix(line, "id:") || strings.HasPrefix(line, "retry:") {
+				continue
+			}
+			return false
+		}
+		if data == "[DONE]" {
+			continue
+		}
+		seen = true
+		if json.Unmarshal([]byte(data), &value) != nil || !check(value) {
+			return false
+		}
+	}
+	return seen && scan.Err() == nil
 }

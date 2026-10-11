@@ -1,15 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { workspaceQuery } from "../../data/queries";
-import { monthShort, useToday } from "../../data/time";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { monthShort, useDates, useToday } from "../../data/time";
+import { Link, useSearchParams } from "react-router";
+import { clientPage } from "../../data/clients";
 import { authKitClientId } from "../auth/Auth";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { Icon } from "@close/ui/components/Icon";
 import { Mark } from "@close/ui/components/Mark";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { FirmEnrollment } from "./Enterprise";
-import { PlanChips } from "./Planning";
 import { workspaceRequest } from "./workspace";
 import type { Close } from "./WorkpaperView";
 
@@ -17,23 +17,28 @@ export function isEnrollmentError(message: string) {
   return !!authKitClientId && message.includes("firm or membership");
 }
 
-type RosterClient = { entity: string; active: boolean; since: string; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean }[] };
-type Roster = { clients: RosterClient[]; can_manage: boolean };
-type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean };
-type ClientRow = { entity: string; active?: boolean; since?: string; closes: ListedClose[]; owed: string[] };
+type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean; owner?: string }[] };
+// connections are the states of each client's QuickBooks and Xero connections, and of its newest labeled exports (labeled, or stale once one is replaced),
+// by client identity (its own name in lower case).
+type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string; exports?: string }>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
+type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean; owner?: string };
+// key is the client's own name in lower case (a confirmed alias resolves to it), as its connections are kept.
+type ClientRow = { key: string; entity: string; active?: boolean; since?: string; owner?: string | null; closes: ListedClose[]; owed: string[] };
 
 const monthName = monthShort;
 
-// Clients, the records page (docs/design-system.md, A records page): every client the reader can work on, one row
-// each with its months (owed and not opened, open, signed off), the search in the title row and Add client as its one
-// action, made in a dialog. A firm administrator adds a client by name; nothing else is asked.
+// Clients, the records page (docs/design-system.md, A records page): every client the reader can work on, one row each
+// that opens the client's page, saying how its books arrive, what is up next, where it stands and who holds it; the
+// search in the title row and Add client as its one action, made in a dialog. A firm administrator adds a client by
+// name and its first month; the months themselves are opened from the client's page.
 export default function ClosesList() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
   const query = params.get("q") ?? "";
   const queryClient = useQueryClient();
   // This month, in the person's own time zone, by the render's clock.
-  const thisMonth = useToday().slice(0, 7);
+  const today = useToday();
+  const thisMonth = today.slice(0, 7);
+  const dates = useDates();
   // The recent closes, and with a search also those matching it (older ones among them), for clients the roster
   // does not list. The roster lists every client a firm administrator can see, and for a member the clients assigned
   // to them, each with the months it owes that nobody opened. All are read with the page.
@@ -66,13 +71,13 @@ export default function ClosesList() {
   const rows = new Map<string, ClientRow>();
   const row = (entity: string, key = entity.toLowerCase()) => {
     let found = rows.get(key);
-    if (!found) rows.set(key, (found = { entity, closes: [], owed: [] }));
+    if (!found) rows.set(key, (found = { key, entity, closes: [], owed: [] }));
     return found;
   };
   // The roster carries each client's whole history (every close under any of its names) and which months it can open:
   // every month from its first through this one that has no close and was not deleted as done. The recent and searched
   // closes add only clients the roster does not list.
-  for (const c of roster?.clients ?? []) Object.assign(row(c.entity), { active: c.active, since: c.since, owed: [...c.owed], closes: c.closes.map((cl) => ({ ...cl, client: c.entity.toLowerCase() })) });
+  for (const c of roster?.clients ?? []) Object.assign(row(c.entity), { active: c.active, since: c.since, owner: c.owner, owed: [...c.owed], closes: c.closes.map((cl) => ({ ...cl, client: c.entity.toLowerCase() })) });
   // The recent and searched closes carry each close's due date, priority and owner; a close the roster also lists
   // takes them from here.
   for (const c of closes) {
@@ -89,17 +94,6 @@ export default function ClosesList() {
   const shown = [...rows.values()]
     .filter((r) => !needle || r.entity.toLowerCase().includes(needle) || r.closes.some((c) => found.has(c.id) || c.entity.toLowerCase().includes(needle) || c.period === needle) || r.owed.includes(needle))
     .sort((a, b) => Number(b.active ?? true) - Number(a.active ?? true) || a.entity.localeCompare(b.entity));
-  async function open(entity: string, period: string) {
-    setBusy(`${entity}:${period}`);
-    setError("");
-    try {
-      const saved = await workspaceRequest("", { entity, period });
-      navigate(`/dashboard/closes/${saved.id}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "The month could not be opened.");
-      setBusy("");
-    }
-  }
   async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -133,6 +127,44 @@ export default function ClosesList() {
     if (r.closes.some((c) => c.signed_off && c.rechecked === false)) return <span className="pill neutral">Older sign-off, not rechecked</span>;
     if (r.closes.length) return <span className="pill">Signed off</span>;
     return <span className="pill neutral">New</span>;
+  };
+  // How the client's books arrive: each ledger connected, with a word when it is not working, and labeled exports, with
+  // a word when one has been replaced since.
+  const books = (r: ClientRow) => {
+    const states = roster?.connections?.[r.key];
+    const ledgers = (
+      [
+        ["QuickBooks", states?.quickbooks],
+        ["Xero", states?.xero],
+      ] as [string, string | undefined][]
+    )
+      .filter(([, state]) => state)
+      .map(([ledger, state]) => (state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`));
+    if (states?.exports) ledgers.push(states.exports === "stale" ? "Exports · one replaced" : "Exports");
+    return ledgers.length ? ledgers.join(", ") : "—";
+  };
+  // What is up next, in the order the work comes (as the client's page says it): the oldest month open with its due
+  // date, the earliest month it owes, or nothing until this month ends.
+  const upNext = (r: ClientRow) => {
+    // A former client's unfinished month still comes first; it owes no new one.
+    const open = r.closes.filter((c) => !c.signed_off).sort((a, b) => a.period.localeCompare(b.period))[0];
+    if (open?.unchecked) return `${monthName(open.period)}: recheck the sign-off`;
+    if (open) return `${monthName(open.period)} close${open.due_on ? (open.due_on < today ? `, overdue since ${dates.calendarDay(open.due_on)}` : `, due ${dates.calendarDay(open.due_on)}`) : ""}`;
+    if (r.active === false) return "Nothing: no longer a client";
+    const owed = [...r.owed].sort();
+    if (owed.length) return `Open ${monthName(owed[0])}`;
+    if (r.closes.length && r.active) return `Nothing until ${dates.calendarDay(monthEndOf(thisMonth))}`;
+    return "—";
+  };
+  // Who holds the client's months, where the reader can see it: its own owner, else the firm template's.
+  const people = roster?.people;
+  // Who holds the client's work: whoever holds the month in hand now, else, for the months still to open, the client's
+  // own owner or the template's. A client off the roster, or no longer a client, has no months scheduled to hold.
+  const owner = (r: ClientRow) => {
+    const inHand = r.closes.filter((c) => !c.signed_off).sort((a, b) => a.period.localeCompare(b.period))[0];
+    const subject = inHand ? (inHand.owner ?? "") : r.active !== true ? undefined : (r.owner ?? roster?.template?.owner ?? "");
+    if (subject === undefined) return "—";
+    return subject ? (people?.find((p) => p.subject === subject)?.name ?? subject) : "Nobody";
   };
   return (
     <>
@@ -185,13 +217,15 @@ export default function ClosesList() {
           </DialogActions>
         </form>
       </Dialog>
-      <div className="ks-table ks-clients" role="table" aria-label="Clients">
+      <div className={people ? "ks-table ks-clients owners" : "ks-table ks-clients"} role="table" aria-label="Clients">
         <div className="ks-tr head" role="row">
           <span role="columnheader">Client</span>
-          <span role="columnheader">Months</span>
+          <span role="columnheader">Books</span>
+          <span role="columnheader">Up next</span>
           <span role="columnheader">Status</span>
+          {people && <span role="columnheader">Owner</span>}
           <span role="columnheader">
-            <span className="visually-hidden">Open another month</span>
+            <span className="visually-hidden">Open the client</span>
           </span>
         </div>
         {loading && (
@@ -212,49 +246,26 @@ export default function ClosesList() {
           </div>
         )}
         {shown.map((r) => (
-          <div className="ks-tr" role="row" key={r.entity}>
+          <div className="ks-tr linked" role="row" key={r.entity}>
             <span className="ks-who" role="cell">
               <Mark label={r.entity} />
-              <span title={r.active === false ? "No longer a client" : r.since ? `Closes each month from ${monthName(r.since)}` : undefined}>{r.entity}</span>
+              <Link className="ks-rowlink" to={clientPage(r.entity)} title={r.active === false ? "No longer a client" : r.since ? `Closes each month from ${monthName(r.since)}` : undefined}>
+                {r.entity}
+              </Link>
             </span>
-            <span className="ks-months" role="cell">
-              {r.owed.map((period) => (
-                <button type="button" className="ks-month owed" key={period} disabled={busy !== ""} onClick={() => void open(r.entity, period)}>
-                  {busy === `${r.entity}:${period}` ? "Opening…" : `Open ${monthName(period)}`}
-                </button>
-              ))}
-              {r.closes.map((c) => (
-                <Link
-                  className={c.signed_off && c.rechecked !== false ? "ks-month signed" : "ks-month"}
-                  key={c.id}
-                  to={`/dashboard/closes/${c.id}`}
-                  title={c.signed_off && c.rechecked === false ? "A sign-off is recorded but not rechecked here; open the close to see whether it still stands" : undefined}
-                >
-                  {c.signed_off && c.rechecked !== false && <Icon name="review" size={12} />}
-                  {monthName(c.period)}
-                  {c.unchecked && <span className="pill danger">not checked</span>}
-                  {/* Due and owner chips for open work only: a recorded or unchecked sign-off is not called overdue. */}
-                  {!c.signed_off && !c.unchecked && <PlanChips plan={c} />}
-                </Link>
-              ))}
+            <span className="ks-mut" role="cell">
+              {books(r)}
+            </span>
+            <span className="ks-mut" role="cell">
+              {upNext(r)}
             </span>
             <span role="cell">{state(r)}</span>
-            {r.active !== false ? (
-              <details className="ks-another" role="cell">
-                <summary>Another month</summary>
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void open(r.entity, String(new FormData(event.currentTarget).get("period")));
-                  }}
-                >
-                  <input name="period" type="month" required aria-label={`Month to open for ${r.entity}`} />
-                  <button disabled={busy !== ""}>Open</button>
-                </form>
-              </details>
-            ) : (
-              <span role="cell" />
+            {people && (
+              <span className="ks-mut" role="cell">
+                {owner(r)}
+              </span>
             )}
+            <Icon name="arrow" className="ks-go" />
           </div>
         ))}
       </div>
@@ -264,3 +275,5 @@ export default function ClosesList() {
 }
 
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+// The last day of a month (YYYY-MM), as a calendar date.
+const monthEndOf = (period: string) => new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).toISOString().slice(0, 10);

@@ -14,13 +14,17 @@ This plan consolidates the October 2 technical-readiness and market/persona work
 
 **Product promise to prove:** the agent does the preparation and coordination; people receive clear decisions; the business receives current, defensible financial information. Every amount is traceable, every consequential action is authorized, and incomplete work stays visible.
 
+**Experience decision, reaffirmed October 10, 2026:** preserve the current Krith chat-first Home and sidebar access to clients and their monthly closes. All completion work and proposed differentiation must follow the [supervision experience contract](#supervision-experience-contract). This is a build requirement, not a claim that every interaction below is already implemented.
+
+For concrete October 10 fixes, current close-page refinements, source entry points and regression/acceptance scenarios, use the [product fixes and accuracy handoff](agent-first-implementation-handoff.md). It implements this plan's scope and authority; progress continues in the existing backlog.
+
 ## What to preserve and connect
 
 These foundations already exist in code. Presence is not proof of live activation or accountant acceptance; use [validation](validation.md) and [deployment](deployment.md) for evidence.
 
 | Existing foundation | Extend it into | Reference |
 | --- | --- | --- |
-| Tray tokens, shared shell/components, agent composer, shared AskAgent entry and assistant panel; desktop/mobile layout checks | One continuous experience across preparation, review and business decisions; no second design system or parallel chat product | [Design system](design-system.md), [AskAgent](../apps/frontend/src/features/dashboard/AskAgent.tsx) |
+| Krith tokens, shared shell/components, page composer and shared assistant; desktop/mobile layout checks | One continuous experience across preparation, review and business decisions; no second design system or parallel chat product | [Design system](design-system.md), [page composer](../apps/frontend/src/features/dashboard/PageComposer.tsx), [assistant](../apps/frontend/src/features/dashboard/Assistant.tsx) |
 | Durable close goals, intake/preparation jobs, checkpoints, recurring handover and bounded investigations | Automatically advance every supported recurring job; connect investigation results to a proposed draft or precise question | [Coordinator](close-coordinator.md), [Work inbox](work-inbox.md), [investigations](../services/backend/internal/transport/written_answers.go) |
 | QBO/Xero captures, transaction indexes, account coverage, daily exceptions and evidence | Complete takeover, normal transaction resolution, account coverage and freshness | [Backlog](implementation-backlog.md), [QBO](quickbooks-onboarding.md), [Xero](xero-onboarding.md) |
 | Exact calculations, approved procedures, versioned workpapers, review, change invalidation and carry-forward | Broad enough recurring preparation and correction handling for the admitted clients | [Methods](accounting-methods.md), [review](workpaper-review.md), [carry-forward](carry-forward.md) |
@@ -29,7 +33,7 @@ These foundations already exist in code. Presence is not proof of live activatio
 | Brief, flux, aging, tie-out and portable binder | Approved financial reporting, budget comparison, cash planning and AR/AP decisions | [Brief](../services/backend/internal/transport/brief.go), [flux](../services/backend/internal/transport/flux.go), [aging](../services/backend/internal/transport/aging.go), [binder](close-review-package.md) |
 | Firm/client permissions, row-level security, retention, operations and effort records | Executive access, dependable hosted operation and honest measured customer benefit | [Architecture](architecture.md), [operations](operations.md), [effort](../services/backend/internal/transport/effort.go) |
 
-Recent merged work already added agent entry points to Attention and Client closes, an effort trend chart, and wider layout coverage. Do not rebuild them. Layout checks still do not establish complete real-provider journeys or usability. While the [Krith](design-system.md) rollout is under way, a new screen uses Krith's tokens (aliased over Tray's names from the first rollout PR) and the Krith component where one exists, the Tray component otherwise, and the existing assistant context; it adds no new Tray-only token or class (see Seamless agent-first experience).
+Recent merged work already added agent entry points to Attention and Client closes, an effort trend chart, and wider layout coverage. Reuse these capabilities in the current [Krith](design-system.md) shell and assistant context. Krith's rollout history is recorded in the design-system document; new work uses its current tokens and components. Layout checks still do not establish complete real-provider journeys or usability.
 
 ## What each user must receive
 
@@ -174,9 +178,9 @@ Reuse current API/MCP capability handlers and durable jobs. Add a capability onl
 
 ## Seamless agent-first experience
 
-The look is [Krith](design-system.md), chosen on 2026-10-10; it supersedes Tray (archived at [archive/design-system-tray.md](archive/design-system-tray.md)) for tokens, type and the shell, and lands in the order the design-system doc's rollout section gives. Until a page has moved it keeps its Tray foundations: the existing tokens, light shell, Inter type, Hugeicons, PageHeader, shared rows/cards/charts, AgentComposer/AskAgent and AgentMark are implemented and stay in use, and B01–B12 work on an unmoved page builds on them rather than restyling it ahead of the rollout. Krith's Home is a stage for the agent; the four outcome cards, the trust strip and the full decision list move to the Closes page, with Home stating the counts and their freshness in its greeting line and listing the top decisions (the design-system doc's shell section records the revision). Add shared components only after a genuine repeated pattern exists.
+The look is the current [Krith](design-system.md) system, chosen on 2026-10-10; it supersedes Tray (archived at [archive/design-system-tray.md](archive/design-system-tray.md)). Preserve its tokens, typography, shell, composer, conversation and client/month close layouts. Home remains the agent's stage and thread, with its concise context and existing suggestions; detailed counts, records and financial views stay in their existing contextual destinations. Add shared components only after a genuine repeated pattern exists.
 
-The primary navigation should express the user's jobs: existing Work/Attention for firm delivery and decisions, client context for accounting, and business results/planning for permitted executives. Executive navigation in the same shell exposes Business overview, Reports, Cash plan and My decisions for the selected client; accountants reach these same views through client context. Firm operations and administration remain permission-scoped. Reuse existing routes/components where possible and add destinations only for these distinct jobs; do not create a parallel executive app.
+Use the current sidebar and its Clients/Closes access to reach each client and month. Work/Attention are existing capabilities surfaced through this shell, not a request to restore older navigation. Executive navigation in the same shell exposes Business overview, Reports, Cash plan and My decisions for the selected client; accountants reach these views through client context. Firm operations and administration remain permission-scoped. The improvements below fit existing destinations and contextual drill-downs.
 
 Interaction requirements:
 
@@ -189,6 +193,76 @@ Interaction requirements:
 - Reuse supplied data and approved methods; preserve unsent text on recoverable failures. Keyboard navigation, visible focus, screen-reader status, accessible contrast, mobile requests and reduced motion are required. Do not stream private reasoning; expose evidence and concise action receipts.
 
 Proposed performance acceptance targets, measured rather than advertised: visible input/navigation feedback within 100 ms; p95 interactive page/list readiness within 2 seconds under a documented representative dataset/concurrency profile; queued-command acknowledgment within 1 second; confirmed job-state changes visible within 5 seconds while online. Model and provider work runs asynchronously with real progress and failure state. Instrument timings and include slow provider, large list and poor connection cases; agreed load profiles must precede acceptance. Never make financial effects optimistic to meet a target.
+
+### Supervision experience contract
+
+This October 10 founder clarification applies to every B01–B12 package and to any later feature. It specifies behavior within the current layout. Package scope, phases and accounting/authority gates remain in force. The October 10 maturity recommendations are interpreted through this contract.
+
+#### The workspace the person sees
+
+- **Home:** adopt the founder-approved composition of greeting, current briefing, central composer, up to three contextual suggestions, a short next-decisions list and folded completed work. Use the existing stage/thread and canonical decision population; add no permanent KPI grid, agent console or competing work queue. The [Home/navigation handoff](agent-first-implementation-handoff.md#b02--approved-home-and-scalable-client-navigation) retains the screenshot and concrete acceptance.
+- **Sidebar:** preserve stable destinations and bounded recent chats/notices. Keep the existing Clients → company/client → monthly closes → close-with-tabs browsing path; do not add the demo's expanded company/month tree. Routine supervision from Home, chat or a notice deep-links directly to the current scoped decision, without forcing the person through that browsing hierarchy. A new capability should appear as an agent action or contextual result before it needs new navigation.
+- **Client/month:** keep the current close layout: one status sentence, the decisions left and completed work folded away. Sources, schedules, reports and history remain directly inspectable through existing views. Routine supervision must not require visiting every tab.
+- **Conversation:** the agent can prepare, investigate, explain and bring a decision into the thread. Buttons and focused edits let the person act without knowing a prompt. They use the same permission-checked handlers and durable records as the rest of the product. Chat history is never the sole record of a job or its authority.
+- **Business numbers:** show the few relevant figures when briefing or answering, with metric, period, source freshness and actual/forecast status. Existing Reports and Cash plan hold the detail. An answer should lead to its supported next action where one exists.
+
+#### The agent owns progression
+
+At takeover, the agent proposes the client/month scope, sources, methods, recurring jobs, owners and decision boundaries from available evidence and approved firm templates. The authorized person resolves the genuinely missing choices and confirms the mandate. Preview the selected clients and periods for portfolio work; never infer cross-client authority from an open conversation.
+
+Within that mandate, the system automatically gathers permitted evidence, verifies eligible facts, links documents, calculates, prepares drafts, detects missing inputs, drafts consolidated questions, watches dependencies and resumes supported work. Do not require a confirmation for every extracted field or a fresh prompt to perform each internal step. Automatic fact acceptance requires the work type's source and contradiction checks; a model's confidence cannot substitute for them. Ambiguity pauses only dependent work, with a specific question and the best supported recommendation.
+
+Human attention is for initial scope/access, accounting judgment, conflicting or unavailable facts, exceptions, policy changes and consequential approval. The agent should exhaust authorized available sources before asking for information already held. If a person supplies a correction, treat it as an attributed input or proposed treatment, retain its provenance, recompute deterministically and show the effect. Do not silently overwrite source evidence or propagate a one-off correction into a firm policy.
+
+After an answer or approval, the system continues all already-authorized dependent work and returns a concise result. It persists through a closed browser, a new chat and a new month. A new conversation does not duplicate the mandate. Requests, ledger effects, publication and sign-off retain their explicit authority boundaries; existing standing approvals apply only within their original recorded bounds.
+
+#### One decision, enough information to act
+
+Reuse the current proposal/task presentation. For each actual decision, show:
+
+1. **Scope and reason:** client, month, what changed or is missing, and why the person is needed.
+2. **Recommendation and effect:** what the agent proposes, the relevant amount/accounts/period and any effect on an existing report or forecast. If there is no reliable recommendation, say what fact would resolve it.
+3. **Evidence and uncertainty:** compact source links and essential qualifications, with calculation and before/after detail one interaction away. Material uncertainty must be visible before approval.
+4. **Exact action:** one primary action with a specific verb, such as “Approve revised schedule” or “Approve and send request”; secondary controls to change, return/reject or inspect. Approval of preparation does not imply permission to post, publish or sign off.
+5. **Receipt:** what was approved, what actually completed, what is still processing and what remains unresolved. Failed or unknown external outcomes never appear as success.
+
+Group decisions caused by the same event, while preserving separate authorities and exact effects. A payroll amendment should tell one coherent story; grouping does not turn workpaper review, correction posting and report publication into an unexplained “Approve all.” Compatible batch approval names every included item and exclusion, checks each current version and returns per-item outcomes.
+
+Reject/return leaves the affected work unresolved with a reason and owner; it never marks the accounting obligation done or repeatedly recreates the same rejected proposal without changed evidence. Improving a proposal creates a revised draft and invalidates only affected approvals. The person can inspect or correct a fact without rebuilding a spreadsheet.
+
+#### Attention and control stay unambiguous
+
+“Needs you” prioritizes actionable decisions by deadline, impact and dependency, with one cause grouped where possible. Keep unread notices, unresolved decisions and blocked jobs as distinct counts. Opening/dismissing a notice only changes its read state; the unresolved decision remains reachable in the close and the existing decision view. Background progress and completion receipts must not inflate the number of approvals waiting.
+
+An old chat card reflects its current durable status: completed, superseded, revoked or still actionable. Clicking a stale card refreshes the changed proposal and requires approval of the new effect. A notification, thread and close link to the same underlying decision. New evidence updates that decision's revision instead of creating competing copies.
+
+Distinguish **stop this answer** from **pause delegated accounting work**. The former stops the chat turn; the latter uses an explicit, scoped control and reports queued and already-executing effects accurately. Resuming work or restoring access must respect current permissions and versions. On model/provider failure, preserve drafts, evidence and direct review controls; explain what is delayed and keep independent deterministic work progressing.
+
+#### Concrete experience examples
+
+The following are acceptance scenarios and illustrative copy, not current production results.
+
+| Situation | Agent-driven experience | Human contribution |
+| --- | --- | --- |
+| Arrive after work ran | “Meridian · September: drafts are prepared. The payroll amendment needs your decision; the missing statement request is ready to send.” Open the relevant current decision from chat or the sidebar. | Inspect the recommendation; approve or improve the precise action. No “start preparation” prompt for already delegated work. |
+| Mixed document bundle | Identify statements, invoices, credits and replacements; prepare eligible work; explain a conflicting coverage date with both source excerpts. | Answer the one unresolved date/treatment question; agent resumes without another instruction. |
+| Late payroll amendment | Show the changed employer tax, affected liability and correction proposal together; flag affected report status; retain unrelated approvals. | Review the difference and separately authorize any posting/publication required. |
+| Client reply | Correlate partial answers, check safe attachments, update affected facts, resume preparation and retain only outstanding questions. | Decide only remaining judgment; no manual copying from email into workpapers. |
+| Improve the treatment | Recalculate the current proposal from the correction; offer a separately reviewed, scoped method change if useful for future months. | Approve the current treatment and, if desired, the distinct future method proposal. |
+| Cash issue (proposed extension) | Show the dated shortfall and assumptions, prepare a collection or timing decision, then track authorized action and observed resolution. | Approve the action or change the assumption. A promise remains a promise until payment evidence arrives. |
+
+#### Acceptance for simplicity, accuracy and speed
+
+Use the existing whole-product acceptance corpus and performance instrumentation. For every implemented journey, record human prompts, factual entry, approvals, corrections, navigation, elapsed wait and assisted work. Label why each intervention was necessary; a lower click count cannot hide omitted review, unsupported work or incorrect acceptance.
+
+- Routine delegated continuation needs no new prompt; a reply resumes only the relevant dependencies. A person returning later sees the latest result and outstanding decisions without reading the entire transcript.
+- A reviewer can identify scope, reason, recommendation, financial effect, uncertainty and exact authority from the decision, with evidence immediately available. Check this with unfamiliar reviewers using the existing unaided usability gates.
+- Duplicate input, concurrent approval, stale chat, client switching and late change cannot produce duplicate work, wrong-scope effects or invisible decisions. Same-number/wrong-metric and wrong-period answers fail support checks.
+- Partial failure preserves successful work and makes the remaining action clear. Source uncertainty, unsent mail and unverified writes are not smoothed into a reassuring “done.”
+- Apply the performance targets above and the stricter route-specific budgets where applicable. Acknowledge promptly, show persisted progress, avoid unnecessary serial model calls, and measure time to a correct draft and total human effort. A streamed answer alone is not completed accounting work.
+- Keep keyboard, screen-reader, mobile and reduced-motion support. Review controls remain usable when the model is unavailable.
+
+**Differentiation to demonstrate:** complete supported work with less supervision; correct changes with less re-review; reuse approved firm methods safely; connect accounting facts to resolved business decisions. Evaluate these outcomes against a comparable customer process before claiming market superiority. Every feature proposal must name the work the agent removes, the remaining human decision, the current surface it uses and the evidence that it is accurate and faster. Feature count or a new screen alone does not satisfy this contract.
 
 ## Accuracy as a release contract
 

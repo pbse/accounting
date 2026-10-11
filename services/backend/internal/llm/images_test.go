@@ -37,7 +37,6 @@ func TestPageReadingFollowsProviderSwitchAndModelPolicy(t *testing.T) {
 	if len(page) <= 2<<20 {
 		t.Fatal("fixture must exercise image-sized request limit")
 	}
-	scope := Scope{Organization: "org", Subject: "owner", AccessProfile: "personal"}
 	for _, provider := range []string{"api", "context_machine"} {
 		t.Run(provider, func(t *testing.T) {
 			calls := 0
@@ -48,10 +47,10 @@ func TestPageReadingFollowsProviderSwitchAndModelPolicy(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
 						t.Fatal(err)
 					}
-					if r.URL.Path != "/v1/complete" || wire.Scope != scope || wire.Model != "gpt-6.1-sol" || wire.Effort != "medium" || !bytes.Equal(wire.Request.Images[0].PNG, page) || wire.Request.Purpose != "ocr" {
-						t.Fatalf("bad context-machine image request: %+v", wire)
+					if r.URL.Path != "/v1/complete" || wire.Scope.AccessProfile != "" || wire.Model != "gpt-6.1-sol" || wire.Effort != "medium" || !bytes.Equal(wire.Request.Images[0].PNG, page) || wire.Request.Purpose != "ocr" {
+						t.Fatal("bad context-machine image request: route, policy, attribution or image mismatch")
 					}
-					json.NewEncoder(w).Encode(CompletionResponse{Version: 1, Status: "completed", Scope: scope, Response: Response{ID: "done", Model: "gpt-6.1-sol", ReasoningEffort: "medium", AuthMode: "chatgpt", Text: "Amount 123.45", ModelCalls: 1}})
+					json.NewEncoder(w).Encode(CompletionResponse{Version: 1, Status: "completed", Scope: wire.Scope, Response: Response{ID: "done", Model: "gpt-6.1-sol", ReasoningEffort: "medium", AuthMode: "chatgpt", Text: "Amount 123.45", ModelCalls: 1}})
 				} else {
 					var body map[string]any
 					json.NewDecoder(r.Body).Decode(&body)
@@ -66,7 +65,7 @@ func TestPageReadingFollowsProviderSwitchAndModelPolicy(t *testing.T) {
 				}
 			}))
 			defer front.Close()
-			c, err := New(Config{APIImages: true, Provider: provider, APIKey: "key", Model: "gpt-6.1-sol", ReasoningEffort: "medium", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "gpt-6.1-sol", CodexEffort: "medium", ContextMachineEndpoint: front.URL + "/v1/run", Profiles: []Scope{scope}, AllowUncappedOutputTokens: true})
+			c, err := New(Config{APIImages: true, Provider: provider, APIKey: "key", Model: "gpt-6.1-sol", ReasoningEffort: "medium", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "gpt-6.1-sol", CodexEffort: "medium", ContextMachineEndpoint: front.URL + "/v1/run", Profiles: nil, AllowUncappedOutputTokens: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,8 +81,8 @@ func TestPageReadingFollowsProviderSwitchAndModelPolicy(t *testing.T) {
 			}
 			if provider == "context_machine" {
 				_, _, err = (PageReader{}).ReadPage(WithIdentity(ctx, "org", "other"), page)
-				if err == nil || calls != 1 {
-					t.Fatal("foreign owner sent an image")
+				if err != nil || calls != 2 {
+					t.Fatal("profile-free image inference refused", err)
 				}
 			}
 		})

@@ -34,7 +34,8 @@ func organizationAccess(db *sql.DB, r *http.Request) (bool, error) {
 	return member, nil
 }
 
-// All saved-close routes pass this boundary, including downloads and future routes.
+// All saved-close routes pass this boundary, including downloads and future routes. A client's page (/client) checks
+// access to the client itself (clients.go), since a client has no close of its own.
 // Close ownership is immutable through the API. Child identifiers are additionally
 // checked against this close by their existing handlers.
 // executiveRoutes are all an executive may call: their overview, a close's published packs, their exports and
@@ -59,7 +60,7 @@ func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 			problem(w, 403, "Executive access covers published reports, the cash plan and the budget comparison only.")
 			return
 		}
-		if path != "" && !strings.HasPrefix(path, "/chat/confirm/") && !strings.HasPrefix(path, "/chat/sessions") && path != "/executive" && path != "/examples" && path != "/examples/prepaid" && path != "/work" && path != "/work/interpret" && path != "/chat" && path != "/search" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/track-record" && path != "/organization/policy" && path != "/agent-access" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" && path != "/daily" && path != "/morning" && path != "/home" && path != "/attention" && path != "/attention/stream" && path != "/attention/preferences" && path != "/me" && path != "/me/profile" && path != "/me/drive" && path != "/me/drive/connect" && path != "/security" && path != "/security/clients" && path != "/roster" && path != "/close-template" && path != "/security/operations" && path != "/index-rates" && path != "/portfolio" && path != "/portfolio/run" && path != "/goals" && path != "/plans/catalog" && path != "/plans/proposals" && path != "/setup" && path != "/members/roles" && path != "/members/invitations" && path != "/members/people" && path != "/members/role" && path != "/firm-export" {
+		if path != "" && !strings.HasPrefix(path, "/chat/confirm/") && !strings.HasPrefix(path, "/chat/sessions") && path != "/executive" && path != "/examples" && path != "/examples/prepaid" && path != "/work" && path != "/work/interpret" && path != "/chat" && path != "/search" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/track-record" && path != "/organization/policy" && path != "/agent-access" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" && path != "/daily" && path != "/morning" && path != "/home" && path != "/attention" && path != "/attention/stream" && path != "/attention/preferences" && path != "/me" && path != "/me/profile" && path != "/me/drive" && path != "/me/drive/connect" && path != "/security" && path != "/security/clients" && path != "/roster" && path != "/client" && path != "/close-template" && path != "/security/operations" && path != "/index-rates" && path != "/portfolio" && path != "/portfolio/run" && path != "/goals" && path != "/plans/catalog" && path != "/plans/proposals" && path != "/setup" && path != "/members/roles" && path != "/members/invitations" && path != "/members/people" && path != "/members/role" && path != "/firm-export" {
 			id, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 			id, err = url.PathUnescape(id)
 			if err != nil {

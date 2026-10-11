@@ -49,7 +49,7 @@ func ocrLabel(provider, detail string) string {
 	case "openai":
 		return "OpenAI API (" + detail + ") reads authorized PDF pages; a scanned page it cannot read is read locally by Tesseract"
 	case "context_machine":
-		return "Private context machine (" + detail + ") reads PDF pages only for configured members with current client grants; other pages use local PDF text/Tesseract"
+		return "Private context machine (" + detail + ") reads PDF pages for authorized uploaders with current client grants; other pages use local PDF text/Tesseract"
 	case "tesseract":
 		return "Local only: each page's own PDF text, and Tesseract for scanned pages"
 	case "held":

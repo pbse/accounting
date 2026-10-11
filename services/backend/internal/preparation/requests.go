@@ -178,9 +178,9 @@ const RequestCoverageIsCurrent = `(q.coverage_scope IS NULL OR (` + requestCaptu
 // recorded that work has none.
 const RequestReleased = `(rj.job_id IS DISTINCT FROM q.job_id AND (q.coverage_scope IS NULL OR (q.coverage_scope ? 'jobs' AND NOT (q.coverage_scope->'jobs') ? rj.job_id::text)))`
 
-// requestCoverageFollows is RequestCoverageIsCurrent once a request has a reply: an account's binding may also have
+// RequestCoverageFollowsReply is RequestCoverageIsCurrent once a request has a reply: an account's binding may also have
 // moved to add the request's released work, keeping every job it had when the request was approved.
-const requestCoverageFollows = `(q.coverage_scope IS NULL OR (` + requestCapture + `
+const RequestCoverageFollowsReply = `(q.coverage_scope IS NULL OR (` + requestCapture + `
  AND NOT EXISTS(SELECT 1 FROM ` + requestBindings + ` CROSS JOIN LATERAL (SELECT COALESCE((SELECT a.job_ids FROM coverage_bindings a WHERE a.id=NULLIF(b->>'id','')::bigint),'[]'::jsonb) AS jobs) approved
   WHERE COALESCE(cur.id,'') IS DISTINCT FROM b->>'id' AND (cur.id IS NULL OR cur.excluded OR NOT cur.job_ids @> approved.jobs
    OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(cur.job_ids) added WHERE NOT approved.jobs ? added
@@ -195,7 +195,7 @@ func RequestCoverageCurrent(ctx context.Context, tx *sql.Tx, closeID, requestID 
 // RequestCoverageFollows is RequestCoverageCurrent for a request that has a reply, letting it take the rest of the
 // client's answers and documents while the firm works on the first ones.
 func RequestCoverageFollows(ctx context.Context, tx *sql.Tx, closeID, requestID string) error {
-	return requestCoverage(ctx, tx, closeID, requestID, requestCoverageFollows)
+	return requestCoverage(ctx, tx, closeID, requestID, RequestCoverageFollowsReply)
 }
 
 func requestCoverage(ctx context.Context, tx *sql.Tx, closeID, requestID, rule string) error {
