@@ -4115,7 +4115,10 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - a figure-less forecast or scenario sentence ("cash closes positive next week") must say it is one;
   - a sentence that computes from a stale read may say "stale";
   - the remainder must be stated ("the rest", "unexplained"), never inferred from a driver's own name ("Other services");
-  - a hedge excuses a cause only when it qualifies the cause, before or at the connective.
+  - a hedge excuses a cause only when it qualifies the cause, before or at the connective;
+  - a line named "Interest income" is an income line, never net income;
+  - prior-month figures and changes inherit the prior capture's staleness;
+  - client names are found by plain search with whole-word edges: twenty figures checked against 5,000 firm clients take well under a second (the earlier per-client patterns took about 26 seconds in the reviewer's probe).
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.

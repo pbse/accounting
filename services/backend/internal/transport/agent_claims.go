@@ -62,6 +62,20 @@ var agentMetricTerms = func() []metricTerm {
 	return out
 }()
 
+// lineMetrics is the measures a report line's name gives it. A bare "income" names an income line ("Interest
+// income"), never net or operating income, which people may mean by the word but a line's name does not.
+func lineMetrics(label string) map[string]bool {
+	found := metricsIn(label)
+	if found["revenue"] && found["net_income"] && found["operating_profit"] {
+		lower := strings.ToLower(label)
+		if !strings.Contains(lower, "net income") && !strings.Contains(lower, "operating income") && !strings.Contains(lower, "net operating income") {
+			delete(found, "net_income")
+			delete(found, "operating_profit")
+		}
+	}
+	return found
+}
+
 // metricsIn is the measures a text names, each phrase taken once at its longest.
 func metricsIn(text string) map[string]bool {
 	lower := []byte(strings.ToLower(text))
@@ -260,7 +274,7 @@ func claimOf(read agentRead, path string) claim {
 			}
 		}
 	}
-	for k := range metricsIn(c.label) {
+	for k := range lineMetrics(c.label) {
 		c.keys[k] = true
 	}
 	words := strings.ReplaceAll(last, "_", " ")
@@ -326,6 +340,14 @@ func claimOf(read agentRead, path string) claim {
 			}
 			if items, ok := root["open_items"].(map[string]any); ok && items["complete"] == false && c.forecast {
 				c.incomplete = true
+			}
+		}
+	}
+	// A prior month's figure, and a change made from it, are as fresh as the prior month's capture.
+	if c.kind == "prior" || c.kind == "change" {
+		for _, o := range ancestors {
+			if prior, ok := o["prior"].(map[string]any); ok && prior["stale"] == true {
+				c.stale = true
 			}
 		}
 	}
@@ -1444,19 +1466,36 @@ func clientsNamed(text string, clients []string) []string {
 	sort.SliceStable(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
 	lower := []byte(strings.ToLower(text))
 	out := []string{}
+	boundary := func(b []byte, i int) bool {
+		if i < 0 || i >= len(b) {
+			return true
+		}
+		r := rune(b[i])
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r < 0x80
+	}
 	for _, name := range ordered {
-		name = strings.TrimSpace(name)
-		if len(name) < 3 {
+		want := strings.ToLower(strings.TrimSpace(name))
+		if len(want) < 3 {
 			continue
 		}
-		re := regexp.MustCompile(`(?:^|[^\p{L}\p{N}])` + regexp.QuoteMeta(strings.ToLower(name)) + `(?:$|[^\p{L}\p{N}])`)
-		if at := re.FindIndex(lower); at != nil {
-			out = append(out, name)
-			for i := at[0]; i < at[1]; i++ {
-				if lower[i] != ' ' {
-					lower[i] = '#'
-				}
+		// A plain search, then whole-word edges: no pattern is compiled per client.
+		from := 0
+		for {
+			i := strings.Index(string(lower[from:]), want)
+			if i < 0 {
+				break
 			}
+			i += from
+			if boundary(lower, i-1) && boundary(lower, i+len(want)) {
+				out = append(out, strings.TrimSpace(name))
+				for j := i; j < i+len(want); j++ {
+					if lower[j] != ' ' {
+						lower[j] = '#'
+					}
+				}
+				break
+			}
+			from = i + 1
 		}
 	}
 	return out

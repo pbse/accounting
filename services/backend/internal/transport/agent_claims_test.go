@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The support gate holds a financial sentence to what its cited field measures, not merely to an equal number
@@ -312,6 +313,32 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		e("t32", 0, "/rows/0/change", "4940.00"), e("t32", 0, "/rows/0/drivers/0/change", "3000.00"), e("t32", 0, "/rows/0/drivers/1/change", "1000.00"))
 	rejected("Revenue rose 4,940.00 because of a marketing campaign which may end soon.", "cause the reads do not show", e("t6", 0, "/rows/0/change", "4940.00"))
 	ok("Revenue rose 4,940.00, possibly because of a marketing campaign.", e("t6", 0, "/rows/0/change", "4940.00"))
+
+	// Round thirteen: an income line is not net income; a stale prior capture; many clients stay fast.
+	reads["t33"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"sections":[{"name":"Other Income","lines":[{"name":"Interest income","amount":"8000.00"}]}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Net income is 8,000.00.", "but the cited field is Interest income", e("t33", 0, "/profit_and_loss/sections/0/lines/0/amount", "8000.00"))
+	ok("Interest income is 8,000.00.", e("t33", 0, "/profit_and_loss/sections/0/lines/0/amount", "8000.00"))
+	reads["t34"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","prior":{"period":"2026-09","stale":true},"profit_and_loss":{"measures":[{"name":"Net income","amount":"100.00","prior":"90.00","change":"10.00"}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Net income was 90.00 in September.", "the cited read is stale", e("t34", 0, "/profit_and_loss/measures/0/prior", "90.00"))
+	ok("Net income is 100.00 in October.", e("t34", 0, "/profit_and_loss/measures/0/amount", "100.00"))
+	many := []string{}
+	for i := 0; i < 5000; i++ {
+		many = append(many, "Client number "+strings.Repeat("x", i%7)+string(rune('a'+i%26))+" "+strings.Repeat("y", i%5))
+	}
+	many = append(many, "Bluegrass Dental PLLC")
+	began := time.Now()
+	long := []agentSupportEntry{}
+	text := ""
+	for i := 0; i < 20; i++ {
+		text += "Bluegrass Dental PLLC's net income is 21,780.00. "
+		long = append(long, e("t2", i, ni+"/amount", "21780.00"))
+	}
+	if _, why := agentSupport("facts", strings.TrimSpace(text), long, reads, nil, many...); why != "" {
+		t.Fatalf("twenty figures over 5,000 clients: %s", why)
+	}
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("twenty figures over 5,000 clients took %s", took)
+	}
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
