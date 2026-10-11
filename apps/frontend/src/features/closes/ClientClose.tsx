@@ -9,12 +9,9 @@ import { CashPlan } from "./CashPlan";
 import { Reports } from "./Reports";
 import { Budget } from "./Budget";
 import { RetentionControls } from "./Enterprise";
-import { Evidence, PreparationJobs } from "./Evidence";
 import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
 import { Memory } from "./Memory";
-import { HistoricalExports } from "./HistoricalExports";
-import { Stripe } from "./Stripe";
 import { Readiness } from "./Readiness";
 import { OpeningBaseline } from "./OpeningBaseline";
 import { TakeoverSetup } from "./TakeoverSetup";
@@ -23,6 +20,7 @@ import { Requests } from "./Requests";
 import { EffortCard, EffortTracker, type Activity } from "./Effort";
 import { Books, BooksLede } from "./Books";
 import { Workpapers, WorkpapersLede } from "./Workpapers";
+import { Documents, DocumentsLede } from "./Documents";
 import { AgentChip, CloseMenu, countsOf, needsFor, Overview, useDecisions, useGoalStatus } from "./Overview";
 import { workspaceRequest } from "./workspace";
 import { useClose, type Close, type Profile } from "./WorkpaperView";
@@ -94,6 +92,15 @@ function Package({ close }: { close: Close }) {
 
 // Each tab's own actions and exception paths, at the top of the close's ⋯ menu.
 const tabMenus = (base: string): Partial<Record<Tab, { title: string; items: { label: string; to: string }[] }>> => ({
+  evidence: {
+    title: "Documents",
+    items: [
+      { label: "Upload a document", to: `${base}?tab=evidence&view=add` },
+      { label: "Forward documents by email", to: `${base}?tab=evidence&view=add` },
+      { label: "Replace or compare a document", to: `${base}?tab=evidence&view=add` },
+      { label: "Run saved preparation instructions", to: `${base}?tab=evidence&view=instructions` },
+    ],
+  },
   workpapers: {
     title: "Workpapers",
     items: [
@@ -183,7 +190,7 @@ export default function ClientClose() {
         </div>
       </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
-      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : <CloseLede close={close} counts={counts} />}
+      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : tab === "evidence" ? <DocumentsLede closeId={close.id} base={base} waiting={needs.filter((need) => need.tab === "evidence").reduce((n, need) => n + need.count, 0)} /> : <CloseLede close={close} counts={counts} />}
       {close.profile && (close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown") && (
         <p className="ks-lede-notes">
           <span className="chip warn" role={close.profile.state === "unknown" ? undefined : "alert"} title={close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>
@@ -208,14 +215,7 @@ export default function ClientClose() {
       {tab === "overview" && <Overview close={close} papers={papers} needs={needs} teammates={teammates} brief={brief} briefRead={briefRead} decisionsError={decisionsError} base={base} onPrepared={() => void reload()} />}
       {tab === "books" && <Books close={close} papers={papers} needs={needs.filter((need) => need.tab === "books")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
       {tab === "workpapers" && <Workpapers close={close} papers={papers} more={more} needs={needs.filter((need) => need.tab === "workpapers")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} statusError={!goalRead.isError ? "" : goalRead.data ? "stale" : "failed"} base={base} onPrepared={() => void reload()} />}
-      {tab === "evidence" && (
-        <div className="stack">
-          <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
-          <HistoricalExports key={`history-${close.id}`} closeId={close.id} />
-          <Stripe key={`stripe-${close.id}`} closeId={close.id} entity={close.entity} />
-          <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
-        </div>
-      )}
+      {tab === "evidence" && <Documents close={close} needs={needs.filter((need) => need.tab === "evidence")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} onChange={() => void reload()} />}
       {tab === "requests" && (
         <div className="stack">
           <Requests closeId={close.id} papers={papers} />

@@ -29,6 +29,14 @@ export type EvidenceFile = {
   checks?: { pages: number; warnings: string[]; questions: string[] };
   created_by?: string;
   agent?: string | null;
+  created_at?: string;
+  // How it arrived and its latest preparation job: the job, its state and the work it was read as.
+  arrived?: "upload" | "email" | "request" | "reply" | "answer" | "stripe" | "procedure" | "quickbooks";
+  job_id?: string | null;
+  job_state?: string | null;
+  // A reply or answer its job has not moved since receiving: received, not yet read.
+  unread_reply?: boolean | null;
+  kind?: string | null;
 };
 
 export function SourceReview({

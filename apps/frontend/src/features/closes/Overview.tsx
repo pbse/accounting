@@ -43,8 +43,9 @@ export type Need = { key: string; title: string; detail: string; action: string;
 const kinds: Record<string, { detail: string; action: string; tab?: CloseTab }> = {
   changed: { detail: "Its sources changed, so the draft needs your review again before it counts.", action: "Review again", tab: "workpapers" },
   fix: { detail: "A reviewer asked for changes: revise the draft or prepare a new version.", action: "Open the draft", tab: "workpapers" },
-  confirm: { detail: "The agent read these facts and needs you to confirm them before it prepares the draft.", action: "Confirm the facts" },
-  failed: { detail: "The agent could not prepare it; the document's work says why.", action: "Open the document" },
+  confirm: { detail: "The agent read these facts and needs you to confirm them before it prepares the draft.", action: "Confirm the facts", tab: "evidence" },
+  failed: { detail: "The agent could not prepare it; the document's work says why.", action: "Open the document", tab: "evidence" },
+  forwarded: { detail: "Its sender is unverified; it was scanned clean. Release it to the agent, or reject it.", action: "Review the file", tab: "evidence" },
   release: { detail: "Scanned clean, and waiting for you to release it before the agent can use it.", action: "Review the file" },
   held: { detail: "Check the reply and who sent it before it is used.", action: "Review the reply", tab: "requests" },
   answered: { detail: "The reply answers part of the request; the rest is still open.", action: "Read the reply", tab: "requests" },
@@ -54,7 +55,7 @@ const kinds: Record<string, { detail: string; action: string; tab?: CloseTab }> 
   goal: { detail: "The agent's work shows where it stands.", action: "Open" },
   handoff: { detail: "Handed to you to look into.", action: "Open" },
 };
-const kindOf = (e: AttentionEvent) => kinds[e.key.startsWith("held:") ? "held" : e.kind] ?? { detail: "", action: "Open" };
+const kindOf = (e: AttentionEvent) => kinds[e.key.startsWith("held:") ? "held" : e.key.startsWith("forwarded:") ? "forwarded" : e.kind] ?? { detail: "", action: "Open" };
 const tabOf = (tab: string | undefined) => closeTabs.find(([key]) => key === tab)?.[0];
 // Where a brief line's work is: its tab, or on Overview the agent's details, where each document's work is.
 // Books' areas open their view: the ledger its captures, the balance sheet the full tie-out, exceptions the agent's
@@ -68,6 +69,7 @@ const list = (items: string[]) => (items.length < 3 ? items.join(" and ") : `${i
 function target(e: AttentionEvent, base: string) {
   if (e.workpaper_id) return `${base}/workpapers/${e.workpaper_id}`;
   if (e.job_id) return `${base}?job=${e.job_id}`;
+  if (e.key.startsWith("forwarded:")) return `${base}?tab=evidence&view=add#forwarded-${e.key.slice("forwarded:".length)}`;
   if (e.account_id || e.kind === "unanswered" || e.key.startsWith("release:")) return `${base}#coverage-work`;
   const tab = kindOf(e).tab;
   return tab ? `${base}?tab=${tab}` : `${base}#agent-details`;
