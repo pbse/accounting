@@ -136,7 +136,7 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 		// Quarantined bytes are never served. Only a recent clean scan permits review.
 		var name string
 		var body []byte
-		err := db.QueryRowContext(r.Context(), `SELECT name,body FROM client_attachments WHERE id::text=$1 AND close_id::text=$2 AND state IN ('clean','released') AND scanned_digest=digest AND scanned_at>now()-interval '24 hours'`, r.PathValue("attachment"), r.PathValue("id")).Scan(&name, &body)
+		err := db.QueryRowContext(r.Context(), `SELECT name,body FROM client_attachments WHERE id::text=$1 AND close_id::text=$2 AND state IN ('clean','released') AND body IS NOT NULL AND scanned_digest=digest AND scanned_at>now()-interval '24 hours'`, r.PathValue("attachment"), r.PathValue("id")).Scan(&name, &body)
 		if err != nil {
 			problem(w, 409, "Attachment needs a current clean automated scan before download.")
 			return

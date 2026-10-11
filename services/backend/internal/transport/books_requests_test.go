@@ -121,12 +121,12 @@ func TestAClientSendsTheMonthsBooksThroughARequest(t *testing.T) {
 	if period != "2027-04" || name != "April trial balance.csv" || kept != released["import_id"] {
 		t.Fatalf("the released file is the client's April file: %s %s %s %v", period, name, kept, released)
 	}
-	// Deleting the file deletes the attachment that held the same bytes.
-	_, err = db.Exec(`DELETE FROM books_imports WHERE id=$1::bigint`, kept)
-	must(err)
-	var left int
-	must(db.QueryRow(`SELECT count(*) FROM client_attachments WHERE id=$1::bigint`, attachment).Scan(&left))
-	if left != 0 {
-		t.Fatal("a deleted file's bytes are kept in its attachment")
+	// Deleting the file removes the attachment's bytes too; the attachment keeps its request, scan and release.
+	call("POST", "/v1/closes/client/import/delete?name="+url.QueryEscape(entity)+"&id="+kept, token, map[string]any{"reason": "The client asked us to remove it"}, 200)
+	var state string
+	var emptied bool
+	must(db.QueryRow(`SELECT state,body IS NULL AND import_id IS NULL FROM client_attachments WHERE id=$1::bigint`, attachment).Scan(&state, &emptied))
+	if state != "released" || !emptied {
+		t.Fatalf("a deleted file's attachment keeps its record without its bytes: %s %v", state, emptied)
 	}
 }

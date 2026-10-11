@@ -907,8 +907,10 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The file could not be deleted.")
 			return
 		}
-		// The books written from this file go with it: its readings, then the file.
+		// The books written from this file go with it: its readings, then the file. A client attachment it was released from
+		// keeps its record without the same bytes.
 		for _, q := range []string{`DELETE FROM books_versions WHERE source='files' AND source_id IN (SELECT a.id::text FROM books_import_acceptances a WHERE a.import_id::text=$1)`,
+			`UPDATE client_attachments SET body=NULL WHERE import_id::text=$1`,
 			`DELETE FROM books_layouts WHERE import_id::text=$1`, `DELETE FROM books_imports WHERE id::text=$1`} {
 			if _, err = tx.ExecContext(r.Context(), q, id); err != nil {
 				problem(w, 503, "The file could not be deleted.")
