@@ -262,9 +262,11 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["requests"] = requests
-		// A member who can open only some of the client's months, under another of its names, sees those alone.
+		// A member who can open only some of the client's months, under another of its names, sees those alone: nothing
+		// of the client as a whole, its connections and posting grants included.
 		if !whole {
 			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"] = nil, nil, true, []any{}, []any{}, nil, nil
+			out["production_grants"], out["xero_grants"], out["can_grant"] = []any{}, []any{}, false
 			jsonReply(w, 200, out)
 			return
 		}
