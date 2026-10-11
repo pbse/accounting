@@ -211,6 +211,8 @@ type claim struct {
 	published bool
 	// row is what identifies the row the field sits in (an id, a week's start, an account), when it has one.
 	row string
+	// account is the ledger account the field is of, when its row names one; source is the read it came from.
+	account, source string
 	// driver says the field is a driver of a movement (a payee row of a changes read), attributing it, not explaining it.
 	driver bool
 	// variance says a percentage is a variance against a budget (the budget comparison's signed percent).
@@ -237,7 +239,7 @@ var (
 
 // claimOf reads what the field at path measures from the field's key and the objects that hold it.
 func claimOf(read agentRead, path string) claim {
-	c := claim{keys: map[string]bool{}, kind: "level", period: read.period, entity: read.entity}
+	c := claim{keys: map[string]bool{}, kind: "level", period: read.period, entity: read.entity, source: read.title}
 	keys := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	for i, k := range keys {
 		keys[i] = strings.ReplaceAll(strings.ReplaceAll(k, "~1", "/"), "~0", "~")
@@ -311,6 +313,11 @@ func claimOf(read agentRead, path string) claim {
 	// An executive overview lists each client's newest published report as frozen: its figures are the report's.
 	if read.tool == "executive_overview" && keys[0] == "published" {
 		c.published = true
+	}
+	if len(ancestors) > 0 {
+		if v, ok := ancestors[len(ancestors)-1]["account_id"].(string); ok {
+			c.account = v
+		}
 	}
 	// The row's identity, from the nearest object that has one.
 	for i := len(ancestors) - 1; i >= 0 && c.row == ""; i-- {
@@ -1870,7 +1877,36 @@ func operandList(line string, o occurrence, claims []claim) bool {
 // oneFact says whether two cited fields are one fact: the same client, month, line, kind, field, row and scope, on
 // the same basis or one of them of unknown basis.
 func oneFact(a, b claim) bool {
-	return strings.EqualFold(a.entity, b.entity) && a.period == b.period && strings.EqualFold(a.label, b.label) && a.kind == b.kind &&
-		a.field == b.field && a.row == b.row && a.ytd == b.ytd && a.forecast == b.forecast && a.scenario == b.scenario &&
-		(a.basis == "" || b.basis == "" || a.basis == b.basis)
+	same := strings.EqualFold(a.entity, b.entity) && a.period == b.period && a.kind == b.kind && a.ytd == b.ytd &&
+		a.forecast == b.forecast && a.scenario == b.scenario && (a.basis == "" || b.basis == "" || a.basis == b.basis)
+	if !same {
+		return false
+	}
+	// A named measure (net income) is one fact however it is read (an overview's net_income, a pack's measure),
+	// unless two different accounts are cited.
+	if len(a.keys) > 0 && len(a.keys) == len(b.keys) && overlaps(a.keys, b.keys) {
+		// Two different accounts, or two rows of one kind (two weeks), are different facts.
+		if a.account != "" && b.account != "" && a.account != b.account {
+			return false
+		}
+		rowKind := func(r string) string { k, _, _ := strings.Cut(r, "="); return k }
+		if a.row != "" && b.row != "" && rowKind(a.row) == rowKind(b.row) && a.row != b.row {
+			return false
+		}
+		return true
+	}
+	return strings.EqualFold(a.label, b.label) && a.field == b.field && a.row == b.row
 }
+
+// staleSourceNamed says whether a clause stating something is stale or superseded speaks of a stale source the
+// sentence cites: its line, its read, or the kind of source it is (a report, a capture, an opening balance).
+func staleSourceNamed(clause string, stale []claim) bool {
+	for _, c := range stale {
+		if labelNamed(clause, c.label) || sharesWord(clause, c.source) || claimStaleSource.MatchString(strings.ToLower(clause)) {
+			return true
+		}
+	}
+	return false
+}
+
+var claimStaleSource = regexp.MustCompile(`\b(report|publication|pack|version|capture|snapshot|opening|figure|figures|it|this|which)\b`)

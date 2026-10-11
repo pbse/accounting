@@ -648,8 +648,8 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	sentenceClaims := make([]map[int]claim, len(lines))
 	sentenceEntries := make([][]agentSupportEntry, len(lines))
 	sentenceMoney := make([][]moneyEntry, len(lines))
-	// Whether a sentence computes from a stale field, which lets it say "stale".
-	sentenceStale := make([]bool, len(lines))
+	// The stale fields a sentence's derived figures are computed from, which it may say are stale.
+	sentenceStaleClaims := make([][]claim, len(lines))
 	// The fields each sentence's derived figures are computed from.
 	sentenceDerived := make([][]claim, len(lines))
 	// Whether a sentence states a cited number at all (money or a count).
@@ -714,7 +714,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				if c.entity != "" {
 					sentenceClients[s.sentence][strings.ToLower(c.entity)] = true
 				}
-				sentenceStale[s.sentence] = sentenceStale[s.sentence] || c.stale
+				if c.stale {
+					sentenceStaleClaims[s.sentence] = append(sentenceStaleClaims[s.sentence], c)
+				}
 			}
 			covered[s.sentence] = true
 			continue
@@ -951,13 +953,37 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 		// A state the sentence asserts ("is reconciled", "ties") must be the cited value itself, or in the quote,
 		// of one of its own support entries: an amount never supports a state.
-		staleCited := sentenceStale[i]
+		staleClaims := append([]claim{}, sentenceStaleClaims[i]...)
 		for _, c := range sentenceClaims[i] {
-			staleCited = staleCited || c.stale
+			if c.stale {
+				staleClaims = append(staleClaims, c)
+			}
 		}
 		for _, state := range agentStatesIn(lines[i]) {
-			// A read the gate knows to be stale may be said to be stale or superseded.
-			held := staleCited && (state == "stale" || state == "superseded")
+			// A read the gate knows to be stale may be said to be stale or superseded, of that source: the clause
+			// saying so (with the one before it, for "…, which is stale") speaks of it, never of a source not cited
+			// ("the bank feed is stale").
+			held := false
+			if (state == "stale" || state == "superseded") && len(staleClaims) > 0 {
+				lower := strings.ToLower(lines[i])
+				at := strings.Index(lower, state)
+				from, to := 0, len(lower)
+				bounds := claimClause.FindAllStringIndex(lower, -1)
+				for k, b := range bounds {
+					if b[1] <= at {
+						from = b[1]
+						if k > 0 {
+							from = bounds[k-1][1]
+						} else {
+							from = 0
+						}
+					}
+					if b[0] >= at && to == len(lower) {
+						to = b[0]
+					}
+				}
+				held = staleSourceNamed(lines[i][from:to], staleClaims)
+			}
 			for _, s := range support {
 				if s.sentence != i {
 					continue

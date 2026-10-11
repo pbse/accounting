@@ -467,6 +467,12 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	reads["t58"] = read(`{"lines":[{"name":"Sales tax payable","amount":"500.00"}]}`, "Statement", "management_pack", "Bluegrass Dental PLLC", "2026-10")
 	rejected("Sales were 500.00.", "the cited field is Sales tax payable", e("t58", 0, "/lines/0/amount", "500.00"))
 
+	// Round thirty-one: one published figure read two ways; a stale state of a source not cited.
+	reads["t59"] = agentRead{text: "{}", value: decode(`{"published":[{"close_id":"9","publication_id":"21","entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","net_income":"100.00"}]}`), link: chatCitation{"Overview", "/dashboard/executive"}, title: "Your clients", tool: "executive_overview", executive: true}
+	reads["t60"] = read(`{"publication":{"id":"21","state":"current"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"100.00"}]}}}`, "Published report", "read_publication", "", "")
+	rejected("The published net income totals 200.00.", "counts the same figure twice", derived(0, "sum", "200.00", "t59", "/published/0/net_income", "t60", "/pack/profit_and_loss/measures/0/amount"))
+	rejected("The bank feed is stale; the report's net income is 20,100.00.", "the state stale is not in a cited field", e("t7", 0, "/pack/profit_and_loss/measures/0/amount", "20100.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }
