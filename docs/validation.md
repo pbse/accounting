@@ -4126,7 +4126,10 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - forecast and scenario wording qualifies only the figure's own clause or an introduction before it;
   - a derived decline may be stated as its magnitude with "fell", held to the computed sign;
   - figure-less directions are read in the clause that names each field ("revenue rose while expenses fell");
-  - a change named as a variance or difference needs no "up", "down" or "by", and a variance may be said to be against the budget.
+  - a change named as a variance or difference needs no "up", "down" or "by", and a variance may be said to be against the budget;
+  - a line is named by all its distinctive words ("Office rent" never names "Office supplies");
+  - the budget comparison's totals are read as what they are: `_ytd` totals are year to date, and `net_*`, `income_*` and `expense_*` are net income, income and expenses;
+  - client names are matched rune by rune, so a name whose lowercase form has another byte length cannot shift offsets.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.

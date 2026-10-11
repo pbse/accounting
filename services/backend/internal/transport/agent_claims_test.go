@@ -364,6 +364,18 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Revenue fell while expenses rose.", "moved the other way", e("t6", 0, "/rows/0/change", "4940.00"), e("t39", 0, "/profit_and_loss/sections/0/total/change", "-300.00"))
 	ok("Rent's variance against budget is 500.00.", e("t4", 0, "/lines/0/month/variance", "500.00"))
 
+	// Round sixteen: a line named in full; budget totals' year to date and metrics; a Unicode client name.
+	reads["t40"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"sections":[{"name":"Expense","lines":[{"name":"Office supplies","amount":"8000.00"}]}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Office rent was 8,000.00.", "the cited field is Office supplies", e("t40", 0, "/profit_and_loss/sections/0/lines/0/amount", "8000.00"))
+	ok("Office supplies were 8,000.00.", e("t40", 0, "/profit_and_loss/sections/0/lines/0/amount", "8000.00"))
+	reads["t41"] = read(`{"currency":"USD","totals":{"income_ytd":{"actual":"1280000.00","budget":"1250000.00"},"net_month":{"actual":"9400.00","budget":"9000.00"}}}`, "Budget against actual", "budget_comparison", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Total income in October was 1,280,000.00.", "year-to-date", e("t41", 0, "/totals/income_ytd/actual", "1280000.00"))
+	ok("Total income year to date is 1,280,000.00.", e("t41", 0, "/totals/income_ytd/actual", "1280000.00"))
+	ok("Net income was 9,400.00.", e("t41", 0, "/totals/net_month/actual", "9400.00"))
+	if names := clientsNamed("Revenue at ȺCME is up", []string{"ȺCME", "Acme"}); len(names) != 1 || names[0] != "ȺCME" {
+		t.Fatalf("a Unicode client name is matched without shifting offsets: %v", names)
+	}
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

@@ -191,7 +191,9 @@ var (
 	claimPercentKeys = map[string]bool{"percent": true, "ratio": true, "margin_percent": true}
 	claimMoneyKeys   = map[string]bool{"amount": true, "balance": true, "ledger_balance": true, "statement_balance": true, "supported": true, "trial_balance": true, "total": true, "actual": true, "budget": true, "opening": true, "closing": true, "lowest": true, "receipts": true, "disbursements": true, "net": true, "open": true, "due": true}
 	// A cash plan's week fields name what they measure.
-	claimKeyMetrics = map[string]string{"opening": "cash", "closing": "cash", "lowest": "cash", "receipts": "receipts", "disbursements": "disbursements"}
+	claimKeyMetrics = map[string]string{"opening": "cash", "closing": "cash", "lowest": "cash", "receipts": "receipts", "disbursements": "disbursements",
+		// The budget comparison's totals.
+		"net_month": "net_income", "net_ytd": "net_income", "income_month": "revenue", "income_ytd": "revenue", "expense_month": "expenses", "expense_ytd": "expenses"}
 	claimLabelKeys  = []string{"name", "payee", "account", "label", "line", "title", "customer", "vendor"}
 	claimCauseRe    = regexp.MustCompile(`cause|reason|explanation|because|why`)
 	claimMoneyValue = regexp.MustCompile(`^[(−-]?\$?\d[\d,]*\.\d{2}\)?$`)
@@ -288,6 +290,12 @@ func claimOf(read agentRead, path string) claim {
 	if m, ok := claimKeyMetrics[last]; ok && len(c.keys) == 0 {
 		c.keys[m] = true
 	}
+	// A generic field under a known total (/totals/net_month/actual) is that total's.
+	if len(keys) > 1 {
+		if m, ok := claimKeyMetrics[keys[len(keys)-2]]; ok && len(c.keys) == 0 {
+			c.keys[m] = true
+		}
+	}
 	// A generic field (amount, change) under a named object (/lowest/amount, /working_capital/amount) is that object's.
 	if len(c.keys) == 0 && c.label == "" && len(keys) > 1 {
 		parent := keys[len(keys)-2]
@@ -321,7 +329,7 @@ func claimOf(read agentRead, path string) claim {
 			c.forecast = true
 		case strings.Contains(k, "scenario"):
 			c.forecast, c.scenario = true, true
-		case k == "ytd":
+		case k == "ytd" || strings.HasSuffix(k, "_ytd") || strings.HasPrefix(k, "ytd_"):
 			c.ytd = true
 		case k == "prior_month" && i == len(keys)-1:
 			c.kind = "prior"
@@ -633,25 +641,43 @@ func overlaps(a, b map[string]bool) bool {
 var genericLineWords = map[string]bool{"the": true, "and": true, "for": true, "was": true, "are": true, "its": true, "not": true, "but": true, "has": true, "had": true, "per": true, "all": true, "any": true, "our": true, "out": true, "off": true, "own": true, "via": true,
 	"total": true, "fees": true, "fee": true, "expense": true, "expenses": true, "income": true, "costs": true, "cost": true, "account": true, "accounts": true, "other": true, "payable": true, "receivable": true, "balance": true, "amount": true, "net": true, "charges": true, "charge": true, "revenue": true, "sales": true}
 
-// labelNamed says whether a text names a row's line: one of the line's distinctive words (three letters or more, not
-// filler and not a word many lines share), or, when the line has none ("Other expense"), the line's whole name.
+// labelNamed says whether a text names a row's line: every one of the line's distinctive words (three letters or more,
+// not filler and not a word many lines share), so "Office rent" never names "Office supplies"; or, when the line has
+// none ("Other expense"), the line's whole name.
 func labelNamed(text, label string) bool {
 	in := map[string]bool{}
 	for _, w := range wordsOf(text) {
 		in[strings.Trim(w, "-")] = true
 	}
-	distinctive := false
+	distinctive, all := false, true
 	for _, w := range wordsOf(label) {
 		w = strings.Trim(w, "-")
 		if len(w) < 3 || agentStopWords[w] || genericLineWords[w] {
 			continue
 		}
 		distinctive = true
-		if in[w] {
+		all = all && in[w]
+	}
+	if distinctive {
+		return all
+	}
+	return strings.TrimSpace(label) != "" && strings.Contains(strings.ToLower(text), strings.ToLower(strings.TrimSpace(label)))
+}
+
+// sharesWord says whether two texts share a distinctive word: looser than naming a line, for whether a passage
+// speaks of a stated cause or effect.
+func sharesWord(text, other string) bool {
+	in := map[string]bool{}
+	for _, w := range wordsOf(text) {
+		in[strings.Trim(w, "-")] = true
+	}
+	for _, w := range wordsOf(other) {
+		w = strings.Trim(w, "-")
+		if len(w) >= 3 && !agentStopWords[w] && !genericLineWords[w] && in[w] {
 			return true
 		}
 	}
-	return !distinctive && strings.TrimSpace(label) != "" && strings.Contains(strings.ToLower(text), strings.ToLower(strings.TrimSpace(label)))
+	return false
 }
 
 // introduced says whether a qualifier stands in a clause before the figure's that holds no figure of its own, as an
@@ -859,13 +885,13 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 			switch {
 			case s.quote != "" && claimNegation.MatchString(strings.ToLower(s.quote)):
 				// "The campaign did not affect revenue" contradicts the cause rather than supporting it.
-			case s.quote != "" && labelNamed(cause, s.quote) && claimCausalEvidence.MatchString(strings.ToLower(s.quote)) && effectNamed(line[clauseStart:at[0]], s.quote, claims):
+			case s.quote != "" && sharesWord(cause, s.quote) && claimCausalEvidence.MatchString(strings.ToLower(s.quote)) && effectNamed(line[clauseStart:at[0]], s.quote, claims):
 				// The passage names the cause, says it acted, and names the effect the sentence claims ("revenue rose
 				// after the campaign started"); "the campaign raised payroll" supports no claim about revenue.
 				supported = true
 			case claims[i].cause:
 				got, _ := valueAt(reads[s.step].value, s.path)
-				supported = supported || labelNamed(cause, got) || labelNamed(cause, claims[i].label)
+				supported = supported || sharesWord(cause, got) || labelNamed(cause, claims[i].label)
 			}
 		}
 		if !supported {
@@ -1519,36 +1545,52 @@ func resultLabel(line string, o occurrence) map[string]bool {
 func clientsNamed(text string, clients []string) []string {
 	ordered := append([]string(nil), clients...)
 	sort.SliceStable(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
-	lower := []byte(strings.ToLower(text))
-	out := []string{}
-	boundary := func(b []byte, i int) bool {
-		if i < 0 || i >= len(b) {
-			return true
-		}
-		r := rune(b[i])
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r < 0x80
+	// Rune by rune, lowercased one rune to one rune, so offsets in the lowered and original text always agree.
+	original := []rune(text)
+	lower := make([]rune, len(original))
+	for i, r := range original {
+		lower[i] = unicode.ToLower(r)
 	}
-	original := []byte(text)
+	out := []string{}
+	boundary := func(b []rune, i int) bool {
+		return i < 0 || i >= len(b) || !unicode.IsLetter(b[i]) && !unicode.IsDigit(b[i])
+	}
+	index := func(haystack, needle []rune, from int) int {
+		for i := from; i+len(needle) <= len(haystack); i++ {
+			match := true
+			for j := range needle {
+				if haystack[i+j] != needle[j] {
+					match = false
+					break
+				}
+			}
+			if match {
+				return i
+			}
+		}
+		return -1
+	}
 	for _, name := range ordered {
-		want := strings.ToLower(strings.TrimSpace(name))
-		if want == "" {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
 			continue
 		}
 		// A plain search, then whole-word edges: no pattern is compiled per client. A short name ("GE") is matched in
 		// its own case, so the word "ge" in a sentence is not a client.
-		haystack := lower
-		if len(want) < 3 {
-			want, haystack = strings.TrimSpace(name), original
+		want, haystack := []rune(trimmed), original
+		if len(want) >= 3 {
+			for i, r := range want {
+				want[i] = unicode.ToLower(r)
+			}
+			haystack = lower
 		}
-		from := 0
-		for {
-			i := strings.Index(string(haystack[from:]), want)
+		for from := 0; ; {
+			i := index(haystack, want, from)
 			if i < 0 {
 				break
 			}
-			i += from
 			if boundary(haystack, i-1) && boundary(haystack, i+len(want)) {
-				out = append(out, strings.TrimSpace(name))
+				out = append(out, trimmed)
 				for j := i; j < i+len(want); j++ {
 					if lower[j] != ' ' {
 						lower[j], original[j] = '#', '#'
