@@ -316,7 +316,7 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 			if in.Jobs == nil {
 				ids = []byte("[]")
 			}
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO coverage_bindings(close_id,snapshot_id,xero_snapshot_id,account_id,job_ids,excluded,reason,actor) VALUES($1,`+captureColumns("$2")+`,$3,$4,$5,$6,$7)`, closeID, view.SnapshotID, in.AccountID, string(ids), in.Excluded, in.Reason, actor)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO coverage_bindings(close_id,snapshot_id,xero_snapshot_id,file_version_id,account_id,job_ids,excluded,reason,actor) VALUES($1,`+captureColumns("$2")+`,$3,$4,$5,$6,$7)`, closeID, view.SnapshotID, in.AccountID, string(ids), in.Excluded, in.Reason, actor)
 		case "request":
 			recipient, e := mail.ParseAddress(strings.TrimSpace(in.Recipient))
 			if e != nil || recipient.Address != strings.TrimSpace(in.Recipient) || len(in.Recipient) > 254 || len(strings.TrimSpace(in.Body)) == 0 || len(in.Body) > 20000 || len(in.Accounts) == 0 || len(in.Accounts) > 20 {

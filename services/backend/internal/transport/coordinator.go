@@ -90,6 +90,12 @@ func preparationInventory(ctx context.Context, tx *sql.Tx, closeID string) ([]by
 // otherwise collide) and is stale once its connection is no longer active, when it is of another month than the
 // close's, or when it cannot be read.
 func ledgerCoverage(ctx context.Context, tx *sql.Tx, closeID string) (json.RawMessage, error) {
+	// A month whose books are its files is covered account by account from its accepted file's books.
+	if source, err := closeBooksSource(ctx, tx, closeID); err != nil {
+		return nil, err
+	} else if source == "files" {
+		return fileCoverage(ctx, tx, closeID)
+	}
 	var raw json.RawMessage
 	var quickbooksAt sql.NullTime
 	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('snapshot_id',s.id::text,'digest',s.digest,'source_id',s.payload->>'source_id','period',s.payload->>'period','captured_at',s.captured_at,'items',s.payload->'coverage','stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),'null'::jsonb),
@@ -127,15 +133,21 @@ const quickbooksReading = `s.connection_id=COALESCE(` + quickbooks.ReadingConnec
 // xeroCapture prefixes a Xero capture's ID wherever coverage names its capture.
 const xeroCapture = "xero:"
 
+// fileCapture prefixes a month on files' books version's ID wherever coverage names its capture.
+const fileCapture = "file:"
+
 // bindingCapture is SQL naming the capture of coverage binding (or hand-off) t as coverage names it: a QuickBooks
-// snapshot's ID, or "xero:" and a Xero snapshot's.
+// snapshot's ID, "xero:" and a Xero snapshot's, or "file:" and a books version's.
 func bindingCapture(t string) string {
-	return `COALESCE('` + xeroCapture + `'||` + t + `.xero_snapshot_id,` + t + `.snapshot_id::text)`
+	return `COALESCE('` + xeroCapture + `'||` + t + `.xero_snapshot_id,'` + fileCapture + `'||` + t + `.file_version_id,` + t + `.snapshot_id::text)`
 }
 
-// captureColumns is SQL for the snapshot_id and xero_snapshot_id values of the capture coverage names in parameter p.
+// captureColumns is SQL for the snapshot_id, xero_snapshot_id and file_version_id values of the capture coverage names
+// in parameter p.
 func captureColumns(p string) string {
-	return `CASE WHEN starts_with(` + p + `::text,'` + xeroCapture + `') THEN NULL ELSE NULLIF(` + p + `::text,'')::bigint END,CASE WHEN starts_with(` + p + `::text,'` + xeroCapture + `') THEN substr(` + p + `::text,` + "6" + `)::bigint END`
+	other := `(starts_with(` + p + `::text,'` + xeroCapture + `') OR starts_with(` + p + `::text,'` + fileCapture + `'))`
+	return `CASE WHEN ` + other + ` THEN NULL ELSE NULLIF(` + p + `::text,'')::bigint END,CASE WHEN starts_with(` + p + `::text,'` + xeroCapture + `') THEN substr(` + p + `::text,6)::bigint END,` +
+		`CASE WHEN starts_with(` + p + `::text,'` + fileCapture + `') THEN substr(` + p + `::text,6)::bigint END`
 }
 
 func scopeSources(inventory []byte) []byte {
