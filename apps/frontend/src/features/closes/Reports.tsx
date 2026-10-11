@@ -232,7 +232,7 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         <>
           <SectionHeader id="figure-ledger" title={`Ledger rows behind this figure, ${pack.period}`} />
           {pack.source === "files" ? (
-            <FileLines key={`this-${account}`} closeId={closeId} accountId={account} />
+            <FileLines key={`this-${pack.snapshot_id}-${account}`} closeId={closeId} accountId={account} />
           ) : (
             <LedgerSelection key={`this-${account}`} closeId={closeId} snapshotId={pack.snapshot_id} accountId={account} stale={pack.stale} suggestions={[]} />
           )}

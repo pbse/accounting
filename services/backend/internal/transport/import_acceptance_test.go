@@ -495,6 +495,14 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if found := call("user_a", partner, "GET", "/v1/closes/"+februaryClose+"/files/ledger?account_id=n:1000&query=FEBRUARY", nil, 200); found["total"] != 1.0 {
 		t.Fatalf("a line found by its description: %v", found)
 	}
+	// A ledger's version written before its lines were kept has them added by the worker.
+	_, err = db.Exec(`DELETE FROM books_lines WHERE version_id IN (SELECT id FROM books_versions WHERE close_id=$1::bigint AND source='files')`, februaryClose)
+	must(err)
+	_, err = writeFileVersions(t.Context(), db, org, "", "")
+	must(err)
+	if again := call("user_a", partner, "GET", "/v1/closes/"+februaryClose+"/files/ledger?account_id=n:6000", nil, 200); again["total"] != 1.0 {
+		t.Fatalf("the lines of a version written before them: %v", again)
+	}
 	// March's ledger opens at February's derived balances, never at February's lines.
 	march := send1("2027-03", "Date,Number,Account,Description,Debit,Credit\n03/15/2027,1000,Business Checking,Cash sale,50.00,\n03/15/2027,4000,Sales,Cash sale,,50.00\n")
 	confirmColumns(march, "2027-03-31", map[string]string{"0": "date", "1": "account_number", "2": "account_name", "3": "memo", "4": "debit", "5": "credit"})

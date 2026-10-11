@@ -38,7 +38,9 @@ const pendingFileVersions = `SELECT a.organization_id,a.client_entity,a.id::text
   AND c.id=(SELECT max(d.id) FROM client_closes d WHERE d.organization_id=c.organization_id AND client_identity(d.organization_id,d.entity)=client_identity(c.organization_id,c.entity) AND d.period=c.period)
   AND a.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=a.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(a.organization_id,a.client_entity) AND b.period=a.period
    AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id))
-  AND NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='files' AND v.source_id=a.id::text)
+  AND (NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='files' AND v.source_id=a.id::text)
+   OR EXISTS(SELECT 1 FROM books_versions v JOIN books_layouts l ON l.id=a.layout_id WHERE v.source='files' AND v.source_id=a.id::text
+    AND EXISTS(SELECT 1 FROM jsonb_each_text(l.layout->'columns') m WHERE m.value='date') AND NOT EXISTS(SELECT 1 FROM books_lines n WHERE n.version_id=v.id)))
  ORDER BY a.id LIMIT 50`
 
 // writeFileVersions writes the books versions pending for firm org (every firm, for ""), client name and month period
@@ -105,7 +107,12 @@ func writeFileVersion(ctx context.Context, db *sql.DB, org, name, acceptance, fi
 		org, closeID, f.period, acceptance, name, f.asOf, f.acceptedAt, strings.ToUpper(f.currency), f.basis,
 		string(rawAccounts), string(rawBalances), string(rawActivity), hex.EncodeToString(sum[:]), f.missing).Scan(&versionID); {
 	case err == sql.ErrNoRows:
-		return tx.Commit()
+		// Written before its lines were kept: they are added to it, the version itself left as it is.
+		if err = tx.QueryRowContext(ctx, `SELECT v.id::text FROM books_versions v WHERE v.source='files' AND v.source_id=$1 AND NOT EXISTS(SELECT 1 FROM books_lines n WHERE n.version_id=v.id)`, acceptance).Scan(&versionID); err == sql.ErrNoRows {
+			return tx.Commit()
+		} else if err != nil {
+			return err
+		}
 	case err != nil:
 		return err
 	}
@@ -844,9 +851,9 @@ func registerFileLedger(mux *http.ServeMux, db *sql.DB) {
 		}
 		var rows json.RawMessage
 		var total int
-		if err = db.QueryRowContext(r.Context(), `SELECT (SELECT count(*) FROM books_lines WHERE version_id::text=$1 AND account_id=$2 AND ($3='' OR strpos(lower(cells::text),lower($3))>0)),
+		if err = db.QueryRowContext(r.Context(), `SELECT (SELECT count(*) FROM books_lines WHERE version_id=$1::bigint AND account_id=$2 AND ($3='' OR strpos(lower(cells::text),lower($3))>0)),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('location',location)||cells ORDER BY position) FROM (SELECT position,location,cells FROM books_lines
-  WHERE version_id::text=$1 AND account_id=$2 AND ($3='' OR strpos(lower(cells::text),lower($3))>0) ORDER BY position OFFSET $4 LIMIT 20) x),'[]')`, month.Version, accountID, query, offset).Scan(&total, &rows); err != nil {
+  WHERE version_id=$1::bigint AND account_id=$2 AND ($3='' OR strpos(lower(cells::text),lower($3))>0) ORDER BY position OFFSET $4 LIMIT 20) x),'[]')`, month.Version, accountID, query, offset).Scan(&total, &rows); err != nil {
 			problem(w, 503, "The month's ledger lines are unavailable.")
 			return
 		}
