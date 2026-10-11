@@ -139,36 +139,48 @@ func importOwner(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, bo
 	return name, true
 }
 
-// askedChoice is why a CSV choice asked for cannot be used for import id, or "": either both an encoding and a delimiter
-// the reader knows, for a CSV, or neither.
-func askedChoice(ctx context.Context, q rowReader, org, name, id string, asked csvChoice) string {
+// importFormat is import id of client name's format: csv or xlsx.
+func importFormat(ctx context.Context, q rowReader, org, name, id string) (string, error) {
+	var format string
+	err := q.QueryRowContext(ctx, `SELECT format FROM books_imports WHERE id::text=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)`, id, org, name).Scan(&format)
+	return format, err
+}
+
+// askedChoice is why a CSV choice asked for cannot be used for a file of format, or "": either both an encoding and a
+// delimiter the reader knows, for a CSV, or neither.
+func askedChoice(format string, asked csvChoice) string {
 	if asked.Encoding == "" && asked.Delimiter == "" {
 		return ""
 	}
 	if !slices.Contains([]string{"utf-8", "utf-16le", "utf-16be", "windows-1252"}, asked.Encoding) || !slices.Contains([]string{"comma", "semicolon", "tab", "pipe"}, asked.Delimiter) {
 		return "Choose an encoding (UTF-8, UTF-16 or Windows-1252) and a delimiter (comma, semicolon, tab or pipe) together."
 	}
-	var format string
-	if q.QueryRowContext(ctx, `SELECT format FROM books_imports WHERE id::text=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)`, id, org, name).Scan(&format) == nil && format != "csv" {
+	if format != "csv" {
 		return "Only a CSV file is read with an encoding and a delimiter."
 	}
 	return ""
 }
 
-// parseKey names what decides how an import is read for a request: the choice asked for, its own confirmed layout and
-// the client's last one, by their ids. Its rows read under the same key are the same rows.
-func parseKey(asked csvChoice, confirmed, saved *confirmedRead) string {
-	key := asked.Encoding + "|" + asked.Delimiter
-	if confirmed != nil {
-		key += "|c" + confirmed.ID
+// parseKey names what decides how a file of format is read, as readImportAs reads it: nothing, for a workbook; for a
+// CSV, the encoding and delimiter asked for, else those of its own confirmed layout, else the reader's own reading with
+// the client's last choice for what it is unsure of. Rows read under the same key are the same rows, however often
+// layouts are confirmed.
+func parseKey(format string, asked csvChoice, confirmed, saved *confirmedRead) string {
+	switch {
+	case format != "csv":
+		return "workbook"
+	case asked.Encoding != "" && asked.Delimiter != "":
+		return "as|" + asked.Encoding + "|" + asked.Delimiter
+	case confirmed != nil:
+		return "as|" + confirmed.CSV.Encoding + "|" + confirmed.CSV.Delimiter
+	case saved != nil && saved.CSV.Encoding != "":
+		return "reader|" + saved.CSV.Encoding + "|" + saved.CSV.Delimiter
 	}
-	if saved != nil {
-		key += "|s" + saved.ID
-	}
-	return key
+	return "reader"
 }
 
-// storeImportPages keeps the file's tables as read under key, two hundred rows to a chunk, unless they are kept already.
+// storeImportPages keeps the file's tables as read under key, two hundred rows to a chunk, unless they are kept already,
+// in place of those kept for any other way of reading it: a file keeps one copy of its rows.
 func storeImportPages(ctx context.Context, db *sql.DB, org, id, key string, file bookfiles.File) error {
 	type chunk struct {
 		Position      int             `json:"position"`
@@ -205,11 +217,22 @@ func storeImportPages(ctx context.Context, db *sql.DB, org, id, key string, file
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, `INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows,meta)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM books_import_pages WHERE import_id=$1::bigint AND parse<>$2`, id, key); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows,meta)
  SELECT $1,$2::bigint,$3,c.position,c.table_name,c.hidden,c.hidden_columns,c.total,c.chunk,c.first_row,c.rows,c.meta FROM jsonb_to_recordset($4::jsonb)
   AS c(position int,table_name text,hidden boolean,hidden_columns jsonb,total int,chunk int,first_row int,rows jsonb,meta jsonb)
  WHERE NOT EXISTS(SELECT 1 FROM books_import_pages p WHERE p.import_id=$2::bigint AND p.parse=$3) ON CONFLICT DO NOTHING`, org, id, key, string(raw))
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // fileFacts is what a file was read as, beside its rows: as the import's reply names them.
@@ -663,12 +686,21 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The file's layout is unavailable.")
 			return
 		}
+		format, err := importFormat(r.Context(), db, org, name, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			problem(w, 404, "File not found.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The file is unavailable.")
+			return
+		}
 		asked := csvChoice{Encoding: r.URL.Query().Get("encoding"), Delimiter: r.URL.Query().Get("delimiter")}
-		if refusal := askedChoice(r.Context(), db, org, name, id, asked); refusal != "" {
+		if refusal := askedChoice(format, asked); refusal != "" {
 			problem(w, 422, refusal)
 			return
 		}
-		key := parseKey(asked, ownRef, clientRef)
+		key := parseKey(format, asked, ownRef, clientRef)
 		// Rows come in pages: from the first, or from the row a person asks for (?from=), so any row can be seen and
 		// marked. A later page is read from the rows kept the first time the file was read this way.
 		from := 1
@@ -964,9 +996,34 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The file's layout is unavailable.")
 			return
 		}
-		if refusal := askedChoice(r.Context(), db, org, name, r.URL.Query().Get("id"), in.CSV); refusal != "" {
+		format, err := importFormat(r.Context(), db, org, name, r.URL.Query().Get("id"))
+		if errors.Is(err, sql.ErrNoRows) {
+			problem(w, 404, "File not found.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The file is unavailable.")
+			return
+		}
+		if refusal := askedChoice(format, in.CSV); refusal != "" {
 			problem(w, 422, refusal)
 			return
+		}
+		// A preview's further lines come from the preview kept when it was read, while it was read the same way with the
+		// same layout, without reading the file again.
+		sent, _ := json.Marshal(in.Layout)
+		sum := sha256.Sum256([]byte(parseKey(format, in.CSV, ownLayout, clientLayout) + "\n" + string(sent)))
+		digest := hex.EncodeToString(sum[:])
+		if in.Action == "preview" && in.LinesFrom > 0 {
+			out, kept, err := storedPreview(r.Context(), db, org, r.URL.Query().Get("id"), digest, in.LinesFrom)
+			if err != nil {
+				problem(w, 503, "The preview is unavailable.")
+				return
+			}
+			if kept {
+				jsonReply(w, 200, out)
+				return
+			}
 		}
 		summary, file, err := readImportAs(r.Context(), db, org, name, r.URL.Query().Get("id"), in.CSV, ownLayout, clientLayout)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1005,6 +1062,10 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		from := min(max(in.LinesFrom, 0), len(reading.Lines))
 		brief.Lines = reading.Lines[from:min(from+200, len(reading.Lines))]
 		if in.Action == "preview" {
+			if err = keepPreview(r.Context(), db, org, summary.ID, digest, reading); err != nil {
+				problem(w, 503, "The preview could not be kept.")
+				return
+			}
 			jsonReply(w, 200, map[string]any{"reading": brief, "line_count": len(reading.Lines), "accounts": accounts, "lines_from": from})
 			return
 		}
@@ -1023,6 +1084,51 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]any{"id": id, "reading": brief, "line_count": len(reading.Lines), "accounts": accounts})
 	})
+}
+
+// keepPreview keeps reading as import id's latest preview, under digest, in place of any earlier one.
+func keepPreview(ctx context.Context, db *sql.DB, org, id, digest string, reading bookfiles.Reading) error {
+	raw, err := json.Marshal(reading)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM books_import_previews WHERE import_id=$1::bigint`, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO books_import_previews(import_id,organization_id,digest,reading) VALUES($1::bigint,$2,$3,$4::jsonb) ON CONFLICT DO NOTHING`, id, org, digest, string(raw)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// storedPreview is import id's kept preview under digest, as a preview answers: its totals, problems and notes, two
+// hundred of its lines from from (0-based), how many lines it has and how many are accounts; false when none is kept.
+func storedPreview(ctx context.Context, db *sql.DB, org, id, digest string, from int) (map[string]any, bool, error) {
+	var brief, lines []byte
+	var count, accounts int
+	err := db.QueryRowContext(ctx, `SELECT p.reading-'lines',COALESCE(jsonb_array_length(p.reading->'lines'),0),
+ (SELECT count(*) FROM jsonb_array_elements(COALESCE(p.reading->'lines','[]'::jsonb)) e WHERE e->>'kind'='posting'),
+ COALESCE((SELECT jsonb_agg(e ORDER BY n) FROM jsonb_array_elements(COALESCE(p.reading->'lines','[]'::jsonb)) WITH ORDINALITY t(e,n) WHERE n>$4 AND n<=$4+200),'[]'::jsonb)
+ FROM books_import_previews p WHERE p.import_id::text=$1 AND p.organization_id=$2 AND p.digest=$3`, id, org, digest, from).Scan(&brief, &count, &accounts, &lines)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var reading bookfiles.Reading
+	if err = json.Unmarshal(brief, &reading); err != nil {
+		return nil, false, err
+	}
+	if err = json.Unmarshal(lines, &reading.Lines); err != nil {
+		return nil, false, err
+	}
+	return map[string]any{"reading": reading, "line_count": count, "accounts": accounts, "lines_from": min(from, count)}, true, nil
 }
 
 // checkLayout is why a layout cannot be read, or "": a header row, columns of known meaning, a scale of one, a thousand

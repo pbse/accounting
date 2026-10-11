@@ -137,6 +137,18 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	if len(paged["reading"].(map[string]any)["lines"].([]any)) != 2 || paged["line_count"] != 4.0 || paged["accounts"] != 3.0 {
 		t.Fatalf("a preview's lines from the third: %v", paged)
 	}
+	// Further lines come from the preview kept when it was read, without reading the file again.
+	_, err = db.Exec(`UPDATE books_imports SET content='not the file' WHERE id::text=$1`, id)
+	must(err)
+	kept := call("user_b", preparer, "POST", path, map[string]any{"action": "preview", "layout": layout, "lines_from": 3}, 200)
+	if lines := kept["reading"].(map[string]any)["lines"].([]any); len(lines) != 1 || kept["line_count"] != 4.0 || kept["reading"].(map[string]any)["balanced"] != true {
+		t.Fatalf("a kept preview's last line: %v", kept)
+	}
+	_, err = db.Exec(`UPDATE books_imports SET content=$2 WHERE id::text=$1`, id, september)
+	must(err)
+	// An encoding the reader does not know, or one without its delimiter, is refused.
+	call("user_b", preparer, "GET", path+"&encoding=latin-9&delimiter=comma", nil, 422)
+	call("user_b", preparer, "GET", path+"&encoding=utf-8", nil, 422)
 	// A reviewer confirms it with a reason; a preparer cannot.
 	call("user_b", preparer, "POST", path, map[string]any{"action": "confirm", "layout": layout, "reason": "Matches the export"}, 403)
 	call("user_a", partner, "POST", path, map[string]any{"action": "confirm", "layout": layout, "reason": ""}, 422)
@@ -172,6 +184,12 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	}
 	_, err = db.Exec(`UPDATE books_imports SET content=$2 WHERE id::text=$1`, id, september)
 	must(err)
+	// The file keeps one copy of its rows, however often it is read another way.
+	var parses int
+	must(db.QueryRow(`SELECT count(DISTINCT parse) FROM books_import_pages WHERE import_id::text=$1`, id).Scan(&parses))
+	if parses != 1 {
+		t.Fatalf("one copy of the file's rows: %d", parses)
+	}
 	listed := call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co", nil, 200)["imports"].([]any)
 	if len(listed) != 1 || listed[0].(map[string]any)["confirmed"].(map[string]any)["balanced"] != true {
 		t.Fatalf("the list: %v", listed)
@@ -313,10 +331,10 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	}
 
 	// Another client's file, its rows kept under the key Acme's own requests would use, is never read through Acme.
-	var otherClient, acmeLayout string
+	var otherClient, acmeKey string
 	must(db.QueryRow(`INSERT INTO books_imports(organization_id,client_entity,period,name,digest,content,format,actor) VALUES($1,'Other Co','2026-09','other.csv',md5(random()::text)||md5(random()::text),'x','csv','fixture') RETURNING id::text`, org).Scan(&otherClient))
-	must(db.QueryRow(`SELECT max(id)::text FROM books_layouts WHERE organization_id=$1 AND lower(client_entity)='acme co'`, org).Scan(&acmeLayout))
-	_, err = db.Exec(`INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows) VALUES($1,$2::bigint,$3,0,'other.csv',false,'[]',2,0,1,'[{"number":2,"cells":[{"column":0,"ref":"R2C1","kind":"text","value":"Secret"}]}]')`, org, otherClient, "||s"+acmeLayout)
+	must(db.QueryRow(`SELECT 'reader|'||encoding||'|'||delimiter FROM books_layouts WHERE organization_id=$1 AND lower(client_entity)='acme co' ORDER BY id DESC LIMIT 1`, org).Scan(&acmeKey))
+	_, err = db.Exec(`INSERT INTO books_import_pages(organization_id,import_id,parse,position,table_name,hidden,hidden_columns,total,chunk,first_row,rows) VALUES($1,$2::bigint,$3,0,'other.csv',false,'[]',2,0,1,'[{"number":2,"cells":[{"column":0,"ref":"R2C1","kind":"text","value":"Secret"}]}]')`, org, otherClient, acmeKey)
 	must(err)
 	call("user_a", partner, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+otherClient+"&from=2", nil, 404)
 
@@ -328,5 +346,21 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	headed := upload("user_b", preparer, "Headed June.csv", "2026-06", "Account,Memo,Credit\nCash,100.00,\nCapital,,100.00\n", 201)["id"].(string)
 	if p := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+headed, nil, 200)["proposal"].(map[string]any); p["reused"] != false {
 		t.Fatalf("a header where there was none is asked about: %v", p)
+	}
+}
+
+// A CSV choice is both an encoding and a delimiter the reader knows, and only for a CSV; the rows kept are keyed by what
+// decides how the file is read, not by which layout said so.
+func TestACSVChoiceIsCheckedAndKeysTheRowsKept(t *testing.T) {
+	utf8Comma := csvChoice{Encoding: "utf-8", Delimiter: "comma"}
+	if askedChoice("csv", utf8Comma) != "" || askedChoice("xlsx", csvChoice{}) != "" || askedChoice("xlsx", utf8Comma) == "" ||
+		askedChoice("csv", csvChoice{Encoding: "utf-8"}) == "" || askedChoice("csv", csvChoice{Encoding: "latin-9", Delimiter: "comma"}) == "" {
+		t.Fatal("a choice is both parts, known, for a CSV")
+	}
+	if parseKey("xlsx", utf8Comma, &confirmedRead{ID: "1"}, nil) != "workbook" ||
+		parseKey("csv", csvChoice{}, &confirmedRead{ID: "1", CSV: utf8Comma}, nil) != parseKey("csv", csvChoice{}, &confirmedRead{ID: "2", CSV: utf8Comma}, nil) ||
+		parseKey("csv", csvChoice{}, nil, &confirmedRead{ID: "3", CSV: utf8Comma}) != parseKey("csv", csvChoice{}, nil, &confirmedRead{ID: "4", CSV: utf8Comma}) ||
+		parseKey("csv", csvChoice{}, nil, &confirmedRead{CSV: utf8Comma}) == parseKey("csv", utf8Comma, nil, nil) {
+		t.Fatal("the key is how the file is read")
 	}
 }

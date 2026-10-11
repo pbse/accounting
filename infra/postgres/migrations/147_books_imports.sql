@@ -49,8 +49,9 @@ CREATE INDEX books_layouts_client ON books_layouts(organization_id,lower(client_
 CREATE INDEX books_layouts_import ON books_layouts(import_id,id DESC);
 
 -- books_import_pages: an import's rows as read, two hundred to a chunk with the number of its first row, kept the first
--- time the file is read a given way (parse names what decided how), so a later page is read from here rather than by
--- reading the whole file again. The file never changes, so neither do its rows read that way.
+-- time the file is read a given way (parse names the encoding and delimiter that decided how), so a later page is read
+-- from here rather than by reading the whole file again. The file never changes, so neither do its rows read that way;
+-- only the latest way it was read is kept.
 CREATE TABLE books_import_pages (
  organization_id text NOT NULL REFERENCES organizations(id),
  import_id bigint NOT NULL REFERENCES books_imports(id) ON DELETE CASCADE,
@@ -72,6 +73,20 @@ ALTER TABLE books_import_pages ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON books_import_pages FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON books_import_pages FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_remove ON books_import_pages FOR DELETE USING (current_setting('app.organization',true) IN ('*',organization_id));
+
+-- books_import_previews: a file's latest preview reading, under the digest of what decided it (how the file was read
+-- and the layout), so its further lines are paged from here rather than by reading the file again.
+CREATE TABLE books_import_previews (
+ import_id bigint PRIMARY KEY REFERENCES books_imports(id) ON DELETE CASCADE,
+ organization_id text NOT NULL REFERENCES organizations(id),
+ digest text NOT NULL,
+ reading jsonb NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE books_import_previews ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_read ON books_import_previews FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
+CREATE POLICY tenant_add ON books_import_previews FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
+CREATE POLICY tenant_remove ON books_import_previews FOR DELETE USING (current_setting('app.organization',true) IN ('*',organization_id));
 
 -- books_import_deletions: a receipt for each file deleted (sent in error, or at the client's request), without its
 -- content: what it was, its digest, why it was deleted and by whom.
