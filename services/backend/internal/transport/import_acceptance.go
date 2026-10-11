@@ -281,46 +281,57 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	return s, true, nil
 }
 
-// priorReexportOf is the newest replacement of a month's accepted file, along the files' replaces chain, when it can
-// stand as that month's books: its reading confirmed with no problem and balanced, as of the month-end, every amount
-// exact and no formula's result unattested, its scope attested complete on that reading in the accepted file's basis.
-// Nil otherwise: a file that cannot establish the month's closing books is no evidence that they changed.
+// priorReexportOf is the newest replacement of a month's accepted file, along the files' replaces chain, that can stand
+// as that month's books: its reading confirmed with no problem and balanced, as of the month-end, in the accepted file's
+// currency, every amount exact, a workbook's formula results marked and none unattested, its scope attested complete on
+// that reading in the accepted file's basis. Nil without one: a file that cannot establish the month's closing books is
+// no evidence that they changed.
 func priorReexportOf(ctx context.Context, q rowReader, org, name, period, accepted string) (*priorReexport, error) {
-	var id, file, basis string
-	switch err := q.QueryRowContext(ctx, `WITH RECURSIVE chain(id) AS (SELECT $1::bigint UNION SELECT i.id FROM books_imports i JOIN chain c ON i.replaces=c.id)
- SELECT i.id::text,i.name,COALESCE((SELECT y.basis FROM books_import_acceptances a JOIN books_import_scopes y ON y.id=a.scope_id WHERE a.import_id=$1::bigint ORDER BY a.id DESC LIMIT 1),'')
- FROM books_imports i WHERE i.id IN (SELECT id FROM chain) AND i.id<>$1::bigint ORDER BY i.id DESC LIMIT 1`, accepted).Scan(&id, &file, &basis); {
-	case err == sql.ErrNoRows:
-		return nil, nil
-	case err != nil:
-		return nil, err
-	}
-	brief, err := confirmedBrief(ctx, q, org, name, id)
-	if err != nil || brief == nil {
-		return nil, err
-	}
-	scope, err := latestImportScope(ctx, q, org, name, id)
-	if err != nil || scope == nil || scope.LayoutID != brief.ID || !scope.Complete || scope.Basis != basis {
-		return nil, err
-	}
-	if !brief.Reading.Balanced || len(brief.Reading.Problems) > 0 || brief.Layout.AsOf != monthEndDay(period) {
-		return nil, nil
-	}
+	var basis, currency string
 	var raw []byte
-	if err = q.QueryRowContext(ctx, `SELECT COALESCE(reading->'lines','[]'::jsonb) FROM books_layouts WHERE id::text=$1`, brief.ID).Scan(&raw); err != nil {
+	if err := q.QueryRowContext(ctx, `WITH RECURSIVE chain(id) AS (SELECT $1::bigint UNION SELECT i.id FROM books_imports i JOIN chain c ON i.replaces=c.id)
+ SELECT COALESCE((SELECT y.basis FROM books_import_acceptances a JOIN books_import_scopes y ON y.id=a.scope_id WHERE a.import_id=$1::bigint ORDER BY a.id DESC LIMIT 1),''),
+  COALESCE((SELECT upper(l.layout->>'currency') FROM books_import_acceptances a JOIN books_layouts l ON l.id=a.layout_id WHERE a.import_id=$1::bigint ORDER BY a.id DESC LIMIT 1),''),
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id::text,'name',i.name,'format',i.format) ORDER BY i.id DESC) FROM books_imports i WHERE i.id IN (SELECT id FROM chain) AND i.id<>$1::bigint),'[]')`, accepted).
+		Scan(&basis, &currency, &raw); err != nil {
 		return nil, err
 	}
-	var lines []bookfiles.Line
-	if err = json.Unmarshal(raw, &lines); err != nil {
+	var candidates []struct{ ID, Name, Format string }
+	if err := json.Unmarshal(raw, &candidates); err != nil {
 		return nil, err
 	}
-	for _, l := range lines {
-		if l.Kind == bookfiles.Posting && (!l.Cents || monthEndFormula(l) && !scope.Recalculated) {
-			return nil, nil
+	for _, c := range candidates {
+		brief, err := confirmedBrief(ctx, q, org, name, c.ID)
+		if err != nil {
+			return nil, err
 		}
+		if brief == nil || !brief.Reading.Balanced || len(brief.Reading.Problems) > 0 || brief.Layout.AsOf != monthEndDay(period) ||
+			strings.ToUpper(strings.TrimSpace(brief.Layout.Currency)) != currency || c.Format != "csv" && !brief.Reading.FormulasMarked {
+			continue
+		}
+		scope, err := latestImportScope(ctx, q, org, name, c.ID)
+		if err != nil {
+			return nil, err
+		}
+		if scope == nil || scope.LayoutID != brief.ID || !scope.Complete || scope.Basis != basis {
+			continue
+		}
+		var lines []bookfiles.Line
+		if err = q.QueryRowContext(ctx, `SELECT COALESCE(reading->'lines','[]'::jsonb) FROM books_layouts WHERE id::text=$1`, brief.ID).Scan(&raw); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(raw, &lines); err != nil {
+			return nil, err
+		}
+		if slices.ContainsFunc(lines, func(l bookfiles.Line) bool {
+			return l.Kind == bookfiles.Posting && (!l.Cents || monthEndFormula(l) && !scope.Recalculated)
+		}) {
+			continue
+		}
+		_, balances, _ := lineBalances(lines)
+		return &priorReexport{c.Name, balances}, nil
 	}
-	_, balances, _ := lineBalances(lines)
-	return &priorReexport{file, balances}, nil
+	return nil, nil
 }
 
 // lineBalances is a reading's lines as balances by account key, in the order read, with each account's name: an

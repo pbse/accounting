@@ -414,7 +414,13 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if found := evidence(); found == nil || found.name != "Acme 2027-01 corrected.csv" || found.balances["n:1000"] != "1600.25" {
 		t.Fatalf("an attested replacement is the evidence of a change: %v", found)
 	}
-	for _, id := range []string{corrected, beside} {
+	// A newer replacement not yet attested leaves the earlier one the evidence.
+	draft := replace("Number,Account,Debit,Credit\n1000,Business Checking,1700.25,\n3000,Owner's Equity,,1000.00\n4000,Sales,,900.25\n6000,Rent,200.00,\n")
+	confirmLayout(draft, "2027-01-31")
+	if found := evidence(); found == nil || found.balances["n:1000"] != "1600.25" {
+		t.Fatalf("the newest replacement that can stand as the books: %v", found)
+	}
+	for _, id := range []string{draft, corrected, beside} {
 		call("user_a", []string{"workpapers:review", "clients:all", "data:manage"}, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+id, map[string]any{"reason": "Checked"}, 200)
 	}
 	// The month's management pack reads them: its profit and loss from the file's activity, provisional.
