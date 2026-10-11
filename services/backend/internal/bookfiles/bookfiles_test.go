@@ -827,3 +827,12 @@ func TestWorkbookPartsByRelationship(t *testing.T) {
 		t.Fatalf("parts by relationship: %+v", got)
 	}
 }
+
+// A credit written with its Cr marker counts in its column's total as the amount shown.
+func TestCrMarkedCreditsTotal(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Debit,Credit\nCash,100.00,\nCapital,,100.00 Cr\nTOTAL,100.00,100.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	if reading := layout.Read(file.Tables[0]); !reading.Balanced || len(reading.Problems) != 0 {
+		t.Fatalf("a Cr-marked credit and its total: %+v", reading)
+	}
+}

@@ -484,8 +484,12 @@ func (l Layout) Read(t Table) Reading {
 				}
 				// A Dr or Cr marker says the side itself, whichever column the amount sits in: its value is then already
 				// signed as balances are, a credit negative.
+				// The column's amount as a total row adds it: signed as its column reads, so a Dr or Cr marker counts as
+				// that side (100 Cr in the credit column is 100 there; 100 Dr in it is a debit, -100 there).
 				if meaning == Debit {
 					line.writtenDebit = a.Value
+				} else if meaning == Credit && a.Side != "" {
+					line.writtenCredit = new(big.Rat).Neg(a.Value)
 				} else if meaning == Credit {
 					line.writtenCredit = a.Value
 				}
