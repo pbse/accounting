@@ -51,7 +51,25 @@ Overview (`Overview.tsx`) has two columns. On the left:
 - One table: the agent's work, each document and its status (Preparing, Needs your decision, Waiting for client, Ready for review, Approved, or why it is out) with a status filter; before the hand-over it is the agent's plan.
 - The agent's plan, documents and accounts (the goal's details, coverage and each document's work), one fold away and open when a link points into it.
 
-On the right is the rail: a few figures found nowhere else, the agent in one line with its activity folded, and more on the close. A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
+On the right is the rail: a few figures found nowhere else, the agent in one line with its activity folded, and more on the close.
+
+Each tab keeps that frame and puts its own content in it. A tab's lede and fact line say where that tab stands, and its own actions head the ⋯ menu above the close's.
+
+Books (`Books.tsx`):
+- **Lede:** "The books tie out", "…except two accounts", or how many balance-sheet accounts tie, from the tie-out. Under it: which trial balance, from where, when it was captured, and Capture again.
+- **Left column:** the decisions and blockers on Books, then the balance sheet against the trial balance. Each account shows its trial balance, what supports it, the difference and its status, with a filter: Differ, No support, Wait on a draft, Tie. Accounts that tie fold to a line after the first three.
+- **Rail:** total assets, what differs, exceptions found and accounts moved since last month.
+- **More on Books:** links to the tab's other views, each holding its existing section:
+  - the ledger and its captures (QuickBooks and Xero);
+  - the full tie-out;
+  - exceptions;
+  - changes from last month;
+  - aging;
+  - open invoices and bills;
+  - documents against the ledger;
+  - corrections in QuickBooks.
+
+A view opens with `?tab=books&view=…` or with the anchor of a section inside it (`#quickbooks-ledger`, `#xero`, `#correct-…`, `#apply-…`), so existing links still land on it. A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
 
 Below 860px the sidebar is a sheet opened from the brand button, the composer spans the width, and the stage's positions become flow.
 

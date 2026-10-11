@@ -4537,3 +4537,30 @@ The audit was re-run against current main before anything was removed.
 - **Compose:** the admin service's unused `VITE_WORKOS_API_HOSTNAME` is removed. `ACCEPTANCE_DATABASE_URL` is already documented.
 
 Tests and checks: `go build`, `go vet`, `go test` for the changed backend packages on local PostgreSQL, `tsc` for both apps, `npm test` (62 pass), `docker compose config`, and the link check finds no broken anchor.
+
+## 2026-10-11 — Close page Books from the canvas (B02–B10)
+
+The user approved Overview, and Books is the next tab, boards 2 and 2b.
+- **Header:**
+  - Books' own lede from the tie-out: "The books tie out", "…except N accounts", or "N of M balance-sheet accounts tie", or the trial balance could not be read.
+  - A fact line naming the trial balance, its source and capture time, with Capture again.
+  - Books' actions at the top of the ⋯ menu: capture the trial balance again, client questions from the exceptions, correct a transaction in QuickBooks, apply a payment or vendor credit.
+- **Body:**
+  - The decisions and blockers on Books.
+  - The balance sheet as one table, built from `/tie-out` with exact cents. It has a status filter and folds the tying accounts after the first three. Each row opens its account in the full tie-out (`#tie-<id>`). Uncompared items and unclassified accounts are a fold line.
+  - The rail's figures and More on Books.
+- **Views:** the eleven sections that were stacked on Books are now eight views, each holding its existing component(s). The plan's, search's and the exceptions' anchors map to their view. Aging, open items and matching open, and matching reads at once, when shown as a view.
+- **Fixes:**
+  - The brief's ledger lines about captures now point to Books, where capture is: missing, unreadable or stale trial balance, and books read. The historical-exports lines stay on Documents. They open the ledger view, a balance-sheet blocker opens the full tie-out, and an exceptions blocker opens the exceptions view.
+  - An exception's Xero bill correction linked to Documents; it now links to Books, where the recode panel is.
+  - The empty-state text pointed to the Evidence tab; it now points to the ledger view.
+- **Loader:** Books prefetches what its view shows. The balance sheet reads the tie-out, exceptions, changes and open items.
+- **Phone width fix:** the tabs are now the containing block for their badges' hidden words. A badge on a tab past a phone's edge made close pages 400px wide on a 390px screen, which is live since Overview (#432) whenever a far tab has a badge. CI's fresh-database layout check caught it.
+
+Tests and checks, on local PostgreSQL:
+- `TestCloseBriefNarratesWhatNeedsAPerson` asserts that a missing snapshot points to Books, and fails without the change.
+- `tsc` passes.
+- The layout check passes: 95 page views at desktop and phone width, in Edge.
+- Screenshots of Books with a seeded QuickBooks trial balance and of the exceptions view.
+- In the browser: the menu opens the ledger view; `#quickbooks-ledger` and `#correct-bills-…` open their views; a balance-sheet row opens the full tie-out at its account.
+

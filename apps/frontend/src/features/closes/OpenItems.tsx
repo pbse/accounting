@@ -30,7 +30,7 @@ const statuses: Record<Item["kind"], Record<string, string>> = {
 };
 const tone: Record<string, string> = { promised: "status ok", handed_to_bill_pay: "status ok", disputed: "status danger", on_hold: "status warn", following_up: "status info" };
 
-export function OpenItems({ closeId }: { closeId: string }) {
+export function OpenItems({ closeId, open }: { closeId: string; open?: boolean }) {
   const dates = useDates();
   const read = useQuery(workspaceQuery<Items>(`/${closeId}/open-items`));
   const items = read.data;
@@ -138,7 +138,7 @@ export function OpenItems({ closeId }: { closeId: string }) {
       </table>
     );
   return (
-    <details>
+    <details open={open}>
       <summary>Follow up open invoices and bills</summary>
       {error && <p role="alert">{error}</p>}
       {items.state === "waiting" ? (

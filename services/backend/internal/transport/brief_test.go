@@ -43,7 +43,7 @@ func TestCloseBriefNarratesWhatNeedsAPerson(t *testing.T) {
 	handler := apiWithStore(db, token)
 	type brief struct {
 		Headline string
-		Lines    []struct{ Area, State, Text string }
+		Lines    []struct{ Area, State, Text, Tab string }
 	}
 	read := func() (b brief, areas string) {
 		t.Helper()
@@ -64,6 +64,10 @@ func TestCloseBriefNarratesWhatNeedsAPerson(t *testing.T) {
 	b, states := read()
 	if states != "ledger=attention preparation=attention review=info balance sheet=waiting exceptions=waiting sign-off=waiting" || b.Headline != "2 things need you: capture a month-end snapshot, add client documents." {
 		t.Fatalf("an empty close asks for a snapshot and documents: %s | %s", states, b.Headline)
+	}
+	// The snapshot is captured on Books, where the ledger's capture is, not on Documents.
+	if b.Lines[0].Tab != "books" {
+		t.Fatalf("a missing snapshot points to Books: %+v", b.Lines[0])
 	}
 	_, err = db.Exec(`INSERT INTO close_scopes(close_id,scope,actor) VALUES($1,'{"description":"Bookkeeping close","required_papers":[],"external_steps":[]}','fixture')`, closeID)
 	must(err)
