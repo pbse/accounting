@@ -1592,10 +1592,18 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		}
 		entries = append(entries, entry)
 	}
-	// Without the firm's client names the gate cannot tell whose figure a sentence states: the answer is withheld.
-	clients, err := firmClients(ctx, db, org, text)
+	// A factual answer is checked against the firm's client names, looked up with time of its own after the model's
+	// call; without them the gate cannot tell whose figure a sentence states, so the answer is withheld. Other kinds
+	// (help, a refusal, a card) state no client's figures and need no lookup.
+	var clients []string
+	var lookupErr error
+	if answer.Kind == "facts" {
+		lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		clients, lookupErr = firmClients(lookup, db, org, text)
+		cancel()
+	}
 	citations, rejected := []chatCitation(nil), "the firm's clients could not be read to check the answer"
-	if err == nil {
+	if lookupErr == nil {
 		citations, rejected = agentSupport(answer.Kind, text, entries, reads, names, clients...)
 	}
 	if rejected != "" {
