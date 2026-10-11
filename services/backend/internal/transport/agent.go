@@ -880,6 +880,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 		}
 	}
+	answerDrivers, answerLabels := make([]map[string][]*big.Rat, len(lines)), make([][]string, len(lines))
 	for i := range lines {
 		// Every measure a financial sentence names is one its cited fields measure: "net income and receivables are
 		// each 8,000.00" needs net income cited too.
@@ -946,6 +947,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		if why := checkRemainder(lines[i], sentenceTotals[i], drivers, remainderAt[i], labels); why != "" {
 			return nil, why
 		}
+		answerDrivers[i], answerLabels[i] = drivers, labels
+	}
+	// A row's total and its drivers stated in different sentences are reconciled across the answer.
+	if why := remainderAcross(lines, sentenceTotals, answerDrivers, answerLabels); why != "" {
+		return nil, why
 	}
 	for i, c := range covered {
 		if !c {

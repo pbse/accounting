@@ -473,6 +473,15 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("The published net income totals 200.00.", "counts the same figure twice", derived(0, "sum", "200.00", "t59", "/published/0/net_income", "t60", "/pack/profit_and_loss/measures/0/amount"))
 	rejected("The bank feed is stale; the report's net income is 20,100.00.", "the state stale is not in a cited field", e("t7", 0, "/pack/profit_and_loss/measures/0/amount", "20100.00"))
 
+	// Round thirty-two: an opening dated by its capture; drivers in another sentence.
+	reads["t61"] = read(`{"state":"ready","currency":"USD","opening":{"amount":"64120.00","as_of":"2026-12-31","stale":false},"open_items":{"complete":true},"weeks":[]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Opening book cash in October was 64,120.00.", "in another month", e("t61", 0, "/opening/amount", "64120.00"))
+	ok("Opening book cash in December was 64,120.00.", e("t61", 0, "/opening/amount", "64120.00"))
+	rejected("Patient fees rose 4,940.00. This was driven by new patients at 3,000.00.", "account for 3000.00 of 4940.00",
+		e("t10", 0, "/changes/0/change", "4940.00"), e("t10", 1, "/changes/0/new/0/this_month", "3000.00"))
+	ok("Patient fees rose 4,940.00. Of that, new patients brought 3,000.00 and the rest is unexplained.",
+		e("t10", 0, "/changes/0/change", "4940.00"), e("t10", 1, "/changes/0/new/0/this_month", "3000.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

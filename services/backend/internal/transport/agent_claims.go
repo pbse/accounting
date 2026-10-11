@@ -276,6 +276,11 @@ func claimOf(read agentRead, path string) claim {
 	for _, o := range ancestors {
 		if s := text(o, "period"); len(s) == 7 {
 			c.period = s
+		} else if s := text(o, "as_of"); len(s) >= 7 {
+			// An object with no period is dated by its capture ("opening": {"as_of": "2026-12-31"}).
+			if _, err := time.Parse("2006-01", s[:7]); err == nil {
+				c.period = s[:7]
+			}
 		}
 		for _, key := range []string{"entity", "client_entity"} {
 			if s := text(o, key); s != "" {
@@ -1910,3 +1915,55 @@ func staleSourceNamed(clause string, stale []claim) bool {
 }
 
 var claimStaleSource = regexp.MustCompile(`\b(report|publication|pack|version|capture|snapshot|opening|figure|figures|it|this|which)\b`)
+
+// remainderAcross reconciles a row's total and its drivers stated in different sentences of one answer ("Revenue rose
+// 4,940.00. This was driven by new patients up 3,000.00."): the drivers must add up to the total, or a sentence that
+// states them, or the total, names the rest.
+func remainderAcross(lines []string, totals []map[string][]*big.Rat, drivers []map[string][]*big.Rat, labels [][]string) string {
+	totalIn, driversIn := map[string][]int{}, map[string][]int{}
+	for i := range lines {
+		for g := range totals[i] {
+			totalIn[g] = append(totalIn[g], i)
+		}
+		for g := range drivers[i] {
+			driversIn[g] = append(driversIn[g], i)
+		}
+	}
+	for _, g := range slices.Sorted(maps.Keys(totalIn)) {
+		if len(driversIn[g]) == 0 || len(totals[totalIn[g][0]][g]) != 1 {
+			continue
+		}
+		// Within one sentence the per-sentence check has held them already.
+		if len(totalIn[g]) == 1 && len(driversIn[g]) == 1 && totalIn[g][0] == driversIn[g][0] {
+			continue
+		}
+		attributed, named := false, false
+		rest := new(big.Rat)
+		seen := map[int]bool{}
+		for _, i := range append(append([]int{}, driversIn[g]...), totalIn[g]...) {
+			if seen[i] {
+				continue
+			}
+			seen[i] = true
+			lower := strings.ToLower(lines[i])
+			for _, label := range labels[i] {
+				if l := strings.ToLower(strings.TrimSpace(label)); len(l) >= 3 {
+					lower = strings.ReplaceAll(lower, l, strings.Repeat("#", len(l)))
+				}
+			}
+			attributed = attributed || claimCausal.MatchString(lower) || claimAttribution.MatchString(lower)
+			named = named || claimRemainder.MatchString(lower)
+		}
+		for _, i := range driversIn[g] {
+			for _, d := range drivers[i][g] {
+				rest.Add(rest, d)
+			}
+		}
+		total := totals[totalIn[g][0]][g][0]
+		if attributed && !named && rest.Cmp(total) != 0 {
+			gap := new(big.Rat).Sub(total, rest)
+			return "the drivers stated account for " + rest.FloatString(2) + " of " + total.FloatString(2) + "; say what the remaining " + gap.FloatString(2) + " is"
+		}
+	}
+	return ""
+}

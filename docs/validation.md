@@ -4159,6 +4159,8 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - a line's measure is the head of its name, within its statement ("Sales tax payable" is a payable, never sales), and its own name is no further measure;
   - a published figure read through the overview and through the report is one fact (same measure, client, month and kind), while two accounts or two weeks stay two;
   - a sentence may say a cited source is stale only of that source ("the bank feed is stale" with only a report cited fails);
+  - an opening balance is dated by its capture's as-of date, not the close's month;
+  - a total and its drivers stated in different sentences are reconciled across the answer;
   - `TestFirmClientsFindsTheNamesAnAnswerUses` (new, database): the firm's clients named in an answer are found by the database across all clients with no cap (including a two-letter name), and never another firm's.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
