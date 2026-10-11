@@ -15,7 +15,7 @@ const reports: Record<string, string> = {
 };
 
 // A read-only Stripe connection brings the month's itemized reports into the close, as if uploaded.
-export function Stripe({ closeId, entity }: { closeId: string; entity: string }) {
+export function Stripe({ closeId, entity, open }: { closeId: string; entity: string; open?: boolean }) {
   const queryClient = useQueryClient();
   const read = useQuery(workspaceQuery<Status>(`/${closeId}/stripe`));
   const status = read.data;
@@ -49,7 +49,7 @@ export function Stripe({ closeId, entity }: { closeId: string; entity: string })
     </label>
   );
   return (
-    <details>
+    <details open={open}>
       <summary>Stripe reports</summary>
       <p>
         Reads the month's itemized payout reconciliation, Payouts or balance activity report from the client's Stripe account and adds it to this

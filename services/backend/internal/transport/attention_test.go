@@ -226,6 +226,17 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 	}
 	_, err = db.Exec(`UPDATE preparation_jobs SET state=$2 WHERE id=$1`, job, was)
 	must(err)
+	// A file forwarded to the close's address and scanned clean waits for a person to release it.
+	link := "fwd-" + rand.Text()
+	_, err = db.Exec(`INSERT INTO forwarding_links(digest,close_id,issued_by) VALUES($1,$2,'fixture')`, link, alpha)
+	must(err)
+	var forwarded string
+	must(db.QueryRow(`INSERT INTO forwarded_files(close_id,link_digest,message_digest,from_address,subject,name,body,digest,state,scanned_at) VALUES($1,$2,'m','maria@example.test','Invoices','invoices.pdf','%PDF','d','clean',now()) RETURNING id::text`, alpha, link).Scan(&forwarded))
+	if listed := decisions(alpha, 200); !slices.ContainsFunc(listed, func(e attentionEvent) bool { return e.Key == "forwarded:"+forwarded && e.Kind == "release" }) {
+		t.Fatalf("a clean forwarded file waits for release: %+v", listed)
+	}
+	_, err = db.Exec(`UPDATE forwarded_files SET state='released' WHERE id::text=$1`, forwarded)
+	must(err)
 	call("user_a", nil, "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"approve"}, "browser": true}, 200)
 	call("user_a", nil, "POST", "/v1/closes/attention/preferences", map[string]any{"kinds": []string{"everything"}}, 422)
 	if got, _ = mine(""); got.Unread != 0 {

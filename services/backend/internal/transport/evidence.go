@@ -94,7 +94,23 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'created_by',created_by,'agent',agent,'bytes',COALESCE(octet_length(original),octet_length(content)),'purpose',purpose,'procedure_id',procedure_id::text,'procedure_kind',(SELECT kind FROM procedure_versions WHERE id=procedure_id),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY evidence.id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
+		// Each document says how it arrived (from where its saving code records it) and its latest preparation job: the
+		// job, its state and the work it was read as, so the Documents tab lists where each one stands.
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'created_by',created_by,'agent',agent,'bytes',COALESCE(octet_length(original),octet_length(content)),'purpose',purpose,'procedure_id',procedure_id::text,'procedure_kind',(SELECT kind FROM procedure_versions WHERE id=procedure_id),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at,
+ 'arrived',CASE WHEN created_by LIKE 'Forwarded from %' THEN 'email' WHEN created_by LIKE 'Client request %' THEN 'request' WHEN name LIKE 'Client reply to request %' THEN 'reply'
+  WHEN name LIKE 'Preparer answer for work %' THEN 'answer' WHEN created_by='stripe-report' THEN 'stripe' WHEN procedure_id IS NOT NULL THEN 'procedure'
+  WHEN created_by IN ('quickbooks-sync','scheduled-quickbooks-refresh') OR EXISTS(SELECT 1 FROM quickbooks_entity_syncs y WHERE y.evidence_id=evidence.id)
+   OR EXISTS(SELECT 1 FROM quickbooks_ledger_selections l WHERE l.source_id=evidence.id)
+   OR EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=evidence.close_id AND s.payload->>'source_id'=evidence.id::text) THEN 'quickbooks' ELSE 'upload' END,
+ 'job_id',job.job_id,'job_state',job.job_state,'unread_reply',job.unread_reply,'kind',job.job_kind) ORDER BY evidence.id DESC),'[]'::jsonb)
+ FROM evidence LEFT JOIN LATERAL (SELECT j.id::text AS job_id,j.state AS job_state,i.proposal->>'kind' AS job_kind,
+   -- A reply or answer the job has not moved since receiving (still waiting on the client) was received, not read.
+   i.source_id<>evidence.id AND j.state='waiting_client' AND j.state_changed_at<=GREATEST(evidence.created_at,(SELECT max(wr.recorded_at) FROM work_replies wr JOIN request_jobs rj ON rj.request_id=wr.request_id WHERE wr.source_id=evidence.id AND rj.job_id=j.id)) AS unread_reply FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id
+  -- A document's job is its own intake, or else the job that read it: an answer the job was given, a client reply to
+  -- a request the job waits on.
+  WHERE j.state<>'cancelled' AND (i.source_id=evidence.id OR j.id IN (SELECT job_id FROM preparation_answers WHERE source_id=evidence.id)
+   OR j.id IN (SELECT rj.job_id FROM work_replies wr JOIN request_jobs rj ON rj.request_id=wr.request_id WHERE wr.source_id=evidence.id))
+  ORDER BY i.source_id=evidence.id DESC,j.id DESC LIMIT 1) job ON true WHERE evidence.close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
 		if err != nil {
 			problem(w, 503, "Could not load evidence.")
 			return

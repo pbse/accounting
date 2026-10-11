@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -190,6 +191,19 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 	call("POST", action+"/answer", map[string]any{"revision": revision, "body": "Use Insurance expense and Prepaid insurance."}, 200)
 	if err = db.QueryRow(`SELECT source_id::text FROM preparation_answers WHERE job_id=$1`, job).Scan(&answerID); err != nil {
 		t.Fatal(err)
+	}
+	// The documents list shows the answer under the job that reads it.
+	var files []struct {
+		ID    string `json:"id"`
+		JobID string `json:"job_id"`
+	}
+	if json.Unmarshal(call("GET", base+"/evidence", nil, 200), &files) != nil || !slices.ContainsFunc(files, func(f struct {
+		ID    string `json:"id"`
+		JobID string `json:"job_id"`
+	}) bool {
+		return f.ID == answerID && f.JobID == job
+	}) {
+		t.Fatalf("an answer is read by its job: %+v", files)
 	}
 	// Evidence arrives during a network call: the result must not become current.
 	drift = true

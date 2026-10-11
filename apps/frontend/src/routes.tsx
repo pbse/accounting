@@ -111,7 +111,15 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
         "open-items": [`/${id}/open-items`],
       } as Record<string, string[]>
     )[url.searchParams.get("view") ?? ""] ?? [`/${id}/tie-out`, `/${id}/quickbooks/exceptions`, `/${id}/flux`, `/${id}/open-items`],
-    evidence: [`/${id}/evidence?checks=1`, `/${id}/preparations`, `/${id}/jobs`, `/${id}/stripe`],
+    // Documents reads what its open view shows; the list also counts instructions and the forwarding address.
+    evidence: (
+      {
+        add: [`/${id}/evidence?checks=1`, `/${id}/forwarding`],
+        exports: [`/${id}/historical-exports`, `/${id}/evidence`],
+        stripe: [`/${id}/stripe`],
+        instructions: [`/${id}/preparations`, `/${id}/jobs`],
+      } as Record<string, string[]>
+    )[url.searchParams.get("view") ?? ""] ?? [`/${id}/evidence?checks=1`, `/${id}/forwarding`, `/${id}/preparations`],
     requests: [`/${id}/requests`, `/${id}/email-replies`],
     reports: [`/${id}/management-pack`, `/${id}/management-pack/publications`, `/${id}/budget`],
     signoff: [`/${id}/takeover-setup`, `/${id}/opening-baseline`, `/${id}/readiness`, `/${id}/effort`],

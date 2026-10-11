@@ -1,5 +1,6 @@
 import { useDates } from "../../data/time";
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router";
 import { workspaceRequest } from "./workspace";
 
 type Link = { digest: string; issued_at: string; expires_at: string; revoked_at: string | null };
@@ -7,6 +8,7 @@ type File = { id: string; name: string; digest: string; state: string; error: st
 type Status = { configured: boolean; links: Link[]; files: File[] };
 
 export function ForwardedEvidence({ closeId, onReleased }: { closeId: string; onReleased: () => void }) {
+  const location = useLocation();
   const dates = useDates();
   const [status, setStatus] = useState<Status>();
   const [address, setAddress] = useState("");
@@ -57,7 +59,8 @@ export function ForwardedEvidence({ closeId, onReleased }: { closeId: string; on
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) { setError(e instanceof Error ? e.message : "Download unavailable."); }
   }
-  return <details>
+  // A link to a forwarded file (its decision) opens the panel at that file.
+  return <details id="forwarded" open={location.hash.startsWith("#forwarded") || undefined}>
     <summary>Forward documents by email</summary>
     <p>Issue a close-specific address and share it only with the intended sender. The address expires after seven days. Sender names are unverified; attachments are scanned and require your review before the agent can use them.</p>
     {error && <p role="alert">{error}</p>}
@@ -69,7 +72,7 @@ export function ForwardedEvidence({ closeId, onReleased }: { closeId: string; on
     </>}
     <h3>Forwarded attachments</h3>
     {status?.files.length === 0 && <p>No forwarded attachments.</p>}
-    {status?.files.map((file) => <article key={file.id}>
+    {status?.files.map((file) => <article key={file.id} id={`forwarded-${file.id}`}>
       <p><strong>{file.name}</strong> · {file.state} · received {dates.dateTime(file.received_at)} from unverified {file.from_address}{file.subject && ` · ${file.subject}`}</p>
       {file.error && <p role="alert">{file.error}</p>}
       {file.source_id && <p>Evidence #{file.source_id}. Identical bytes reuse an existing source; a changed document needs explicit comparison or replacement.</p>}

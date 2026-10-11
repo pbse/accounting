@@ -103,6 +103,10 @@ const attentionQuery = `WITH scope AS (
  UNION ALL
  SELECT 'held:'||i.id,'release',i.close_id,i.received_at,'An email reply to request #'||i.request_id||' is held for review','' FROM inbound_replies i WHERE i.close_id IN (SELECT id FROM scope) AND i.state='held'
  UNION ALL
+ -- A file forwarded to the close's address, scanned clean, waits for a person to release it to the agent; its sender is
+ -- unverified, so the text says so.
+ SELECT 'forwarded:'||f.id,'release',f.close_id,COALESCE(f.scanned_at,f.received_at),'Forwarded file '||f.name||' from '||f.from_address||' (unverified) is waiting for release','' FROM forwarded_files f WHERE f.close_id IN (SELECT id FROM scope) AND f.state='clean'
+ UNION ALL
  SELECT 'send:'||q.id,'send',d.close_id,q.approved_at,'Request #'||q.id||' is approved; no delivery is recorded','' FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id
   WHERE d.close_id IN (SELECT id FROM scope) AND q.delivered_at IS NULL AND NOT EXISTS(SELECT 1 FROM email_delivery m WHERE m.request_id=q.id) AND ` + waitingRequest + `
  UNION ALL

@@ -109,6 +109,27 @@ func TestEvidencePreparationRoundTrip(t *testing.T) {
 	if idOf(upload("copy.csv", statement, true, 200)) != s {
 		t.Fatal("Duplicate document was not deduplicated")
 	}
+	// The list says how each document arrived and where its preparation stands; a person's upload named like a capture
+	// is still an upload.
+	if idOf(upload("QuickBooks trial balance.csv", "account,balance\nCash,10.00", true, 200)) == "" {
+		t.Fatal("upload refused")
+	}
+	var listedFiles []map[string]any
+	if json.Unmarshal(call("GET", base+"/evidence", nil, 200), &listedFiles) != nil {
+		t.Fatal("evidence list unreadable")
+	}
+	arrived := false
+	for _, f := range listedFiles {
+		if f["id"] == s {
+			arrived = f["arrived"] == "upload" && f["job_id"] != nil && f["job_state"] != nil
+		}
+		if f["name"] == "QuickBooks trial balance.csv" && f["arrived"] != "upload" {
+			t.Fatalf("a person's upload is an upload whatever its name: %v", f)
+		}
+	}
+	if !arrived {
+		t.Fatalf("an uploaded document lists its arrival and its preparation job: %v", listedFiles)
+	}
 	call("GET", "/v1/closes/"+other+"/evidence/"+s, nil, 404)
 	raw := call("GET", base+"/evidence/"+s, nil, 200)
 	if string(raw) != statement {
