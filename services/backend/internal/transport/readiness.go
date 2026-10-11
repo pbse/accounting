@@ -37,8 +37,8 @@ type readiness struct {
 	History           json.RawMessage `json:"history"`
 	Snapshot          json.RawMessage `json:"snapshot"`
 	coverage          coverageView
-	// snapshotDigest is the snapshot's own digest, kept with a sign-off; Digest also binds the client's confirmed
-	// profile, so a sign-off made against a profile since changed is refused.
+	// snapshotDigest is the snapshot's own digest; Digest also binds the client's confirmed profile, so a sign-off made
+	// against a profile since changed is refused. A sign-off keeps the Digest its signer was shown.
 	snapshotDigest string
 	profile        preparation.Profile
 }
@@ -282,7 +282,9 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		out.State = "signed_off"
 		// A month signed off under another currency or fiscal year than it reads now was signed off over other books.
 		moved := history[0].Profile != nil && history[0].Profile.Currency != "" && (history[0].Profile.Currency != out.profile.Currency || history[0].Profile.FiscalStart != out.profile.FiscalStart)
-		if history[0].Digest != out.snapshotDigest || moved || len(out.Blockers) > 0 {
+		// The sign-off kept the digest its signer was shown: the profile-bound one, or, signed before the client had a
+		// confirmed profile, the snapshot's own, whose profile the check above compares.
+		if (history[0].Digest != out.Digest && history[0].Digest != out.snapshotDigest) || moved || len(out.Blockers) > 0 {
 			out.State = "reopen_required"
 		}
 	}
@@ -413,7 +415,7 @@ func registerReadiness(mux *http.ServeMux, db *sql.DB) {
 				raw, _ := json.Marshal(current.profile)
 				signedProfile = string(raw)
 			}
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor,profile) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`, r.PathValue("id"), decision, current.snapshotDigest, string(current.Snapshot), in.Note, actor, signedProfile)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor,profile) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`, r.PathValue("id"), decision, current.Digest, string(current.Snapshot), in.Note, actor, signedProfile)
 			if err == nil {
 				// "close.signed_off:<id>" or "close.reopened:<id>" for workflows (docs/workflow-engine.md).
 				_, err = wf.EmitForClose(r.Context(), tx, r.PathValue("id"), "close."+decision+":"+r.PathValue("id"), map[string]string{"close_id": r.PathValue("id"), "decision": decision}, actor)
