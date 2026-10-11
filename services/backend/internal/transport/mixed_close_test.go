@@ -176,6 +176,22 @@ func mixedClose(t *testing.T, serial bool) {
 				t.Fatalf("each invoice ends as one draft: %s %s", done, checkpoint)
 			}
 		}
+		// A credit note arriving after the drafts reopens only the draft whose invoice it names; a document that names no
+		// draft's invoice, credit or not, changes nothing.
+		review := func(job string) string {
+			t.Helper()
+			var state string
+			must(db.QueryRow(`SELECT w.review_state FROM workpaper_review_state w JOIN preparation_jobs j ON j.workpaper_ids @> jsonb_build_array(w.id::text) WHERE j.id::text=$1`, job).Scan(&state))
+			return state
+		}
+		insert("other-credit.txt", "Delta Insurers\nCredit note CN-9 against invoice DL-1", "ready")
+		if review(jobA) != "pending" || review(jobB) != "pending" {
+			t.Fatalf("a credit naming no draft's invoice changes nothing: %s %s", review(jobA), review(jobB))
+		}
+		insert("acme-credit.txt", "Acme Insurance Co\nCredit note CN-1 against invoice INV-778\nCredited USD 200.00", "ready")
+		if review(jobA) != "source_changed" || review(jobB) != "pending" || review(jobC) != "pending" {
+			t.Fatalf("a later credit note naming Acme's invoice reopens Acme's draft only: %s %s %s", review(jobA), review(jobB), review(jobC))
+		}
 		return
 	}
 	// An invoice read before the others waits on them; once every other is read as an invoice of its own it is read
