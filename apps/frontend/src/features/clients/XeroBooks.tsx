@@ -170,8 +170,9 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
               {x.error && <p role="alert">{x.error}</p>}
               {x.state === "authorizing" && <p className="note">The sign-in was not finished. Disconnect it to start again.</p>}
               {x.state === "reconnect_required" && <p className="note">Xero no longer accepts this sign-in. Disconnect it, then connect again.</p>}
+              {off && x.state === "choose_tenant" && <p className="note">Xero is switched off for your firm, so this sign-in cannot be finished. Disconnect it.</p>}
               <div className="setting-actions">
-                {x.state === "choose_tenant" && (
+                {x.state === "choose_tenant" && !off && (
                   <button
                     type="button"
                     onClick={() => {

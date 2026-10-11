@@ -196,6 +196,9 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
             {c.error && <p role="alert">{c.error}</p>}
             {c.state === "authorizing" && <p className="note">The sign-in was not finished. Disconnect it to start again.</p>}
             {c.state === "reconnect_required" && <p className="note">Intuit no longer accepts this sign-in. Disconnect it, then connect again.</p>}
+            {off && c.state === "pending_confirmation" && (
+              <p className="note">QuickBooks is switched off for your firm, so this company cannot be confirmed. Disconnect it.</p>
+            )}
             <div className="setting-actions">
               {c.state === "active" && (
                 <button type="button" disabled={busy || !agreed} onClick={() => void act("refresh", c)}>
