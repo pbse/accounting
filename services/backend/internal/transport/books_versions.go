@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strconv"
 	"time"
 
 	"close.local/backend/internal/quickbooks"
@@ -95,12 +96,16 @@ func (v booksVersion) digest() string {
 // captureMonth reads one month-end capture as periodBooks gives it to the readers, with its close, firm and month.
 func captureMonth(ctx context.Context, q rowReader, source, id string) (m *fluxMonth, closeID, org string, err error) {
 	m = &fluxMonth{Source: source}
+	// A capture's id is its snapshot's bigint key; any other is no capture.
+	if _, e := strconv.ParseInt(id, 10, 64); e != nil {
+		return m, "", "", sql.ErrNoRows
+	}
 	switch source {
 	case "quickbooks":
 		err = q.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,c.id::text,c.organization_id,c.period,s.payload->'accounts',s.payload->'reports'->'ProfitAndLoss',s.payload->'reports'->'GeneralLedger',COALESCE(s.payload->'reports'->'TrialBalance','null'),COALESCE(s.payload->'reports'->'CashFlow','null')
- FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.id::text=$1 AND s.payload ? 'period'`, id).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &closeID, &org, &m.Period, &m.accounts, &m.pl, &m.gl, &m.tb, &m.cashFlow)
+ FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.id=$1::bigint AND s.payload ? 'period'`, id).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &closeID, &org, &m.Period, &m.accounts, &m.pl, &m.gl, &m.tb, &m.cashFlow)
 	case "xero":
-		err = q.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,c.id::text,c.organization_id,c.period,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.id::text=$1`, id).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &closeID, &org, &m.Period, &m.xero)
+		err = q.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,c.id::text,c.organization_id,c.period,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.id=$1::bigint`, id).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &closeID, &org, &m.Period, &m.xero)
 	default:
 		err = fmt.Errorf("unknown books source %q", source)
 	}
@@ -117,7 +122,7 @@ func writeBooksVersion(ctx context.Context, db *sql.DB, source, id string) error
 	}
 	defer tx.Rollback()
 	// The capture leaves the queue with its version, or alone when it is gone (its close was deleted).
-	if _, err = tx.ExecContext(ctx, `DELETE FROM books_pending WHERE source=$1 AND source_id::text=$2`, source, id); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM books_pending WHERE source=$1 AND source_id=$2::bigint`, source, id); err != nil {
 		return err
 	}
 	m, closeID, org, err := captureMonth(ctx, tx, source, id)
@@ -280,7 +285,7 @@ func booksParity(ctx context.Context, q interface {
 	}
 	// Every capture has its version, or waits in the queue for it: one with neither is missing from the record.
 	rows, err := q.QueryContext(ctx, `SELECT x.source,x.id FROM (`+unversionedCaptures+`) x JOIN client_closes c ON c.id=x.close_id
- WHERE ($1='' OR c.organization_id=$1) AND NOT EXISTS(SELECT 1 FROM books_pending p WHERE p.source=x.source AND p.source_id::text=x.id) ORDER BY 1,2`, org)
+ WHERE ($1='' OR c.organization_id=$1) AND NOT EXISTS(SELECT 1 FROM books_pending p WHERE p.source=x.source AND p.source_id=x.id) ORDER BY 1,2`, org)
 	if err != nil {
 		return checked, mismatched, err
 	}
@@ -295,10 +300,11 @@ func booksParity(ctx context.Context, q interface {
 	return checked, mismatched, rows.Err()
 }
 
-// unversionedCaptures is SQL for each month-end capture with no books version yet: its source, id and close.
-const unversionedCaptures = `SELECT 'quickbooks' AS source,s.id::text AS id,s.close_id FROM quickbooks_snapshots s WHERE s.payload ? 'period'
+// unversionedCaptures is SQL for each month-end capture with no books version yet: its source, id and close. Captures
+// are looked up by their own bigint ids, so their primary keys serve every lookup.
+const unversionedCaptures = `SELECT 'quickbooks' AS source,s.id,s.close_id FROM quickbooks_snapshots s WHERE s.payload ? 'period'
   AND NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='quickbooks' AND v.source_id=s.id::text)
- UNION ALL SELECT 'xero',s.id::text,s.close_id FROM xero_snapshots s WHERE NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='xero' AND v.source_id=s.id::text)`
+ UNION ALL SELECT 'xero',s.id,s.close_id FROM xero_snapshots s WHERE NOT EXISTS(SELECT 1 FROM books_versions v WHERE v.source='xero' AND v.source_id=s.id::text)`
 
 type storedVersion struct {
 	row                            int64
