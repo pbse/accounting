@@ -37,7 +37,7 @@ export function EmailReplies({ closeId, onReleased }: { closeId: string; onRelea
       <pre>{item.body}</pre>
       {item.state === "held" && <form onSubmit={e => { e.preventDefault(); const data = new FormData(e.currentTarget); void decide(item.id, String(data.get("action")) as "release" | "reject", String(data.get("reason")), String(data.get("verification_reference") ?? "")); }}>
         <label>Decision reason<input name="reason" required minLength={5} maxLength={2000} /></label>
-        {item.addresses_match && <label><input type="radio" name="action" value="release" required onChange={() => setReleasing(current => ({...current, [item.id]: true}))} /> Release into the original preparation job</label>}
+        {item.addresses_match && <label><input type="radio" name="action" value="release" required onChange={() => setReleasing(current => ({...current, [item.id]: true}))} /> Release into the original preparation job (its work resumes, treating the request as answered)</label>}
         <label><input type="radio" name="action" value="reject" required onChange={() => setReleasing(current => ({...current, [item.id]: false}))} /> Reject</label>
         {releasing[item.id] && <label>Independent sender verification reference<input name="verification_reference" required minLength={10} maxLength={500} placeholder="Known client contact and confirmation date" /></label>}
         <button disabled={busy}>Save decision</button>

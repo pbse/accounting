@@ -4326,6 +4326,12 @@ Slice 5. A month's pinned copy of a procedure kept authorizing work after the fi
 
 Test: `TestReplacedInvoiceIsRecalculatedStraightThrough` publishes a disabled version for the client and the approval is refused (409), then succeeds once the version is gone; seen to pass wrongly (200) without the approval check. The closest procedure, review, standing-approval, carry-forward, payroll, loan and straight-through tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — An emailed answer can follow a partial link reply (B04/B05)
+
+Releasing a held emailed reply required the request link to be unused, so after any partial reply through the link an emailed answer could never be released ("Request is no longer open"). Release now applies the first-reply checks (request exactly as approved, work waiting) only to an unused link; after a partial reply it needs the link live and the request still taking answers, as the client's link does. The release option now says it resumes the work, treating the request as answered; such a release also records the request's open questions as answered in the email and a complete submission naming it (earlier records stay as they were), so Work and the goal no longer call it partial, and it keeps the link's first-use time.
+
+Test: `TestInboundReplyHeldUntilSenderAndReviewerMatch` releases a later held email after the link was used; seen to fail (409) without the fix. The closest inbound-reply, partial-reply and email tests passed on a fresh local PostgreSQL.
+
 ## 2026-10-11 — Recurring accruals prepared without a request (B04/B11)
 
 Slice 4 (per-method automatic preparation). A reviewed recurring accrual's month was already fully prefilled (the Trial Balance's booked balance, last month's reversal choice and the one current document showing the rule's amount), yet each month waited for a person to submit it, so a firm's standing approval for later months never fired. The scheduled comparison sweep now also queues each such month through the same function the person's request uses (`queueRecurringAccrual`), only when nothing blocks it, the booked balance and the single matching document are present, and the rule was not already tried against the capture; nothing is approved by the sweep, and its source reference says it was agent-read. The sweep also requires the document itself to state the rule's currency, and a person's choice for the month cancels the sweep's still-queued job for that rule (an identical choice re-queues it), so a correction is never stranded behind it.
