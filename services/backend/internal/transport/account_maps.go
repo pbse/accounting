@@ -90,6 +90,9 @@ type fileAccount struct {
 	// amounts is a formula's stored result.
 	Cents   bool `json:"-"`
 	Formula bool `json:"-"`
+	// Movement is the account's period movement as the file writes it, summed over its rows ("" when the file has
+	// none for it).
+	Movement string `json:"-"`
 }
 
 // latestAccountMap is client name's map in force, or nil.
@@ -185,10 +188,13 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 				accounts[at].Balance = addAmounts(accounts[at].Balance, l.Amount)
 				accounts[at].Cents = accounts[at].Cents && l.Cents
 				accounts[at].Formula = accounts[at].Formula || monthEndFormula(l)
+				if m, ok := l.Others[bookfiles.Movement]; ok {
+					accounts[at].Movement = addAmounts(cmp.Or(accounts[at].Movement, "0"), m)
+				}
 				continue
 			}
 			seen[key] = len(accounts)
-			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents, Formula: monthEndFormula(l)}
+			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents, Formula: monthEndFormula(l), Movement: l.Others[bookfiles.Movement]}
 			if current != nil {
 				if m, ok := current.Accounts[key]; ok {
 					a.Mapped = &m

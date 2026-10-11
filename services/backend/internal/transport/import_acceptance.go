@@ -1,10 +1,12 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"slices"
 	"strings"
@@ -58,10 +60,66 @@ type fileState struct {
 	scope    *importScope
 	approved string
 	currency string
-	mapStamp string
-	recorded bool
-	prior    string
-	missing  []string
+	// fiscalStart is the client's fiscal year's first month (1–12), from its profile.
+	fiscalStart int
+	mapStamp    string
+	recorded    bool
+	prior       string
+	missing     []string
+}
+
+// monthActivity is each profit and loss account's activity for the month, by key, in the profit and loss sign (revenue
+// and expenses both positive, as books.Activity has them), and where it came from (docs/books-sources.md, Monthly
+// activity): the file's period-movement column; else, in the fiscal year's first month, the year-to-date balances
+// themselves, unless the file is post-closing. Otherwise none, with what would supply it. It is never estimated.
+func monthActivity(s fileState) (activity map[string]*big.Rat, from, missing string) {
+	presented := func(class string, debitLess *big.Rat) *big.Rat {
+		if class == "Revenue" {
+			return new(big.Rat).Neg(debitLess)
+		}
+		return debitLess
+	}
+	var pl []fileAccount
+	for _, a := range s.reading.Accounts {
+		if a.Mapped != nil && (a.Mapped.Class == "Revenue" || a.Mapped.Class == "Expense") {
+			pl = append(pl, a)
+		}
+	}
+	movement := false
+	for _, m := range s.layout.Layout.Columns {
+		movement = movement || m == bookfiles.Movement
+	}
+	activity = map[string]*big.Rat{}
+	switch {
+	case movement:
+		for _, a := range pl {
+			m, ok := new(big.Rat).SetString(cmp.Or(a.Movement, "0"))
+			if !ok {
+				return nil, "", "an account's movement could not be read"
+			}
+			// The movement is written in the balance's convention: a positive balance a credit makes a positive movement one.
+			if s.layout.Layout.BalanceSign == "credit" {
+				m.Neg(m)
+			}
+			activity[a.Key] = presented(a.Mapped.Class, m)
+		}
+		return activity, "movement", ""
+	case s.fiscalStart > 0 && strings.HasSuffix(s.reading.Period, fmt.Sprintf("-%02d", s.fiscalStart)):
+		closed := true
+		for _, a := range pl {
+			b, ok := new(big.Rat).SetString(cmp.Or(a.Balance, "0"))
+			if !ok {
+				return nil, "", "an account's balance could not be read"
+			}
+			closed = closed && b.Sign() == 0
+			activity[a.Key] = presented(a.Mapped.Class, b)
+		}
+		if closed && len(pl) > 0 {
+			return nil, "", "the file is post-closing (its profit and loss accounts are closed to equity): export the Trial Balance before closing, or with the month's movement"
+		}
+		return activity, "year_to_date", ""
+	}
+	return nil, "", "a column with the month's movement (the net change for the month), or a Trial Balance for the fiscal year's first month"
 }
 
 // previousMonth is the month before period (YYYY-MM).
@@ -119,7 +177,7 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	if err != nil {
 		return s, false, err
 	}
-	s.currency = profile.Currency
+	s.currency, s.fiscalStart = profile.Currency, profile.FiscalStart
 	s.recorded = true
 	for _, a := range reading.Accounts {
 		if a.Mapped == nil || !slices.Contains(a.Mapped.Readings, reading.ID) {
@@ -250,6 +308,25 @@ func fileChecks(s fileState, explained string) []importCheck {
 		add(importCheck{Key: "currency", Title: "In the client's currency, to the cent", State: "holds", Detail: "Some amounts are not exact to the cent: the file may be rounded.", Holds: "Its use as the month's books."})
 	default:
 		add(importCheck{Key: "currency", Title: "In the client's currency, to the cent", State: "passes", Detail: "In " + got + ", every amount exact to the cent."})
+	}
+	// The month's activity, which the management pack and the budget comparison read.
+	if activity, from, missing := monthActivity(s); missing != "" {
+		add(importCheck{Key: "activity", Title: "The month's activity", State: "holds", Detail: "Unavailable: send " + missing + ". It is never estimated.",
+			Holds: "The management pack's profit and loss and the budget comparison for the month."})
+	} else {
+		revenue, expense := new(big.Rat), new(big.Rat)
+		for _, a := range s.reading.Accounts {
+			if v, ok := activity[a.Key]; ok && a.Mapped.Class == "Revenue" {
+				revenue.Add(revenue, v)
+			} else if ok {
+				expense.Add(expense, v)
+			}
+		}
+		said := "From the file's movement column"
+		if from == "year_to_date" {
+			said = "From the year-to-date balances: the fiscal year's first month"
+		}
+		add(importCheck{Key: "activity", Title: "The month's activity", State: "passes", Detail: fmt.Sprintf("%s: revenue %s, expenses %s.", said, revenue.FloatString(2), expense.FloatString(2))})
 	}
 	// Formula amounts are the last calculation, which the reader does not repeat: a values-only export has none, and a
 	// reviewer's attestation of a recalculated copy releases them.
