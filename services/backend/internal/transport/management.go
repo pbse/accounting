@@ -40,6 +40,9 @@ type books struct {
 	// and not credit cards.
 	Imported  *cashFlowImport
 	Uncounted []string
+	// ActivityUnavailable says why the month's activity is unknown (a month on files without a movement column, say):
+	// its profit and loss is then unavailable, never shown as zero.
+	ActivityUnavailable string
 }
 
 // cashFlowImport is the firm's statement of cash flows as imported, with who imported it and what they attested.
@@ -289,6 +292,10 @@ func managementPack(this, last *books) map[string]any {
 	}
 	out := map[string]any{"profit_and_loss": statement{plSections, measures}, "balance_sheet": balance, "reclassified": names,
 		"cash_flow": cashFlow(this, last, compared)}
+	if this.ActivityUnavailable != "" {
+		out["profit_and_loss"], out["profit_and_loss_unavailable"] = statement{[]packSection{}, []packLine{}}, this.ActivityUnavailable
+		complete = false
+	}
 	// The pack's scope includes a reconciled historical cash-flow statement: without one it is not complete.
 	if flow := out["cash_flow"].(map[string]any); flow["reconciled"] != true {
 		complete = false
@@ -662,6 +669,12 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	if err := tx.QueryRowContext(ctx, `SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1`, closeID).Scan(&org, &entity, &period); err != nil {
 		return nil, tieRefusal{404, "Close not found."}
 	}
+	// A month whose books are its files reads them from its accepted file.
+	if source, err := closeBooksSource(ctx, tx, closeID); err != nil {
+		return nil, tieRefusal{503, "The month's books source is unavailable."}
+	} else if source == "files" {
+		return closeFilesPack(ctx, tx, closeID, org, entity, period)
+	}
 	this, err := periodBooks(ctx, tx, closeID, period)
 	if err != nil {
 		return nil, tieRefusal{503, "Period snapshot unavailable."}
@@ -734,9 +747,15 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	if disclosure, ok := pack["cash_flow"].(map[string]any)["disclosure"].(string); ok {
 		note += " " + disclosure
 	}
+	return finishPack(ctx, tx, org, pack, note, status)
+}
+
+// finishPack completes a pack: its note, with the cash-flow statement's disclosure, its overall status and the digest of
+// its figures, and the draft commentary under the firm's materiality.
+func finishPack(ctx context.Context, tx *sql.Tx, org string, pack map[string]any, note, status string) (map[string]any, error) {
 	pack["note"], pack["overall"], pack["digest"] = note, status, figuresDigest(pack)
 	var materiality sql.NullString
-	if err = tx.QueryRowContext(ctx, `SELECT materiality_amount::text FROM organizations WHERE id=$1`, org).Scan(&materiality); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT materiality_amount::text FROM organizations WHERE id=$1`, org).Scan(&materiality); err != nil {
 		return nil, tieRefusal{503, "The firm's policy is unavailable."}
 	}
 	pack["draft_commentary"] = draftCommentary(pack, materiality.String)

@@ -31,6 +31,8 @@ export type Pack =
       reclassified: string[];
       comparison_unavailable?: string;
       profit_and_loss: { sections: Section[]; measures: Line[] };
+      profit_and_loss_unavailable?: string;
+      file?: string;
       balance_sheet: { sections: Section[]; earnings: Line; total_assets: Line; total_liabilities: Line; total_equity: Line; difference: string };
       working_capital: Record<"book_cash" | "receivables" | "payables" | "current_assets" | "current_liabilities" | "working_capital", Line> | { unavailable: string };
       cash_flow: { unavailable: string } | { sections: Section[]; net_change: Line; beginning: Line; ending: Line; book_cash: string; reconciled: boolean; differences: string[]; disclosure?: string };
@@ -126,7 +128,11 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         <strong>
           {pack.entity} · {pack.period}
         </strong>{" "}
-        · {pack.basis} basis · {pack.currency} · captured from {pack.source === "quickbooks" ? "QuickBooks" : "Xero"} {dates.dateTime(pack.as_of)} ·{" "}
+        · {pack.basis} basis · {pack.currency} ·{" "}
+        {pack.source === "files"
+          ? `from the accepted file ${pack.file ?? ""}, as of ${dates.calendarDate(pack.as_of)}`
+          : `captured from ${pack.source === "quickbooks" ? "QuickBooks" : "Xero"} ${dates.dateTime(pack.as_of)}`}{" "}
+        ·{" "}
         <span className={statusClass}>{statusText}</span>
       </p>
       {pack.stale && <p role="alert">This capture is no longer current: its connection or evidence changed. Capture the month again before relying on these figures.</p>}
@@ -135,7 +141,7 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         {pack.note}{" "}
         {prior ? (
           <>
-            Compared with {prior.period} (<span className={statusLabels[prior.status][0]}>{statusLabels[prior.status][1]}</span>), captured {dates.dateTime(prior.as_of)}
+            Compared with {prior.period} (<span className={statusLabels[prior.status][0]}>{statusLabels[prior.status][1]}</span>), {pack.source === "files" ? `as of ${dates.calendarDate(prior.as_of)}` : `captured ${dates.dateTime(prior.as_of)}`}
             {prior.stale ? "; that capture is no longer current" : ""}. Totals are the sums of the accounts listed above them.
           </>
         ) : (
@@ -150,7 +156,11 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         table(`At the end of ${pack.period}`, [], [wc.book_cash, wc.receivables, wc.payables, wc.current_assets, wc.current_liabilities, wc.working_capital])
       )}
       <SectionHeader title="Profit and loss" />
-      {table(`Activity in ${pack.period}`, pack.profit_and_loss.sections, pack.profit_and_loss.measures)}
+      {pack.profit_and_loss_unavailable ? (
+        <p className="note">The month's activity is unavailable: {pack.profit_and_loss_unavailable}. It is never estimated.</p>
+      ) : (
+        table(`Activity in ${pack.period}`, pack.profit_and_loss.sections, pack.profit_and_loss.measures)
+      )}
       <SectionHeader title="Balance sheet" />
       {table(`Balances at the end of ${pack.period}`, bs.sections, [bs.earnings, bs.total_assets, bs.total_liabilities, bs.total_equity])}
       {bs.difference !== "0.00" && <p role="alert">Assets differ from liabilities and equity by {show(bs.difference)}.</p>}
