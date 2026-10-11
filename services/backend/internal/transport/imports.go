@@ -134,6 +134,24 @@ func importOwner(w http.ResponseWriter, r *http.Request, db *sql.DB) (string, bo
 	return name, true
 }
 
+// readImportAs reads import id the way a person sees it: a CSV as asked, else as its own layout was confirmed, else as
+// the client's last file was confirmed (its exports keep their format) when that reads it, else as the reader reads it.
+func readImportAs(ctx context.Context, q rowReader, org, name, id string, asked csvChoice, confirmed, saved *confirmedRead) (importSummary, bookfiles.File, error) {
+	if asked.Encoding != "" && asked.Delimiter != "" {
+		return readImport(ctx, q, org, name, id, asked)
+	}
+	if confirmed != nil {
+		return readImport(ctx, q, org, name, id, confirmed.CSV)
+	}
+	summary, file, err := readImport(ctx, q, org, name, id, csvChoice{})
+	if err == nil && saved != nil && saved.CSV.Encoding != "" && summary.Format == "csv" {
+		if s, f, e := readImport(ctx, q, org, name, id, saved.CSV); e == nil {
+			return s, f, nil
+		}
+	}
+	return summary, file, err
+}
+
 // readImport is import id of client name in firm org: its stored file, read into tables; a CSV in the encoding and with
 // the delimiter a person chose, when they chose them, else as the reader reads it.
 func readImport(ctx context.Context, q rowReader, org, name, id string, as csvChoice) (importSummary, bookfiles.File, error) {
@@ -272,8 +290,9 @@ func tableOf(file bookfiles.File, l bookfiles.Layout) (bookfiles.Table, bool) {
 }
 
 func registerImports(mux *http.ServeMux, db *sql.DB) {
+	// A firm's files stay readable when its file imports are switched off: only sending and confirming stop.
 	mux.HandleFunc("GET /v1/closes/client/imports", func(w http.ResponseWriter, r *http.Request) {
-		name, ok := importClient(w, r, db)
+		name, ok := importOwner(w, r, db)
 		if !ok {
 			return
 		}
@@ -321,7 +340,12 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if more {
 			imports = imports[:100]
 		}
-		jsonReply(w, 200, map[string]any{"imports": imports, "more": more, "can_confirm": canReview(r)})
+		on, err := fileImportsOn(r.Context(), db, organization(r))
+		if err != nil {
+			problem(w, 503, "The client's files are unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"imports": imports, "more": more, "on": on, "can_confirm": canReview(r) && on})
 	})
 	mux.HandleFunc("POST /v1/closes/client/imports", func(w http.ResponseWriter, r *http.Request) {
 		name, ok := importClient(w, r, db)
@@ -380,7 +404,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		jsonReply(w, 201, map[string]string{"id": id})
 	})
 	mux.HandleFunc("GET /v1/closes/client/import", func(w http.ResponseWriter, r *http.Request) {
-		name, ok := importClient(w, r, db)
+		name, ok := importOwner(w, r, db)
 		if !ok {
 			return
 		}
@@ -398,20 +422,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		// A CSV is read as asked (?encoding=&delimiter=), else as its layout was confirmed, else as the client's last
-		// file was confirmed (its exports keep their format), else as the reader reads it.
-		as := csvChoice{Encoding: r.URL.Query().Get("encoding"), Delimiter: r.URL.Query().Get("delimiter")}
-		explicit := as.Encoding != ""
-		if !explicit && confirmed != nil {
-			as = confirmed.CSV
-		}
-		summary, file, err := readImport(r.Context(), db, org, name, id, as)
-		if err == nil && !explicit && confirmed == nil && saved != nil && saved.CSV.Encoding != "" && summary.Format == "csv" {
-			// The client's own choice is tried first; a file it cannot read is read as the reader reads it.
-			if s, f, e := readImport(r.Context(), db, org, name, id, saved.CSV); e == nil {
-				summary, file = s, f
-			}
-		}
+		summary, file, err := readImportAs(r.Context(), db, org, name, id, csvChoice{Encoding: r.URL.Query().Get("encoding"), Delimiter: r.URL.Query().Get("delimiter")}, confirmed, saved)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
 			return
@@ -446,12 +457,37 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			tables = append(tables, p)
 		}
 		out := map[string]any{"import": summary, "tables": tables, "encoding": file.Encoding, "delimiter": file.Delimiter, "unsure": file.Unsure,
-			"linked_workbooks": file.LinkedWorkbooks, "recalculate_on_open": file.RecalculateOnOpen, "formulas": file.Formulas, "can_confirm": canReview(r)}
+			"linked_workbooks": file.LinkedWorkbooks, "recalculate_on_open": file.RecalculateOnOpen, "formulas": file.Formulas}
+		on, err := fileImportsOn(r.Context(), db, org)
+		if err != nil {
+			problem(w, 503, "File imports are unavailable.")
+			return
+		}
+		out["on"], out["can_confirm"] = on, canReview(r) && on
 		if confirmed == nil {
 			layout, questions, reused := proposal(file, saved)
 			out["proposal"] = map[string]any{"layout": layout, "questions": questions, "reused": reused}
 		}
 		jsonReply(w, 200, out)
+	})
+	// One confirmed layout, with what it read: each version stays readable, its exit included.
+	mux.HandleFunc("GET /v1/closes/client/layout", func(w http.ResponseWriter, r *http.Request) {
+		name, ok := importOwner(w, r, db)
+		if !ok {
+			return
+		}
+		var raw []byte
+		err := db.QueryRowContext(r.Context(), `SELECT to_jsonb(l) FROM books_layouts l WHERE l.id::text=$1 AND l.organization_id=$2 AND client_identity(l.organization_id,l.client_entity)=client_identity($2,$3)`,
+			r.URL.Query().Get("id"), organization(r), name).Scan(&raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			problem(w, 404, "Layout not found.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The layout is unavailable.")
+			return
+		}
+		jsonReply(w, 200, json.RawMessage(raw))
 	})
 	// The file as it was sent, byte for byte: the firm's to download at any time, its exit included.
 	mux.HandleFunc("GET /v1/closes/client/import/file", func(w http.ResponseWriter, r *http.Request) {
@@ -509,18 +545,18 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		org := organization(r)
-		// With no choice of its own, a CSV is read the way its confirmed layout read it, as the reader shows it.
-		if in.CSV.Encoding == "" || in.CSV.Delimiter == "" {
-			saved, err := latestLayout(r.Context(), db, org, name, r.URL.Query().Get("id"))
-			if err != nil {
-				problem(w, 503, "The file's layout is unavailable.")
-				return
-			}
-			if saved != nil {
-				in.CSV = saved.CSV
-			}
+		// With no choice of its own, a CSV is read as the reader shows it: as its layout was confirmed, else as the
+		// client's last file was.
+		ownLayout, err := latestLayout(r.Context(), db, org, name, r.URL.Query().Get("id"))
+		var clientLayout *confirmedRead
+		if err == nil && ownLayout == nil {
+			clientLayout, err = latestLayout(r.Context(), db, org, name, "")
 		}
-		summary, file, err := readImport(r.Context(), db, org, name, r.URL.Query().Get("id"), in.CSV)
+		if err != nil {
+			problem(w, 503, "The file's layout is unavailable.")
+			return
+		}
+		summary, file, err := readImportAs(r.Context(), db, org, name, r.URL.Query().Get("id"), in.CSV, ownLayout, clientLayout)
 		if errors.Is(err, sql.ErrNoRows) {
 			problem(w, 404, "File not found.")
 			return

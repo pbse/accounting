@@ -82,6 +82,8 @@ type ClientRead = {
   profile: Profile | null;
   // file_imports says the firm takes the client's books as files.
   file_imports?: boolean;
+  // files is how many files the client has sent: they stay readable with file imports switched off.
+  files?: number;
   basis: {
     method: "accrual" | "cash" | "modified_cash";
     scope: "client" | "firm";
@@ -350,7 +352,7 @@ export default function ClientPage() {
           {postingConnections(client.xero.map((x) => x.id), client.xero_grants).map((id) => (
             <XeroPostingCard key={id} client={client} connection={id} onChanged={reread} />
           ))}
-          {client.file_imports && client.whole && <FilesCard key={name} client={name} />}
+          {client.whole && (client.file_imports || (client.files ?? 0) > 0) && <FilesCard key={name} client={name} />}
           <Card
             icon="history"
             tone={!roster ? "wait" : "done"}

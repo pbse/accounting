@@ -92,8 +92,10 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	}
 	september := "Account,Debit,Credit\nBank,1500.25,\nCapital,,1000.00\nSales,,500.25\nTOTAL,1500.25,1500.25\n"
 
-	// Off for the firm until staff switch it on.
-	call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co", nil, 403)
+	// Off for the firm until staff switch it on: nothing can be sent, and the list says it is off.
+	if off := call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co", nil, 200); off["on"] != false || off["can_confirm"] != false {
+		t.Fatalf("the list with file imports off: %v", off)
+	}
 	upload("user_a", partner, "tb.csv", "2026-09", september, 403)
 	_, err = db.Exec(`UPDATE organizations SET file_imports=true WHERE id=$1`, org)
 	must(err)
@@ -205,9 +207,23 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	}
 	exported := call("user_a", []string{"clients:all", "data:manage", "workpapers:review"}, "GET", "/v1/closes/firm-export", nil, 200)["records"].(map[string]any)
 	files := exported["books_imports"].([]any)
-	if len(files) == 0 || files[0].(map[string]any)["download"] == nil || files[0].(map[string]any)["content"] != nil || len(exported["books_layouts"].([]any)) == 0 {
-		t.Fatalf("the export's files: %v", files)
+	layouts := exported["books_layouts"].([]any)
+	if len(files) == 0 || files[0].(map[string]any)["download"] == nil || files[0].(map[string]any)["content"] != nil || len(layouts) == 0 || layouts[0].(map[string]any)["reading"] == nil {
+		t.Fatalf("the export's files and layouts: %v %v", files, layouts)
 	}
+	// Each layout's reading downloads on its own.
+	if version := call("user_a", partner, "GET", layouts[0].(map[string]any)["reading"].(string), nil, 200); version["reading"] == nil {
+		t.Fatalf("a layout's reading: %v", version)
+	}
+	// Switched off again, the firm's files stay readable, not confirmable.
+	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)
+	must(err)
+	if read := call("user_a", partner, "GET", path, nil, 200); read["on"] != false || read["can_confirm"] != false {
+		t.Fatalf("a file read with imports off: %v", read["on"])
+	}
+	call("user_a", partner, "POST", path, map[string]any{"action": "preview", "layout": layout}, 403)
+	_, err = db.Exec(`UPDATE organizations SET file_imports=true WHERE id=$1`, org)
+	must(err)
 	// The list comes in pages, saying when there are more.
 	all := call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co", nil, 200)
 	rest := call("user_a", partner, "GET", "/v1/closes/client/imports?name=Acme%20Co&offset=1", nil, 200)

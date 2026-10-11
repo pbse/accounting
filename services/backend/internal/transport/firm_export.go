@@ -16,7 +16,7 @@ var firmExportTables = []struct{ table, order string }{
 	{"takeover_setups", "id"}, {"opening_baselines", "id"}, {"opening_cleanup_resolutions", "id"},
 	{"budget_versions", "id"}, {"cash_scenarios", "id"}, {"cash_obligations", "id"}, {"standing_approvals", "id"}, {"open_item_actions", "id"},
 	{"customer_contact_authority", "id"}, {"collection_contact_preferences", "id"}, {"email_settlements", "id"},
-	{"production_posting_grants", "id"}, {"xero_posting_grants", "id"}, {"operation_acceptances", "id"}, {"books_layouts", "id"},
+	{"production_posting_grants", "id"}, {"xero_posting_grants", "id"}, {"operation_acceptances", "id"},
 }
 
 // firmExportLimit refuses an export rather than cutting it short.
@@ -82,6 +82,34 @@ func registerFirmExport(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["books_imports"], _ = json.Marshal(files)
+		// Each confirmed layout without what it read, which can be large, with where that downloads.
+		layouts := []map[string]any{}
+		rows, err = tx.QueryContext(r.Context(), `SELECT to_jsonb(l),l.id::text,l.client_entity FROM (SELECT id,organization_id,client_entity,import_id,layout,reason,actor,created_at,encoding,delimiter,
+ COALESCE((reading->>'balanced')::boolean,false) AS balanced,COALESCE(jsonb_array_length(reading->'problems'),0) AS problems FROM books_layouts WHERE organization_id=$1) l ORDER BY l.id`, org)
+		if err != nil {
+			problem(w, 503, "The firm export could not be read.")
+			return
+		}
+		for rows.Next() {
+			var raw []byte
+			var id, client string
+			if err = rows.Scan(&raw, &id, &client); err != nil {
+				break
+			}
+			row := map[string]any{}
+			json.Unmarshal(raw, &row)
+			row["reading"] = "/v1/closes/client/layout?name=" + url.QueryEscape(client) + "&id=" + id
+			layouts = append(layouts, row)
+		}
+		rows.Close()
+		if err == nil {
+			err = rows.Err()
+		}
+		if err != nil {
+			problem(w, 503, "The firm export could not be read.")
+			return
+		}
+		out["books_layouts"], _ = json.Marshal(layouts)
 		for _, t := range firmExportTables {
 			if !read(t.table, `SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.`+t.order+`),'[]') FROM `+t.table+` t WHERE t.organization_id=$1`, org) {
 				return

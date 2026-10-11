@@ -45,6 +45,8 @@ type ImportRead = {
   linked_workbooks?: string[];
   recalculate_on_open?: boolean;
   formulas?: number;
+  // on says the firm's file imports are on: off, a file is read and downloaded but not confirmed again.
+  on?: boolean;
   can_confirm: boolean;
   proposal?: { layout: Layout; questions: string[]; reused: boolean };
 };
@@ -98,7 +100,7 @@ const delimiters = [
 export function FilesCard({ client }: { client: string }) {
   const queryClient = useQueryClient();
   const dates = useDates();
-  const files = useQuery(workspaceQuery<{ imports: ImportRow[]; more: boolean; can_confirm: boolean }>(filesPath(client)));
+  const files = useQuery(workspaceQuery<{ imports: ImportRow[]; more: boolean; on?: boolean; can_confirm: boolean }>(filesPath(client)));
   // Older files come a hundred at a time after the newest hundred.
   const [older, setOlder] = useState<{ imports: ImportRow[]; more: boolean } | undefined>(undefined);
   const [sending, setSending] = useState(false);
@@ -120,9 +122,11 @@ export function FilesCard({ client }: { client: string }) {
         title="Files"
         chip={<span className="pill neutral">{imports.length ? `${imports.length} sent` : "None sent"}</span>}
         action={
-          <button type="button" onClick={() => setSending(true)}>
-            Send a file
-          </button>
+          files.data?.on === false ? undefined : (
+            <button type="button" onClick={() => setSending(true)}>
+              Send a file
+            </button>
+          )
         }
       >
         {files.error
@@ -223,7 +227,16 @@ function ImportReader({ client, id, onDone }: { client: string; id: string; onDo
   return (
     <>
       {read.error && <p role="alert">{read.error.message || "The file could not be read that way."}</p>}
-      <LayoutForm key={read.data.import.id} client={client} id={id} data={read.data} start={start} csv={csv} onCsv={setCsv} onDone={onDone} />
+      <LayoutForm
+        key={`${read.data.import.id}:${read.data.encoding ?? ""}:${read.data.delimiter ?? ""}`}
+        client={client}
+        id={id}
+        data={read.data}
+        start={start}
+        csv={csv}
+        onCsv={setCsv}
+        onDone={onDone}
+      />
     </>
   );
 }
@@ -495,13 +508,16 @@ function LayoutForm({
           <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
         </label>
       )}
+      {data.on === false && <p className="note">File imports are switched off for your firm: this file can be read and downloaded, not read again with another layout.</p>}
       <DialogActions>
         <button type="button" onClick={() => void downloadFile()}>
           Download the file
         </button>
-        <button type="button" disabled={busy} onClick={() => void act("preview")}>
-          {busy ? "Reading…" : "Preview the reading"}
-        </button>
+        {data.on !== false && (
+          <button type="button" disabled={busy} onClick={() => void act("preview")}>
+            {busy ? "Reading…" : "Preview the reading"}
+          </button>
+        )}
         {data.can_confirm && (
           <button type="button" className="primary" disabled={busy || !reading || !reason.trim() || !layout.as_of || !layout.currency} onClick={() => void act("confirm")}>
             Confirm the layout
