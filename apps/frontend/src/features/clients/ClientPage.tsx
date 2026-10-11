@@ -7,7 +7,9 @@ import { Icon } from "@close/ui/components/Icon";
 import { clientPath } from "../../data/clients";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, monthShort, useDates, useToday } from "../../data/time";
-import { ClientForm, type Person, type RosterEntry } from "../closes/Roster";
+import { ClientForm, LedgerPicker, type CatalogLedger, type LedgerChoice, type Person, type RosterEntry } from "../closes/Roster";
+import { PostingCard, QuickBooksAction, type ProductionGrant } from "./QuickBooksBooks";
+import { XeroAction, XeroPostingCard, type XeroGrant } from "./XeroBooks";
 import { FilesCard } from "./Files";
 import { workspaceRequest } from "../closes/workspace";
 
@@ -44,6 +46,7 @@ type XeroConnection = {
   client_entity: string;
   state: string;
   tenant_name: string;
+  tenants: { tenantId: string; tenantName: string }[];
   error: string;
 };
 type Profile = {
@@ -58,6 +61,8 @@ type ClientRead = {
   whole: boolean;
   can_manage: boolean;
   can_connect: boolean;
+  // can_grant says the reader may give and revoke the client's posting grants.
+  can_grant: boolean;
   roster: RosterEntry | null;
   template: { due_days: number | null; owner: string } | null;
   template_hidden: boolean;
@@ -65,6 +70,15 @@ type ClientRead = {
   owed: Owed[];
   quickbooks: QuickBooksConnection[];
   xero: XeroConnection[];
+  // The ledger the client keeps, as recorded: not how its books arrive.
+  ledger: KeptLedger | null;
+  // Which connectors may be connected for the firm: one switched off is not offered.
+  connectable?: { quickbooks: boolean; xero: boolean };
+  // Which ledgers this server can connect, and the client's posting grants.
+  quickbooks_setup?: { sandbox: boolean; production: boolean };
+  xero_configured?: boolean;
+  production_grants?: ProductionGrant[];
+  xero_grants?: XeroGrant[];
   profile: Profile | null;
   // file_imports says the firm takes the client's books as files.
   file_imports?: boolean;
@@ -78,6 +92,8 @@ type ClientRead = {
   people?: Person[];
   people_unavailable?: string;
 };
+// The ledger a client keeps, as recorded when it was added or corrected on its page, with its catalog entry.
+type KeptLedger = { id: string; ledger: string; other_name?: string; entry?: CatalogLedger; reason: string; actor: string; at: string };
 // A request to the client that it has not finished answering, from any month the reader can open.
 type AskedOfClient = {
   id: string;
@@ -122,7 +138,7 @@ export default function ClientPage() {
   const client = read.data;
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"" | "another" | "schedule">("");
+  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "ledger">("");
   const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   if (!client) {
     if (read.isPending) return <p role="status">Opening the client…</p>;
@@ -188,6 +204,23 @@ export default function ClientPage() {
               ? `${name} is signed off through ${monthName(signed[0].period)}.`
               : `${name} has no months yet.`;
   const ledger = books(client, dates.dayMonth);
+  // The ledger the client keeps, as recorded, said first on the Books card; a ledger the firm cannot connect is served by
+  // files once they reach the firm, with its export steps.
+  const kept = client.ledger;
+  // Recorded under the client's own name, so only by a reader who sees the client whole.
+  const canRecord = client.whole && (client.can_manage || client.can_connect);
+  const keptName = kept?.entry?.name ?? (kept?.ledger === "other" ? kept.other_name : "");
+  const keeps = !kept
+    ? canRecord
+      ? "Its ledger is not recorded yet. "
+      : ""
+    : kept.ledger === "unknown"
+      ? "Its ledger is not known yet. "
+      : `Keeps its books in ${keptName}.${
+          !client.quickbooks.length && !client.xero.length && (!kept.entry || !kept.entry.connected)
+            ? ` ${keptName} has no connector here${kept.entry?.connector ? " switched on for your firm" : ""}: once file import reaches your firm, its books come from its exports.`
+            : ""
+        } `;
   const roster = client.roster;
   const dueDays = roster?.due_days ?? client.template?.due_days ?? null;
   const context = !client.whole
@@ -204,16 +237,9 @@ export default function ClientPage() {
   // The one action: the oldest month open, else the earliest month it owes.
   const inHand = oldest;
   const next = active && !inHand && owed[0] ? owed[0] : null;
-  // Procedures are kept under the client's own name, so they are managed from its newest month opened under that name;
-  // a connection from the newest month opened under the name it is held under (a month under another name shows
-  // neither).
+  // Procedures are kept under the client's own name, so they are managed from its newest month opened under that name
+  // (a month under another name shows them not). Connections are managed here; labeled exports in their month.
   const latest = months.find((m) => m.entity.toLowerCase() === name.toLowerCase());
-  const managedIn = ledger.month ?? months.find((m) => m.entity.toLowerCase() === (ledger.held ?? name).toLowerCase());
-  // Each other connection needing attention, with the month that manages it.
-  const fixes = ledger.fix.flatMap((l) => {
-    const month = months.find((m) => m.entity.toLowerCase() === l.held.toLowerCase());
-    return month ? [{ ledger: l, month }] : [];
-  });
 
   // How each month is due and who holds it: the client's own terms, else the firm template's, said once.
   const people = client.people ?? [];
@@ -297,25 +323,33 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              client.can_connect && (managedIn || fixes.length) ? (
+              client.can_connect || ledger.month || canRecord ? (
                 <>
-                  {managedIn && (
-                    <Link className="button" to={`/dashboard/closes/${managedIn.id}?tab=${ledger.tab}#${ledger.anchor}`}>
-                      {ledger.connected ? "Manage" : "Connect"} in {monthShort(managedIn.period)}
+                  {canRecord && (
+                    <button type="button" onClick={() => setDialog("ledger")}>
+                      Ledger
+                    </button>
+                  )}
+                  {ledger.month && (
+                    <Link className="button" to={`/dashboard/closes/${ledger.month.id}?tab=evidence#historical-exports`}>
+                      {monthShort(ledger.month.period)}’s exports
                     </Link>
                   )}
-                  {fixes.map((f) => (
-                    <Link key={`${f.ledger.source}:${f.ledger.name}:${f.month.id}`} className="button" to={`/dashboard/closes/${f.month.id}?tab=${f.ledger.tab}#${f.ledger.anchor}`}>
-                      Fix {f.ledger.name}
-                    </Link>
-                  ))}
+                  <QuickBooksAction client={client} onChanged={reread} />
+                  <XeroAction client={client} onChanged={reread} />
                 </>
               ) : undefined
             }
           >
+            {keeps}
             {ledger.line}
-            {managedIn || !client.can_connect ? "" : ` Open a month under ${ledger.held ?? name} to ${ledger.connected ? "manage" : "connect"} its ledger.`}
           </Card>
+          {postingConnections(client.quickbooks.filter((c) => c.environment === "production").map((c) => c.id), client.production_grants).map((id) => (
+            <PostingCard key={id} client={client} connection={id} onChanged={reread} />
+          ))}
+          {postingConnections(client.xero.map((x) => x.id), client.xero_grants).map((id) => (
+            <XeroPostingCard key={id} client={client} connection={id} onChanged={reread} />
+          ))}
           {client.file_imports && client.whole && <FilesCard client={name} />}
           <Card
             icon="history"
@@ -499,6 +533,16 @@ export default function ClientPage() {
           </DialogActions>
         </form>
       </Dialog>
+      {canRecord && (
+        <Dialog
+          open={dialog === "ledger"}
+          onClose={() => setDialog("")}
+          title={`${name}’s ledger`}
+          description="Which product the client keeps its books in. It is not how a month’s books arrive, and changing it changes no books."
+        >
+          <LedgerForm key={kept?.id ?? "none"} client={name} kept={kept} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
+        </Dialog>
+      )}
       {client.can_manage && (
         <Dialog
           open={dialog === "schedule"}
@@ -521,6 +565,12 @@ function monthState(m: Month, today: string) {
   if (m.signed_off) return <span className="pill">Signed off</span>;
   if (m.due_on && m.due_on < today) return <span className="pill danger">Overdue</span>;
   return <span className="pill neutral">Open</span>;
+}
+
+// connectOffer is how the client's books can arrive: the connectors switched on for the firm, else a month's exports.
+function connectOffer(client: ClientRead) {
+  const on = [client.connectable?.quickbooks !== false && "QuickBooks", client.connectable?.xero !== false && "Xero"].filter(Boolean);
+  return on.length ? `Connect ${on.join(" or ")}, or label the exports a month uses.` : "Label the exports a month uses.";
 }
 
 // How the client's books arrive, from its connections (the QuickBooks one its books are read from first, then Xero),
@@ -553,7 +603,7 @@ function books(client: ClientRead, day: (value: string) => string) {
             ? "its organisation waits to be chosen"
             : "still connecting";
   // Each connection, under the client's own name first, then production first, as the API lists them: how it reads,
-  // its state, and the month that manages it.
+  // and its state.
   const ledgers: Ledger[] = [
     ...client.quickbooks.map((q) => ({
       source: "quickbooks",
@@ -564,8 +614,6 @@ function books(client: ClientRead, day: (value: string) => string) {
       chip: state(q.state, "Confirm the company"),
       status: status(q.state),
       ok: live(q.state),
-      tab: q.environment === "production" ? "settings" : "evidence",
-      anchor: q.environment === "production" ? "quickbooks-production" : "quickbooks-ledger",
     })),
     ...client.xero.map((x) => ({
       source: "xero",
@@ -576,13 +624,11 @@ function books(client: ClientRead, day: (value: string) => string) {
       chip: state(x.state, "Choose the organisation"),
       status: status(x.state),
       ok: live(x.state),
-      tab: "evidence",
-      anchor: "xero",
     })),
   ];
   // The card leads with how the newest month's books arrived: its labeled exports, managed in that month, or the
   // ledger it was captured from; with neither, a connection that works, else the first. Every other connection is said
-  // after it with its own state, and each that needs attention gets its own way in.
+  // after it with its own state; each ledger's own action on the card manages it.
   const source = newest?.books?.source;
   const also = (others: Ledger[]) => others.map((o) => ` ${o.name} is also connected (${o.status}).`).join("");
   if (newest?.books && source === "exports") {
@@ -590,14 +636,9 @@ function books(client: ClientRead, day: (value: string) => string) {
     return {
       short: "books from exports",
       line: `${latest.trim()}${ledgers.length ? also(ledgers) : " No ledger is connected."}`,
-      held: newest.entity as string | undefined,
       month: newest as ClientRead["months"][number] | undefined,
       chip: (newest.books.stale ? ["Exports replaced", "pill muted"] : failing.length ? failing[0].chip : ["From exports", "pill neutral"]) as [string, string],
       attention: !!newest.books.stale || failing.length > 0,
-      connected: true,
-      tab: "evidence",
-      anchor: "historical-exports",
-      fix: failing,
     };
   }
   // The connection a captured month was read from is the one of its source held under the month's own name, if any.
@@ -608,33 +649,86 @@ function books(client: ClientRead, day: (value: string) => string) {
     return {
       short: lead.short,
       line: `${lead.line}${also(others)}${latest}`,
-      held: lead.held as string | undefined,
       month: undefined as ClientRead["months"][number] | undefined,
       chip: lead.ok && failing.length ? failing[0].chip : lead.chip,
       attention: !lead.ok || failing.length > 0,
-      connected: true,
-      tab: lead.tab,
-      anchor: lead.anchor,
-      fix: failing,
     };
   }
   return {
     short: newest?.books?.source === "exports" ? "books from exports" : "no ledger connected",
-    line: `No ledger is connected. Connect QuickBooks or Xero, or label the exports a month uses.${latest}`,
+    line: `No ledger is connected. ${connectOffer(client)}${latest}`,
     chip: ["Not connected", "pill neutral"] as [string, string],
     attention: false,
-    connected: false,
-    held: undefined as string | undefined,
     month: undefined as ClientRead["months"][number] | undefined,
-    tab: "evidence",
-    anchor: "quickbooks-ledger",
-    fix: [] as Ledger[],
   };
 }
 
-type Ledger = { source: string; short: string; name: string; line: string; held: string; chip: [string, string]; status: string; ok: boolean; tab: string; anchor: string };
+type Ledger = { source: string; short: string; name: string; line: string; held: string; chip: [string, string]; status: string; ok: boolean };
 
 // Names joined as a sentence lists them: "Ann", "Ann and Cy", "Ann, Bea and Cy".
 function listed(names: string[]) {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+// LedgerForm records or corrects the ledger a client keeps, with a reason, against the ledger as read; a catalog entry
+// shows the steps that export its books.
+function LedgerForm({ client, kept, onSaved, onCancel }: { client: string; kept: KeptLedger | null; onSaved: () => void; onCancel: () => void }) {
+  const [choice, setChoice] = useState<LedgerChoice>({ ledger: kept?.ledger ?? "unknown", other_name: kept?.other_name ?? "" });
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const catalog = useQuery(workspaceQuery<{ ledgers: CatalogLedger[] }>("/ledgers"));
+  const entry = catalog.data?.ledgers.find((l) => l.id === choice.ledger);
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest("/client/ledger", { client, ledger: choice.ledger, other_name: choice.other_name.trim(), reason: reason.trim(), rev: kept?.id ?? "" });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The ledger could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form onSubmit={save}>
+      <fieldset disabled={busy}>
+        <LedgerPicker value={choice} onChange={setChoice} />
+        {entry && (
+          <details>
+            <summary>How {entry.name} exports its books</summary>
+            <p>
+              <b>Trial Balance:</b> {entry.exports.trial_balance}
+            </p>
+            <p>
+              <b>General Ledger:</b> {entry.exports.general_ledger}
+            </p>
+            <p>
+              <b>Open items:</b> {entry.exports.open_items}
+            </p>
+          </details>
+        )}
+        <label>
+          Reason
+          <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+        </label>
+        {error && <p role="alert">{error}</p>}
+        <DialogActions>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" disabled={busy || !reason.trim() || (choice.ledger === "other" && !choice.other_name.trim())}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </DialogActions>
+      </fieldset>
+    </form>
+  );
+}
+
+// postingConnections is each connection a posting card is for: every listed connection, and any a grant is still on.
+function postingConnections(connections: string[], grants?: { connection_id: string }[]) {
+  return [...new Set([...connections, ...(grants ?? []).map((g) => g.connection_id)])];
 }

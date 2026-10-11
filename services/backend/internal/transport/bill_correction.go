@@ -263,7 +263,7 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 				saved, kind = prior.GrantID, ""
 			}
 			var err error
-			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entityName, kind, saved); err != nil {
+			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entityName, closeID, kind, saved); err != nil {
 				refuse(w, err)
 				return
 			}

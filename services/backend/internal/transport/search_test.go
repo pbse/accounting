@@ -113,7 +113,7 @@ func TestSearchFindsMatchesOnlyInAccessibleCloses(t *testing.T) {
 	if len(found["reply"]) != 1 || len(found["draft"]) != 1 || found["draft"][0].Title != "prepaid draft #"+paper || found["draft"][0].Snippet != "Zurich policy 2026" {
 		t.Fatalf("a client reply is marked, and only the current draft is found: %+v %+v", found["reply"], found["draft"])
 	}
-	if len(found["transaction"]) != 1 || found["transaction"][0].Title != "Bill 41 · 2026-09-10 · captured 1200.00 USD" || found["transaction"][0].Snippet != "Zurich Insurance" || found["transaction"][0].Href != "/dashboard/closes/"+alpha+"?tab=evidence#quickbooks-ledger" {
+	if len(found["transaction"]) != 1 || found["transaction"][0].Title != "Bill 41 · 2026-09-10 · captured 1200.00 USD" || found["transaction"][0].Snippet != "Zurich Insurance" || found["transaction"][0].Href != "/dashboard/closes/"+alpha+"?tab=books#quickbooks-ledger" {
 		t.Fatalf("a transaction of the latest capture is found with its captured amount: %+v", found["transaction"])
 	}
 	if len(found["procedure"]) != 1 || found["procedure"][0].Title != "prepaid procedure" || len(found["decision"]) != 1 || !strings.HasPrefix(found["decision"][0].Title, "approved by user_reviewer on ") {
@@ -238,7 +238,7 @@ func TestSearchFindsTheNewestXeroCaptureRows(t *testing.T) {
 		return out.Results
 	}
 	hits := search("harbor printing")
-	if len(hits) != 1 || hits[0].Kind != "transaction" || hits[0].Title != "Xero Bill B-9 · 2026-09-12 · captured 40.00 NZD" || hits[0].Href != "/dashboard/closes/"+alpha+"?tab=evidence#xero" || hits[0].Close != "Alpha · 2026-09" || !strings.Contains(hits[0].Snippet, "Harbor Printing") || strings.Contains(hits[0].Snippet, "older") {
+	if len(hits) != 1 || hits[0].Kind != "transaction" || hits[0].Title != "Xero Bill B-9 · 2026-09-12 · captured 40.00 NZD" || hits[0].Href != "/dashboard/closes/"+alpha+"?tab=books#xero" || hits[0].Close != "Alpha · 2026-09" || !strings.Contains(hits[0].Snippet, "Harbor Printing") || strings.Contains(hits[0].Snippet, "older") {
 		t.Fatalf("only the newest capture of an accessible client is found, linked to its Xero evidence: %+v", hits)
 	}
 	if hits := search("xero bill"); len(hits) != 1 {

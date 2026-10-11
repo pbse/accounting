@@ -15,7 +15,7 @@ import { Stat } from "../components/Stat";
 type Run = { id: number; workflow: string; state: string; started_by: string; created_at: string; finished_at: string | null };
 type Health = { run_id: number; finished_at: string; report: Record<string, number> } | null;
 type Limits = { max_closes: number; max_pending_jobs: number; max_model_calls_per_day: number };
-type Detail = { firm: FirmRow; last_suspension: { at: string; by: string } | null; runs: Run[]; health: Health; limits: Limits; support_owner: string; assistance_minutes: number; file_imports?: boolean };
+type Detail = { firm: FirmRow; last_suspension: { at: string; by: string } | null; runs: Run[]; health: Health; limits: Limits; support_owner: string; assistance_minutes: number; connectors?: Record<string, { environment: boolean; pilot?: boolean }> ; file_imports?: boolean };
 
 const tabs = [["", "Overview"], ["people", "People"], ["activity", "Activity"], ["audit", "Staff audit"]] as const;
 
@@ -112,6 +112,7 @@ function Overview({ detail, reload }: { detail: Detail; reload: () => void }) {
       <Onboarding key={detail.support_owner} firm={f} detail={detail} onDone={reload} />
       <FirmLimits key={JSON.stringify(detail.limits)} firm={f} limits={detail.limits} onDone={reload} />
       <FileImports firm={f} on={!!detail.file_imports} onDone={reload} />
+      <ConnectorPilots firm={f} connectors={detail.connectors ?? {}} onDone={reload} />
       <Suspension firm={f} onDone={reload} />
     </>
   );
@@ -181,6 +182,36 @@ function FileImports({ firm, on, onDone }: { firm: FirmRow; on: boolean; onDone:
         await post(`/v1/admin/firms/${encodeURIComponent(firm.id)}/file-imports`, { enabled: !on, reason });
         onDone();
       }} />
+    </section>
+  );
+}
+
+// Native ledger connectors reach every firm when this environment switches them on; a firm can pilot one before then,
+// or have it switched off for it, with a reason (docs/books-sources.md, Ledger catalog and onboarding).
+function ConnectorPilots({ firm, connectors, onDone }: { firm: FirmRow; connectors: Record<string, { environment: boolean; pilot?: boolean }>; onDone: () => void }) {
+  const names = Object.keys(connectors).sort();
+  const [connector, setConnector] = useState(names[0] ?? "");
+  const [enabled, setEnabled] = useState(true);
+  const operate = usePermissions().includes("platform:operate");
+  if (!names.length) return null;
+  return (
+    <section>
+      <h2>Ledger connectors</h2>
+      <ul>
+        {names.map((n) => (
+          <li key={n}>
+            {n}: {connectors[n].environment ? "on in this environment" : "off in this environment"}
+            {connectors[n].pilot !== undefined && `; ${connectors[n].pilot ? "piloted on" : "switched off"} for this firm`}
+          </li>
+        ))}
+      </ul>
+      <ActionForm label="Set the firm's pilot" allowed={operate} minLength={10} onSubmit={async (reason) => {
+        await post(`/v1/admin/firms/${encodeURIComponent(firm.id)}/connector-pilot`, { connector, enabled, reason });
+        onDone();
+      }}>
+        <label>Connector<select value={connector} onChange={(event) => setConnector(event.target.value)}>{names.map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
+        <label className="checkbox-label"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> On for this firm</label>
+      </ActionForm>
     </section>
   );
 }

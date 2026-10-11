@@ -260,7 +260,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				saved, kind = item.GrantID, ""
 			}
 			var err error
-			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entityName, kind, saved); err != nil {
+			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entityName, closeID, kind, saved); err != nil {
 				refuse(w, err)
 				return
 			}

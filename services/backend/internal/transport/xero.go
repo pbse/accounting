@@ -21,20 +21,20 @@ import (
 	"close.local/backend/internal/xero"
 )
 
-// xeroReturn sends the browser back to the close that started the sign-in; the close then
-// posts the code, so the exchange runs under that accountant's own session.
+// xeroReturn sends the browser back to the client's page; the page then posts the code, so the exchange runs under the
+// accountant's own session.
 func xeroReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	q := r.URL.Query()
 	if len(q.Get("state")) > 100 || len(q.Get("code")) > 4096 || q.Get("code") == "" {
-		problem(w, 422, "Xero sign-in was cancelled or invalid. Return to your close and connect again.")
+		problem(w, 422, "Xero sign-in was cancelled or invalid. Return to the client's page and connect again.")
 		return
 	}
-	var closeID string
-	err := db.QueryRowContext(r.Context(), `SELECT x.close_id::text FROM xero_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&closeID)
+	var entity, id string
+	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity,x.id::text FROM xero_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity, &id)
 	if err != nil {
-		problem(w, 410, "Connection attempt expired or unavailable. Start again from your close.")
+		problem(w, 410, "Connection attempt expired or unavailable. Start again from the client's page.")
 		return
 	}
 	origin, err := url.Parse(os.Getenv("PUBLIC_APP_URL"))
@@ -42,9 +42,10 @@ func xeroReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 503, "Configure the exact HTTPS application origin.")
 		return
 	}
-	// The Xero panel lives on the Evidence tab.
-	origin.Path, origin.RawQuery = "/dashboard/closes/"+closeID, "tab=evidence"
-	origin.Fragment = url.Values{"xero_code": {q.Get("code")}, "xero_state": {q.Get("state")}}.Encode()
+	// The client's page holds its connections, whichever page the sign-in was started from, and finishes it.
+	origin.Path, origin.RawPath = "/dashboard/clients/"+entity, "/dashboard/clients/"+url.PathEscape(entity)
+	// The attempt is named, so the page finishes this one whatever others are under way.
+	origin.Fragment = url.Values{"xero_code": {q.Get("code")}, "xero_state": {q.Get("state")}, "xero_connection": {id}}.Encode()
 	http.Redirect(w, r, origin.String(), http.StatusSeeOther)
 }
 
@@ -54,7 +55,8 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 		var connection, snapshots json.RawMessage
 		var latest []byte
 		err := db.QueryRowContext(ctx, `SELECT
- COALESCE((SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'confirmed_at',x.confirmed_at,'error',x.error) FROM xero_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'),'null'::jsonb),
+ COALESCE((SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'confirmed_at',x.confirmed_at,'error',x.error) FROM xero_connections x WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state<>'disconnected'
+  ORDER BY x.state='active' DESC,x.id DESC LIMIT 1),'null'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'period',s.period,'captured_at',s.captured_at,'digest',s.digest,'tenant_id',s.tenant_id) ORDER BY s.id DESC) FROM xero_snapshots s WHERE s.close_id=c.id),'[]'::jsonb),
  (SELECT s.payload FROM xero_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1)
  FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&connection, &snapshots, &latest)
@@ -116,24 +118,8 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 		w.Write(raw)
 	})
 	mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
-		a := auth.Actor(r.Context())
-		if a == nil || a.Organization == "" || !slices.Contains(a.Permissions, "integrations:manage") {
-			problem(w, 403, "A hosted session with integrations:manage is required.")
-			return
-		}
-		var in struct {
-			Action    string `json:"action"`
-			ID        string `json:"connection_id"`
-			Confirmed bool   `json:"confirmed"`
-			Code      string `json:"code"`
-			State     string `json:"state"`
-			TenantID  string `json:"tenant_id"`
-		}
-		if !decode(w, r, &in) {
-			return
-		}
-		if !in.Confirmed {
-			problem(w, 422, "Confirm this connection action and client.")
+		a, in, ok := xeroRequest(w, r)
+		if !ok {
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
@@ -143,104 +129,13 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client close not found.")
 			return
 		}
-		if in.Action == "connect" {
-			if !xero.Configured() {
-				problem(w, 503, "Configure the Xero app first.")
-				return
-			}
-			if _, err := secrets.Seal(a.Organization+"/xero-check", nil); err != nil {
-				problem(w, 503, err.Error())
-				return
-			}
-			state := rand.Text()
-			var id string
-			if err := db.QueryRowContext(ctx, `INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at) VALUES($1,$2,$3,$4,'authorizing',$5,now()+interval '10 minutes') ON CONFLICT DO NOTHING RETURNING id::text`, r.PathValue("id"), a.Organization, entity, a.Subject, preparation.Digest([]byte(state))).Scan(&id); err != nil {
-				problem(w, 409, "A Xero connection or attempt already exists for this client. Disconnect it before connecting again.")
-				return
-			}
-			jsonReply(w, 200, map[string]string{"id": id, "url": xero.AuthorizationURL(state)})
+		// A connection is the client's, made, finished, confirmed and disconnected on its page; a month only captures its
+		// books through it.
+		if in.Action != "snapshot" {
+			problem(w, 409, "Manage Xero on the client's page; a month captures its books through the client's connection.")
 			return
 		}
-		var id, state string
-		var tenants json.RawMessage
-		if err := db.QueryRowContext(ctx, `SELECT id::text,state,tenants FROM xero_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND state<>'disconnected'`, in.ID, a.Organization, entity).Scan(&id, &state, &tenants); err != nil {
-			problem(w, 404, "Xero connection not found for this client.")
-			return
-		}
-		aad := a.Organization + "/xero/" + id
-		fail := func(message string) {
-			persist, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer done()
-			db.ExecContext(persist, `UPDATE xero_connections SET state='reconnect_required',error=$2,updated_at=now() WHERE id=$1 AND state IN ('exchanging','refreshing')`, id, message)
-			problem(w, 422, message)
-		}
-		changed := func(result sql.Result, err error) bool {
-			if err != nil {
-				problem(w, 503, "Connection storage unavailable.")
-				return true
-			}
-			if n, _ := result.RowsAffected(); n != 1 {
-				problem(w, 409, "The connection changed. Refresh its status.")
-				return true
-			}
-			return false
-		}
-		switch in.Action {
-		case "disconnect":
-			if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='disconnected',credential=NULL,updated_at=now(),error='Disconnected here; remove the app under Connected Apps in Xero to revoke its access.' WHERE id=$1`, id)) {
-				return
-			}
-		case "callback":
-			if len(in.Code) == 0 || len(in.Code) > 4096 || len(in.State) > 100 {
-				problem(w, 422, "Invalid Xero sign-in response.")
-				return
-			}
-			if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='exchanging',updated_at=now() WHERE id=$1 AND state='authorizing' AND oauth_digest=$2 AND oauth_expires_at>now() AND actor=$3`, id, preparation.Digest([]byte(in.State)), a.Subject)) {
-				return
-			}
-			credentials, err := xero.Exchange(ctx, in.Code)
-			if err != nil {
-				fail(err.Error())
-				return
-			}
-			list, err := xero.Tenants(ctx, credentials.Access)
-			if err != nil {
-				fail(err.Error())
-				return
-			}
-			if len(list) == 0 {
-				fail("No Xero organisation was authorised in this sign-in. Connect again and choose the client's organisation.")
-				return
-			}
-			raw, _ := json.Marshal(credentials)
-			sealed, err := secrets.Seal(aad, raw)
-			if err != nil {
-				fail(err.Error())
-				return
-			}
-			choices, _ := json.Marshal(list)
-			if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='choose_tenant',tenants=$2,credential=$3,access_expires_at=$4,error='',updated_at=now() WHERE id=$1 AND state='exchanging'`, id, string(choices), sealed, time.Now().Add(time.Duration(credentials.Expires)*time.Second))) {
-				return
-			}
-		case "confirm":
-			var list []xero.Tenant
-			json.Unmarshal(tenants, &list)
-			i := slices.IndexFunc(list, func(t xero.Tenant) bool { return t.ID == in.TenantID })
-			if state != "choose_tenant" || i < 0 {
-				problem(w, 409, "Choose one of the organisations authorised in this sign-in.")
-				return
-			}
-			if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='active',tenant_id=$2,tenant_name=$3,confirmed_by=$4,confirmed_at=now(),updated_at=now(),changed_at=now() WHERE id=$1 AND state='choose_tenant'`, id, list[i].ID, list[i].Name, a.Subject)) {
-				return
-			}
-		case "snapshot":
-			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(95 * time.Second))
-			if err := captureXero(ctx, db, a.Organization, id, r.PathValue("id"), period, a.Subject); err != nil {
-				refuse(w, err)
-				return
-			}
-		default:
-			problem(w, 422, fmt.Sprintf("Unsupported Xero action %q.", in.Action))
+		if !xeroAct(ctx, w, db, a, entity, period, r.PathValue("id"), in) {
 			return
 		}
 		out, err := status(ctx, r.PathValue("id"))
@@ -251,6 +146,151 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 		out["hosted"] = true
 		jsonReply(w, 200, out)
 	})
+}
+
+// xeroIn is a Xero action, from a close (which also reads its Trial Balance) or from the client's page (which
+// connects, finishes the sign-in, chooses the organisation and disconnects).
+type xeroIn struct {
+	Action    string `json:"action"`
+	ID        string `json:"connection_id"`
+	Confirmed bool   `json:"confirmed"`
+	Code      string `json:"code"`
+	State     string `json:"state"`
+	TenantID  string `json:"tenant_id"`
+}
+
+// xeroRequest is the member who may act on a client's Xero connection (a hosted session with integrations:manage) and
+// their confirmed action.
+func xeroRequest(w http.ResponseWriter, r *http.Request) (*auth.Claims, xeroIn, bool) {
+	var in xeroIn
+	a := auth.Actor(r.Context())
+	if a == nil || a.Organization == "" || !slices.Contains(a.Permissions, "integrations:manage") {
+		problem(w, 403, "A hosted session with integrations:manage is required.")
+		return nil, in, false
+	}
+	if !decode(w, r, &in) {
+		return nil, in, false
+	}
+	if !in.Confirmed {
+		problem(w, 422, "Confirm this connection action and client.")
+		return nil, in, false
+	}
+	return a, in, true
+}
+
+// xeroAct does a Xero action for the client entity. It answers a refusal, and a connect (with the sign-in address),
+// itself and returns false; otherwise the action was done and the caller answers. From the client's page (no closeID)
+// it connects, finishes the sign-in, chooses the organisation and disconnects; a close also captures its month-end
+// Trial Balance. A connection made from the client's page names no close.
+func xeroAct(ctx context.Context, w http.ResponseWriter, db *sql.DB, a *auth.Claims, entity, period, closeID string, in xeroIn) bool {
+	if in.Action == "connect" {
+		if !xero.Configured() {
+			problem(w, 503, "Configure the Xero app first.")
+			return false
+		}
+		if _, err := secrets.Seal(a.Organization+"/xero-check", nil); err != nil {
+			problem(w, 503, err.Error())
+			return false
+		}
+		state := rand.Text()
+		var id string
+		if err := db.QueryRowContext(ctx, `INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at) VALUES(NULLIF($1,'')::bigint,$2,$3,$4,'authorizing',$5,now()+interval '10 minutes') ON CONFLICT DO NOTHING RETURNING id::text`, closeID, a.Organization, entity, a.Subject, preparation.Digest([]byte(state))).Scan(&id); err != nil {
+			problem(w, 409, "A Xero connection or attempt already exists for this client. Disconnect it before connecting again.")
+			return false
+		}
+		jsonReply(w, 200, map[string]string{"id": id, "url": xero.AuthorizationURL(state)})
+		return false
+	}
+	var id, state string
+	var tenants json.RawMessage
+	// A month reads its books through any of its client's connections, whichever name it is held under; managing a
+	// connection (signing in, choosing the organisation, disconnecting) takes the name it is held under.
+	if err := db.QueryRowContext(ctx, `SELECT id::text,state,tenants FROM xero_connections WHERE id::text=$1 AND organization_id=$2
+ AND (lower(client_entity)=lower($3) OR $4 AND client_identity(organization_id,client_entity)=client_identity($2,$3)) AND state<>'disconnected'`, in.ID, a.Organization, entity, in.Action == "snapshot").Scan(&id, &state, &tenants); err != nil {
+		problem(w, 404, "Xero connection not found for this client.")
+		return false
+	}
+	aad := a.Organization + "/xero/" + id
+	fail := func(message string) {
+		persist, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer done()
+		db.ExecContext(persist, `UPDATE xero_connections SET state='reconnect_required',error=$2,updated_at=now() WHERE id=$1 AND state IN ('exchanging','refreshing')`, id, message)
+		problem(w, 422, message)
+	}
+	changed := func(result sql.Result, err error) bool {
+		if err != nil {
+			problem(w, 503, "Connection storage unavailable.")
+			return true
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			problem(w, 409, "The connection changed. Refresh its status.")
+			return true
+		}
+		return false
+	}
+	switch in.Action {
+	case "disconnect":
+		if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='disconnected',credential=NULL,updated_at=now(),error='Disconnected here; remove the app under Connected Apps in Xero to revoke its access.' WHERE id=$1`, id)) {
+			return false
+		}
+	case "callback":
+		if len(in.Code) == 0 || len(in.Code) > 4096 || len(in.State) > 100 {
+			problem(w, 422, "Invalid Xero sign-in response.")
+			return false
+		}
+		if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='exchanging',updated_at=now() WHERE id=$1 AND state='authorizing' AND oauth_digest=$2 AND oauth_expires_at>now() AND actor=$3`, id, preparation.Digest([]byte(in.State)), a.Subject)) {
+			return false
+		}
+		credentials, err := xero.Exchange(ctx, in.Code)
+		if err != nil {
+			fail(err.Error())
+			return false
+		}
+		list, err := xero.Tenants(ctx, credentials.Access)
+		if err != nil {
+			fail(err.Error())
+			return false
+		}
+		if len(list) == 0 {
+			fail("No Xero organisation was authorised in this sign-in. Connect again and choose the client's organisation.")
+			return false
+		}
+		raw, _ := json.Marshal(credentials)
+		sealed, err := secrets.Seal(aad, raw)
+		if err != nil {
+			fail(err.Error())
+			return false
+		}
+		choices, _ := json.Marshal(list)
+		if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='choose_tenant',tenants=$2,credential=$3,access_expires_at=$4,error='',updated_at=now() WHERE id=$1 AND state='exchanging'`, id, string(choices), sealed, time.Now().Add(time.Duration(credentials.Expires)*time.Second))) {
+			return false
+		}
+	case "confirm":
+		var list []xero.Tenant
+		json.Unmarshal(tenants, &list)
+		i := slices.IndexFunc(list, func(t xero.Tenant) bool { return t.ID == in.TenantID })
+		if state != "choose_tenant" || i < 0 {
+			problem(w, 409, "Choose one of the organisations authorised in this sign-in.")
+			return false
+		}
+		if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='active',tenant_id=$2,tenant_name=$3,confirmed_by=$4,confirmed_at=now(),updated_at=now(),changed_at=now() WHERE id=$1 AND state='choose_tenant'`, id, list[i].ID, list[i].Name, a.Subject)) {
+			return false
+		}
+	case "snapshot":
+		if closeID == "" {
+			problem(w, 422, "A month's Trial Balance is captured from the month.")
+			return false
+		}
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(95 * time.Second))
+		if err := captureXero(ctx, db, a.Organization, id, closeID, period, a.Subject); err != nil {
+			refuse(w, err)
+			return false
+		}
+	default:
+		problem(w, 422, fmt.Sprintf("Unsupported Xero action %q.", in.Action))
+		return false
+	}
+	return true
 }
 
 // xeroRowsInsert saves ledger rows ($2, xero.Ledger's rows as JSON) for snapshot $1.
@@ -418,7 +458,7 @@ func latestXeroBooks(ctx context.Context, db *sql.DB, closeID string) (*xeroBook
 	var captured time.Time
 	var payload []byte
 	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period
- JOIN xero_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'
+ JOIN xero_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state<>'disconnected'
  WHERE s.close_id::text=$1 AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs q JOIN evidence e ON e.id=q.evidence_id AND e.close_id=q.close_id AND e.superseded_by IS NULL WHERE q.close_id=s.close_id AND q.state IN ('completed','unchanged') AND q.finished_at>s.captured_at AND q.connection_id=`+quickbooks.ReadingConnection("s.close_id")+`)
  ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&b.ID, &b.Tenant, &captured, &payload)
 	if err == sql.ErrNoRows {
@@ -455,7 +495,7 @@ const xeroDue = `EXISTS(SELECT 1 FROM organizations o WHERE o.id=c.organization_
  AND (((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '24 hours')
    AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id AND s.captured_at>now()-interval '24 hours'))
   OR ((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '30 minutes')
-   AND EXISTS(SELECT 1 FROM xero_connections h WHERE h.organization_id=c.organization_id AND lower(h.client_entity)=lower(c.entity) AND h.state='active'
+   AND EXISTS(SELECT 1 FROM xero_connections h WHERE h.organization_id=c.organization_id AND client_identity(h.organization_id,h.client_entity)=client_identity(c.organization_id,c.entity) AND h.state='active'
     AND h.changed_at>GREATEST(c.xero_refresh_at,(SELECT max(captured_at) FROM xero_snapshots s WHERE s.close_id=c.id)))))`
 
 // sweepXeroRefresh captures, for up to 10 due closes with an active Xero connection, the month-end Trial Balance.
@@ -465,7 +505,8 @@ func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 		return nil
 	}
 	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.organization_id,c.period,x.id::text FROM client_closes c
- JOIN xero_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.credential IS NOT NULL
+ JOIN LATERAL (SELECT x.id FROM xero_connections x WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active' AND x.credential IS NOT NULL
+  ORDER BY x.id DESC LIMIT 1) x ON true
  WHERE `+xeroDue+` ORDER BY c.id LIMIT 10`)
 	if err != nil {
 		return err

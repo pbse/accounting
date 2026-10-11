@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/ledgers"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -361,7 +362,7 @@ func adminFirms(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id := r.PathValue("id")
 	var firm adminFirmRow
-	var suspension, runs, health, limits []byte
+	var suspension, runs, health, limits, pilots []byte
 	var owner string
 	var assistance int
 	var fileImports bool
@@ -378,7 +379,8 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
  (SELECT jsonb_build_object('max_closes',max_closes,'max_pending_jobs',max_pending_jobs,'max_model_calls_per_day',max_model_calls_per_day) FROM organizations WHERE id=$1),
  (SELECT support_owner FROM organizations WHERE id=$1),
  (SELECT COALESCE(sum(x.minutes),0) FROM close_effort_entries x LEFT JOIN client_closes c ON c.id=x.close_id WHERE x.activity='assistance' AND COALESCE(c.organization_id,x.organization_id)=$1),
- (SELECT file_imports FROM organizations WHERE id=$1)`, id).Scan(&suspension, &runs, &health, &limits, &owner, &assistance, &fileImports)
+ (SELECT file_imports FROM organizations WHERE id=$1),
+ COALESCE((SELECT jsonb_object_agg(connector,enabled) FROM (SELECT DISTINCT ON (connector) connector,enabled FROM connector_pilots WHERE organization_id=$1 ORDER BY connector,id DESC) p),'{}'::jsonb)`, id).Scan(&suspension, &runs, &health, &limits, &owner, &assistance, &fileImports, &pilots)
 	})
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "local-development") {
 		problem(w, 404, "Firm not found.")
@@ -390,7 +392,20 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	// The last suspension's reason is free text; it is in the firm's activity, masked until revealed.
-	jsonReply(w, 200, map[string]any{"firm": firm, "last_suspension": json.RawMessage(suspension), "runs": json.RawMessage(runs), "health": json.RawMessage(health), "limits": json.RawMessage(limits), "support_owner": owner, "assistance_minutes": assistance, "file_imports": fileImports})
+	// Each native connector, whether this environment switches it on, and the firm's own pilot of it, if any.
+	connectors := map[string]map[string]any{}
+	var piloted map[string]bool
+	json.Unmarshal(pilots, &piloted)
+	for _, l := range ledgers.Catalog() {
+		if l.Connector != "" {
+			c := map[string]any{"environment": ledgers.Switched(l.Connector, nil)}
+			if on, ok := piloted[l.Connector]; ok {
+				c["pilot"] = on
+			}
+			connectors[l.Connector] = c
+		}
+	}
+	jsonReply(w, 200, map[string]any{"firm": firm, "last_suspension": json.RawMessage(suspension), "runs": json.RawMessage(runs), "health": json.RawMessage(health), "limits": json.RawMessage(limits), "support_owner": owner, "assistance_minutes": assistance, "connectors": connectors, "file_imports": fileImports})
 }
 
 // RunHeartbeat records every 30 seconds that loop is alive, for the admin overview, with detail about how it is set up

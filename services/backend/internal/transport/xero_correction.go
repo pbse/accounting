@@ -82,7 +82,10 @@ type xeroRecode struct {
 // The digest covers what was checked, so any change before approval or execution refuses.
 func planXeroRecode(ctx context.Context, db *sql.DB, org, entity, closeID, period, invoiceID, lineID, targetID, reason, rule string) (xeroRecode, error) {
 	var p xeroRecode
-	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND revoked_at IS NULL`, org, entity))
+	// The client's grant under any of its names, the one on the connection the month's latest capture came from first,
+	// then the month's own name's; that the capture came from the granted connection is checked below.
+	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL
+ ORDER BY connection_id IS NOT DISTINCT FROM (SELECT s.connection_id FROM xero_snapshots s WHERE s.close_id::text=$3 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) DESC,lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity, closeID))
 	if err != nil || time.Now().After(g.Expires) || !slices.Contains(g.Kinds, "bill_correction") {
 		return p, refusal{409, "An unexpired Xero grant that covers bill corrections is required."}
 	}
@@ -276,7 +279,7 @@ func registerXeroCorrections(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			var connection string
-			if err := db.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND tenant_id=$3 AND state='active'`, org, entity, record.TenantID).Scan(&connection); err != nil {
+			if err := db.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND tenant_id=$3 AND state='active' ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity, record.TenantID).Scan(&connection); err != nil {
 				problem(w, 409, "Connect the same Xero organisation for this client to verify the attempt.")
 				return
 			}

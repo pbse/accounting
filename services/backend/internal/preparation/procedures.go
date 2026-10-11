@@ -46,7 +46,8 @@ type Profile struct {
 func ClientProfile(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID string) (Profile, error) {
-	return clientProfile(ctx, q, `WITH c AS (SELECT organization_id,entity FROM client_closes WHERE id::text=$1)`, `lower(%[1]s.client_entity)=lower(c.entity)`, closeID)
+	// A month reads its client's connections under any of its names, as its books do.
+	return clientProfile(ctx, q, `WITH c AS (SELECT organization_id,entity FROM client_closes WHERE id::text=$1)`, `client_identity(%[1]s.organization_id,%[1]s.client_entity)=client_identity(c.organization_id,c.entity)`, closeID)
 }
 
 // ClientProfileOf is ClientProfile for a client by its name in firm org, with no close needed, read from its

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/ledgers"
 )
 
 // The firm's client roster and monthly close template (B01/B02, migration 127). Roster entries are matched to closes by
@@ -383,6 +384,32 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 		}
+		// And, as "ledger", the ledger each client keeps as recorded (a catalog entry's name, or the name given for another
+		// ledger), for the same clients; not known yet says nothing.
+		if err == nil {
+			var rows *sql.Rows
+			if rows, err = tx.QueryContext(r.Context(), `SELECT l.client,l.ledger,l.other_name FROM current_client_ledgers l WHERE l.organization_id=$1 AND l.ledger<>'unknown'
+ AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$3 AND g.granted AND lower(g.client_entity)=l.client))`, org, firmAccess(r), subject(r)); err == nil {
+				for rows.Next() {
+					var client, ledger, other string
+					if err = rows.Scan(&client, &ledger, &other); err != nil {
+						break
+					}
+					name := other
+					if entry, ok := ledgers.Find(ledger); ok {
+						name = entry.Name
+					}
+					if connections[client] == nil {
+						connections[client] = map[string]string{}
+					}
+					connections[client]["ledger"] = name
+				}
+				rows.Close()
+				if err == nil {
+					err = rows.Err()
+				}
+			}
+		}
 		var owed []owedMonth
 		if err == nil {
 			owed, err = owedMonthsThrough(r.Context(), tx, time.Now().UTC().Format("2006-01"), org, firmAccess(r), canReview(r), subject(r), "")
@@ -424,6 +451,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			Owner   *string `json:"owner"`
 			Reason  string  `json:"reason"`
 			Rev     string  `json:"rev"` // the client's entry as read, "" for none
+			// Ledger is the ledger a client being added keeps (a catalog entry, other with its name, or unknown), recorded
+			// with its entry; "" records none. The client's page corrects it.
+			Ledger    string `json:"ledger"`
+			OtherName string `json:"other_name"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -448,6 +479,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		if in.DueDays != nil && (*in.DueDays < 0 || *in.DueDays > 60) {
 			problem(w, 422, "A close is due 1–60 days after its month ends, or 0 for no due date.")
+			return
+		}
+		if in.Ledger != "" && (in.Rev != "" || !ledgers.Valid(in.Ledger, in.OtherName)) {
+			problem(w, 422, "Choose the client's ledger from the list, name another one, or say it is not known yet.")
 			return
 		}
 		// The roster names each client once, by its own name: a confirmed alias of a client is that client.
@@ -515,6 +550,16 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
 			organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r))
+		// The ledger the new client keeps, unless one is recorded for it already (a client added again after leaving).
+		// The client's ledgers are locked as its page locks them, so a correction made there meanwhile is seen, not
+		// replaced.
+		if err == nil && in.Ledger != "" {
+			_, err = tx.ExecContext(r.Context(), clientLedgersLock, organization(r), in.Entity)
+		}
+		if err == nil && in.Ledger != "" {
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_ledgers(organization_id,client_entity,ledger,other_name,reason,actor) SELECT $1,$2,$3,$4,'Recorded when the client was added',$5
+ WHERE NOT EXISTS(SELECT 1 FROM current_client_ledgers WHERE organization_id=$1 AND client=client_identity($1,$2))`, organization(r), in.Entity, in.Ledger, strings.TrimSpace(in.OtherName), subject(r))
+		}
 		// A client that owes nothing more has no monthly hand-over to open its months.
 		if err == nil && !in.Active {
 			_, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND stopped_at IS NULL`,
