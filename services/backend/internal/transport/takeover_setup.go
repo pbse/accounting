@@ -29,7 +29,7 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 	err := tx.QueryRowContext(ctx, `SELECT jsonb_build_object('close',jsonb_build_object('id',c.id::text,'entity',c.entity,'period',c.period),
  'companies',`+takeoverCompanies+`,
  'procedures',(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',p.id::text,'kind',p.kind,'method',p.method,'enabled',p.enabled,'scope',CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END,'expense_account',p.expense_account,'prepaid_account',p.prepaid_account) ORDER BY p.kind),'[]'::jsonb)
-  FROM (SELECT DISTINCT ON (p.kind) p.* FROM procedure_versions p WHERE p.organization_id=c.organization_id AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY p.kind,(p.client_entity<>'') DESC,p.id DESC) p),
+  FROM (SELECT DISTINCT ON (p.kind) p.* FROM procedure_versions p WHERE p.organization_id=c.organization_id AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY p.kind,(p.client_entity<>'') DESC,p.id DESC) p),
  'assigned',(SELECT COALESCE(jsonb_agg(jsonb_build_object('subject',g.subject,'member',COALESCE(m.granted,false)) ORDER BY g.subject),'[]'::jsonb)
   FROM current_client_access g LEFT JOIN current_organization_members m ON m.organization_id=g.organization_id AND m.subject=g.subject WHERE g.organization_id=c.organization_id AND lower(g.client_entity)=lower(c.entity) AND g.granted),
  'routine',(SELECT jsonb_build_object('finish',r.finish,'due_days',r.due_days) FROM close_routines r WHERE r.organization_id=c.organization_id AND lower(r.client_entity)=lower(c.entity) AND r.stopped_at IS NULL))

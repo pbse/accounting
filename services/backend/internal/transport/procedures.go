@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
@@ -27,11 +28,13 @@ type procedureScopeReader interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func procedureScopeDigest(ctx context.Context, q procedureScopeReader, org, client, kind, previous string) (string, int, error) {
+// procedureScopeDigest covers the closes a new version in client's (or the firm's) scope would apply to: from month from
+// on, when it takes effect from one.
+func procedureScopeDigest(ctx context.Context, q procedureScopeReader, org, client, kind, previous, from string) (string, int, error) {
 	var total int
 	var scopeHash string
-	err := q.QueryRowContext(ctx, `SELECT count(*),COALESCE(md5(string_agg(c.id::text||':'||COALESCE(w.last_id::text,'')||':'||COALESCE(e.source_id::text,''),',' ORDER BY c.id)),'') FROM client_closes c LEFT JOIN LATERAL (SELECT max(id) last_id FROM workpapers WHERE close_id=c.id AND kind=$3) w ON true LEFT JOIN LATERAL (SELECT max(e.id) source_id FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL) e ON true WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3)))`, org, client, kind).Scan(&total, &scopeHash)
-	return preparation.Digest([]byte(kind + "/" + strings.ToLower(client) + "/" + previous + "/" + scopeHash)), total, err
+	err := q.QueryRowContext(ctx, `SELECT count(*),COALESCE(md5(string_agg(c.id::text||':'||COALESCE(w.last_id::text,'')||':'||COALESCE(e.source_id::text,''),',' ORDER BY c.id)),'') FROM client_closes c LEFT JOIN LATERAL (SELECT max(id) last_id FROM workpapers WHERE close_id=c.id AND kind=$3) w ON true LEFT JOIN LATERAL (SELECT max(e.id) source_id FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL) e ON true WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3 AND (p.effective_from IS NULL OR p.effective_from<=c.period)))) AND ($4='' OR c.period>=$4)`, org, client, kind, from).Scan(&total, &scopeHash)
+	return preparation.Digest([]byte(kind + "/" + strings.ToLower(client) + "/" + previous + "/" + from + "/" + scopeHash)), total, err
 }
 
 func readProcedureImpact(ctx context.Context, tx *sql.Tx, closeID, kind string) (procedureImpact, error) {
@@ -140,8 +143,8 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	})
 	mux.HandleFunc("GET /v1/closes/procedures", func(w http.ResponseWriter, r *http.Request) {
 		if kind := r.URL.Query().Get("impact_kind"); kind != "" {
-			client := strings.TrimSpace(r.URL.Query().Get("client_entity"))
-			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis" && kind != "owner" && kind != "payroll") || len(client) > 200 {
+			client, from := strings.TrimSpace(r.URL.Query().Get("client_entity")), r.URL.Query().Get("effective_from")
+			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis" && kind != "owner" && kind != "payroll") || len(client) > 200 || !effectiveMonth(from) {
 				problem(w, 422, "Choose a supported procedure scope.")
 				return
 			}
@@ -156,12 +159,12 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Procedure impact unavailable.")
 				return
 			}
-			digest, total, err := procedureScopeDigest(r.Context(), db, organization(r), client, kind, previous)
+			digest, total, err := procedureScopeDigest(r.Context(), db, organization(r), client, kind, previous, from)
 			if err != nil {
 				problem(w, 503, "Procedure impact unavailable.")
 				return
 			}
-			rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period,COALESCE((SELECT e.id::text FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),''),(SELECT count(*) FROM workpapers w WHERE w.close_id=c.id AND w.kind=$3) FROM client_closes c WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3))) ORDER BY c.id DESC LIMIT 100`, organization(r), client, kind)
+			rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period,COALESCE((SELECT e.id::text FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),''),(SELECT count(*) FROM workpapers w WHERE w.close_id=c.id AND w.kind=$3) FROM client_closes c WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3 AND (p.effective_from IS NULL OR p.effective_from<=c.period)))) AND ($4='' OR c.period>=$4) ORDER BY c.id DESC LIMIT 100`, organization(r), client, kind, from)
 			if err != nil {
 				problem(w, 503, "Procedure impact unavailable.")
 				return
@@ -184,7 +187,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, map[string]any{"kind": kind, "client_entity": client, "previous_id": previous, "impact_digest": digest, "total_closes": total, "has_more": total > len(items), "closes": items})
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) AND ($4='' OR procedure_versions.client_entity='' OR lower(procedure_versions.client_entity)=lower($4)) ORDER BY procedure_versions.id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r), strings.TrimSpace(r.URL.Query().Get("client")))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text,COALESCE(effective_from,'') FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) AND ($4='' OR procedure_versions.client_entity='' OR lower(procedure_versions.client_entity)=lower($4)) ORDER BY procedure_versions.id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r), strings.TrimSpace(r.URL.Query().Get("client")))
 		if err != nil {
 			problem(w, 503, "Firm procedures unavailable.")
 			return
@@ -193,7 +196,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		items := []preparation.Procedure{}
 		for rows.Next() {
 			var p preparation.Procedure
-			if err = rows.Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt); err != nil {
+			if err = rows.Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom); err != nil {
 				problem(w, 503, "Could not read procedures.")
 				return
 			}
@@ -237,7 +240,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			// Entity type is a fact about one client; the firm default carries only policy and account names.
 			methodOK = (in.ClientEntity != "") == (in.Method != "") && (in.Method == "" || slices.Contains(owners.EntityTypes, in.Method))
 		}
-		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis" && in.Kind != "owner" && in.Kind != "payroll") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
+		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis" && in.Kind != "owner" && in.Kind != "payroll") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) || !effectiveMonth(in.EffectiveFrom) {
 			problem(w, 422, "Confirm a supported procedure, bounded instructions, a reason and optional single-line prepaid account names.")
 			return
 		}
@@ -285,13 +288,13 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		digest, _, impactErr := procedureScopeDigest(r.Context(), tx, org, in.ClientEntity, in.Kind, prior)
+		digest, _, impactErr := procedureScopeDigest(r.Context(), tx, org, in.ClientEntity, in.Kind, prior, in.EffectiveFrom)
 		if impactErr != nil || in.ImpactDigest == "" || in.ImpactDigest != digest {
 			problem(w, 409, "Affected closes changed. Refresh the procedure impact before publishing.")
 			return
 		}
 		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id::text`, org, in.ClientEntity, in.Kind, in.Instructions, in.ExpenseAccount, in.PrepaidAccount, in.Enabled, in.Reason, actor, in.Method).Scan(&id)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,method,effective_from) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,'')) RETURNING id::text`, org, in.ClientEntity, in.Kind, in.Instructions, in.ExpenseAccount, in.PrepaidAccount, in.Enabled, in.Reason, actor, in.Method, in.EffectiveFrom).Scan(&id)
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Procedure save could not be confirmed. Reload history before retrying.")
 			return
@@ -348,4 +351,13 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]string{"source_id": source})
 	})
+}
+
+// effectiveMonth says whether a version's first month is "" (every month) or a valid YYYY-MM.
+func effectiveMonth(from string) bool {
+	if from == "" {
+		return true
+	}
+	_, err := time.Parse("2006-01", from)
+	return err == nil && len(from) == 7
 }
