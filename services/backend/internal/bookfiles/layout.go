@@ -313,12 +313,25 @@ func coveredFrom(lines []Line, i int) int {
 			return from
 		}
 	}
-	for j := i - 1; j >= 0; j-- {
-		if lines[j].Kind == Total {
-			return j + 1
+	// Otherwise it covers the rows since the total before it, and each section just before whose total names a kind of
+	// what it totals ("Total Current Assets" before "Total Assets"), with the rows between them.
+	since := func(end int) int {
+		for j := end - 1; j >= 0; j-- {
+			if lines[j].Kind == Total {
+				return j + 1
+			}
 		}
+		return 0
 	}
-	return 0
+	from := since(i)
+	for from > 0 {
+		child := strings.ToLower(strings.TrimSpace(totalLabel.ReplaceAllString(lines[from-1].Name, "")))
+		if label == "" || !strings.HasSuffix(child, " "+label) {
+			break
+		}
+		from = since(coveredFrom(lines, from-1))
+	}
+	return from
 }
 
 // Read applies a confirmed layout to its table: each row below the header becomes a line, a total (a row named

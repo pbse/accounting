@@ -435,3 +435,18 @@ func TestEachMeaningIsOneColumn(t *testing.T) {
 		t.Fatalf("a marked total with no amount: %+v", reading)
 	}
 }
+
+// A total encloses the sections whose totals name a kind of what it totals, without a heading of its own; and a file
+// that is not text is refused by its signature, not read as a CSV.
+func TestEnclosingTotalsAndUnsupportedFiles(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00\nReceivables,50.00\nTotal Current Assets,150.00\nVan,30.00\nTotal Fixed Assets,30.00\nDeposit,20.00\nTotal Assets,200.00\nCapital,-200.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	if reading := layout.Read(file.Tables[0]); len(reading.Problems) != 0 || !reading.Balanced {
+		t.Fatalf("Total Assets encloses current and fixed assets: %+v", reading)
+	}
+	for name, body := range map[string]string{"statement.pdf": "%PDF-1.7\n", "scan.csv": "\x89PNG\r\n", "old.dat": "\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"} {
+		if _, err := Read(name, []byte(body)); err == nil {
+			t.Fatalf("%s is refused", name)
+		}
+	}
+}

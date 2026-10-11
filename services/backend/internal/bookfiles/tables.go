@@ -7,7 +7,9 @@
 package bookfiles
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -85,8 +87,15 @@ func Read(name string, body []byte) (File, error) {
 	if strings.HasSuffix(strings.ToLower(name), ".xlsx") || (len(body) > 4 && string(body[:4]) == "PK\x03\x04") {
 		return ReadWorkbook(body)
 	}
-	if strings.HasSuffix(strings.ToLower(name), ".xls") {
+	if strings.HasSuffix(strings.ToLower(name), ".xls") || bytes.HasPrefix(body, []byte("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1")) {
 		return File{}, errors.New("the file is an older Excel workbook (.xls); save it as .xlsx or CSV and send it again")
+	}
+	// Formats that are not text are refused by their own signature, never read as a one-cell CSV: a PDF goes to the
+	// document reader instead.
+	for _, f := range []struct{ magic, name string }{{"%PDF-", "a PDF"}, {"\x89PNG", "a PNG image"}, {"\xFF\xD8\xFF", "a JPEG image"}, {"GIF8", "a GIF image"}, {"PK\x05\x06", "an empty ZIP archive"}, {"\x1F\x8B", "a gzip archive"}} {
+		if bytes.HasPrefix(body, []byte(f.magic)) {
+			return File{}, fmt.Errorf("%w: it is %s", ErrFormat, f.name)
+		}
 	}
 	return ReadCSV(name, body)
 }
