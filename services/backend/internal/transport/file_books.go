@@ -213,6 +213,10 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 		if changed {
 			m.Holds = append(m.Holds, "the account map now classifies one of its accounts differently; accept the file again")
 		}
+		// The prior month's accepted books may have changed since: the month must still roll from them.
+		if c := rollForward(state); c.State == "holds" && !slices.ContainsFunc(kept, func(k importCheck) bool { return k.Key == "roll_forward" && k.State == "holds" }) {
+			m.Holds = append(m.Holds, "it no longer rolls forward: "+c.Detail)
+		}
 	}
 	return b, &m, nil
 }

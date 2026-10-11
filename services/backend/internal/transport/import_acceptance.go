@@ -300,26 +300,51 @@ func rollForward(s fileState) importCheck {
 	if from == "" {
 		return importCheck{}
 	}
-	opening := map[string]*big.Rat{}
-	for _, a := range s.reading.Accounts {
-		v, ok := new(big.Rat).SetString(cmp.Or(a.Opening, "0"))
-		held := a.OpeningHeld
-		if from == "movement" {
-			balance, readable := new(big.Rat).SetString(cmp.Or(a.Balance, "0"))
-			movement, movementReadable := new(big.Rat).SetString(cmp.Or(a.Movement, "0"))
-			if ok, held = readable && movementReadable, a.MovementHeld; ok {
-				v = balance.Sub(balance, movement)
-			}
-		}
-		if held != "" || !ok {
-			check.State, check.Detail = "holds", "The opening for "+strings.TrimSpace(a.Number+" "+a.Name)+" cannot be read as exact: "+cmp.Or(held, "unreadable")+"."
-			return check
-		}
-		opening[a.Key] = v
-	}
 	if s.prior == "" {
 		check.State, check.Detail, check.Holds = "note", "No accepted books for "+monthTitle(previousMonth(s.reading.Period))+" to roll from: the openings are not checked.", ""
 		return check
+	}
+	// A formula's stored result is released by the attestation of a recalculated copy, as for the other amounts.
+	recalculated := s.scope != nil && s.scope.Recalculated
+	exact := func(a fileAccount, value, held string) (*big.Rat, bool) {
+		v, ok := new(big.Rat).SetString(cmp.Or(value, "0"))
+		if held == "formula" && recalculated {
+			held = ""
+		}
+		if held != "" || !ok {
+			check.State, check.Detail = "holds", "The opening or movement of "+strings.TrimSpace(a.Number+" "+a.Name)+" cannot be read as exact: "+cmp.Or(held, "unreadable")+"."
+			return nil, false
+		}
+		return v, true
+	}
+	opening, differences := map[string]*big.Rat{}, []string{}
+	for _, a := range s.reading.Accounts {
+		balance, ok := new(big.Rat).SetString(cmp.Or(a.Balance, "0"))
+		if !ok {
+			check.State, check.Detail = "holds", "The balance of "+strings.TrimSpace(a.Number+" "+a.Name)+" cannot be read."
+			return check
+		}
+		movement := new(big.Rat)
+		if a.Movement != "" {
+			if movement, ok = exact(a, a.Movement, a.MovementHeld); !ok {
+				return check
+			}
+		}
+		if from == "movement" {
+			opening[a.Key] = new(big.Rat).Sub(balance, movement)
+			continue
+		}
+		v, ok := exact(a, a.Opening, a.OpeningHeld)
+		if !ok {
+			return check
+		}
+		opening[a.Key] = v
+		// With both columns, the opening and the month's movement make the month-end balance.
+		if a.Movement != "" {
+			if sum := new(big.Rat).Add(v, movement); sum.Cmp(balance) != 0 {
+				differences = append(differences, fmt.Sprintf("%s opens at %s and moves by %s, but closes at %s", strings.TrimSpace(a.Number+" "+a.Name), v.FloatString(2), movement.FloatString(2), balance.FloatString(2)))
+			}
+		}
 	}
 	expected := map[string]*big.Rat{}
 	for key, b := range s.priorBalances {
@@ -348,7 +373,6 @@ func rollForward(s fileState) importCheck {
 			return check
 		}
 	}
-	differences := []string{}
 	for _, a := range s.reading.Accounts {
 		e := cmp.Or(expected[a.Key], new(big.Rat))
 		if o := opening[a.Key]; o.Cmp(e) != 0 {
