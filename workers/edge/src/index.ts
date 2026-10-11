@@ -51,6 +51,8 @@ export class CapabilityAPI extends Container<Env> {
     MCP_ALLOWED_ORIGINS: this.env.MCP_ALLOWED_ORIGINS ?? "",
     PRODUCTION_POSTING_KINDS: this.env.PRODUCTION_POSTING_KINDS ?? "",
     XERO_POSTING_KINDS: this.env.XERO_POSTING_KINDS ?? "",
+    LEDGER_CONNECTORS: this.env.LEDGER_CONNECTORS ?? "",
+    BOOKS_RECORD_READERS: this.env.BOOKS_RECORD_READERS ?? "",
     AUTH_SESSION: this.env.AUTH_SESSION ?? "",
   };
   // A sleeping API wakes in seconds, so it stays up through a working day: pages load in under 400 ms only from a
@@ -124,6 +126,10 @@ interface Env {
   MCP_ALLOWED_ORIGINS?: string;
   PRODUCTION_POSTING_KINDS?: string;
   XERO_POSTING_KINDS?: string;
+  // LEDGER_CONNECTORS lists the native connectors switched on here; BOOKS_RECORD_READERS, the readers staff have
+  // switched onto the month-books record.
+  LEDGER_CONNECTORS?: string;
+  BOOKS_RECORD_READERS?: string;
   AUTH_SESSION?: string;
   // Notes from the public contact page are forwarded here (docs/marketing-site.md); unset, they are only kept.
   CONTACT_FORWARD_ADDRESS?: string;

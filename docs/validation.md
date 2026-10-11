@@ -4201,3 +4201,79 @@ Not verified:
 - exported/published equivalents: chat answers are not exported, and report exports render from typed pack fields, not model text;
 - the ambiguous numeric date (09/01/2026 accepted as either order), recorded as a known limit.
 
+## Chat failure diagnostics and scoped clarification — 2026-10-11
+
+Trigger: a firm-wide “What is blocking this month’s close?” regularly showed “The agent model did not answer; try again”, reportedly almost immediately. Two authenticated production retries reached the private context machine successfully (completion HTTP 200), but their answers were withheld by support validation. Those retries do not establish the cause of the original immediate model error.
+
+The fix accepts ordinary client/month clarification questions as help while retaining the no-names, no-figures and no-book-claims gate. A singular firm-wide question without an established client asks for scope. Provider HTTP status and bounded incomplete/limit codes now survive the private completion boundary; chat distinguishes authentication, request rejection, busy/usage limits, incomplete output, unavailable service and reading/writing timeouts. Diagnostics contain a random attempt identifier, phase, outcome, elapsed time, fixed codes and counts, never provider bodies, CLI output, prompts or credentials. No automatic model retry was added. The execution budget remains 60 seconds, with the existing 25-second answer reserve and a five-second HTTP write grace. Model/effort configuration and all financial, citation, grant and action-confirmation guards are unchanged.
+
+Validation used a fresh disposable native PostgreSQL database on 127.0.0.1:5432, migrated locally through 148 and dropped afterward, with both DATABASE_URL and TEST_DATABASE_URL set to it; no Neon branch. `go test -count=1 -race ./internal/llm/... ./internal/transport -run 'TestService|TestAgent|TestChat|TestAssistant|TestProxy|TestCompletion|TestExecution|TestCommands|TestInstalled|TestProvider|TestNewCodex|TestProfiles|TestCodex'` and `go vet ./internal/llm/... ./internal/transport` passed. Cases cover opaque provider status propagation without retry, external-header distrust, error/log redaction, deadline and output-limit identity, proxy status preservation, clarification acceptance with factual counterexamples, failed planning/finalization without an answer/card, 403 access configuration, and successful research recovery after an earlier provider failure. `git diff --check` passed.
+
+Review: Claude Opus 5.5 (`claude-opus-5-5`), medium effort, reviewed the full update in three rounds followed by one corrective closure review. Findings led to preserving successful research recovery, pinning safe clarification wording, retaining output-overflow causes, adding elapsed/attempt/outcome diagnostics, separating 403 access errors from sign-in, and clearing obsolete proxy failures before a new provider call. The closure review found no actionable defect in the final correction. Its residual refusal-retry note is inapplicable to completions: the one-call budget prevents a second upstream attempt. The complete gateway/runtime race suite and vet passed again after the final proxy correction.
+
+Not yet verified: deployed behavior of this fix, the original intermittent immediate provider/CLI failure, or an actual-model acceptance replay after the recently merged financial-claim gates. No production action card was confirmed during the two live chat checks.
+
+
+## 2026-10-11 — Cash-obligation matching and forecast readiness (B09/B10)
+
+Handoff slice 2 ([cash matching and honest decision readiness](agent-first-implementation-handoff.md#b09b10--cash-matching-and-honest-decision-readiness)), on the branch after `79624687` (#361).
+
+Reproduced first: at `79624687`, the plan built a set of vendor-and-due-week keys from counted open bills and skipped any approved outgoing schedule whose vendor had a bill that week. Rent of $10,000 with a $500 maintenance bill from the same landlord that week counted $500, not $10,500. A $4,000 bill invoicing part of the rent dropped the whole $10,000 estimate, and a second schedule for the same vendor and week was dropped as well. The fix removes that inference. A bill now changes a schedule's date only through a person's recorded decision (`cash_obligation_matches`, migration 150), and an undecided bill from the vendor that week is a question with both counted (`internal/transport/cash_matching.go`).
+
+- **`TestSettleOccurrenceCountsOnlyWhatDecisionsSay` (new).** The handoff's fixtures, each on its own:
+  - rent of 10,000.00 and a separate 500.00 maintenance bill: a question while undecided (both count: 10,500.00), then 10,500.00 with no question once decided separate;
+  - a 4,000.00 bill invoicing part of 10,000.00: the bill plus a 6,000.00 residual; a 500.00 credit on the bill leaves the residual at 6,000.00 (9,500.00 paid in all); once paid the residual still counts;
+  - two schedules for one vendor and week: only the date the bill is decided against is replaced, and the other asks nothing;
+  - full replacement, a duplicate capture (the second bill left out as a repeat), disputed and undated bills (the estimate stands, with the reason), and a moved bill-pay date (the bill still pays the rent on its new date);
+  - bills invoicing more than the schedule leave nothing and say by how much; another vendor's bill, a credit or another week is never asked about.
+- **`TestCashReadinessNamesWhatIsUnresolved` and `TestGroupedAmountWritesExactCents` (new).** A proposed bonus leaves a draft; an undated bill leaves the forecast incomplete; both are named.
+- **`TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations` (updated).** It previously asserted that the landlord's bill silently covered the rent; that is now the defect. It asserts:
+  - the undecided bill is a question with both counted (7,000.00 that week) and the readiness names it;
+  - a review is refused while the question is open;
+  - decisions are refused for a date the schedule does not have, a bill not among the open items, a part larger than the schedule, an unknown relation, a change that does not name the decision it replaces, and a second date for the same bill;
+  - once decided, the bill is the rent (5,500.00 that week) and the plan says its newest review is current;
+  - every week reconciles to its items;
+  - a past-due invoice and then a broken promise are named with their amounts;
+  - after a bill-pay handoff the decision holds on the new date and the review shows inputs changed;
+  - a disputed bill leaves the rent estimate counted.
+- **`TestAgentClaimsBindWhatAFigureMeasures` (two cases added).** A draft plan's lowest balance stated plainly is rejected; stated as a draft forecast, it is accepted.
+- **UI journey (local, disposable PostgreSQL `close_cash_check` with a fixture client, Edge via Playwright, desktop 1440×900 and phone 390×844).** The fixture is the handoff's prototype case: opening book cash 25,000.00, rent 10,000.00 plus a 500.00 maintenance bill from the landlord, an 18,000.00 Wednesday payroll, a 9,000.00 Thursday receipt, an undated 6,420.00 bill and a proposed 18,000.00 bonus. The cash tab led with "Draft forecast" (after the review follow-ups below; the first run read "Incomplete forecast") and named three unresolved items. It asked one decision for the rent with both bills, showing the effect, and week one's payments were 38,500.00. Choosing "pays all of it" for the 10,000.00 bill in the page made week one 28,500.00, with a Wednesday low of −3,500.00 before Thursday's receipt closed the week at 5,500.00. It listed the decision with Change and Clear controls, and still asked about the 500.00 maintenance bill on the now-paid date (defaulting to "is a separate payment"), so the review form stayed hidden. The phone view had no horizontal page scroll.
+- **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 150, `npm run check` and `npm test` (62) passed.
+
+Review follow-ups (Codex `gpt-6-sol`, high):
+
+- a bill missing from the open items is never taken as paid on its own (a complete capture shows only that it left them: paid, voided or credited): the estimate counts again, readiness asks, and a person confirms it was paid (`paid` on the decision) before it settles the date; a bill still open cannot be confirmed, and a confirmed decision can be changed but not cleared (tested through a later capture without the bill); a partial capture says nothing about a missing bill;
+- only a bill decided to pay the date is asked about once it leaves the open items, and only when the capture can say so: it read every open item, was taken after the decision, and covers a month that includes the bill's own date (recorded with the decision), as the open items' settled rule requires; confirming payment needs the same (tested with an earlier capture, then a later one); a separate or repeated bill that left them asks nothing and can be cleared;
+- an item whose agreed or due date cannot be read is left out with the reason, never counted (tested with a bill due "2026-10-3x");
+- a decided bill missing from a capture that cannot say whether it is still open leaves the plan incomplete, named (tested); correcting a paid bill's relation keeps its confirmed payment (tested: as a 1,000.00 part it leaves 500.00);
+- incomplete inputs never produce a reviewed-current forecast: a review is `current` only while the forecast is complete; a draft or incomplete one is `draft_reviewed` (tested, `TestReviewedStateIsCurrentOnlyForACompleteForecast`); missing or unreadable sources make a plan incomplete, while items needing an agreed date or left out by design are decisions; a review stays refused while a bill question or payment confirmation is open;
+- a decision names the capture the person saw and is refused after a newer capture (tested), checked under the close's lock without holding a second pooled connection; a bill merely missing from a capture can be cleared (the page offers Clear beside It was paid), while a confirmed payment cannot be cleared even if its bill reappears;
+- a scenario's unapplied move leaves the view incomplete, as documented;
+- the demonstration seed answers its bill questions (a bill for exactly the schedule's amount pays it, else separate) and its plans, which start after the captured month, are reviewed as drafts: a fresh local seed finished with 0 problems and two draft reviews.
+- a scenario's move that could not be applied is named under readiness and leaves the view incomplete;
+- a decision whose schedule was retired or no longer has that date lapses: it moves nothing, and readiness names it for a new decision (tested by retiring the rent);
+- a paid bill's decision can be changed (from its recorded label and amount) but not cleared, so a date it settled cannot silently count again; the page changes a decision in place and offers Clear only for open bills;
+- readiness, including proposed schedules, is part of the digest, so a new proposal after a review shows the review changed (tested);
+- a second bill from the vendor in a week whose date another bill already pays is still asked about, since it counts until someone calls it separate or a repeat (tested);
+- retiring a schedule retires the decisions made against it (tested); a decision that lapses some other way (its schedule's currency changed, forced in the test) is named, listed with Clear, and clearable even when its bill is paid; deciding a bill again retires its lapsed decisions.
+
+Not verified:
+
+- the agent proposing a bill decision, payment date or collection message as a card in chat; the cash plan read exposes the questions and readiness, but chat proposals belong with one decision across chat and close (slice 3);
+- live QuickBooks books: every case here is a fixture capture;
+- a scheduled refresh of an affected forecast on a later capture beyond recomputation on read (the plan is computed when read, so a changed source changes it and its review shows inputs changed, while the reviewed version is kept).
+
+## 2026-10-11 — One decision and truthful counts (B02/B05/B06)
+
+Handoff slice 3 ([one decision across chat and close pages](agent-first-implementation-handoff.md#b02b06--one-decision-across-chat-and-close-pages)). A code read mapped each requirement to current code; most were already met (see the [backlog entry](implementation-backlog.md)). The gaps fixed:
+
+- Home's decision count skips notices that need no decision (a complete client reply, a goal reached), which stay unread news; snoozed decisions are counted and shown apart instead of dropped.
+- A partial client reply stays in the inbox past 14 days while the work it answers still waits on the client.
+- The decisions-and-notices list labels a notice that needs no decision as such, rather than hiding it (the same list is "All notices").
+- A partial reply to a coverage-only request (accounts, no work yet) is kept on the same terms.
+- The sidebar badge shows a dash, not nothing, when its read fails, including a failed refresh over a cached count.
+- The review queue's count comes from the same statement as its list.
+
+Tests: `TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState` gains two checks: a partial reply is a decision and still listed when 20 days old while its work waits (seen to fail without the fix); a complete reply is marked informational. The closest attention, Home, goal, handoff and request tests passed against a fresh local PostgreSQL migrated through 150.
+
+Not changed (follow-up): the chat card asking a person to review shows the draft's state only after the server refuses a stale request; approval requests have no unique index if a card's outcome fails to record after the request committed.

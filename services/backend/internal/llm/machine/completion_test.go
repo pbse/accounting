@@ -281,3 +281,24 @@ const token=process.env.CONTEXT_MACHINE_RUN_TOKEN;
 		t.Fatal("research gained database authority", w.Code)
 	}
 }
+
+func TestCompletionFailuresHaveOpaqueBodyAndBoundedCode(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{context.DeadlineExceeded, 504, "timeout"},
+		{llm.ErrIncomplete, 502, "incomplete"},
+		{llm.ErrLimit, 502, "limit"},
+		{&llm.ServiceError{Status: 401}, 401, "service"},
+		{&llm.ServiceError{Status: 429}, 429, "busy"},
+		{fmt.Errorf("SECRET_CLI_OUTPUT"), 502, "error"},
+	} {
+		w := httptest.NewRecorder()
+		completionFailure(w, tc.err)
+		if w.Code != tc.status || w.Header().Get("X-Context-Machine-Failure") != tc.code || strings.Contains(w.Body.String(), "SECRET") {
+			t.Fatal(w.Code, w.Header(), w.Body.String())
+		}
+	}
+}

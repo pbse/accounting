@@ -39,6 +39,7 @@ export default function Home() {
   const waiting = counts
     ? [
         counts.decisions.count ? n(counts.decisions.count, "decision") + (counts.decisions.unread ? ` (${counts.decisions.unread} new)` : "") : "",
+        counts.decisions.snoozed ? n(counts.decisions.snoozed, "snoozed decision") : "",
         missed ? n(missed, "close") + " overdue" : "",
         d && d.due_soon + d.not_opened_upcoming ? n(d.due_soon + d.not_opened_upcoming, "close") + " due this week" : "",
         counts.uncaptured.length ? n(counts.uncaptured.length, "month") + " without month-end books" : "",
@@ -63,7 +64,7 @@ export default function Home() {
   const week = [
     ...reopened,
     ...(counts?.inbox.groups ?? [])
-      .map((g) => ({ ...g, events: g.events.filter((e) => e.yours && !e.snoozed_until) }))
+      .map((g) => ({ ...g, events: g.events.filter((e) => e.yours && !e.snoozed_until && !e.info) }))
       .filter((g) => g.events.length > 0)
       .map((g) => {
         // The row opens the decision itself, as the decision list does: the draft, the job, the coverage work, or the close.

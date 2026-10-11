@@ -26,12 +26,15 @@ const undeliveredEmail = `(m.delivery IN ('bounced','complained','failed','suppr
 const waitingRequest = `EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client' AND NOT EXISTS(SELECT 1 FROM request_jobs n WHERE n.job_id=rj.job_id AND n.request_id>rj.request_id))
  AND NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id)`
 
-// waitingCoverage is SQL for a request q about accounts alone, before any work, still current on its close's capture, with
-// no reply and no newer request for any of its accounts.
-const waitingCoverage = `(q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FROM request_jobs WHERE request_id=q.id) AND NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id)
+// openCoverage is SQL for a request q about accounts alone, before any work, still current on its close's capture, with
+// no newer request for any of its accounts.
+const openCoverage = `(q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FROM request_jobs WHERE request_id=q.id)
  AND ` + preparation.RequestCoverageIsCurrent + `
  AND NOT EXISTS(SELECT 1 FROM work_requests n JOIN request_drafts nd ON nd.id=n.draft_id CROSS JOIN jsonb_array_elements(n.coverage_scope->'bindings') nb
   WHERE nd.close_id=d.close_id AND n.id>q.id AND q.coverage_scope->'bindings' @> jsonb_build_array(jsonb_build_object('account_id',nb->>'account_id'))))`
+
+// waitingCoverage is an open coverage request q with no reply yet.
+const waitingCoverage = `(` + openCoverage + ` AND NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id))`
 
 // attentionQuery derives each event from current work, review and request state; a key changes when the situation does.
 const attentionQuery = `WITH scope AS (
@@ -50,7 +53,12 @@ const attentionQuery = `WITH scope AS (
 ), events AS (
  SELECT 'answered:'||s.id AS key,'answered' AS kind,d.close_id,s.created_at AS at,'Client replied to request #'||s.request_id||CASE WHEN s.complete THEN '' ELSE ' (partial)' END AS text,'' AS workpaper
   FROM request_submissions s JOIN work_requests q ON q.id=s.request_id JOIN request_drafts d ON d.id=q.draft_id
-  WHERE d.close_id IN (SELECT id FROM scope) AND s.id=(SELECT max(id) FROM request_submissions WHERE request_id=s.request_id) AND s.created_at>now()-interval '14 days'
+  WHERE d.close_id IN (SELECT id FROM scope) AND s.id=(SELECT max(id) FROM request_submissions WHERE request_id=s.request_id)
+  AND (s.created_at>now()-interval '14 days'
+   -- A partial reply stays a decision while the work it answers still waits on the client under this request: no
+   -- reminder can follow a reply, so only a person can follow it up.
+   OR NOT s.complete AND (EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
+    AND NOT EXISTS(SELECT 1 FROM request_jobs n WHERE n.job_id=rj.job_id AND n.request_id>rj.request_id)) OR ` + openCoverage + `))
  UNION ALL
  SELECT CASE j.state WHEN 'failed' THEN 'failed:' ELSE 'confirm:' END||j.id||':'||i.revision,CASE j.state WHEN 'failed' THEN 'failed' ELSE 'confirm' END,j.close_id,j.state_changed_at,
   CASE j.state WHEN 'failed' THEN 'Preparation failed for ' ELSE 'Confirm the facts read from ' END||e.name,''
@@ -123,7 +131,22 @@ type attentionEvent struct {
 	AccountID    string     `json:"account_id,omitempty"`
 	Read         bool       `json:"read"`
 	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
-	group        attentionGroup
+	// Info marks a notice that needs no decision: a client's complete reply (its work resumed on its own) or a goal
+	// reached (its drafts are decisions of their own). It is still a notice, never a decision in a count.
+	Info  bool `json:"info,omitempty"`
+	group attentionGroup
+}
+
+// attentionInfo says whether an event is a notice with no decision behind it, from the keys and texts attentionQuery
+// gives it: a complete reply carries no " (partial)", a reached goal's key ends in its time, a stopped goal's in "stopped".
+func attentionInfo(e attentionEvent) bool {
+	switch {
+	case e.Kind == "answered":
+		return !strings.HasSuffix(e.Text, " (partial)")
+	case e.Kind == "goal" && strings.HasPrefix(e.Key, "goal:"):
+		return !strings.HasSuffix(e.Key, ":stopped")
+	}
+	return false
 }
 
 type attentionGroup struct {
@@ -184,6 +207,7 @@ func attentionEvents(ctx context.Context, db reader, r *http.Request) ([]attenti
 			e.SnoozedUntil = &snoozed.Time
 		}
 		e.Yours = eventYours(r, e.Kind)
+		e.Info = attentionInfo(e)
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {

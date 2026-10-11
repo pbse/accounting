@@ -1121,7 +1121,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			return now == clients, err
 		}
 		if agent {
-			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(agentDeadline + 5*time.Second))
 			// The clients the member can open now are remembered for every agent turn: a read without lineage, firm-wide
 			// or a cross-client read inside a close, is covered by this set being unchanged before the answer goes out.
 			var err error

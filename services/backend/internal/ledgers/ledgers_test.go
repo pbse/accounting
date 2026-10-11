@@ -32,4 +32,13 @@ func TestTheCatalogAndItsSwitches(t *testing.T) {
 	if !Switched("quickbooks", nil) || Switched("xero", nil) || !Switched("xero", &yes) || Switched("quickbooks", &no) || Switched("conductor", &yes) || Switched("", &yes) {
 		t.Fatal("the environment's list switches connectors on; a pilot switches on one this build has, for its firm")
 	}
+	// Empty, as a deployment passes a setting it was not given, is the default: every connector on; "none" is none.
+	t.Setenv("LEDGER_CONNECTORS", "")
+	if !Switched("quickbooks", nil) || !Switched("xero", nil) {
+		t.Fatal("an empty setting switches every connector on")
+	}
+	t.Setenv("LEDGER_CONNECTORS", "none")
+	if Switched("quickbooks", nil) || Switched("xero", nil) {
+		t.Fatal("none switches every connector off")
+	}
 }

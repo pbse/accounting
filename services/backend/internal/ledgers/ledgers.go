@@ -109,8 +109,10 @@ func Switched(connector string, pilot *bool) bool {
 
 // environment says whether this environment switches connector on.
 func environment(connector string) bool {
-	on, set := os.LookupEnv("LEDGER_CONNECTORS")
-	if !set {
+	// Unset or empty (as a deployment passes an optional setting it was not given) switches every connector on; "none"
+	// switches them all off.
+	on := strings.TrimSpace(os.Getenv("LEDGER_CONNECTORS"))
+	if on == "" {
 		return true
 	}
 	for _, c := range strings.Split(on, ",") {

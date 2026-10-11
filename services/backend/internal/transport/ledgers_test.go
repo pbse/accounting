@@ -171,7 +171,7 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 func TestAClientsLedgerIsRecordedAndCorrected(t *testing.T) {
 	db := adminDB(t)
 	t.Setenv("WORKOS_CLIENT_ID", "")
-	t.Setenv("LEDGER_CONNECTORS", "")
+	t.Setenv("LEDGER_CONNECTORS", "none")
 	org := "org_ClientLedger" + rand.Text()
 	must := func(query string, args ...any) {
 		t.Helper()
