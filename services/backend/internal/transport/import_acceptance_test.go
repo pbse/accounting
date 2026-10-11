@@ -545,6 +545,40 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if entered := call("user_a", partner, "GET", journalsPath, nil, 200)["journals"].([]any)[0].(map[string]any); entered["state"] != "entered" || entered["ledger_reference"] != "JE-77" {
 		t.Fatalf("an entered journal: %v", entered)
 	}
+	// Entered, it waits for a ledger that holds it: February's, exported before it was entered, neither verifies it nor
+	// misses it, and the month's sign-off waits.
+	journalBlockers := func() []string {
+		t.Helper()
+		tx, err := db.BeginTx(t.Context(), nil)
+		must(err)
+		defer tx.Rollback()
+		r, err := closeReadiness(t.Context(), tx, februaryClose)
+		must(err)
+		return slices.DeleteFunc(slices.Clone(r.Blockers), func(b string) bool { return !strings.Contains(b, "journal "+reference) })
+	}
+	if held := journalBlockers(); len(held) != 1 || !strings.Contains(held[0], "entered but not yet verified") {
+		t.Fatalf("an entered journal holds the sign-off: %v", held)
+	}
+	// Its lines in the month's ledger, carrying its reference, verify it; found twice, it is uncertain.
+	addLines := func(rows string) {
+		t.Helper()
+		_, err := db.Exec(`INSERT INTO books_lines(version_id,position,account_id,location,cells) SELECT $1::bigint,1000+n,k,'R'||n,jsonb_build_object('date','2027-02-28','account',a,'amount',m,'memo',$2::text||' accrual INV-55')
+ FROM (VALUES `+rows+`) x(n,k,a,m)`, februaryMonth.Version, reference)
+		must(err)
+	}
+	addLines(`(1,'n:6000','6000 Rent','150'),(2,'n:2100','2100 Accrued expenses','-150')`)
+	if verified := call("user_a", partner, "GET", journalsPath, nil, 200)["journals"].([]any)[0].(map[string]any); verified["state"] != "verified" || !strings.Contains(verified["note"].(string), "Found in Acme 2027-02.csv") {
+		t.Fatalf("a journal found in the month's ledger: %v", verified)
+	}
+	if held := journalBlockers(); len(held) != 0 {
+		t.Fatalf("a verified journal holds no sign-off: %v", held)
+	}
+	addLines(`(3,'n:6000','Rent','150')`)
+	if held := journalBlockers(); len(held) != 1 || !strings.Contains(held[0], "is uncertain. Found in Acme 2027-02.csv more than once: 3 lines carry its reference, for its 2.") {
+		t.Fatalf("a journal found twice: %v", held)
+	}
+	_, err = db.Exec(`DELETE FROM books_lines WHERE version_id=$1::bigint AND position>1000`, februaryMonth.Version)
+	must(err)
 	// A month whose books are a ledger's posts its entries instead.
 	call("user_a", partner, "GET", "/v1/closes/"+octoberClose+"/journals", nil, 409)
 	// March's ledger opens at February's derived balances, never at February's lines.

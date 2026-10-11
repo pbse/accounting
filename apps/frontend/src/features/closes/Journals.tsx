@@ -10,7 +10,7 @@ import { workspaceRequest } from "./workspace";
 
 type Line = { date: string; account: string; debit?: string; credit?: string; memo: string };
 type Pending = { paper_id: string; kind: string; source: string; lines: Line[]; held?: string };
-type Journal = { id: string; batch: number; reference: string; paper_id: string; state: "exported" | "entered" | "verified" | "uncertain"; ledger_reference: string; lines: Line[]; exported_by: string; exported_at: string; entered_by?: string; entered_at?: string };
+type Journal = { id: string; batch: number; reference: string; paper_id: string; state: "exported" | "entered" | "verified" | "uncertain"; ledger_reference: string; lines: Line[]; exported_by: string; exported_at: string; entered_by?: string; entered_at?: string; note?: string };
 type JournalsRead = { pending: Pending[]; journals: Journal[]; ledger: string; journal_import: string; can_export: boolean; can_enter: boolean };
 
 const states = { exported: ["pill muted", "Exported"], entered: ["pill neutral", "Entered"], verified: ["pill", "Verified"], uncertain: ["pill danger", "Uncertain"] } as const;
@@ -65,7 +65,8 @@ export function Journals({ closeId }: { closeId: string }) {
       <p>
         This month's books are its files, so its approved entries are entered in the client's ledger by a journal import
         {ledger ? ` into ${ledger}${journal_import ? `, through its ${journal_import}` : ""}` : ""}. Each journal's reference is in its memo, so a duplicate or
-        partial import can be seen.
+        partial import can be seen. An entered journal is verified once the month's General Ledger, exported after it was
+        entered, is accepted and holds it; until then the month is not signed off.
       </p>
       {error && <p role="alert">{error}</p>}
       <h3>Approved, not yet exported</h3>
@@ -96,6 +97,7 @@ export function Journals({ closeId }: { closeId: string }) {
             <li key={j.id}>
               <span className={states[j.state][0]}>{states[j.state][1]}</span> {j.reference} (batch {j.batch}, draft #{j.paper_id}), exported {dates.dayMonth(j.exported_at)} by {j.exported_by}
               {j.state !== "exported" && j.ledger_reference ? `; entered as ${j.ledger_reference}${j.entered_at ? ` ${dates.dayMonth(j.entered_at)}` : ""}${j.entered_by ? ` by ${j.entered_by}` : ""}` : ""}
+              {j.note && <small> {j.note}</small>}
               {can_enter && j.state === "exported" && (
                 <span>
                   {" "}

@@ -124,6 +124,21 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		case len(month.Holds) > 0:
 			out.Blockers = append(out.Blockers, "Books from files: the accepted file "+month.File+" has checks that hold its statements: "+strings.Join(month.Holds, "; ")+".")
 		}
+		// A journal entered in the client's ledger is in the month's statements only once its books verify it.
+		if month != nil {
+			journals, err := journalsOf(ctx, tx, id, month)
+			if err != nil {
+				return out, err
+			}
+			for _, j := range journals {
+				switch j.State {
+				case "entered":
+					out.Blockers = append(out.Blockers, "Books from files: journal "+j.Reference+" is entered but not yet verified: accept the month's General Ledger exported after it was entered.")
+				case "uncertain":
+					out.Blockers = append(out.Blockers, "Books from files: journal "+j.Reference+" is uncertain. "+j.Note)
+				}
+			}
+		}
 	}
 	var snapshot struct {
 		Scope *struct {
