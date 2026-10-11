@@ -127,9 +127,17 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 	// "Total Current Assets" is under the heading outside it, not "Current Assets".
 	var headings []string
 	for _, l := range lines {
+		// The innermost heading that says a class, else the innermost: "Misc" under "US Operations" under "Current
+		// Assets" is under current assets.
 		heading := ""
-		if len(headings) > 0 {
-			heading = headings[len(headings)-1]
+		for i := len(headings) - 1; i >= 0; i-- {
+			if heading == "" {
+				heading = headings[i]
+			}
+			if bookfiles.Propose("", headings[i], "", "").Class != "" {
+				heading = headings[i]
+				break
+			}
 		}
 		switch l.Kind {
 		case bookfiles.Heading:

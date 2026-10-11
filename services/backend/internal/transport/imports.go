@@ -1070,8 +1070,20 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if as.Encoding == "" || as.Delimiter == "" {
 			as = csvChoice{Encoding: file.Encoding, Delimiter: file.Delimiter}
 		}
-		if err = db.QueryRowContext(r.Context(), `INSERT INTO books_layouts(organization_id,client_entity,import_id,layout,reading,reason,actor,encoding,delimiter) VALUES($1,$2,$3::bigint,$4::jsonb,$5::jsonb,$6,$7,$8,$9) RETURNING id::text`,
-			org, name, summary.ID, string(layout), string(read), in.Reason, reviewerName(r), as.Encoding, as.Delimiter).Scan(&id); err != nil {
+		// A layout confirmed takes the client's account-map lock, as a map confirmation does: none is ever saved against
+		// a reading this one replaces while it runs.
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The layout could not be saved.")
+			return
+		}
+		defer tx.Rollback()
+		if _, err = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('books_account_maps:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
+			problem(w, 503, "The layout could not be saved.")
+			return
+		}
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO books_layouts(organization_id,client_entity,import_id,layout,reading,reason,actor,encoding,delimiter) VALUES($1,$2,$3::bigint,$4::jsonb,$5::jsonb,$6,$7,$8,$9) RETURNING id::text`,
+			org, name, summary.ID, string(layout), string(read), in.Reason, reviewerName(r), as.Encoding, as.Delimiter).Scan(&id); err != nil || tx.Commit() != nil {
 			problem(w, 503, "The layout could not be saved.")
 			return
 		}
