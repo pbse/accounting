@@ -2,10 +2,12 @@ package bookfiles
 
 import (
 	"fmt"
+	"maps"
 	"math/big"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -45,8 +47,10 @@ type Layout struct {
 	Headings []int `json:"headings,omitempty"`
 	Totals   []int `json:"totals,omitempty"`
 	// Ignored are rows a person confirmed are not part of the Trial Balance (a footer, a note) though they hold values
-	// outside the layout's columns; any other such row is a problem.
-	Ignored []int `json:"ignored,omitempty"`
+	// outside the layout's columns; any other such row is a problem. IgnoredColumns are columns a person confirmed hold
+	// nothing of it (a memo, last year's figures); amounts in any other column the layout does not name are a problem.
+	Ignored        []int `json:"ignored,omitempty"`
+	IgnoredColumns []int `json:"ignored_columns,omitempty"`
 }
 
 // headerWords names what each column header usually says, for a proposal.
@@ -382,6 +386,8 @@ func (l Layout) Read(t Table) Reading {
 		}
 	}
 	debits, credits := new(big.Rat), new(big.Rat)
+	// beside is each column the layout does not name, with the rows that hold an amount in it beside the row's own.
+	beside := map[int][]int{}
 	var columns []int
 	for c := range l.Columns {
 		columns = append(columns, c)
@@ -397,8 +403,10 @@ func (l Layout) Read(t Table) Reading {
 		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cells: map[Meaning]string{}, Cents: true}
 		var debit, credit, balance *big.Rat
 		hasAmount, signed := false, false
-		// outside are the row's values in columns the layout does not name: nothing is dropped unseen.
+		// outside are the row's values in columns the layout does not name, and strays the columns of those that are
+		// amounts: nothing is dropped unseen.
 		var outside []string
+		var strays []int
 		// side keeps one amount per side: a second (a Cr-marked amount in the debit column beside a credit) is a problem,
 		// not an overwrite.
 		side := func(to **big.Rat, value *big.Rat, name string, ref string) {
@@ -411,8 +419,11 @@ func (l Layout) Read(t Table) Reading {
 		for _, c := range r.Cells {
 			meaning, ok := l.Columns[c.Column]
 			if !ok {
-				if strings.TrimSpace(c.Value) != "" {
+				if strings.TrimSpace(c.Value) != "" && !slices.Contains(l.IgnoredColumns, c.Column) {
 					outside = append(outside, c.Ref)
+					if _, err := cellAmount(c, l.Style); err == nil {
+						strays = append(strays, c.Column)
+					}
 				}
 				continue
 			}
@@ -473,9 +484,19 @@ func (l Layout) Read(t Table) Reading {
 			}
 			continue
 		}
+		// Amounts beside a row's own are said once per column, after the table.
+		if hasAmount {
+			for _, c := range strays {
+				beside[c] = append(beside[c], r.Number)
+			}
+		}
 		// A row with an account but no amount in the chosen columns, and a value beside them, may have shifted.
 		if !hasAmount && len(outside) > 0 {
 			reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d (%s) has no amount in the chosen columns but values beside them (%s): choose its columns, or mark it ignored", r.Number, line.Name, strings.Join(outside, ", ")))
+		}
+		// Other balances without the month-end one leave the month-end balance unknown, never zero.
+		if hasAmount && debit == nil && credit == nil && balance == nil && len(line.Others) > 0 {
+			reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d (%s) has other balances but no month-end balance", r.Number, line.Label()))
 		}
 		switch {
 		case balance != nil:
@@ -546,11 +567,10 @@ func (l Layout) Read(t Table) Reading {
 			if !line.Cents {
 				reading.Problems = append(reading.Problems, fmt.Sprintf("Row %d is not exact to the cent", r.Number))
 			}
-			if line.Balance.Sign() > 0 {
-				debits.Add(debits, line.Balance)
-			} else {
-				credits.Sub(credits, line.Balance)
-			}
+			// Each side as written: a row with both a debit and a credit counts each on its own side.
+			d, c := columnSums([]Line{line})
+			debits.Add(debits, d)
+			credits.Add(credits, c)
 		case Total:
 			// In a layout with both columns, a total with one side blank shows nothing on that side: both are checked.
 			if meanings[Debit] && meanings[Credit] && (debit != nil || credit != nil) {
@@ -565,6 +585,9 @@ func (l Layout) Read(t Table) Reading {
 				reading.Problems = append(reading.Problems, checkTotal(reading.Lines, i, debit, credit)...)
 			}
 		}
+	}
+	for _, c := range slices.Sorted(maps.Keys(beside)) {
+		reading.Problems = append(reading.Problems, fmt.Sprintf("Column %s holds amounts in rows %s outside the chosen columns: choose what it holds, or mark it ignored", strings.TrimRight(cellRef(c, 1), "1"), rowList(beside[c])))
 	}
 	reading.Debits, reading.Credits = exact(debits), exact(credits)
 	reading.Balanced = debits.Cmp(credits) == 0
@@ -609,4 +632,16 @@ func columnSums(lines []Line) (*big.Rat, *big.Rat) {
 		}
 	}
 	return debits, credits
+}
+
+// rowList names rows briefly: the first few, and how many more.
+func rowList(rows []int) string {
+	shown := make([]string, 0, 3)
+	for i, r := range rows {
+		if i == 3 {
+			return strings.Join(shown, ", ") + fmt.Sprintf(" and %d more", len(rows)-3)
+		}
+		shown = append(shown, strconv.Itoa(r))
+	}
+	return strings.Join(shown, ", ")
 }

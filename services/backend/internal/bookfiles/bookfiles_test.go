@@ -344,7 +344,7 @@ func TestTheReaderHoldsWhatDoesNotAddUp(t *testing.T) {
 func TestTotalsAndBalancesAgree(t *testing.T) {
 	three, _ := Read("tb.csv", []byte("Account,Debit,Credit,Balance\nBank,90.00,,100.00\nCapital,,100.00,-100.00\n"))
 	layout := Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountName, 1: Debit, 2: Credit, 3: Balance}, Style: NumberStyle{Scale: 1}}
-	if reading := layout.Read(three.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Row 2") {
+	if reading := layout.Read(three.Tables[0]); len(reading.Problems) == 0 || !strings.Contains(reading.Problems[0], "Row 2's balance (100) is not its debit less its credit (90)") {
 		t.Fatalf("a balance that is not its debit less its credit: %+v", reading)
 	}
 	cut, _ := Read("tb.csv", []byte("Account,Balance\nBank,100.00\nTotal Assets,\nCapital,-100.00\n"))
@@ -506,5 +506,30 @@ func TestRecalculationRoundingAndGrouping(t *testing.T) {
 	}
 	if _, err := ParseAmount("1,23,45", NumberStyle{Scale: 1}); err == nil {
 		t.Fatal("wrong grouping is still refused")
+	}
+}
+
+// A month-end balance missing beside other balances is a problem; amounts in a column the layout does not name are a
+// problem until a person marks the column ignored; and the totals add each side as written.
+func TestMissingBalancesStrayColumnsAndSides(t *testing.T) {
+	missing, _ := Read("tb.csv", []byte("Number,Account,Opening,Balance\n1000,Bank,90.00,100.00\n1100,Petty cash,5.00,\n3000,Capital,-95.00,-100.00\n"))
+	layout := Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountNumber, 1: AccountName, 2: Opening, 3: Balance}, Style: NumberStyle{Scale: 1}}
+	if reading := layout.Read(missing.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Row 3 (Petty cash) has other balances but no month-end balance") {
+		t.Fatalf("a missing month-end balance: %+v", reading.Problems)
+	}
+	stray, _ := Read("tb.csv", []byte("Account,Balance,Prior,Memo\nBank,100.00,80.00,checked\nCapital,-100.00,-80.00,\n"))
+	layout, _ = ProposeLayout(stray.Tables[0])
+	layout.Columns = map[int]Meaning{0: AccountName, 1: Balance}
+	if reading := layout.Read(stray.Tables[0]); len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "Column C holds amounts in rows 2, 3") {
+		t.Fatalf("amounts beside the chosen columns: %+v", reading.Problems)
+	}
+	layout.IgnoredColumns = []int{2}
+	if reading := layout.Read(stray.Tables[0]); len(reading.Problems) != 0 {
+		t.Fatalf("a column marked ignored: %+v", reading.Problems)
+	}
+	gross, _ := Read("tb.csv", []byte("Account,Debit,Credit\nBank,150.00,50.00\nCapital,,100.00\n"))
+	layout, _ = ProposeLayout(gross.Tables[0])
+	if reading := layout.Read(gross.Tables[0]); reading.Debits != "150" || reading.Credits != "150" || !reading.Balanced {
+		t.Fatalf("each side as written: %+v", reading)
 	}
 }
