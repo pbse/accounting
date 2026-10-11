@@ -143,7 +143,8 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client close not found.")
 			return
 		}
-		if in.Action == "connect" && connectorOff(ctx, w, db, a.Organization, "xero", "Xero") {
+		// Connecting, finishing a sign-in and choosing the organisation each make or complete a connection.
+		if (in.Action == "connect" || in.Action == "callback" || in.Action == "confirm") && connectorOff(ctx, w, db, a.Organization, "xero", "Xero") {
 			return
 		}
 		if in.Action == "connect" {
