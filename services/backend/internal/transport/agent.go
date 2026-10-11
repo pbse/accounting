@@ -704,18 +704,21 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			if read.doc || !found || !sameValue(got, s.value) {
 				return nil, "a cited field does not hold the cited value"
 			}
-			if n := normalizeFigure(s.value); n != "" {
-				bound[s.sentence][n] = true
-			}
-			// A cited field that is prose ("2 things need you: …") supports each figure it holds.
-			for _, f := range agentFigures(got) {
-				bound[s.sentence][f] = true
+			fieldClaim = claimOf(read, s.path)
+			// A percentage field stored as a bare number ("6.3") is a percentage: it binds "6.3%", never "6.3".
+			if fieldClaim.kind != "percent" {
+				if n := normalizeFigure(s.value); n != "" {
+					bound[s.sentence][n] = true
+				}
+				// A cited field that is prose ("2 things need you: …") supports each figure it holds.
+				for _, f := range agentFigures(got) {
+					bound[s.sentence][f] = true
+				}
 			}
 			// The cited field must substantiate its sentence: a figure of the sentence, the value's own words, or the
 			// field's name must appear in it, so an unrelated field never covers a claim.
 			// The field bears on its sentence by its value, its words, or the line or metric it is of (Lab fees, net
 			// income); a money figure is then held to what the field measures, below, once every entry is in.
-			fieldClaim = claimOf(read, s.path)
 			driver(s.sentence, s.step, s.path)
 			if fieldClaim.entity != "" {
 				sentenceClients[s.sentence][strings.ToLower(fieldClaim.entity)] = true
@@ -724,6 +727,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				return nil, "a cited field does not bear on its sentence"
 			}
 			if n := normalizeFigure(got); n != "" && (fieldClaim.money || fieldClaim.kind == "percent" || strings.HasSuffix(n, "%")) && !isCalendar(n) {
+				if fieldClaim.kind == "percent" && !strings.HasSuffix(n, "%") {
+					n += "%"
+				}
 				sentenceMoney[s.sentence] = append(sentenceMoney[s.sentence], moneyEntry{fieldClaim, got, n, s.step, s.path})
 			}
 		case s.quote != "":
@@ -768,7 +774,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			candidates, held := 0, false
 			first := ""
 			for j, m := range sentenceMoney[i] {
-				if o.normalized != m.n && !(m.claim.kind == "change" && o.normalized == strings.TrimPrefix(m.n, "-")) {
+				if o.normalized != m.n && !((m.claim.kind == "change" || m.claim.variance) && o.normalized == strings.TrimPrefix(m.n, "-")) {
 					continue
 				}
 				candidates++
@@ -830,17 +836,8 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		// A client the sentence names must be one its cited fields are of: "Birch and Bluegrass each had 21,780.00"
 		// needs Birch's figure too.
 		if len(sentenceClients[i]) > 0 {
-			lower := strings.ToLower(lines[i])
-			for _, e := range entities {
-				le := strings.ToLower(e)
-				if len(e) < 3 || !strings.Contains(lower, le) {
-					continue
-				}
-				covered := false
-				for c := range sentenceClients[i] {
-					covered = covered || c == le || strings.Contains(c, le) || strings.Contains(le, c)
-				}
-				if !covered {
+			for _, e := range clientsNamed(lines[i], entities) {
+				if !sentenceClients[i][strings.ToLower(e)] {
 					return nil, "the sentence names " + e + ", but nothing it cites is " + e + "'s"
 				}
 			}

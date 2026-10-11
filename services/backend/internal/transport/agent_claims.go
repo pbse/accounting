@@ -161,6 +161,8 @@ type claim struct {
 	currency string
 	basis    string
 	stale    bool
+	// variance says a percentage is a variance against a budget (the budget comparison's signed percent).
+	variance bool
 	// incomplete is a forecast built while some of its inputs were not captured.
 	incomplete bool
 	cause      bool
@@ -293,6 +295,9 @@ func claimOf(read agentRead, path string) claim {
 		c.kind = "budget"
 	case claimPercentKeys[last]:
 		c.kind = "percent"
+		if len(ancestors) > 0 {
+			_, c.variance = ancestors[len(ancestors)-1]["budget"]
+		}
 	}
 	for i, k := range keys {
 		switch {
@@ -382,6 +387,7 @@ var (
 	// Words that attribute a total to drivers, which must then add up or name the rest.
 	claimAttribution    = regexp.MustCompile(`\b(from|of which|including|includes|mainly|mostly|largely|chiefly|primarily|led by|reflecting)\b`)
 	claimCausalEvidence = regexp.MustCompile(`\b(because|due to|caused|causes|driven|drove|drives|resulted|result of|results from|led to|leads to|owing to|thanks to|after|following|boosted|lifted|raised|increased|reduced|lowered|cut|added|brought|grew|rose|fell|dropped)\b`)
+	claimFromTo         = regexp.MustCompile(`(?i)\bfrom\s+(\w+(?:\s+\d{4})?)\s+to\s+(\w+(?:\s+\d{4})?)`)
 	claimNegation       = regexp.MustCompile(`\b(not|no|never|without|neither|nor|unrelated|isn't|wasn't|didn't|doesn't|don't|won't|cannot|can't|hasn't|haven't)\b|n't\b`)
 	claimIncompleteSaid = regexp.MustCompile(`\b(incomplete|missing|partial|not complete|provisional|not yet captured|not all)\b`)
 	// Month names in any case, except "may", which is a month only as May.
@@ -682,6 +688,19 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			return "the sentence states the prior month's " + o.normalized + " as current"
 		}
 	}
+	// A budget variance percentage is said to be against the budget, over in its sign or under.
+	if c.variance {
+		if !claimBudget.MatchString(lowerClause) {
+			return "the sentence states the budget variance " + o.normalized + " without saying it is against the budget"
+		}
+		if field != nil && len(o.after) > 0 {
+			over := o.after[0] == "over" || o.after[0] == "above" || o.after[0] == "ahead"
+			under := o.after[0] == "under" || o.after[0] == "below" || o.after[0] == "behind" || o.after[0] == "short"
+			if over && field.Sign() < 0 || under && field.Sign() > 0 {
+				return "the sentence states " + o.normalized + " " + o.after[0] + " budget, but the variance is " + normalizeFigure(got)
+			}
+		}
+	}
 	// A budget is said to be one; an actual is not called a budget.
 	if c.kind == "budget" && !claimBudget.MatchString(lowerClause) {
 		return "the sentence states the budget " + o.normalized + " without saying it is the budget"
@@ -733,27 +752,14 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			}
 		}
 	}
-	// The client named is the field's client.
+	// The client named is the field's client, exactly: every client named beside the figure (else in the sentence).
 	if c.entity != "" {
-		inClause, inLine := []string{}, []string{}
-		for _, e := range entities {
-			if len(e) < 3 {
-				continue
-			}
-			if strings.Contains(lowerClause, strings.ToLower(e)) {
-				inClause = append(inClause, e)
-			}
-			if strings.Contains(lowerLine, strings.ToLower(e)) {
-				inLine = append(inLine, e)
-			}
+		named := clientsNamed(o.clause, entities)
+		if len(named) == 0 {
+			named = clientsNamed(line, entities)
 		}
-		if len(inClause) == 0 {
-			inClause = inLine
-		}
-		// Every client named beside the figure is the field's: one figure is never given to two clients.
-		for _, e := range inClause {
-			le, lc := strings.ToLower(e), strings.ToLower(c.entity)
-			if le != lc && !strings.Contains(lc, le) && !strings.Contains(le, lc) {
+		for _, e := range named {
+			if !isSameClient(e, c.entity) {
 				return "the sentence gives " + o.normalized + " to " + e + ", but the cited figure is " + c.entity + "'s"
 			}
 		}
@@ -814,8 +820,9 @@ func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim,
 			switch {
 			case s.quote != "" && claimNegation.MatchString(strings.ToLower(s.quote)):
 				// "The campaign did not affect revenue" contradicts the cause rather than supporting it.
-			case s.quote != "" && labelNamed(cause, s.quote) && claimCausalEvidence.MatchString(strings.ToLower(s.quote)):
-				// The passage names the cause and says it acted ("visits rose after the campaign started").
+			case s.quote != "" && labelNamed(cause, s.quote) && claimCausalEvidence.MatchString(strings.ToLower(s.quote)) && effectNamed(line[clauseStart:at[0]], s.quote, claims):
+				// The passage names the cause, says it acted, and names the effect the sentence claims ("revenue rose
+				// after the campaign started"); "the campaign raised payroll" supports no claim about revenue.
 				supported = true
 			case claims[i].cause:
 				got, _ := valueAt(reads[s.step].value, s.path)
@@ -1179,8 +1186,12 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		}
 	}
 	if len(clientsOf) > 1 {
+		named := map[string]bool{}
+		for _, e := range clientsNamed(line, entities) {
+			named[strings.ToLower(e)] = true
+		}
 		for e := range clientsOf {
-			if !strings.Contains(lower, e) {
+			if !named[e] {
 				return "a derived figure combines several clients' figures; the sentence must name each"
 			}
 		}
@@ -1245,18 +1256,11 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 				}
 			}
 		}
-		// A client the sentence names must be one the inputs are of.
+		// A client the sentence names must be one the inputs are of, exactly.
 		if c.entity != "" {
-			for _, e := range entities {
-				le := strings.ToLower(e)
-				if len(e) >= 3 && strings.Contains(lower, le) {
-					inputs := false
-					for other := range clientsOf {
-						inputs = inputs || strings.Contains(other, le) || strings.Contains(le, other)
-					}
-					if !inputs {
-						return "the sentence names " + e + ", but its figure is computed from " + c.entity + "'s"
-					}
+			for _, e := range clientsNamed(line, entities) {
+				if !clientsOf[strings.ToLower(e)] {
+					return "the sentence names " + e + ", but its figure is computed from " + c.entity + "'s"
 				}
 			}
 		}
@@ -1323,6 +1327,17 @@ func derivedResult(op string, o occurrence, claims []claim, computed *big.Rat) s
 		}
 		if moved && !sameLine {
 			return "the sentence states the difference " + o.normalized + " between different lines as a movement"
+		}
+		// "from September to October" is the second operand's month to the first's.
+		if m := claimFromTo.FindStringSubmatch(o.clause); m != nil && len(claims) == 2 {
+			from, to := namedMonths(m[1]), namedMonths(m[2])
+			if len(from) == 1 && len(to) == 1 && claims[0].period != "" && claims[1].period != "" {
+				first, _ := time.Parse("2006-01", claims[0].period)
+				second, _ := time.Parse("2006-01", claims[1].period)
+				if to[0][0] != int(first.Month()) || from[0][0] != int(second.Month()) {
+					return "the sentence states the difference from " + m[1] + " to " + m[2] + ", but it is computed from " + second.Format("January") + " to " + first.Format("January")
+				}
+			}
 		}
 		if moved && (direction == "rise" && computed.Sign() < 0 || direction == "fall" && computed.Sign() > 0) {
 			return "the sentence states a " + direction + " of " + o.normalized + ", but the computed difference is " + computed.FloatString(2)
@@ -1406,4 +1421,48 @@ func resultLabel(line string, o occurrence) map[string]bool {
 		out[k] = true
 	}
 	return out
+}
+
+// clientsNamed is the clients a text names, matched whole and longest first, so "Acme Europe" is never read as "Acme"
+// and "Acme" never matches inside "Acme Europe".
+func clientsNamed(text string, clients []string) []string {
+	ordered := append([]string(nil), clients...)
+	sort.SliceStable(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+	lower := []byte(strings.ToLower(text))
+	out := []string{}
+	for _, name := range ordered {
+		name = strings.TrimSpace(name)
+		if len(name) < 3 {
+			continue
+		}
+		re := regexp.MustCompile(`(?:^|[^\p{L}\p{N}])` + regexp.QuoteMeta(strings.ToLower(name)) + `(?:$|[^\p{L}\p{N}])`)
+		if at := re.FindIndex(lower); at != nil {
+			out = append(out, name)
+			for i := at[0]; i < at[1]; i++ {
+				if lower[i] != ' ' {
+					lower[i] = '#'
+				}
+			}
+		}
+	}
+	return out
+}
+
+// isSameClient says whether two client names are the same client, exactly.
+func isSameClient(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// effectNamed says whether a passage names the effect a causal sentence claims: a measure the effect names, or the line
+// of a field cited in the sentence that the effect names.
+func effectNamed(effect, passage string, claims map[int]claim) bool {
+	if overlaps(metricsIn(passage), metricsIn(effect)) {
+		return true
+	}
+	for _, c := range claims {
+		if c.label != "" && labelNamed(effect, c.label) && labelNamed(passage, c.label) {
+			return true
+		}
+	}
+	return false
 }
