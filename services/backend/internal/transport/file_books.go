@@ -3,13 +3,16 @@ package transport
 import (
 	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/quickbooks"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"maps"
+	"math/big"
 	"regexp"
 	"slices"
 	"strings"
@@ -82,27 +85,58 @@ func writeFileVersion(ctx context.Context, db *sql.DB, org, name, acceptance, fi
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('books_account_maps:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
 		return err
 	}
-	state, found, err := readFileState(ctx, tx, org, name, file)
-	if err != nil {
+	// An acceptance no longer on the file's reading or scope is not its month's books: nothing is written for it.
+	f, ok, err := acceptedFileBooks(ctx, tx, org, name, acceptance, file)
+	if err != nil || !ok {
 		return err
+	}
+	content, _ := json.Marshal(map[string]any{"accounts": f.accounts, "balances": f.balances, "activity": f.activity, "activity_unavailable": f.missing,
+		"currency": f.currency, "as_of": f.asOf, "basis": f.basis})
+	sum := sha256.Sum256(content)
+	rawAccounts, _ := json.Marshal(f.accounts)
+	rawBalances, _ := json.Marshal(f.balances)
+	rawActivity, _ := json.Marshal(f.activity)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO books_versions(organization_id,close_id,period,source,source_id,company,as_of,captured_at,currency,basis,typed,accounts,balances,activity,digest,activity_unavailable)
+ VALUES($1,$2,$3,'files',$4,$5,$6::date,$7,$8,$9,true,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14) ON CONFLICT (source,source_id) DO NOTHING`,
+		org, closeID, f.period, acceptance, name, f.asOf, f.acceptedAt, strings.ToUpper(f.currency), f.basis,
+		string(rawAccounts), string(rawBalances), string(rawActivity), hex.EncodeToString(sum[:]), f.missing); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// acceptedFile is the books an acceptance gives its month: its file's reading as the map it was accepted on classifies
+// it, balances and the month's activity as exact decimals, with what the month's activity is missing, if anything.
+type acceptedFile struct {
+	accounts                               map[string]booksAccount
+	balances, activity                     map[string]string
+	missing, period, currency, asOf, basis string
+	acceptedAt                             time.Time
+}
+
+// acceptedFileBooks reads the books acceptance gives its month; ok is false when the acceptance is no longer on its
+// file's reading or scope.
+func acceptedFileBooks(ctx context.Context, q rowReader, org, name, acceptance, file string) (acceptedFile, bool, error) {
+	state, found, err := readFileState(ctx, q, org, name, file)
+	if err != nil {
+		return acceptedFile{}, false, err
 	}
 	var layoutID, scopeID, period, stamp string
 	var acceptedAt sql.NullTime
-	if err = tx.QueryRowContext(ctx, `SELECT layout_id::text,scope_id::text,period,created_at,map_stamp FROM books_import_acceptances WHERE id::text=$1`, acceptance).Scan(&layoutID, &scopeID, &period, &acceptedAt, &stamp); err != nil {
-		return err
+	if err = q.QueryRowContext(ctx, `SELECT layout_id::text,scope_id::text,period,created_at,map_stamp FROM books_import_acceptances WHERE id::text=$1`, acceptance).Scan(&layoutID, &scopeID, &period, &acceptedAt, &stamp); err != nil {
+		return acceptedFile{}, false, err
 	}
 	// The classes and types are the map the acceptance was given on, never one confirmed since.
 	accepted := map[string]mappedAccount{}
 	if mapID, _, ok := strings.Cut(stamp, ":"); ok {
 		var raw []byte
-		if err = tx.QueryRowContext(ctx, `SELECT accounts FROM books_account_maps WHERE id::text=$1`, mapID).Scan(&raw); err != nil && err != sql.ErrNoRows {
-			return err
+		if err = q.QueryRowContext(ctx, `SELECT accounts FROM books_account_maps WHERE id::text=$1`, mapID).Scan(&raw); err != nil && err != sql.ErrNoRows {
+			return acceptedFile{}, false, err
 		}
 		json.Unmarshal(raw, &accepted)
 	}
-	// An acceptance no longer on the file's reading or scope is not its month's books: nothing is written for it.
 	if !found || state.scope == nil || state.reading.ID != layoutID || state.scope.ID != scopeID {
-		return nil
+		return acceptedFile{}, false, nil
 	}
 	// The reading's accounts as the accepted map maps them, for the accounts and the activity alike.
 	for i, a := range state.reading.Accounts {
@@ -111,32 +145,21 @@ func writeFileVersion(ctx context.Context, db *sql.DB, org, name, acceptance, fi
 			state.reading.Accounts[i].Mapped = &m
 		}
 	}
-	accounts, balances := map[string]booksAccount{}, map[string]string{}
+	f := acceptedFile{accounts: map[string]booksAccount{}, balances: map[string]string{}, activity: map[string]string{}, period: period,
+		currency: state.layout.Layout.Currency, asOf: state.layout.Layout.AsOf, basis: state.scope.Basis, acceptedAt: acceptedAt.Time}
 	for _, a := range state.reading.Accounts {
 		account := booksAccount{Name: strings.TrimSpace(a.Number + " " + a.Name)}
 		if m, ok := accepted[a.Key]; ok {
 			account.Class, account.Type = m.Class, m.Type
 		}
-		accounts[a.Key], balances[a.Key] = account, a.Balance
+		f.accounts[a.Key], f.balances[a.Key] = account, a.Balance
 	}
-	activity := map[string]string{}
 	month, _, missing := monthActivity(state)
 	for key, v := range month {
-		activity[key] = exactDecimal(v)
+		f.activity[key] = exactDecimal(v)
 	}
-	content, _ := json.Marshal(map[string]any{"accounts": accounts, "balances": balances, "activity": activity, "activity_unavailable": missing,
-		"currency": state.layout.Layout.Currency, "as_of": state.layout.Layout.AsOf, "basis": state.scope.Basis})
-	sum := sha256.Sum256(content)
-	rawAccounts, _ := json.Marshal(accounts)
-	rawBalances, _ := json.Marshal(balances)
-	rawActivity, _ := json.Marshal(activity)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO books_versions(organization_id,close_id,period,source,source_id,company,as_of,captured_at,currency,basis,typed,accounts,balances,activity,digest,activity_unavailable)
- VALUES($1,$2,$3,'files',$4,$5,$6::date,$7,$8,$9,true,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14) ON CONFLICT (source,source_id) DO NOTHING`,
-		org, closeID, period, acceptance, name, state.layout.Layout.AsOf, acceptedAt.Time, strings.ToUpper(state.layout.Layout.Currency), state.scope.Basis,
-		string(rawAccounts), string(rawBalances), string(rawActivity), hex.EncodeToString(sum[:]), missing); err != nil {
-		return err
-	}
-	return tx.Commit()
+	f.missing = missing
+	return f, true, nil
 }
 
 // writeFileVersionsNow writes a client's pending files months' books at once, after an acceptance or a choice of
@@ -385,6 +408,129 @@ func fileBalanceExceptions(b *books) []ledger.BalanceException {
 	}
 	slices.SortFunc(out, func(a, b ledger.BalanceException) int { return strings.Compare(a.Account, b.Account) })
 	return out
+}
+
+// fileSupplement reconciles a month's accepted file to the month's books when they come from a live ledger: a supplement
+// never replaces the month's books, and one that does not reconcile is shown with its differences and not used
+// (docs/books-sources.md, one authoritative books version per month). Each of the file's accounts is matched to one of
+// the ledger's by its name, without its number, then by its whole name; a name two ledger accounts share matches
+// neither. Nil when the month has no close, or when its books are its files.
+func fileSupplement(ctx context.Context, q rowReader, org, name, acceptance, file string) (map[string]any, error) {
+	f, ok, err := acceptedFileBooks(ctx, q, org, name, acceptance, file)
+	if err != nil || !ok {
+		return nil, err
+	}
+	var closeID string
+	switch err = q.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND client_identity(organization_id,entity)=client_identity($1,$2) AND period=$3 ORDER BY id DESC LIMIT 1`, org, name, f.period).Scan(&closeID); {
+	case err == sql.ErrNoRows:
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	if source, err := closeBooksSource(ctx, q, closeID); err != nil || source == "files" {
+		return nil, err
+	}
+	out := map[string]any{"state": "unavailable", "period": f.period, "close_id": closeID}
+	// A file whose accepted checks hold its statements is not compared; the month's activity alone holds none of them.
+	var raw []byte
+	if err = q.QueryRowContext(ctx, `SELECT checks FROM books_import_acceptances WHERE id::text=$1`, acceptance).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var kept []importCheck
+	json.Unmarshal(raw, &kept)
+	holds := []string{}
+	for _, c := range kept {
+		if c.State == "holds" && c.Key != "activity" {
+			holds = append(holds, c.Title)
+		}
+	}
+	if len(holds) > 0 {
+		out["reason"] = "Checks it was accepted with hold its statements, so it is not compared: " + strings.Join(holds, "; ") + "."
+		return out, nil
+	}
+	m, err := periodBooks(ctx, q, closeID, f.period)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		out["reason"] = "The month has no captured books to reconcile the file to."
+		return out, nil
+	}
+	out["ledger"], out["captured_at"] = m.Source, m.CapturedAt.UTC()
+	captured, err := recordBooks(ctx, q, m)
+	if err != nil {
+		out["reason"] = "The month's capture could not be read: " + err.Error() + "."
+		return out, nil
+	}
+	if !strings.EqualFold(f.currency, captured.Currency) {
+		out["state"], out["differences"] = "differs", []string{"The file is in " + strings.ToUpper(f.currency) + ", the books in " + captured.Currency + "."}
+		return out, nil
+	}
+	matched, differences := reconcileFile(f, captured)
+	out["state"], out["accounts"], out["differences"] = "reconciled", matched, differences
+	if len(differences) > 0 {
+		out["state"] = "differs"
+	}
+	return out, nil
+}
+
+// reconcileFile compares an accepted file's balances with a month's captured books: how many of the file's accounts it
+// matched to one of the books' accounts, and every difference, of an amount or of an account found on one side only.
+func reconcileFile(f acceptedFile, captured *books) (int, []string) {
+	normal := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+	// A ledger account is known by its name, the last part of a parent's name, and either without a leading number.
+	byName := map[string][]string{}
+	for _, id := range slices.Sorted(maps.Keys(captured.Accounts)) {
+		whole := captured.Accounts[id].Name
+		last := whole[strings.LastIndex(whole, ":")+1:]
+		for _, n := range []string{whole, last, withoutNumber(whole), withoutNumber(last)} {
+			if n = normal(n); n != "" && !slices.Contains(byName[n], id) {
+				byName[n] = append(byName[n], id)
+			}
+		}
+	}
+	zero := new(big.Rat)
+	differences, matched, used := []string{}, 0, map[string]bool{}
+	for _, key := range slices.Sorted(maps.Keys(f.balances)) {
+		stated, _ := new(big.Rat).SetString(f.balances[key])
+		if stated == nil {
+			stated = new(big.Rat)
+		}
+		account := f.accounts[key].Name
+		found := ""
+		for _, n := range []string{fileAccountName(key, account), account} {
+			if ids := byName[normal(n)]; len(ids) == 1 && !used[ids[0]] {
+				found = ids[0]
+				break
+			}
+		}
+		if found == "" {
+			if stated.Sign() != 0 {
+				differences = append(differences, account+": "+money(stated)+" in the file, with no account of that name in the books.")
+			}
+			continue
+		}
+		used[found], matched = true, matched+1
+		books := cmp.Or(captured.Balances[found], zero)
+		if stated.Cmp(books) != 0 {
+			differences = append(differences, fmt.Sprintf("%s: the file says %s, the books %s, a difference of %s.", account, money(stated), money(books), money(new(big.Rat).Sub(stated, books))))
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(captured.Balances)) {
+		if balance := captured.Balances[id]; !used[id] && balance.Sign() != 0 {
+			differences = append(differences, captured.Accounts[id].Name+": "+money(balance)+" in the books, not in the file.")
+		}
+	}
+	return matched, differences
+}
+
+// withoutNumber is an account name without a leading account number ("1000 Checking" is "Checking").
+func withoutNumber(name string) string {
+	fields := strings.Fields(name)
+	if len(fields) > 1 && strings.ContainsAny(fields[0], "0123456789") {
+		return strings.Join(fields[1:], " ")
+	}
+	return name
 }
 
 // filesVersion is SQL for close expression c's books from its files, when they are its books: the version of the month's

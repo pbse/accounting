@@ -670,6 +670,13 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 				out["scope"] = state.scope.ID
 			}
 		}
+		// A file accepted for a month whose books come from a live ledger is a supplement, reconciled to those books.
+		if found && accepted != nil && accepted.Current {
+			if out["supplement"], err = fileSupplement(r.Context(), db, org, name, accepted.ID, id); err != nil {
+				problem(w, 503, "The file's checks are unavailable.")
+				return
+			}
+		}
 		jsonReply(w, 200, out)
 	})
 	// A reviewer accepts a file's reading as the client's books for its month, on the reading, attestation and map they
