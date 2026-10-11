@@ -62,9 +62,6 @@ func Prepare(in Input) (Workpaper, error) {
 	if in.Method != Method {
 		return fail("Choose the payroll summary method.")
 	}
-	if !in.ApprovedConfirmed || !in.NotBookedConfirmed {
-		return fail("Confirm the summary is the provider's final, approved payroll for these pay dates, and that the ledger shows its bank debits in the clearing account with this payroll not yet recorded.")
-	}
 	if !ledger.ValidCurrency(in.Currency) {
 		return fail("Use the client's home currency as a three-letter code with two decimals, such as USD or CAD.")
 	}

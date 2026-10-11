@@ -214,7 +214,7 @@ func standingApprove(ctx context.Context, db *sql.DB, closeID, paperID string) (
 	if state != "pending" || paper.Revises != "" || len(paper.Questions) > 0 || kind == "prepaid" && len(paper.Proposal) > 0 && string(paper.Proposal) != "null" {
 		return false, nil
 	}
-	if _, status, _ := decideReview(ctx, tx, closeID, paperID, by, "approved", "Standing approval #"+grant+standingNote, digest, reviewID, false); status != 0 {
+	if _, status, _ := decideReview(ctx, tx, closeID, paperID, by, "approved", "Standing approval #"+grant+standingNote, digest, reviewID, false, nil); status != 0 {
 		return false, nil
 	}
 	return true, tx.Commit()

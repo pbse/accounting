@@ -427,6 +427,13 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			failure = err.Error()
 			break
 		}
+		// A payroll draft carries the checks its reviewer confirms beside: duplicates, an entry already booked, and the
+		// clearing account's debits against the provider's.
+		if p.Kind == "payroll" {
+			if bodies[i], err = CheckPayroll(ctx, tx, closeID, period, p.Revises, bodies[i]); err != nil {
+				return false, err
+			}
+		}
 		if err = CheckProcedureMethod(ctx, tx, closeID, p.Kind, bodies[i]); err != nil {
 			failure = err.Error()
 			break

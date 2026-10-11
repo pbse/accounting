@@ -53,7 +53,11 @@ func validDecision(decision, note string) bool {
 	return (decision == "approved" || decision == "changes_requested") && len(note) > 0 && len(note) <= 2000
 }
 
-func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, decision, note, expectedDigest, expectedReview string, bulk bool) (string, int, string) {
+// payrollAttestations are the two confirmations a payroll recording is approved with, as a person gives them; no other
+// approval (bulk, standing, a posting's) stands in for them.
+var payrollAttestations = []string{"final_approved_summary", "not_already_booked"}
+
+func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, decision, note, expectedDigest, expectedReview string, bulk bool, attestations []string) (string, int, string) {
 	if !validDecision(decision, note) {
 		return "", 422, decisionMessage
 	}
@@ -71,8 +75,9 @@ func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, deci
 		return "", 409, "This workpaper or its review changed. Reload the review before deciding."
 	}
 	var paper struct {
-		Sources  []preparation.Source `json:"sources"`
-		Blockers []string             `json:"blockers"`
+		Sources  []preparation.Source       `json:"sources"`
+		Blockers []string                   `json:"blockers"`
+		Checks   []preparation.PayrollCheck `json:"checks"`
 	}
 	if json.Unmarshal(raw, &paper) != nil {
 		return "", 500, "Invalid saved workpaper."
@@ -130,8 +135,29 @@ func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, deci
 			return "", 409, issue
 		}
 	}
+	// A payroll recording is approved only with both confirmations, given by the person approving, against the exact
+	// summary and ledger evidence the draft cites; a draft saved before its checks were run is prepared again first.
+	var attested any
+	if decision == "approved" && kind == "payroll" {
+		for _, a := range payrollAttestations {
+			if !slices.Contains(attestations, a) {
+				return "", 409, "Approve a payroll recording by confirming both that the summary is the provider's final, approved payroll for its pay dates and that this payroll is not already booked."
+			}
+		}
+		if paper.Checks == nil {
+			return "", 409, "This payroll draft was saved before its duplicate and ledger checks were run. Prepare it again, then review."
+		}
+		evidence := map[string]preparation.Source{}
+		for _, s := range paper.Sources {
+			if s.Role == "support" || s.Role == "ledger" {
+				evidence[s.Role] = s
+			}
+		}
+		raw, _ := json.Marshal(map[string]any{"confirmed": payrollAttestations, "summary": evidence["support"], "ledger": evidence["ledger"]})
+		attested = string(raw)
+	}
 	var id string
-	if err = tx.QueryRowContext(ctx, `INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, paperID, digest, decision, note, actor).Scan(&id); err != nil {
+	if err = tx.QueryRowContext(ctx, `INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor,attestations) VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text`, paperID, digest, decision, note, actor, attested).Scan(&id); err != nil {
 		return "", 503, "Review save could not be confirmed. Reload history before retrying."
 	}
 	return id, 0, ""
@@ -219,6 +245,8 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 			Note             string `json:"note"`
 			Digest           string `json:"digest"`
 			ExpectedReviewID string `json:"expected_review_id"`
+			// Attestations are the confirmations the decision gives; a payroll recording needs both of payrollAttestations.
+			Attestations []string `json:"attestations"`
 		}
 		if !decode(w, r, &input) {
 			return
@@ -238,7 +266,7 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		id, status, message := decideReview(r.Context(), tx, closeID, r.PathValue("paper"), actor, input.Decision, input.Note, input.Digest, input.ExpectedReviewID, false)
+		id, status, message := decideReview(r.Context(), tx, closeID, r.PathValue("paper"), actor, input.Decision, input.Note, input.Digest, input.ExpectedReviewID, false, input.Attestations)
 		if status != 0 {
 			problem(w, status, message)
 			return
@@ -314,7 +342,7 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 				if err != nil {
 					return "", 404, "Close not found or no longer accessible."
 				}
-				id, status, message := decideReview(r.Context(), tx, closeID, item.WorkpaperID, actor, "approved", input.Note, item.Digest, item.ExpectedReviewID, true)
+				id, status, message := decideReview(r.Context(), tx, closeID, item.WorkpaperID, actor, "approved", input.Note, item.Digest, item.ExpectedReviewID, true, nil)
 				if status == 0 && tx.Commit() != nil {
 					return "", 503, "Review save could not be confirmed. Reload history before retrying."
 				}
