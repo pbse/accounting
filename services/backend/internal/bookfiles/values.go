@@ -161,7 +161,7 @@ func cellAmount(c Cell, style NumberStyle) (Amount, error) {
 		places = max(places-exponent, 0)
 	}
 	value, cents := scaled(value, places, style.Scale)
-	return Amount{Value: value, Cents: cents}, nil
+	return Amount{Value: value, Cents: cents, Mark: c.Mark}, nil
 }
 
 // symbolCurrencies are the currencies each mark can stand for.

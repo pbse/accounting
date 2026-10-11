@@ -1,6 +1,7 @@
 package bookfiles
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"math/big"
@@ -362,6 +363,7 @@ func coveredFrom(lines []Line, i int) int {
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
 	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}}
+	localNoted := false
 	// The month-end balance is what a Trial Balance is read for: a layout naming no column for it reads nothing, rather
 	// than every account as zero.
 	meanings := map[Meaning]bool{}
@@ -468,7 +470,13 @@ func (l Layout) Read(t Table) Reading {
 					line.Rounded = append(line.Rounded, meaning)
 				}
 				// A currency written beside an amount must be the Trial Balance's: books in two currencies never add up.
-				if l.Currency != "" && a.Mark != "" && !MarkAgrees(a.Mark, l.Currency) {
+				// A workbook amount formatted in the local currency names none: it is said, to be confirmed, once.
+				if a.Mark == LocalCurrency {
+					if !localNoted {
+						localNoted = true
+						reading.Notes = append(reading.Notes, fmt.Sprintf("%s and others are formatted in the workbook's local currency, which the file does not name: confirm it is %s", c.Ref, cmp.Or(l.Currency, "the Trial Balance's currency")))
+					}
+				} else if l.Currency != "" && a.Mark != "" && !MarkAgrees(a.Mark, l.Currency) {
 					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is marked in another currency than %s", c.Ref, c.Value, l.Currency))
 				}
 				// A Dr or Cr marker says the side itself, whichever column the amount sits in: its value is then already

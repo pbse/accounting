@@ -40,7 +40,14 @@ type Cell struct {
 	// another cell, whose text it repeats (Excel stores it once).
 	Formula string `json:"formula,omitempty"`
 	Shared  bool   `json:"shared,omitempty"`
+	// Mark is the currency a workbook's number format shows beside the number ("€", "USD"), or LocalCurrency for a
+	// format that shows the workbook's local currency without naming it.
+	Mark string `json:"mark,omitempty"`
 }
+
+// LocalCurrency marks a number formatted in the local currency of whoever opens the workbook (Excel's built-in currency
+// and accounting formats), which the file does not name.
+const LocalCurrency = "¤"
 
 // Row is one row with at least one cell.
 type Row struct {

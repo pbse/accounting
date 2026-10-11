@@ -700,3 +700,30 @@ func TestATotalOfSignedColumns(t *testing.T) {
 		t.Fatalf("signed columns and their total: %+v", reading)
 	}
 }
+
+// A workbook amount's currency is the one its number format shows: a euro format in a dollar Trial Balance is a
+// problem, a local-currency format a note to confirm.
+func TestAWorkbookAmountsCurrencyIsItsFormats(t *testing.T) {
+	for code, want := range map[string]string{`[$€-407] #,##0.00`: "€", `"USD" #,##0`: "USD", `\£#,##0.00`: "£", `[Red]#,##0;[$-409]0`: "", `#,##0.00 "Dr"`: "", `_-$* #,##0.00_-`: "$"} {
+		if got := formatMark(code); got != want {
+			t.Fatalf("%s: %q, not %q", code, got, want)
+		}
+	}
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	file, err := Read("tb.xlsx", workbook(t, map[string]string{
+		"xl/workbook.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/styles.xml":              `<styleSheet ` + main + `><numFmts count="1"><numFmt numFmtId="164" formatCode="[$€-407] #,##0.00"/></numFmts><cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="164"/><xf numFmtId="7"/></cellXfs></styleSheet>`,
+		"xl/worksheets/sheet1.xml": `<worksheet ` + main + `><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Account</t></is></c><c r="B1" t="inlineStr"><is><t>Debit</t></is></c><c r="C1" t="inlineStr"><is><t>Credit</t></is></c></row>` +
+			`<row r="2"><c r="A2" t="inlineStr"><is><t>Cash</t></is></c><c r="B2" s="1"><v>100</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>Capital</t></is></c><c r="C3" s="2"><v>100</v></c></row></sheetData></worksheet>`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, _ := ProposeLayout(file.Tables[0])
+	layout.Currency = "USD"
+	reading := layout.Read(file.Tables[0])
+	if len(reading.Problems) != 1 || !strings.Contains(reading.Problems[0], "B2") || len(reading.Notes) == 0 || !strings.Contains(strings.Join(reading.Notes, " "), "local currency") {
+		t.Fatalf("currencies by format: %+v", reading)
+	}
+}
