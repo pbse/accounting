@@ -1199,12 +1199,111 @@ aside.assistant {
   gap: var(--space-12);
 }
 .ks-composer.foot {
-  position: sticky;
-  bottom: var(--space-20);
   width: var(--composer-width);
   max-width: 100%;
-  margin: var(--space-24) auto 0;
+}
+/* The agent's own section: the composer on a band of its own at the foot of the page. The page scrolls above the band,
+   so the composer never sits over a row, a control or a dialog. Hide folds the band to one line on that page only. */
+.app-shell:has(> .app-main > .ks-agentbar) {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+}
+.app-shell .app-main:has(> .ks-agentbar) {
+  flex: 1 1 0;
+  align-self: stretch;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.app-main:has(> .ks-agentbar) > .ks-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.app-shell .ks-agentbar {
+  flex: none;
+  position: relative;
   z-index: 5;
+  display: flex;
+  justify-content: center;
+  margin: 0;
+  padding: var(--space-14) var(--space-32) var(--space-16);
+  border-radius: 0;
+  background: var(--surface-side);
+  box-shadow: none;
+  border-top: 1px solid var(--line);
+}
+.app-shell .ks-agentbar.hidden {
+  padding: var(--space-6) var(--space-32);
+}
+.ks-agentbar.hidden .ks-composer {
+  display: none;
+}
+.app-shell .ks-hide {
+  position: absolute;
+  top: var(--space-14);
+  right: var(--space-24);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 28px;
+  min-height: 0;
+  padding: 0 var(--space-10);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  box-shadow: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.app-shell .ks-hide:hover,
+.app-shell .ks-show:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.ks-hide svg {
+  transform: rotate(90deg);
+}
+/* Where the box would reach the Hide control, Hide sits above the box instead. */
+@media (max-width: 1100px) {
+  .app-shell .ks-agentbar:not(.hidden) {
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-6);
+  }
+  .app-shell .ks-hide {
+    position: static;
+    order: -1;
+    align-self: flex-end;
+  }
+}
+.app-shell .ks-show {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  height: 30px;
+  min-height: 0;
+  padding: 0 var(--space-10) 0 var(--space-6);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: none;
+  box-shadow: none;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.ks-show-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--ring);
 }
 .ks-composer-note {
   margin: 0;
@@ -1215,12 +1314,8 @@ aside.assistant {
   font-size: 13px;
   color: var(--ink-2);
 }
-/* The page's content ends above the composer, so nothing hides under it. */
-.app-shell .app-main:has(> .ks-composer.foot) .page {
-  padding-bottom: 150px;
-}
 /* The page's own composer gives way to the drawer's while the drawer is open. */
-body.assistant-open .ks-composer.foot {
+body.assistant-open .app-shell .ks-agentbar {
   display: none;
 }
 .app-shell .ks-box {
@@ -1463,7 +1558,15 @@ aside.assistant .ks-box textarea {
   }
   .ks-composer.foot {
     width: auto;
-    bottom: var(--space-12);
+  }
+  .app-shell .ks-agentbar {
+    padding: var(--space-10) var(--space-16) var(--space-14);
+  }
+  .app-shell .ks-agentbar:not(.hidden) {
+    align-items: stretch;
+  }
+  .app-shell .ks-agentbar.hidden {
+    padding: var(--space-6) var(--space-16);
   }
 }
 @media (prefers-reduced-motion: reduce) {

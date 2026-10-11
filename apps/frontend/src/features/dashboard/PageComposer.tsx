@@ -2,10 +2,82 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Icon } from "@close/ui/components/Icon";
 import { workspaceQuery } from "../../data/queries";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { askAssistant, nextReview, starterCommands, starters } from "./assistantStore";
 import { openPalette } from "./CommandPalette";
 import { parseCommand, runCommand, type Ask } from "./commands";
+
+// The agent's own section at the foot of every page but Home: the composer, unchanged, on a band of its own below the
+// page, so the page scrolls above it and it never covers a row. Hide folds the band to one line on this page only
+// (remembered for the browser tab); Show, or "/" typed outside a field, brings it back. The composer stays mounted while
+// folded, so a draft is kept.
+export function ComposerBand({ closeId, executive }: { closeId: string; executive: boolean }) {
+  const { pathname } = useLocation();
+  const key = `composer-hidden:${pathname}`;
+  // Read after the first render, so the server's page and the browser's first render agree.
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => setHidden(folded(key)), [key]);
+  const show = (focus: boolean) => {
+    setHidden(false);
+    remember(key, false);
+    if (focus) requestAnimationFrame(() => document.getElementById("page-composer")?.focus());
+  };
+  useEffect(() => {
+    if (!hidden) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey || target?.closest("input, textarea, select, [contenteditable]")) return;
+      event.preventDefault();
+      show(true);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
+  return (
+    <section className={hidden ? "ks-agentbar hidden" : "ks-agentbar"} aria-label={hidden ? "The agent, hidden on this page" : "The agent"}>
+      <PageComposer closeId={closeId} executive={executive} />
+      {hidden ? (
+        <button type="button" className="ks-show" onClick={() => show(true)}>
+          <span className="ks-show-mark">
+            <Icon name="agent" size={14} />
+          </span>
+          Show the agent
+          <kbd className="ks-kbd">/</kbd>
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="ks-hide"
+          title="Hide the agent on this page"
+          onClick={() => {
+            setHidden(true);
+            remember(key, true);
+          }}
+        >
+          Hide
+          <Icon name="chevron" size={14} />
+        </button>
+      )}
+    </section>
+  );
+}
+
+// Whether the band is folded on a page, kept for the browser tab; storage that cannot be read leaves it shown.
+function folded(key: string) {
+  try {
+    return sessionStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+function remember(key: string, hidden: boolean) {
+  try {
+    if (hidden) sessionStorage.setItem(key, "1");
+    else sessionStorage.removeItem(key);
+  } catch {
+    /* not remembered */
+  }
+}
 
 // The composer at the foot of every page but Home (docs/design-system.md, Composer): a box with room for sentences
 // and three controls, the plus (the asks the agent answers here), the scope, and send. What is sent opens the agent
