@@ -202,6 +202,58 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	}
 	actor.Permissions = []string{"workpapers:review"}
 	call("/v1/closes/procedures", map[string]any{}, 403)
+	// A learned rule holds back new guidance only while it is its own scope's active version: the firm's learned rule does
+	// not stop a client's own override, a retired one does not stop guidance, and an earlier version can be restored.
+	publishAccrual := func(client string, body map[string]any, want int) string {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/procedures?impact_kind=accrual&client_entity="+neturl.QueryEscape(client), nil)
+		r = r.WithContext(auth.WithActor(r.Context(), actor))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		var scope struct {
+			PreviousID   string `json:"previous_id"`
+			ImpactDigest string `json:"impact_digest"`
+		}
+		json.Unmarshal(w.Body.Bytes(), &scope)
+		in := map[string]any{"client_entity": client, "kind": "accrual", "previous_id": scope.PreviousID, "impact_digest": scope.ImpactDigest, "reason": "Accountant decision", "confirmed": true}
+		for k, v := range body {
+			in[k] = v
+		}
+		var out struct {
+			ID string `json:"id"`
+		}
+		json.Unmarshal(call("/v1/closes/procedures", in, want), &out)
+		return out.ID
+	}
+	learned := func(client string, enabled bool) {
+		t.Helper()
+		if _, e := db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor,method) VALUES($1,$2,'accrual','Learned accrual rule',$3,'Activated from review','fixture','fixed_incurred_v1')`, org, client, enabled); e != nil {
+			t.Fatal(e)
+		}
+	}
+	guidance := map[string]any{"instructions": "Accrue recurring services from the latest invoice.", "enabled": true}
+	actor.Permissions = []string{"clients:all", "workpapers:review", "procedures:manage"}
+	learned("", true)
+	publishAccrual("Same client", guidance, 200)
+	learned("Same client", true)
+	publishAccrual("Same client", guidance, 409)
+	learned("Same client", false)
+	firstGuidance := publishAccrual("Same client", guidance, 200)
+	publishAccrual("Same client", map[string]any{"instructions": "Accrue only from signed contracts.", "enabled": true}, 200)
+	// An earlier guidance version comes back as a new version, as it was; a learned rule, or another scope's version, does not.
+	var learnedID string
+	if e := db.QueryRow(`SELECT id::text FROM procedure_versions WHERE organization_id=$1 AND client_entity='Same client' AND kind='accrual' AND method<>'' AND enabled ORDER BY id LIMIT 1`, org).Scan(&learnedID); e != nil {
+		t.Fatal(e)
+	}
+	publishAccrual("Same client", map[string]any{"restore_id": learnedID}, 422)
+	publishAccrual("", map[string]any{"restore_id": firstGuidance}, 422)
+	restored := publishAccrual("Same client", map[string]any{"restore_id": firstGuidance}, 200)
+	var method, instructions string
+	var enabled bool
+	if e := db.QueryRow(`SELECT method,instructions,enabled FROM procedure_versions WHERE id::text=$1`, restored).Scan(&method, &instructions, &enabled); e != nil || method != "" || instructions != "Accrue recurring services from the latest invoice." || !enabled {
+		t.Fatalf("an earlier version comes back as a new version, as it was: %s %q %v %v", method, instructions, enabled, e)
+	}
+
 	// A version that takes effect from a later month leaves earlier months on the version in effect for them; the
 	// impact preview counts only the closes it will apply to.
 	actor.Permissions = []string{"clients:all", "workpapers:review", "procedures:manage"}

@@ -774,6 +774,13 @@ func registerImportAcceptance(mux *http.ServeMux, db *sql.DB) {
 				out["scope"] = state.scope.ID
 			}
 		}
+		// A file for a month that accepted another says how the month changed since.
+		if found {
+			if out["accepted_books"], err = monthChanged(r.Context(), db, org, name, id, state); err != nil {
+				problem(w, 503, "The file's checks are unavailable.")
+				return
+			}
+		}
 		// A file accepted for a month whose books come from a live ledger is a supplement, reconciled to those books.
 		if found && accepted != nil && accepted.Current {
 			if out["supplement"], err = fileSupplement(r.Context(), db, org, name, accepted.ID, id); err != nil {
