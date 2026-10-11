@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "ledgers": [
+    {
+      "id": "quickbooks_online",
+      "name": "QuickBooks Online",
+      "connector": "quickbooks",
+      "exports": {
+        "trial_balance": "Reports, then search for Trial Balance. Set the report period to the month, run it, then Export to Excel.",
+        "general_ledger": "Reports, then General Ledger. Set the report period to the month, run it, then Export to Excel.",
+        "open_items": "Reports, then A/R Aging Detail and A/P Aging Detail as of the month-end. Export each to Excel."
+      },
+      "journal_import": "QuickBooks Online journal entry import (CSV)",
+      "native_gaps": []
+    },
+    {
+      "id": "xero",
+      "name": "Xero",
+      "connector": "xero",
+      "exports": {
+        "trial_balance": "Accounting, then Reports, then Trial Balance. Choose the month-end date, Update, then Export to Excel.",
+        "general_ledger": "Accounting, then Reports, then Account Transactions. Choose the month, Update, then Export to Excel.",
+        "open_items": "Accounting, then Reports, then Aged Receivables Detail and Aged Payables Detail as of the month-end. Export each to Excel."
+      },
+      "journal_import": "Xero manual journal import (CSV)",
+      "native_gaps": []
+    },
+    {
+      "id": "quickbooks_desktop",
+      "name": "QuickBooks Desktop",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Reports, then Accountant & Taxes, then Trial Balance. Set the dates to the month, then Excel, then Create New Worksheet.",
+        "general_ledger": "Reports, then Accountant & Taxes, then General Ledger. Set the dates to the month, then Excel.",
+        "open_items": "Reports, then Customers & Receivables and Vendors & Payables, then the Open Invoices and Unpaid Bills Detail reports as of the month-end, then Excel."
+      },
+      "journal_import": "IIF journal import",
+      "native_gaps": ["Reads and writes need a file each month; there is no cloud connection."]
+    },
+    {
+      "id": "sage_intacct",
+      "name": "Sage Intacct",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Reports, then Trial Balances (General Ledger). Choose the month-end period and the entity, run it, then Export to Excel.",
+        "general_ledger": "Reports, then General Ledger. Choose the month, run it, then Export to Excel.",
+        "open_items": "Accounts Receivable and Accounts Payable, then the Aging reports as of the month-end, then Export to Excel."
+      },
+      "journal_import": "Sage Intacct journal entry import (CSV)",
+      "native_gaps": []
+    },
+    {
+      "id": "netsuite",
+      "name": "NetSuite",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Reports, then Financial, then Trial Balance. Choose the month-end period and subsidiary, then Export to Excel.",
+        "general_ledger": "Reports, then Financial, then General Ledger. Choose the month and subsidiary, then Export to Excel.",
+        "open_items": "Reports, then Customers and Vendors, then A/R Aging Detail and A/P Aging Detail as of the month-end, then Export to Excel."
+      },
+      "journal_import": "NetSuite journal entry CSV import",
+      "native_gaps": []
+    },
+    {
+      "id": "business_central",
+      "name": "Microsoft Dynamics 365 Business Central",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Search for Trial Balance. Set the date filter to the month, then Open in Excel.",
+        "general_ledger": "Search for General Ledger Entries. Filter the posting date to the month, then Open in Excel.",
+        "open_items": "Search for Aged Accounts Receivable and Aged Accounts Payable. Set the aged-as-of date to the month-end, then Open in Excel."
+      },
+      "journal_import": "General journal import from Excel",
+      "native_gaps": []
+    },
+    {
+      "id": "sage_50",
+      "name": "Sage 50",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Reports & Forms, then General Ledger, then General Ledger Trial Balance. Choose the month-end, then Excel.",
+        "general_ledger": "Reports & Forms, then General Ledger, then General Ledger. Choose the month, then Excel.",
+        "open_items": "Reports & Forms, then Accounts Receivable and Accounts Payable, then the Aged Receivables and Aged Payables reports as of the month-end, then Excel."
+      },
+      "journal_import": "General journal import (CSV)",
+      "native_gaps": []
+    },
+    {
+      "id": "myob",
+      "name": "MYOB",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Reports, then Accounts, then Trial Balance. Choose the month, then Export to Excel.",
+        "general_ledger": "Reports, then Accounts, then General Ledger [Detail]. Choose the month, then Export to Excel.",
+        "open_items": "Reports, then Sales and Purchases, then the Aged Receivables and Aged Payables detail reports as of the month-end, then Export to Excel."
+      },
+      "journal_import": "MYOB general journal import (TXT)",
+      "native_gaps": []
+    },
+    {
+      "id": "zoho_books",
+      "name": "Zoho Books",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Reports, then Accountant, then Trial Balance. Choose the month-end, then Export as XLSX.",
+        "general_ledger": "Reports, then Accountant, then General Ledger. Choose the month, then Export as XLSX.",
+        "open_items": "Reports, then Receivables and Payables, then AR Aging Details and AP Aging Details as of the month-end, then Export as XLSX."
+      },
+      "journal_import": "Zoho Books manual journal import (CSV)",
+      "native_gaps": []
+    },
+    {
+      "id": "freshbooks",
+      "name": "FreshBooks",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Reports, then Trial Balance. Choose the month-end, then Export to Excel.",
+        "general_ledger": "Reports, then General Ledger. Choose the month, then Export to Excel.",
+        "open_items": "Reports, then Accounts Aging and the unpaid bills list as of the month-end, then Export."
+      },
+      "journal_import": "",
+      "native_gaps": ["No journal import; entries are made by hand from the instructions."]
+    },
+    {
+      "id": "wave",
+      "name": "Wave",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Reports, then Trial Balance. Choose the month-end, then Export to CSV.",
+        "general_ledger": "Reports, then Account Transactions (General Ledger). Choose the month, then Export to CSV.",
+        "open_items": "Reports, then Aged Receivables and Aged Payables as of the month-end, then Export to CSV."
+      },
+      "journal_import": "",
+      "native_gaps": ["No journal import; entries are made by hand from the instructions."]
+    },
+    {
+      "id": "tally",
+      "name": "Tally",
+      "connector": "",
+      "exports": {
+        "trial_balance": "Gateway, then Display More Reports, then Trial Balance. Set the period to the month (Alt+F2), then Export (Alt+E) to Excel.",
+        "general_ledger": "Gateway, then Display More Reports, then Account Books, then Ledger. Choose the ledger and month, then Export (Alt+E) to Excel.",
+        "open_items": "Gateway, then Display More Reports, then Statements of Accounts, then Outstandings, then Receivables and Payables as of the month-end, then Export (Alt+E)."
+      },
+      "journal_import": "Tally XML journal voucher import",
+      "native_gaps": []
+    }
+  ]
+}

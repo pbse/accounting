@@ -10,6 +10,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { Mark } from "@close/ui/components/Mark";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { FirmEnrollment } from "./Enterprise";
+import { LedgerPicker, type LedgerChoice } from "./Roster";
 import { workspaceRequest } from "./workspace";
 import type { Close } from "./WorkpaperView";
 
@@ -18,9 +19,9 @@ export function isEnrollmentError(message: string) {
 }
 
 type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean; owner?: string }[] };
-// connections are the states of each client's QuickBooks and Xero connections, and of its newest labeled exports (labeled, or stale once one is replaced),
+// connections are the states of each client's QuickBooks and Xero connections, of its newest labeled exports (labeled, or stale once one is replaced), and the ledger it keeps, as recorded,
 // by client identity (its own name in lower case).
-type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string; exports?: string }>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
+type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string; exports?: string; ledger?: string }>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
 type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean; owner?: string };
 // key is the client's own name in lower case (a confirmed alias resolves to it), as its connections are kept.
 type ClientRow = { key: string; entity: string; active?: boolean; since?: string; owner?: string | null; closes: ListedClose[]; owed: string[] };
@@ -94,6 +95,8 @@ export default function ClosesList() {
   const shown = [...rows.values()]
     .filter((r) => !needle || r.entity.toLowerCase().includes(needle) || r.closes.some((c) => found.has(c.id) || c.entity.toLowerCase().includes(needle) || c.period === needle) || r.owed.includes(needle))
     .sort((a, b) => Number(b.active ?? true) - Number(a.active ?? true) || a.entity.localeCompare(b.entity));
+  // The ledger a client being added keeps, recorded with it (docs/books-sources.md, Ledger catalog and onboarding).
+  const [ledger, setLedger] = useState<LedgerChoice>({ ledger: "unknown", other_name: "" });
   async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -101,8 +104,9 @@ export default function ClosesList() {
     setBusy("add");
     setError("");
     try {
-      await workspaceRequest("/roster", { entity, active: true, since: String(data.get("since") || thisMonth), due_days: null, owner: null, reason: "", rev: "" });
+      await workspaceRequest("/roster", { entity, active: true, since: String(data.get("since") || thisMonth), due_days: null, owner: null, reason: "", rev: "", ledger: ledger.ledger, other_name: ledger.other_name.trim() });
       setAdding(false);
+      setLedger({ ledger: "unknown", other_name: "" });
       reread();
     } catch (e) {
       // The dialog stays, with what was typed, so the person corrects it rather than starting over.
@@ -141,6 +145,8 @@ export default function ClosesList() {
       .filter(([, state]) => state)
       .map(([ledger, state]) => (state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`));
     if (states?.exports) ledgers.push(states.exports === "stale" ? "Exports · one replaced" : "Exports");
+    // With nothing connected, the ledger the client keeps, as recorded.
+    if (!ledgers.length && states?.ledger) return `${states.ledger} · not connected`;
     return ledgers.length ? ledgers.join(", ") : "—";
   };
   // What is up next, in the order the work comes (as the client's page says it): the oldest month open with its due
@@ -207,11 +213,12 @@ export default function ClosesList() {
             First month to close
             <input name="since" type="month" defaultValue={thisMonth} />
           </label>
+          <LedgerPicker value={ledger} onChange={setLedger} />
           <DialogActions>
             <button type="button" disabled={busy === "add"} onClick={() => setAdding(false)}>
               Cancel
             </button>
-            <button className="primary" disabled={busy === "add"}>
+            <button className="primary" disabled={busy === "add" || (ledger.ledger === "other" && !ledger.other_name.trim())}>
               {busy === "add" ? "Adding…" : "Add client"}
             </button>
           </DialogActions>

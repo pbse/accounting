@@ -202,6 +202,44 @@ function MonthBooks() {
   );
 }
 
+// Which ledgers firms record their clients keeping, by catalog entry or the name given for another, and whether each
+// has a native connector switched on: the counts that inform which connector to build next. No client is named.
+type LedgerCount = { ledger: string; name: string; clients: number; firms: number; connector: string; connected: boolean };
+
+function Ledgers() {
+  const counts = useResource<{ ledgers: LedgerCount[] }>("/v1/admin/ledgers");
+  return (
+    <section>
+      <h2>Ledgers firms keep</h2>
+      {counts.error && <p role="alert">{counts.error}</p>}
+      {!counts.data && !counts.error && <p role="status">Loading…</p>}
+      {counts.data && !counts.data.ledgers.length && <p>No firm has recorded a client's ledger yet.</p>}
+      {counts.data && counts.data.ledgers.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>Ledger</th>
+              <th>Clients</th>
+              <th>Firms</th>
+              <th>Connector</th>
+            </tr>
+          </thead>
+          <tbody>
+            {counts.data.ledgers.map((l) => (
+              <tr key={`${l.ledger}:${l.name}`}>
+                <td>{l.ledger === "other" ? `${l.name} (named by firms)` : l.name}</td>
+                <td>{l.clients}</td>
+                <td>{l.firms}</td>
+                <td>{!l.connector ? "None" : l.connected ? `${l.connector}, on` : `${l.connector}, off`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 export function Connections() {
   const f = useFilters(["provider", "state", "firm"]);
   const connections = useResource<{ counts: Count[]; connections: Connection[]; has_more: boolean; next_offset: number }>(`/v1/admin/connections${f.query}`);
@@ -268,6 +306,7 @@ export function Connections() {
         </>
       )}
       <MonthBooks />
+      <Ledgers />
     </>
   );
 }

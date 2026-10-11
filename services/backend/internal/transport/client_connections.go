@@ -29,6 +29,11 @@ func registerClientConnections(mux *http.ServeMux, db *sql.DB) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer cancel()
+		// Connecting, finishing a sign-in and confirming the company each make or complete a connection, which the
+		// firm's QuickBooks switch allows; one already made keeps reading.
+		if (in.Action == "connect" || in.Action == "callback" || in.Action == "confirm") && connectorOff(ctx, w, db, a.Organization, "quickbooks", "QuickBooks") {
+			return
+		}
 		// A new connection is made under the client's own name, whichever connection the request names.
 		held := name
 		var err error
@@ -52,6 +57,11 @@ func registerClientConnections(mux *http.ServeMux, db *sql.DB) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer cancel()
+		// Connecting, finishing a sign-in and choosing the organisation each make or complete a connection, which the
+		// firm's Xero switch allows.
+		if (in.Action == "connect" || in.Action == "callback" || in.Action == "confirm") && connectorOff(ctx, w, db, a.Organization, "xero", "Xero") {
+			return
+		}
 		held := name
 		var err error
 		if in.Action != "connect" {

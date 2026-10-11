@@ -7,7 +7,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { clientPath } from "../../data/clients";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, monthShort, useDates, useToday } from "../../data/time";
-import { ClientForm, type Person, type RosterEntry } from "../closes/Roster";
+import { ClientForm, LedgerPicker, type CatalogLedger, type LedgerChoice, type Person, type RosterEntry } from "../closes/Roster";
 import { PostingCard, QuickBooksAction, type ProductionGrant } from "./QuickBooksBooks";
 import { XeroAction, XeroPostingCard, type XeroGrant } from "./XeroBooks";
 import { workspaceRequest } from "../closes/workspace";
@@ -75,6 +75,10 @@ type ClientRead = {
   owed: Owed[];
   quickbooks: QuickBooksConnection[];
   xero: XeroConnection[];
+  // The ledger the client keeps, as recorded: not how its books arrive.
+  ledger: KeptLedger | null;
+  // Which connectors may be connected for the firm: one switched off is not offered.
+  connectable?: { quickbooks: boolean; xero: boolean };
   // Which ledgers this server can connect, and the client's posting grants.
   quickbooks_setup?: { sandbox: boolean; production: boolean };
   xero_configured?: boolean;
@@ -92,6 +96,8 @@ type ClientRead = {
   people?: Person[];
   people_unavailable?: string;
 };
+// The ledger a client keeps, as recorded when it was added or corrected on its page, with its catalog entry.
+type KeptLedger = { id: string; ledger: string; other_name?: string; entry?: CatalogLedger; reason: string; actor: string; at: string };
 // A request to the client that it has not finished answering, from any month the reader can open.
 type AskedOfClient = {
   id: string;
@@ -136,7 +142,7 @@ export default function ClientPage() {
   const client = read.data;
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "profile">("");
+  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "profile" | "ledger">("");
   const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   if (!client) {
     if (read.isPending) return <p role="status">Opening the client…</p>;
@@ -202,6 +208,23 @@ export default function ClientPage() {
               ? `${name} is signed off through ${monthName(signed[0].period)}.`
               : `${name} has no months yet.`;
   const ledger = books(client, dates.dayMonth);
+  // The ledger the client keeps, as recorded, said first on the Books card; a ledger the firm cannot connect is served by
+  // files once they reach the firm, with its export steps.
+  const kept = client.ledger;
+  // Recorded under the client's own name, so only by a reader who sees the client whole.
+  const canRecord = client.whole && (client.can_manage || client.can_connect);
+  const keptName = kept?.entry?.name ?? (kept?.ledger === "other" ? kept.other_name : "");
+  const keeps = !kept
+    ? canRecord
+      ? "Its ledger is not recorded yet. "
+      : ""
+    : kept.ledger === "unknown"
+      ? "Its ledger is not known yet. "
+      : `Keeps its books in ${keptName}.${
+          !client.quickbooks.length && !client.xero.length && (!kept.entry || !kept.entry.connected)
+            ? ` ${keptName} has no connector here${kept.entry?.connector ? " switched on for your firm" : ""}: once file import reaches your firm, its books come from its exports.`
+            : ""
+        } `;
   const roster = client.roster;
   const dueDays = roster?.due_days ?? client.template?.due_days ?? null;
   const context = !client.whole
@@ -304,8 +327,13 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              client.can_connect || ledger.month ? (
+              client.can_connect || ledger.month || canRecord ? (
                 <>
+                  {canRecord && (
+                    <button type="button" onClick={() => setDialog("ledger")}>
+                      Ledger
+                    </button>
+                  )}
                   {ledger.month && (
                     <Link className="button" to={`/dashboard/closes/${ledger.month.id}?tab=evidence#historical-exports`}>
                       {monthShort(ledger.month.period)}’s exports
@@ -317,6 +345,7 @@ export default function ClientPage() {
               ) : undefined
             }
           >
+            {keeps}
             {ledger.line}
           </Card>
           {postingConnections(client.quickbooks.filter((c) => c.environment === "production").map((c) => c.id), client.production_grants).map((id) => (
@@ -529,6 +558,16 @@ export default function ClientPage() {
           <ProfileForm key={client.profiles[0]?.id ?? "none"} client={name} profile={profile} history={client.profiles} first={months.length ? months[months.length - 1].period : undefined} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
         </Dialog>
       )}
+      {canRecord && (
+        <Dialog
+          open={dialog === "ledger"}
+          onClose={() => setDialog("")}
+          title={`${name}’s ledger`}
+          description="Which product the client keeps its books in. It is not how a month’s books arrive, and changing it changes no books."
+        >
+          <LedgerForm key={kept?.id ?? "none"} client={name} kept={kept} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
+        </Dialog>
+      )}
       {client.can_manage && (
         <Dialog
           open={dialog === "schedule"}
@@ -551,6 +590,12 @@ function monthState(m: Month, today: string) {
   if (m.signed_off) return <span className="pill">Signed off</span>;
   if (m.due_on && m.due_on < today) return <span className="pill danger">Overdue</span>;
   return <span className="pill neutral">Open</span>;
+}
+
+// connectOffer is how the client's books can arrive: the connectors switched on for the firm, else a month's exports.
+function connectOffer(client: ClientRead) {
+  const on = [client.connectable?.quickbooks !== false && "QuickBooks", client.connectable?.xero !== false && "Xero"].filter(Boolean);
+  return on.length ? `Connect ${on.join(" or ")}, or label the exports a month uses.` : "Label the exports a month uses.";
 }
 
 // How the client's books arrive, from its connections (the QuickBooks one its books are read from first, then Xero),
@@ -636,7 +681,7 @@ function books(client: ClientRead, day: (value: string) => string) {
   }
   return {
     short: newest?.books?.source === "exports" ? "books from exports" : "no ledger connected",
-    line: `No ledger is connected. Connect QuickBooks or Xero, or label the exports a month uses.${latest}`,
+    line: `No ledger is connected. ${connectOffer(client)}${latest}`,
     chip: ["Not connected", "pill neutral"] as [string, string],
     attention: false,
     month: undefined as ClientRead["months"][number] | undefined,
@@ -751,4 +796,62 @@ function ProfileForm({ client, profile, history, first, onSaved, onCancel }: { c
 // postingConnections is each connection a posting card is for: every listed connection, and any a grant is still on.
 function postingConnections(connections: string[], grants?: { connection_id: string }[]) {
   return [...new Set([...connections, ...(grants ?? []).map((g) => g.connection_id)])];
+}
+
+// LedgerForm records or corrects the ledger a client keeps, with a reason, against the ledger as read; a catalog entry
+// shows the steps that export its books.
+function LedgerForm({ client, kept, onSaved, onCancel }: { client: string; kept: KeptLedger | null; onSaved: () => void; onCancel: () => void }) {
+  const [choice, setChoice] = useState<LedgerChoice>({ ledger: kept?.ledger ?? "unknown", other_name: kept?.other_name ?? "" });
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const catalog = useQuery(workspaceQuery<{ ledgers: CatalogLedger[] }>("/ledgers"));
+  const entry = catalog.data?.ledgers.find((l) => l.id === choice.ledger);
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest("/client/ledger", { client, ledger: choice.ledger, other_name: choice.other_name.trim(), reason: reason.trim(), rev: kept?.id ?? "" });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The ledger could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form onSubmit={save}>
+      <fieldset disabled={busy}>
+        <LedgerPicker value={choice} onChange={setChoice} />
+        {entry && (
+          <details>
+            <summary>How {entry.name} exports its books</summary>
+            <p>
+              <b>Trial Balance:</b> {entry.exports.trial_balance}
+            </p>
+            <p>
+              <b>General Ledger:</b> {entry.exports.general_ledger}
+            </p>
+            <p>
+              <b>Open items:</b> {entry.exports.open_items}
+            </p>
+          </details>
+        )}
+        <label>
+          Reason
+          <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+        </label>
+        {error && <p role="alert">{error}</p>}
+        <DialogActions>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" disabled={busy || !reason.trim() || (choice.ledger === "other" && !choice.other_name.trim())}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </DialogActions>
+      </fieldset>
+    </form>
+  );
 }

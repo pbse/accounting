@@ -18,6 +18,7 @@ func registerAdminOperations(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("GET /v1/admin/jobs", read(adminJobs))
 	mux.HandleFunc("GET /v1/admin/connections", read(adminConnections))
 	mux.HandleFunc("GET /v1/admin/books", read(adminBooks))
+	mux.HandleFunc("GET /v1/admin/ledgers", read(adminLedgers))
 }
 
 // adminFilters reads a list's short filters; a value longer than 100 characters answers 422 and returns false.

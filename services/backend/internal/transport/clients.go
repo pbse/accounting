@@ -265,7 +265,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		// A member who can open only some of the client's months, under another of its names, sees those alone: nothing
 		// of the client as a whole, its connections and posting grants included, and no action on it.
 		if !whole {
-			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["profiles"], out["basis"] = nil, nil, true, []any{}, []any{}, nil, []any{}, nil
+			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["profiles"], out["basis"], out["ledger"] = nil, nil, true, []any{}, []any{}, nil, []any{}, nil, nil
 			out["production_grants"], out["xero_grants"], out["can_grant"], out["can_connect"], out["can_manage"] = []any{}, []any{}, false, false, false
 			jsonReply(w, 200, out)
 			return
@@ -370,6 +370,20 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["profile"] = profile
+		// The ledger the client keeps, as recorded, and its catalog entry.
+		// Which connectors may be connected for the firm, so the page offers only those.
+		connectable := map[string]bool{}
+		for _, connector := range []string{"quickbooks", "xero"} {
+			if connectable[connector], err = connectorOn(ctx, tx, org, connector); err != nil {
+				problem(w, 503, "The client is unavailable.")
+				return
+			}
+		}
+		out["connectable"] = connectable
+		if out["ledger"], err = readClientLedger(ctx, tx, org, name); err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
 		if out["profiles"], err = profileHistory(ctx, tx, org, name); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return

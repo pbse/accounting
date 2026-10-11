@@ -17,6 +17,8 @@ type Client = {
   quickbooks_setup?: { sandbox: boolean; production: boolean };
   production_grants?: ProductionGrant[];
   profile: { currency: string } | null;
+  // Which connectors may be connected for the firm: QuickBooks switched off offers no new connection.
+  connectable?: { quickbooks: boolean; xero: boolean };
 };
 
 const path = (name: string, what = "quickbooks") => `/client/${what}?name=${encodeURIComponent(name)}`;
@@ -37,14 +39,16 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [agreed, setAgreed] = useState(false);
-  const setup = client.quickbooks_setup ?? { sandbox: false, production: false };
+  // Switched off for the firm, QuickBooks makes no new connection; those already made are still managed.
+  const off = client.connectable?.quickbooks === false;
+  const setup = off ? { sandbox: false, production: false } : (client.quickbooks_setup ?? { sandbox: false, production: false });
   // The environments this server can connect that the client has no connection in yet: each can be added beside the other.
   const missing = (["production", "sandbox"] as const).filter((env) => setup[env] && !client.quickbooks.some((c) => c.environment === env));
   const [environment, setEnvironment] = useState<"production" | "sandbox">(setup.production || !setup.sandbox ? "production" : "sandbox");
   // Intuit's answer opens the step that finishes it.
   useEffect(() => {
-    if (returned) setOpen("finish");
-  }, [returned?.id]);
+    if (returned && !off) setOpen("finish");
+  }, [returned?.id, off]);
   if (!client.can_connect) return null;
   const close = () => {
     setOpen("");
@@ -83,7 +87,7 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
       {primary}
     </DialogActions>
   );
-  const button = pending ? (
+  const button = pending && !off ? (
     <button type="button" className="button" onClick={() => setOpen("confirm")}>
       Confirm the company
     </button>
@@ -91,7 +95,7 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
     <button type="button" className="button" onClick={() => setOpen("manage")}>
       Manage QuickBooks
     </button>
-  ) : (
+  ) : off ? null : (
     <button type="button" className="button" onClick={() => setOpen("connect")}>
       Connect QuickBooks
     </button>
@@ -192,6 +196,9 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
             {c.error && <p role="alert">{c.error}</p>}
             {c.state === "authorizing" && <p className="note">The sign-in was not finished. Disconnect it to start again.</p>}
             {c.state === "reconnect_required" && <p className="note">Intuit no longer accepts this sign-in. Disconnect it, then connect again.</p>}
+            {off && c.state === "pending_confirmation" && (
+              <p className="note">QuickBooks is switched off for your firm, so this company cannot be confirmed. Disconnect it.</p>
+            )}
             <div className="setting-actions">
               {c.state === "active" && (
                 <button type="button" disabled={busy || !agreed} onClick={() => void act("refresh", c)}>

@@ -7,7 +7,17 @@ import { money, workspaceRequest } from "../closes/workspace";
 
 export type XeroConnection = { id: string; state: string; tenant_name: string; tenants: { tenantId: string; tenantName: string }[]; error: string };
 export type XeroGrant = { id: string; connection_id: string; tenant_id: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string };
-type Client = { entity: string; can_connect: boolean; can_grant: boolean; xero: XeroConnection[]; xero_configured?: boolean; xero_grants?: XeroGrant[]; profile: { currency: string } | null };
+type Client = {
+  entity: string;
+  can_connect: boolean;
+  can_grant: boolean;
+  xero: XeroConnection[];
+  xero_configured?: boolean;
+  xero_grants?: XeroGrant[];
+  profile: { currency: string } | null;
+  // Which connectors may be connected for the firm: Xero switched off offers no new connection.
+  connectable?: { quickbooks: boolean; xero: boolean };
+};
 
 // The connection a step acts on: the one Xero just returned for, else the one waiting for its organisation, else the
 // first (under the client's own name first, as the read lists them).
@@ -35,9 +45,11 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
   const [choosing, setChoosing] = useState<XeroConnection | undefined>(undefined);
   const chosen = choosing ?? (c?.state === "choose_tenant" ? c : undefined);
   // Xero's answer opens the step that finishes it.
+  // Switched off for the firm, Xero makes no new connection; those already made are still managed.
+  const off = client.connectable?.xero === false;
   useEffect(() => {
-    if (returned) setOpen("finish");
-  }, [returned]);
+    if (returned && !off) setOpen("finish");
+  }, [returned, off]);
   if (!client.can_connect) return null;
   const close = () => {
     setOpen("");
@@ -78,7 +90,7 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
     </DialogActions>
   );
   const button =
-    c?.state === "choose_tenant" ? (
+    c?.state === "choose_tenant" && !off ? (
       <button type="button" onClick={() => setOpen("choose")}>
         Choose the organisation
       </button>
@@ -86,7 +98,7 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
       <button type="button" onClick={() => setOpen("manage")}>
         Manage Xero
       </button>
-    ) : (
+    ) : off ? null : (
       <button type="button" onClick={() => setOpen("connect")}>
         Connect Xero
       </button>
@@ -158,8 +170,9 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
               {x.error && <p role="alert">{x.error}</p>}
               {x.state === "authorizing" && <p className="note">The sign-in was not finished. Disconnect it to start again.</p>}
               {x.state === "reconnect_required" && <p className="note">Xero no longer accepts this sign-in. Disconnect it, then connect again.</p>}
+              {off && x.state === "choose_tenant" && <p className="note">Xero is switched off for your firm, so this sign-in cannot be finished. Disconnect it.</p>}
               <div className="setting-actions">
-                {x.state === "choose_tenant" && (
+                {x.state === "choose_tenant" && !off && (
                   <button
                     type="button"
                     onClick={() => {
