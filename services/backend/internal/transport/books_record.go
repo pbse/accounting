@@ -19,7 +19,10 @@ import (
 // running, which found every version agreeing (books_record_gate): a version written since, or any version while that
 // run found a disagreement, is read from its capture as before. So a reader switched on reads exactly the books it read before, from the record.
 
-// recordReaders are the readers staff have switched onto the record: month_books is the month-end books the management
+// recordReaderNames are the readers that can be switched onto the record.
+var recordReaderNames = []string{"month_books"}
+
+// recordReader says whether reader name is switched onto the record: month_books is the month-end books the management
 // pack, the cash-flow import and budget against actual read. An unversioned build ("dev", a local one) never reads the
 // record: its code changes under the one name, so no parity run can vouch for it.
 func recordReader(name string) bool {
@@ -46,15 +49,14 @@ func recordBooks(ctx context.Context, q rowReader, m *fluxMonth) (*books, error)
 	return readLedgerMonth(m)
 }
 
-// storedMonthBooks is the books stored for capture id of source, when its version is verified: first read by a parity
-// run no later than the latest run of this build, while that run found every version agreeing (books_record_gate, read
-// in the same query). They are rebuilt as readLedgerMonth made them, or the reason the readers refused the capture.
+// storedMonthBooks is the books stored for capture id of source, when its version is verified: read by the latest
+// parity run of this build, which found every version it read agreeing (books_record_gate, read in the same query). They are rebuilt as readLedgerMonth made them, or the reason the readers refused the capture.
 func storedMonthBooks(ctx context.Context, q rowReader, source, id string) (*books, bool, error) {
 	var v booksVersion
 	var accounts, balances, activity, cashFlow, uncounted []byte
 	var unreadable string
 	err := q.QueryRowContext(ctx, `SELECT currency,typed,accounts,balances,activity,cash_flow,uncounted,unreadable FROM books_versions
- WHERE source=$1 AND source_id=$2 AND first_checked_run<=(SELECT g.run FROM books_record_gate g WHERE g.build=$3 AND g.clean) ORDER BY id DESC LIMIT 1`,
+ WHERE source=$1 AND source_id=$2 AND verified_run=(SELECT g.run FROM books_record_gate g WHERE g.build=$3 AND g.clean) ORDER BY id DESC LIMIT 1`,
 		source, id, wf.CodeVersion).Scan(&v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &unreadable)
 	if err == sql.ErrNoRows {
 		return nil, false, nil

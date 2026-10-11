@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -500,23 +501,26 @@ func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		adminFirmProblem(w, err, "books read")
 		return
 	}
-	readers := []string{}
+	// The readers switched on, and any name set that is not a reader (ignored, so said).
+	readers, ignored := []string{}, []string{}
 	for _, name := range strings.Split(os.Getenv("BOOKS_RECORD_READERS"), ",") {
-		if name = strings.TrimSpace(name); name != "" {
+		if name = strings.TrimSpace(name); slices.Contains(recordReaderNames, name) {
 			readers = append(readers, name)
+		} else if name != "" {
+			ignored = append(ignored, name)
 		}
 	}
 	// The gate the readers switched on read by: this build's latest run, whether it found every version agreeing, and
-	// how many versions it verified (those first read by a run no later than it).
+	// how many versions it verified (those it read).
 	var gate json.RawMessage
 	if err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('run',g.run,'through',g.through,'clean',g.clean,'finished_at',g.finished_at,
- 'verified',(SELECT count(*) FROM books_versions v WHERE v.first_checked_run<=g.run)) FROM books_record_gate g WHERE g.build=$1),'null'::jsonb)`, wf.CodeVersion).Scan(&gate)
+ 'verified',(SELECT count(*) FROM books_versions v WHERE v.verified_run=g.run)) FROM books_record_gate g WHERE g.build=$1),'null'::jsonb)`, wf.CodeVersion).Scan(&gate)
 	}); err != nil {
 		adminFirmProblem(w, err, "books read")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity, "build": wf.CodeVersion, "readers": readers, "gate": gate})
+	jsonReply(w, 200, map[string]any{"captures": captures, "versions": captures - pending, "pending": pending, "unreadable": unreadable, "parity": parity, "build": wf.CodeVersion, "readers": readers, "ignored_readers": ignored, "gate": gate})
 }
 
 // runBooksParity checks every version against its capture and records the run, so staff read its outcome.
@@ -527,9 +531,9 @@ func runBooksParity(ctx context.Context, db *sql.DB) error {
 	if err := db.QueryRowContext(ctx, `INSERT INTO books_parity(pending,through,build) SELECT (SELECT count(*) FROM books_pending),COALESCE((SELECT max(id) FROM books_versions),0),$1 RETURNING id,through`, wf.CodeVersion).Scan(&run, &through); err != nil {
 		return err
 	}
-	// Each version it reads records the first run that read it: only those are ever verified by a run.
+	// Each version it reads is marked as read by this run; only those it read can be verified by it.
 	checked, mismatched, err := booksParityRun(ctx, db, "", through, func(ids []int64) error {
-		_, err := db.ExecContext(ctx, `UPDATE books_versions SET first_checked_run=$1 WHERE id=ANY($2) AND first_checked_run IS NULL`, run, ids)
+		_, err := db.ExecContext(ctx, `UPDATE books_versions SET reading_run=$1 WHERE id=ANY($2)`, run, ids)
 		return err
 	})
 	if err != nil {
@@ -552,6 +556,13 @@ func runBooksParity(ctx context.Context, db *sql.DB) error {
 	if _, err = tx.ExecContext(ctx, `INSERT INTO books_record_gate(build,run,through,clean,finished_at) VALUES($1,$2,$3,$4,now())
  ON CONFLICT (build) DO UPDATE SET run=EXCLUDED.run,through=EXCLUDED.through,clean=EXCLUDED.clean,finished_at=EXCLUDED.finished_at WHERE books_record_gate.run<EXCLUDED.run`, wf.CodeVersion, run, through, len(mismatched) == 0); err != nil {
 		return err
+	}
+	// A clean run that became its build's gate verifies the versions it read, and only those; one that finished after
+	// a later run took the gate verifies nothing.
+	if len(mismatched) == 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE books_versions SET verified_run=$1 WHERE reading_run=$1 AND EXISTS(SELECT 1 FROM books_record_gate g WHERE g.build=$2 AND g.run=$1)`, run, wf.CodeVersion); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

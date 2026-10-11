@@ -72,7 +72,7 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO books_record_gate(build,run,through,clean,finished_at) VALUES($1,1,(SELECT max(id) FROM books_versions),true,now())
  ON CONFLICT (build) DO UPDATE SET run=1,through=EXCLUDED.through,clean=true`, wf.CodeVersion)
 	must(err)
-	_, err = db.Exec(`UPDATE books_versions SET first_checked_run=1 WHERE organization_id=$1`, org)
+	_, err = db.Exec(`UPDATE books_versions SET reading_run=1,verified_run=1 WHERE organization_id=$1`, org)
 	must(err)
 	month := func(id string) *fluxMonth {
 		t.Helper()
@@ -108,13 +108,16 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	if b, err := recordBooks(t.Context(), db, month(readable)); err != nil || b.Balances["1"].FloatString(2) != "1.00" {
 		t.Fatalf("read from the record: %v %v", b, err)
 	}
-	// A version no run has read yet is read from its capture, whatever its id.
-	_, err = db.Exec(`UPDATE books_versions SET first_checked_run=NULL WHERE source='quickbooks' AND source_id=$1`, readable)
-	must(err)
-	if b, err := recordBooks(t.Context(), db, month(readable)); err != nil || b.Balances["1"].FloatString(2) != "1500.25" {
-		t.Fatalf("an unread version, the capture: %v %v", b, err)
+	// A version the gate's run did not verify, whether no run has or another run did (an earlier one, or one that
+	// overlapped it), is read from its capture.
+	for _, other := range []any{nil, 0, 2} {
+		_, err = db.Exec(`UPDATE books_versions SET verified_run=$2 WHERE source='quickbooks' AND source_id=$1`, readable, other)
+		must(err)
+		if b, err := recordBooks(t.Context(), db, month(readable)); err != nil || b.Balances["1"].FloatString(2) != "1500.25" {
+			t.Fatalf("a version verified by run %v, not the gate's, the capture: %v %v", other, b, err)
+		}
 	}
-	_, err = db.Exec(`UPDATE books_versions SET first_checked_run=1 WHERE source='quickbooks' AND source_id=$1`, readable)
+	_, err = db.Exec(`UPDATE books_versions SET verified_run=1 WHERE source='quickbooks' AND source_id=$1`, readable)
 	must(err)
 	// Switched off, the capture is read.
 	t.Setenv("BOOKS_RECORD_READERS", "")

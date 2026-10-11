@@ -153,6 +153,7 @@ type BooksRecord = {
   // build and whether its latest run agreed: a reader switched on reads the record only while it is clean.
   readers: string[];
   gate: { run: number; through: number; clean: boolean; finished_at: string; verified: number } | null;
+  ignored_readers: string[];
   parity: { checked: number; pending: number; since: number; waiting: number; mismatched: string[]; finished_at: string; build: string; later: { started_at: string; stalled: boolean } | null } | null;
 };
 
@@ -214,6 +215,7 @@ function MonthBooks() {
                           ? "this build's latest run had no versions to read"
                           : "this build's latest run found a disagreement"
                     }.`}
+            {books.data.ignored_readers.length > 0 && ` Not readers, so ignored: ${books.data.ignored_readers.join(", ")}.`}
           </p>
         </>
       )}

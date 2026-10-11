@@ -163,11 +163,14 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if !gated {
 		t.Fatal("the latest run decides its build's gate")
 	}
-	// Every version it read records the first run that read it.
-	var unread int
-	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1 AND first_checked_run IS NULL`, org).Scan(&unread))
-	if unread != 0 {
-		t.Fatalf("each version read by the run is marked: %d unmarked", unread)
+	// Every version it read is marked as read by it, and verified by it only as a clean gate.
+	var clean bool
+	var reading, verified int
+	must(db.QueryRow(`SELECT clean FROM books_record_gate WHERE build=$1`, wf.CodeVersion).Scan(&clean))
+	must(db.QueryRow(`SELECT count(*) FILTER (WHERE reading_run=(SELECT max(id) FROM books_parity)),count(*) FILTER (WHERE verified_run=(SELECT max(id) FROM books_parity))
+ FROM books_versions WHERE organization_id=$1`, org).Scan(&reading, &verified))
+	if reading != 5 || verified != map[bool]int{true: 5, false: 0}[clean] {
+		t.Fatalf("each version read by the run is marked, and verified only by a clean gate: %d read, %d verified, clean %v", reading, verified, clean)
 	}
 	// Once the readers would read a capture differently, the parity check names it.
 	_, err = db.Exec(`UPDATE quickbooks_snapshots SET payload=jsonb_set(payload,'{reports,TrialBalance,Rows,Row,0,ColData,1,value}','"1500.26"') WHERE id=$1`, readable)
@@ -265,8 +268,9 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if parity := read["parity"].(map[string]any); parity["waiting"].(float64) < 1 || parity["build"] != read["build"] || parity["later"] != nil {
 		t.Fatalf("the gate counts captures without a version, for the build that ran it: %v", parity)
 	}
-	// The readers' gate names this build's latest run and how many versions it verified, those it read.
-	if gate := read["gate"].(map[string]any); gate["run"] == nil || gate["verified"].(float64) < 1 {
+	// The readers' gate names this build's latest run and how many versions it verified: those it read, when it found
+	// them all agreeing; none when it found a disagreement.
+	if gate := read["gate"].(map[string]any); gate["run"] == nil || (gate["clean"] == true) != (gate["verified"].(float64) > 0) {
 		t.Fatalf("the readers' gate: %v", gate)
 	}
 	// A later run that never finished (it failed) leaves the gate uncleared, said so.
