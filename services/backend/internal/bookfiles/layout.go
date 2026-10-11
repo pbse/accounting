@@ -54,8 +54,8 @@ type Layout struct {
 	// nothing of it (a memo, last year's figures); amounts in any other column the layout does not name are a problem.
 	Ignored        []int `json:"ignored,omitempty"`
 	IgnoredColumns []int `json:"ignored_columns,omitempty"`
-	// Headers are the header row's text over each column the layout names, kept when it is confirmed: a later file is
-	// read with the same layout without a question only when its headers say the same.
+	// Headers are the header row's text over each column the layout names or leaves out, kept when it is confirmed: a
+	// later file is read with the same layout without a question only when its headers say the same.
 	Headers map[int]string `json:"headers,omitempty"`
 }
 
