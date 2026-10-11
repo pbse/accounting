@@ -103,3 +103,77 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 		t.Fatalf("switched off again: %v", connected)
 	}
 }
+
+// A client's ledger is recorded when it is added and corrected on its page, under its own name, by whoever manages the
+// roster or connects ledgers, against the ledger they read; Clients and the client's page show it.
+func TestAClientsLedgerIsRecordedAndCorrected(t *testing.T) {
+	db := adminDB(t)
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	t.Setenv("LEDGER_CONNECTORS", "")
+	org := "org_ClientLedger" + rand.Text()
+	must := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(`INSERT INTO organizations(id,name) VALUES($1,'Client ledger firm')`, org)
+	asFirm(t, map[string]string{"user_a": "partner", "user_c": "reviewer"}, org)
+	must(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture'),($1,'user_c',true,'Synthetic','fixture')`, org)
+	must(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Maple Trading Ltd',true,'Synthetic','fixture')`, org)
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM client_ledgers WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`,
+			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	})
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(subject string, permissions []string, method, path string, body any, want int) map[string]any {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s %s: %d %s", subject, method, path, w.Code, w.Body.String())
+		}
+		var out map[string]any
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	admin := []string{"workpapers:review", "clients:all", "members:manage"}
+	// Added with its ledger: Maple keeps Sage Intacct, whose connector this build has not, so it is served by files with
+	// its export steps.
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Maple Co", "active": true, "since": "2026-08", "due_days": nil, "owner": nil, "reason": "", "rev": "", "ledger": "made_up", "other_name": ""}, 422)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Maple Co", "active": true, "since": "2026-08", "due_days": nil, "owner": nil, "reason": "", "rev": "", "ledger": "sage_intacct", "other_name": ""}, 200)
+	read := call("user_a", admin, "GET", "/v1/closes/client?name=Maple%20Co", nil, 200)
+	ledger := read["ledger"].(map[string]any)
+	entry := ledger["entry"].(map[string]any)
+	if ledger["ledger"] != "sage_intacct" || entry["name"] != "Sage Intacct" || entry["connected"] != false || entry["exports"].(map[string]any)["trial_balance"] == "" || ledger["reason"] != "Recorded when the client was added" {
+		t.Fatalf("the client's ledger: %v", ledger)
+	}
+	if books := call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)["connections"].(map[string]any)["maple co"].(map[string]any); books["ledger"] != "Sage Intacct" {
+		t.Fatalf("Clients shows the ledger: %v", books)
+	}
+	// Corrected on its page, under its own name: by an alias it is still Maple; a stale read, a member assigned to the
+	// alias alone, and one who neither manages the roster nor connects ledgers are refused.
+	must(`INSERT INTO client_closes(organization_id,entity,period,created_at) VALUES($1,'Maple Trading Ltd','2026-09',now()-interval '1 day')`, org)
+	must(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Maple Co','maple trading ltd','fixture',now()-interval '2 days')`, org)
+	correct := map[string]any{"client": "Maple Trading Ltd", "ledger": "other", "other_name": "Acumatica", "reason": "The client moved off Sage last year", "rev": ledger["id"]}
+	call("user_e", []string{"workpapers:review"}, "POST", "/v1/closes/client/ledger", correct, 403)
+	call("user_c", []string{"workpapers:review", "integrations:manage"}, "POST", "/v1/closes/client/ledger", correct, 403)
+	stale := map[string]any{"client": "Maple Co", "ledger": "xero", "other_name": "", "reason": "Wrong", "rev": ""}
+	call("user_a", admin, "POST", "/v1/closes/client/ledger", stale, 409)
+	saved := call("user_a", admin, "POST", "/v1/closes/client/ledger", correct, 200)["ledger"].(map[string]any)
+	if saved["ledger"] != "other" || saved["other_name"] != "Acumatica" || saved["entry"] != nil {
+		t.Fatalf("a named other ledger: %v", saved)
+	}
+	call("user_a", admin, "POST", "/v1/closes/client/ledger", map[string]any{"client": "Maple Co", "ledger": "other", "other_name": "", "reason": "No name", "rev": saved["id"]}, 422)
+	// Not known yet is a choice too, and says nothing on Clients.
+	call("user_a", admin, "POST", "/v1/closes/client/ledger", map[string]any{"client": "Maple Co", "ledger": "unknown", "other_name": "", "reason": "Checking with the client", "rev": saved["id"]}, 200)
+	if books, ok := call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)["connections"].(map[string]any)["maple co"].(map[string]any); ok && books["ledger"] != nil {
+		t.Fatalf("not known yet says nothing: %v", books)
+	}
+	call("user_a", admin, "POST", "/v1/closes/client/ledger", map[string]any{"client": "Nobody Ltd", "ledger": "xero", "reason": "x", "rev": ""}, 404)
+}

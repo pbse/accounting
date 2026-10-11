@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"close.local/backend/internal/ledgers"
 )
@@ -50,6 +53,51 @@ func firmCatalog(ctx context.Context, q interface {
 	return out, nil
 }
 
+// clientLedger is the ledger recorded for a client, under any of its names: a catalog entry as the firm reads it (with
+// whether its connector is switched on for the firm, and its export steps), another ledger by the name given, or not
+// known yet; with who recorded it, when and why.
+type clientLedger struct {
+	ID        string        `json:"id"`
+	Ledger    string        `json:"ledger"`
+	OtherName string        `json:"other_name,omitempty"`
+	Entry     *catalogEntry `json:"entry,omitempty"`
+	Reason    string        `json:"reason"`
+	Actor     string        `json:"actor"`
+	At        time.Time     `json:"at"`
+}
+
+// readClientLedger is client name's ledger in firm org, or nil when none is recorded.
+func readClientLedger(ctx context.Context, q interface {
+	rowReader
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, org, name string) (*clientLedger, error) {
+	var l clientLedger
+	err := q.QueryRowContext(ctx, `SELECT id::text,ledger,other_name,reason,actor,created_at FROM current_client_ledgers WHERE organization_id=$1 AND client=client_identity($1,$2)`, org, name).
+		Scan(&l.ID, &l.Ledger, &l.OtherName, &l.Reason, &l.Actor, &l.At)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := ledgers.Find(l.Ledger); ok {
+		catalog, err := firmCatalog(ctx, q, org)
+		if err != nil {
+			return nil, err
+		}
+		for i := range catalog {
+			if catalog[i].ID == l.Ledger {
+				l.Entry = &catalog[i]
+			}
+		}
+	}
+	return &l, nil
+}
+
+// canRecordLedger is a member who may record or correct a client's ledger: one who manages the roster (who adds
+// clients), or one who may connect its ledgers.
+func canRecordLedger(r *http.Request) bool { return canManageRoster(r) || canConnect(r) }
+
 func registerLedgers(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/ledgers", func(w http.ResponseWriter, r *http.Request) {
 		catalog, err := firmCatalog(r.Context(), db, organization(r))
@@ -58,6 +106,86 @@ func registerLedgers(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		jsonReply(w, 200, map[string]any{"ledgers": catalog})
+	})
+	// A client's ledger is recorded or corrected on its page: which product it keeps, not how a month's books arrive.
+	// Correcting it changes the export steps and catalog entry shown, and no books.
+	mux.HandleFunc("POST /v1/closes/client/ledger", func(w http.ResponseWriter, r *http.Request) {
+		if !canRecordLedger(r) {
+			problem(w, 403, "Recording a client's ledger requires members:manage with clients:all, or integrations:manage.")
+			return
+		}
+		var in struct {
+			Client    string `json:"client"`
+			Ledger    string `json:"ledger"`
+			OtherName string `json:"other_name"`
+			Reason    string `json:"reason"`
+			Rev       string `json:"rev"` // the ledger as read, "" for none
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		in.Client, in.OtherName, in.Reason = strings.TrimSpace(in.Client), strings.TrimSpace(in.OtherName), strings.TrimSpace(in.Reason)
+		if in.Client == "" || utf8.RuneCountInString(in.Client) > 200 {
+			problem(w, 422, "Name the client.")
+			return
+		}
+		if !ledgers.Valid(in.Ledger, in.OtherName) {
+			problem(w, 422, "Choose the client's ledger from the list, name another one (up to 120 characters), or say it is not known yet.")
+			return
+		}
+		if in.Reason == "" || utf8.RuneCountInString(in.Reason) > 500 {
+			problem(w, 422, "Say why (1–500 characters).")
+			return
+		}
+		ctx := r.Context()
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			problem(w, 503, "The client's ledger is unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		org := organization(r)
+		name, known, allowed, whole, err := clientNamed(ctx, tx, org, in.Client, firmAccess(r), subject(r))
+		if err != nil {
+			problem(w, 503, "The client's ledger is unavailable.")
+			return
+		}
+		if !known || !allowed {
+			problem(w, 404, "Client not found.")
+			return
+		}
+		if !whole {
+			problem(w, 403, "A client's ledger is recorded under its own name; ask for access to "+name+".")
+			return
+		}
+		// One change at a time, against the ledger the person read.
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('client_ledgers:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
+			problem(w, 503, "The client's ledger is unavailable.")
+			return
+		}
+		var current sql.NullInt64
+		if err = tx.QueryRowContext(ctx, `SELECT max(id) FROM current_client_ledgers WHERE organization_id=$1 AND client=client_identity($1,$2)`, org, name).Scan(&current); err != nil {
+			problem(w, 503, "The client's ledger is unavailable.")
+			return
+		}
+		read := ""
+		if current.Valid {
+			read = strconv.FormatInt(current.Int64, 10)
+		}
+		if in.Rev != read {
+			problem(w, 409, "The client's ledger changed since you read it. Review it and try again.")
+			return
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO client_ledgers(organization_id,client_entity,ledger,other_name,reason,actor) VALUES($1,$2,$3,$4,$5,$6)`, org, name, in.Ledger, in.OtherName, in.Reason, reviewerName(r)); err != nil {
+			problem(w, 503, "The client's ledger could not be saved.")
+			return
+		}
+		saved, err := readClientLedger(ctx, tx, org, name)
+		if err != nil || tx.Commit() != nil {
+			problem(w, 503, "The client's ledger could not be saved.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"ledger": saved})
 	})
 }
 

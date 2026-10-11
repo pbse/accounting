@@ -274,7 +274,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		out["requests"] = requests
 		// A member who can open only some of the client's months, under another of its names, sees those alone.
 		if !whole {
-			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"] = nil, nil, true, []any{}, []any{}, nil, nil
+			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"], out["ledger"] = nil, nil, true, []any{}, []any{}, nil, nil, nil
 			jsonReply(w, 200, out)
 			return
 		}
@@ -343,6 +343,11 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["profile"] = profile
+		// The ledger the client keeps, as recorded, and its catalog entry.
+		if out["ledger"], err = readClientLedger(ctx, tx, org, name); err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
 		// The approved basis, as a close reads it for the name it was opened under: the client's own override, else the
 		// firm's. An override approved under a name since confirmed as the client's alias is that name's months' basis,
 		// so each is listed with the name it was approved under rather than folded into one client-wide value.
