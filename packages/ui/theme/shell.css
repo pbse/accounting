@@ -1070,6 +1070,18 @@ body {
   font-size: 12px;
   padding: 1px 4px;
 }
+/* A file's accounts and their classes (features/clients/AccountMap.tsx): selects at their own width, and room for a
+   chart of accounts before the table scrolls. */
+.ks-preview.ks-accounts {
+  max-height: min(60vh, 520px);
+}
+.ks-accounts select {
+  width: auto;
+}
+.ks-accounts td .pill {
+  display: inline-block;
+  margin-top: 2px;
+}
 .ks-preview tr.header td {
   background: var(--fill);
   font-weight: 600;

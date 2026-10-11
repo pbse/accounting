@@ -855,6 +855,12 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		org, id := organization(r), r.URL.Query().Get("id")
+		// The client's account-map lock comes first, as a confirmation takes it, before the file's row: in one order, so
+		// a deletion and a confirmation never wait on each other.
+		if _, err = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('books_account_maps:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
+			problem(w, 503, "The file could not be deleted.")
+			return
+		}
 		var period, filename, digest string
 		var replaced, retained bool
 		// A file of a month whose close is under legal hold, or kept until a date still to come, is kept with it.
@@ -876,6 +882,11 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		}
 		if retained {
 			problem(w, 409, "This month's close is under legal hold or kept until a date still to come: its files are kept with it.")
+			return
+		}
+		// What only this file's readings named leaves the client's account maps with it.
+		if _, err = tx.ExecContext(r.Context(), `SELECT books_forget_readings($1,$2,ARRAY(SELECT l.id::text FROM books_layouts l WHERE l.import_id::text=$3))`, org, name, id); err != nil {
+			problem(w, 503, "The file could not be deleted.")
 			return
 		}
 		for _, q := range []string{`DELETE FROM books_layouts WHERE import_id::text=$1`, `DELETE FROM books_imports WHERE id::text=$1`} {
@@ -1059,8 +1070,20 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if as.Encoding == "" || as.Delimiter == "" {
 			as = csvChoice{Encoding: file.Encoding, Delimiter: file.Delimiter}
 		}
-		if err = db.QueryRowContext(r.Context(), `INSERT INTO books_layouts(organization_id,client_entity,import_id,layout,reading,reason,actor,encoding,delimiter) VALUES($1,$2,$3::bigint,$4::jsonb,$5::jsonb,$6,$7,$8,$9) RETURNING id::text`,
-			org, name, summary.ID, string(layout), string(read), in.Reason, reviewerName(r), as.Encoding, as.Delimiter).Scan(&id); err != nil {
+		// A layout confirmed takes the client's account-map lock, as a map confirmation does: none is ever saved against
+		// a reading this one replaces while it runs.
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The layout could not be saved.")
+			return
+		}
+		defer tx.Rollback()
+		if _, err = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('books_account_maps:'||$1||':'||client_identity($1,$2)))`, org, name); err != nil {
+			problem(w, 503, "The layout could not be saved.")
+			return
+		}
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO books_layouts(organization_id,client_entity,import_id,layout,reading,reason,actor,encoding,delimiter) VALUES($1,$2,$3::bigint,$4::jsonb,$5::jsonb,$6,$7,$8,$9) RETURNING id::text`,
+			org, name, summary.ID, string(layout), string(read), in.Reason, reviewerName(r), as.Encoding, as.Delimiter).Scan(&id); err != nil || tx.Commit() != nil {
 			problem(w, 503, "The layout could not be saved.")
 			return
 		}
