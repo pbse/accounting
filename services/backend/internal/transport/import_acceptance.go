@@ -290,9 +290,9 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 func rollForward(s fileState) importCheck {
 	from := ""
 	for _, a := range s.reading.Accounts {
-		if a.Opening != "" {
+		if a.Opening != "" || a.OpeningHeld != "" {
 			from = "opening"
-		} else if a.Movement != "" && from == "" {
+		} else if (a.Movement != "" || a.MovementHeld != "") && from == "" {
 			from = "movement"
 		}
 	}
@@ -300,51 +300,63 @@ func rollForward(s fileState) importCheck {
 	if from == "" {
 		return importCheck{}
 	}
-	if s.prior == "" {
-		check.State, check.Detail, check.Holds = "note", "No accepted books for "+monthTitle(previousMonth(s.reading.Period))+" to roll from: the openings are not checked.", ""
-		return check
-	}
-	// A formula's stored result is released by the attestation of a recalculated copy, as for the other amounts.
+	// A formula's stored result is released by the attestation of a recalculated copy, as for the other amounts; an
+	// amount the file does not give exactly is never taken as zero.
 	recalculated := s.scope != nil && s.scope.Recalculated
-	exact := func(a fileAccount, value, held string) (*big.Rat, bool) {
-		v, ok := new(big.Rat).SetString(cmp.Or(value, "0"))
+	usable := func(value, held string) (*big.Rat, string) {
 		if held == "formula" && recalculated {
 			held = ""
 		}
-		if held != "" || !ok {
-			check.State, check.Detail = "holds", "The opening or movement of "+strings.TrimSpace(a.Number+" "+a.Name)+" cannot be read as exact: "+cmp.Or(held, "unreadable")+"."
-			return nil, false
+		v, ok := new(big.Rat).SetString(cmp.Or(value, "0"))
+		switch {
+		case held != "":
+			return nil, held
+		case !ok:
+			return nil, "unreadable"
 		}
-		return v, true
+		return v, ""
 	}
-	opening, differences := map[string]*big.Rat{}, []string{}
+	opening, differences, unread := map[string]*big.Rat{}, []string{}, ""
 	for _, a := range s.reading.Accounts {
-		balance, ok := new(big.Rat).SetString(cmp.Or(a.Balance, "0"))
-		if !ok {
-			check.State, check.Detail = "holds", "The balance of "+strings.TrimSpace(a.Number+" "+a.Name)+" cannot be read."
-			return check
+		name := strings.TrimSpace(a.Number + " " + a.Name)
+		balance, why := usable(a.Balance, "")
+		movement, moved := new(big.Rat), a.Movement != "" || a.MovementHeld != ""
+		if moved && why == "" {
+			movement, why = usable(a.Movement, a.MovementHeld)
 		}
-		movement := new(big.Rat)
-		if a.Movement != "" {
-			if movement, ok = exact(a, a.Movement, a.MovementHeld); !ok {
-				return check
-			}
+		if why != "" {
+			unread = cmp.Or(unread, name+": "+why)
+			continue
 		}
 		if from == "movement" {
 			opening[a.Key] = new(big.Rat).Sub(balance, movement)
 			continue
 		}
-		v, ok := exact(a, a.Opening, a.OpeningHeld)
-		if !ok {
-			return check
+		v, why := usable(a.Opening, a.OpeningHeld)
+		if why != "" {
+			unread = cmp.Or(unread, name+": "+why)
+			continue
 		}
 		opening[a.Key] = v
 		// With both columns, the opening and the month's movement make the month-end balance.
-		if a.Movement != "" {
+		if moved {
 			if sum := new(big.Rat).Add(v, movement); sum.Cmp(balance) != 0 {
-				differences = append(differences, fmt.Sprintf("%s opens at %s and moves by %s, but closes at %s", strings.TrimSpace(a.Number+" "+a.Name), v.FloatString(2), movement.FloatString(2), balance.FloatString(2)))
+				differences = append(differences, fmt.Sprintf("%s opens at %s and moves by %s, but closes at %s", name, v.FloatString(2), movement.FloatString(2), balance.FloatString(2)))
 			}
 		}
+	}
+	// With no accepted prior month the openings are not compared; the file's own arithmetic still is.
+	if s.prior == "" {
+		check.State, check.Detail, check.Holds = "note", "No accepted books for "+monthTitle(previousMonth(s.reading.Period))+" to roll from: the openings are not checked.", ""
+		if len(differences) > 0 {
+			check.State, check.Holds = "holds", "The accounts whose figures do not agree, and the statements built on them."
+			check.Detail = fmt.Sprintf("%d account%s' opening and movement %s not make %s balance: %s.", len(differences), suffix(len(differences)), map[bool]string{true: "does", false: "do"}[len(differences) == 1], map[bool]string{true: "its", false: "their"}[len(differences) == 1], strings.Join(differences, "; "))
+		}
+		return check
+	}
+	if unread != "" {
+		check.State, check.Detail = "holds", "An opening or movement cannot be read as exact, so the month's openings are not compared ("+unread+")."
+		return check
 	}
 	expected := map[string]*big.Rat{}
 	for key, b := range s.priorBalances {

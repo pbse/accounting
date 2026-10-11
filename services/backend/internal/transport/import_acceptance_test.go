@@ -641,17 +641,29 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	}
 	// A formula's opening holds until a recalculated copy is attested; with no prior month, nothing is checked.
 	s.reading.Accounts[0].Balance, s.reading.Accounts[0].OpeningHeld = "1200", "formula"
-	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "cannot be read as exact: formula") {
+	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking: formula") {
 		t.Fatalf("a formula's opening: %+v", c)
 	}
 	s.scope = &importScope{Recalculated: true}
 	if c := rollForward(s); c.State != "passes" {
 		t.Fatalf("a recalculated copy's opening: %+v", c)
 	}
+	// A movement the file does not give exactly is never taken as zero.
+	movement := s.reading.Accounts[2].Movement
+	s.reading.Accounts[2].Movement, s.reading.Accounts[2].MovementHeld = "", "unreadable"
+	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "4000 Sales: unreadable") {
+		t.Fatalf("an unreadable movement: %+v", c)
+	}
+	s.reading.Accounts[2].Movement, s.reading.Accounts[2].MovementHeld = movement, ""
 	s.reading.Accounts[0].OpeningHeld = "rounded"
 	s.prior = ""
 	if c := rollForward(s); c.State != "note" {
 		t.Fatalf("no prior month to roll from: %+v", c)
+	}
+	// With no prior month, the file's own openings and movements must still make its balances.
+	s.reading.Accounts[0].OpeningHeld, s.reading.Accounts[0].Balance = "", "1250"
+	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking opens at 1000.00 and moves by 200.00, but closes at 1250.00") {
+		t.Fatalf("a first month's own arithmetic: %+v", c)
 	}
 	for i := range s.reading.Accounts {
 		s.reading.Accounts[i].Opening = ""
