@@ -203,15 +203,17 @@ function MonthBooks() {
           <p>
             {!books.data.readers.length
               ? "No reader is switched onto the record: every one reads the captures."
-              : books.data.gate?.clean && books.data.gate.verified > 0
-                ? `Reading from the record: ${books.data.readers.join(", ")}, for the ${books.data.gate.verified === 1 ? "version" : `${books.data.gate.verified} versions`} this build's latest run (#${books.data.gate.run}) read and found agreeing; versions written since, from their captures.`
-                : `Switched on: ${books.data.readers.join(", ")}. Still reading the captures: ${
-                    !books.data.gate
-                      ? "no run of this build has finished yet"
-                      : books.data.gate.clean
-                        ? "this build's latest run had no versions to read"
-                        : "this build's latest run found a disagreement"
-                  }.`}
+              : books.data.build === "dev"
+                ? `Switched on: ${books.data.readers.join(", ")}. Still reading the captures: this is an unversioned local build, which no parity run can vouch for.`
+                : books.data.gate?.clean && books.data.gate.verified > 0
+                  ? `Reading from the record: ${books.data.readers.join(", ")}, for the ${books.data.gate.verified === 1 ? "version" : `${books.data.gate.verified} versions`} this build's latest run (#${books.data.gate.run}) read and found agreeing; versions written since, from their captures.`
+                  : `Switched on: ${books.data.readers.join(", ")}. Still reading the captures: ${
+                      !books.data.gate
+                        ? "no run of this build has finished yet"
+                        : books.data.gate.clean
+                          ? "this build's latest run had no versions to read"
+                          : "this build's latest run found a disagreement"
+                    }.`}
           </p>
         </>
       )}

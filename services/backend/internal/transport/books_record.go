@@ -20,8 +20,12 @@ import (
 // run found a disagreement, is read from its capture as before. So a reader switched on reads exactly the books it read before, from the record.
 
 // recordReaders are the readers staff have switched onto the record: month_books is the month-end books the management
-// pack, the cash-flow import and budget against actual read.
+// pack, the cash-flow import and budget against actual read. An unversioned build ("dev", a local one) never reads the
+// record: its code changes under the one name, so no parity run can vouch for it.
 func recordReader(name string) bool {
+	if wf.CodeVersion == "dev" {
+		return false
+	}
 	for _, on := range strings.Split(os.Getenv("BOOKS_RECORD_READERS"), ",") {
 		if strings.TrimSpace(on) == name {
 			return true

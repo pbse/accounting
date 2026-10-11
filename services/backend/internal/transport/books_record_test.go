@@ -30,6 +30,10 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	// A versioned build: an unversioned local one never reads the record.
+	build := wf.CodeVersion
+	wf.CodeVersion = "record-test-" + rand.Text()
+	defer func() { wf.CodeVersion = build }()
 	org := "org_Record" + rand.Text()
 	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Record fixture')`, org)
 	must(err)
@@ -117,6 +121,13 @@ func TestTheMonthBooksAreReadFromTheRecordOnceVerified(t *testing.T) {
 	if b, err := recordBooks(t.Context(), db, month(readable)); err != nil || b.Balances["1"].FloatString(2) != "1500.25" {
 		t.Fatalf("switched off, the capture: %v %v", b, err)
 	}
+	// An unversioned local build never reads the record, whatever its gate says.
+	versioned := wf.CodeVersion
+	wf.CodeVersion = "dev"
+	if recordReader("month_books") {
+		t.Fatal("an unversioned build reads the captures")
+	}
+	wf.CodeVersion = versioned
 	// Switched on, a parity run that found a disagreement verifies nothing: the capture is read.
 	t.Setenv("BOOKS_RECORD_READERS", "month_books")
 	_, err = db.Exec(`UPDATE books_record_gate SET clean=false WHERE build=$1`, wf.CodeVersion)
