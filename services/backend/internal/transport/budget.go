@@ -362,8 +362,8 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client's fiscal year is unavailable.")
 			return
 		}
-		if profile.State == "conflict" {
-			wait("The client's connected ledgers disagree on the fiscal year, so year to date cannot be set.")
+		if profile.Unsettled() {
+			wait(profile.Question() + ", so year to date cannot be set.")
 			return
 		}
 		month, _ := time.Parse("2006-01", period)

@@ -863,7 +863,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 				return true, err
 			}
 			home := ""
-			if profile.State == "detected" {
+			if profile.State == "detected" || profile.State == "confirmed" {
 				home = profile.Currency
 			}
 			rule, e := ProcedureEvidence(persist, finish, closeID, procedure.ID)

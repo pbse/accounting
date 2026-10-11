@@ -16,7 +16,7 @@ import (
 )
 
 // takeoverContent is what a reviewer confirms when taking a client over: the close, the ledger company its books are read
-// from, the firm procedures in force for it (client overrides are its exceptions, the basis among them), who is assigned to
+// from (or, for books that come as files, none, with the confirmed profile), the firm procedures in force for it (client overrides are its exceptions, the basis among them), who is assigned to
 // it, the account scope proposed from this month's capture, and the monthly hand-over. It holds no times.
 func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[string]any, string, []string, error) {
 	var raw []byte
@@ -74,14 +74,56 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 		scope["digest"], scope["items"] = view.Digest, items
 	}
 	content["scope"] = scope
+	// A confirmed profile is part of what is confirmed (kept out of setups without one, so their digests stand), and
+	// lets a client whose books come as files be taken over with no connection.
+	profile, err := preparation.ClientProfile(ctx, tx, closeID)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if profile.State == "confirmed" || profile.State == "differs" {
+		content["profile"] = map[string]any{"currency": profile.Currency, "fiscal_year_start": profile.FiscalStart, "state": profile.State}
+	}
+	// A ledger connected once and since disconnected is not a client whose books come as files: it is reconnected.
+	var disconnected string
+	if len(check.Companies) == 0 {
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT 'QuickBooks' FROM quickbooks_connections q JOIN client_closes c ON c.id::text=$1 WHERE q.organization_id=c.organization_id AND client_identity(q.organization_id,q.client_entity)=client_identity(c.organization_id,c.entity) AND q.state='disconnected' LIMIT 1),
+ (SELECT 'Xero' FROM xero_connections x JOIN client_closes c ON c.id::text=$1 WHERE x.organization_id=c.organization_id AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='disconnected' LIMIT 1),'')`, closeID).Scan(&disconnected)
+		if err != nil {
+			return nil, "", nil, err
+		}
+	}
 	problems := []string{}
 	switch {
+	case len(check.Companies) == 0 && disconnected != "":
+		problems = append(problems, "The client's "+disconnected+" connection was disconnected: reconnect it on the client's page, as the takeover confirms where its books are read from.")
+	case len(check.Companies) == 0 && profile.State == "confirmed":
+		// Books that come as files are read from the month's file: the takeover confirms the file and its confirmed
+		// reading, and waits until one reads cleanly (balanced, with no problem) and has not been replaced.
+		content["books"] = "files"
+		var file, layout sql.NullString
+		err = tx.QueryRowContext(ctx, `SELECT i.id::text,l.id::text FROM books_imports i JOIN client_closes c ON c.id::text=$1
+ JOIN LATERAL (SELECT b.id,b.reading FROM books_layouts b WHERE b.import_id=i.id ORDER BY b.id DESC LIMIT 1) l ON true
+ WHERE i.organization_id=c.organization_id AND client_identity(i.organization_id,i.client_entity)=client_identity(c.organization_id,c.entity) AND i.period=c.period
+  AND NOT EXISTS(SELECT 1 FROM books_imports n WHERE n.replaces=i.id) AND COALESCE((l.reading->>'balanced')::boolean,false) AND COALESCE(jsonb_array_length(l.reading->'problems'),0)=0
+ ORDER BY i.id DESC LIMIT 1`, closeID).Scan(&file, &layout)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, "", nil, err
+		}
+		if file.Valid {
+			content["file"] = map[string]string{"import": file.String, "layout": layout.String}
+		} else {
+			problems = append(problems, "Its books come as files: send this month's Trial Balance on the client's page and confirm how it is read; the takeover waits until it reads cleanly.")
+		}
 	case len(check.Companies) == 0:
-		problems = append(problems, "Connect the client's QuickBooks or Xero company: the takeover confirms the company its books are read from.")
+		problems = append(problems, "Connect the client's QuickBooks or Xero company, or, if its books come as files, confirm its currency and fiscal year on the client's page: the takeover confirms where its books are read from.")
 	case len(check.Companies) > 1:
 		problems = append(problems, "More than one ledger company is connected for this client; disconnect the one its books are not kept in.")
 	case check.Companies[0].State != "active":
 		problems = append(problems, "Reconnect "+check.Companies[0].Provider+": its connection is "+strings.ReplaceAll(check.Companies[0].State, "_", " ")+".")
+	}
+	// A ledger that reports another currency or fiscal year than the confirmed profile is a question answered first.
+	if profile.State == "differs" {
+		problems = append(problems, profile.Question()+" on the client's page.")
 	}
 	if !slices.ContainsFunc(check.Procedures, func(p struct{ Kind, Method string }) bool { return p.Kind == "basis" && p.Method != "" }) {
 		problems = append(problems, "Record the client's accounting basis under Approved procedures and client overrides.")
