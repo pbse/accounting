@@ -540,7 +540,7 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 	if !c.forecast && claimForecast.MatchString(lowerClause) && !claimActual.MatchString(lowerClause) && (strings.Contains(lowerClause, "forecast") || strings.Contains(lowerClause, "projected") || strings.Contains(lowerClause, "will be") || strings.Contains(lowerClause, "expected")) {
 		return "the sentence states " + o.normalized + " as a forecast, but the cited field is an actual (" + c.describe() + ")"
 	}
-	if c.ytd != claimYTD.MatchString(lowerLine) {
+	if c.ytd != claimYTD.MatchString(lowerClause) {
 		if c.ytd {
 			return "the sentence states the year-to-date " + o.normalized + " as a month's"
 		}
@@ -681,25 +681,17 @@ func driverMovement(read agentRead, path string) (string, *big.Rat, bool) {
 	return row, movement, ok
 }
 
-// checkRemainder holds a stated movement and its drivers together: when a sentence attributes a change to drivers
-// whose changes do not add up to it, it must say what remains.
-func checkRemainder(line string, changes []*big.Rat) string {
+// checkRemainder holds a stated movement and its drivers together: when a sentence attributes one cited total change
+// to drivers whose movements do not add up to it, it must say what remains. The total is the cited change that is not
+// a driver; drivers may offset (+500 and −400 explain a net 100).
+func checkRemainder(line string, totals, drivers []*big.Rat) string {
 	lower := strings.ToLower(line)
-	if len(changes) < 2 || !claimCausal.MatchString(lower) && !strings.Contains(lower, " from ") && !strings.Contains(lower, "of which") {
+	if len(totals) != 1 || len(drivers) == 0 || !claimCausal.MatchString(lower) && !strings.Contains(lower, " from ") && !strings.Contains(lower, "of which") {
 		return ""
 	}
-	total, rest := new(big.Rat).Abs(changes[0]), new(big.Rat)
-	largest := 0
-	for i, c := range changes {
-		if new(big.Rat).Abs(c).Cmp(new(big.Rat).Abs(changes[largest])) > 0 {
-			largest = i
-		}
-	}
-	total = new(big.Rat).Set(changes[largest])
-	for i, c := range changes {
-		if i != largest {
-			rest.Add(rest, c)
-		}
+	total, rest := totals[0], new(big.Rat)
+	for _, d := range drivers {
+		rest.Add(rest, d)
 	}
 	if rest.Cmp(total) == 0 || claimRemainder.MatchString(lower) {
 		return ""
@@ -875,6 +867,23 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 	}
 	named := metricsIn(line)
 	lower := strings.ToLower(line)
+	// What the result is called, next to it, must be a measure its inputs carry: rent plus marketing is never net income.
+	inputKeys := map[string]bool{}
+	for _, c := range claims {
+		for k := range c.keys {
+			inputKeys[k] = true
+		}
+	}
+	for _, o := range figuresIn(line) {
+		if o.normalized != stated {
+			continue
+		}
+		for k := range metricsIn(o.clause) {
+			if !inputKeys[k] {
+				return "the sentence calls the " + s.derive + " " + stated + " " + strings.ReplaceAll(k, "_", " ") + ", which none of its fields measures"
+			}
+		}
+	}
 	clientsOf, bases, months := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, c := range claims {
 		if c.entity != "" {

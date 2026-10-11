@@ -140,7 +140,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		derived(0, "difference", "21780.00", "t2", "/profit_and_loss/sections/0/lines/0/amount", "t2", "/profit_and_loss/sections/1/total/amount"))
 	ok("Rent and marketing total 9,040.00.", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
 	rejected("Rent and marketing total 9,400.00.", "is 9040.00, not 9400.00", derived(0, "sum", "9400.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
-	rejected("Rent and payroll total 9,040.00.", "does not name Marketing", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
+	rejected("Rent and utilities total 9,040.00.", "does not name Marketing", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
 	ok("Net income is 17.0% of patient fees.", derived(0, "ratio", "17.0%", "t2", ni+"/amount", "t2", "/profit_and_loss/sections/0/lines/0/amount"))
 	rejected("Net income is 16.9% of patient fees.", "not 16.9%", derived(0, "ratio", "16.9%", "t2", ni+"/amount", "t2", "/profit_and_loss/sections/0/lines/0/amount"))
 	// A ratio to a zero base is refused rather than invented.
@@ -175,6 +175,14 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "patient visits rose after"})
 	ok("Revenue rose 4,940.00 because of the marketing campaign.",
 		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "after the marketing campaign started"})
+
+	// What a derived figure is called is checked too; a month and its year to date are each qualified on their own;
+	// offsetting drivers explain a smaller net change.
+	rejected("Rent and marketing make net income 9,040.00.", "which none of its fields measures", derived(0, "sum", "9040.00", "t4", "/lines/0/month/actual", "t4", "/lines/1/month/actual"))
+	ok("Rent is 8,500.00 this month and 85,000.00 year to date.", e("t4", 0, "/lines/0/month/actual", "8500.00"), e("t4", 0, "/lines/0/ytd/actual", "85000.00"))
+	reads["t12"] = read(`{"rows":[{"account":"Revenue","change":"100.00","drivers":[{"payee":"Acme","change":"500.00"},{"payee":"Zenith","change":"-400.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	ok("Revenue rose 100.00, driven by Acme up 500.00 and Zenith down 400.00.",
+		e("t12", 0, "/rows/0/change", "100.00"), e("t12", 0, "/rows/0/drivers/0/change", "500.00"), e("t12", 0, "/rows/0/drivers/1/change", "-400.00"))
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))

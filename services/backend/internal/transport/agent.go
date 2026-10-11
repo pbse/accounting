@@ -640,6 +640,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	sentenceEntries := make([][]agentSupportEntry, len(lines))
 	sentenceChanges := make([][]*big.Rat, len(lines))
 	sentenceMoney := make([][]moneyEntry, len(lines))
+	sentenceDriverChanges := make([][]*big.Rat, len(lines))
 	sentenceDrivers := make([]map[string]*big.Rat, len(lines))
 	for i := range lines {
 		sentenceDrivers[i] = map[string]*big.Rat{}
@@ -776,7 +777,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 					held, used[j] = true, true
 					if m.claim.kind == "change" {
 						if r, ok := new(big.Rat).SetString(m.n); ok {
-							sentenceChanges[i] = append(sentenceChanges[i], r)
+							if m.claim.cause {
+								sentenceDriverChanges[i] = append(sentenceDriverChanges[i], r)
+							} else {
+								sentenceChanges[i] = append(sentenceChanges[i], r)
+							}
 						}
 					}
 				} else {
@@ -803,11 +808,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		if why := checkCauses(lines[i], sentenceEntries[i], sentenceClaims[i], reads); why != "" {
 			return nil, why
 		}
-		changes := sentenceChanges[i]
+		drivers := sentenceDriverChanges[i]
 		for _, k := range slices.Sorted(maps.Keys(sentenceDrivers[i])) {
-			changes = append(changes, sentenceDrivers[i][k])
+			drivers = append(drivers, sentenceDrivers[i][k])
 		}
-		if why := checkRemainder(lines[i], changes); why != "" {
+		if why := checkRemainder(lines[i], sentenceChanges[i], drivers); why != "" {
 			return nil, why
 		}
 	}
