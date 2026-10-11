@@ -256,11 +256,12 @@ func currentLink(ctx context.Context, q rowReader, org, name, ledger, company st
 	return l, nil
 }
 
-// relinked is books b re-keyed through a confirmed company link, from b's account ids to the other side's. An account
-// carrying a balance or activity that the mapping leaves out keeps the months apart: its name is returned, with no
-// books.
-func relinked(b *books, mapping map[string]string) (*books, string) {
-	out := &books{Currency: b.Currency, Typed: b.Typed, Accounts: map[string]packAccount{}, Balances: map[string]*big.Rat{}, Activity: map[string]*big.Rat{},
+// relinked is books b re-keyed through a confirmed company link, from b's account ids to the other side's, grouped as
+// that side groups its accounts (typed, by account type, or else by class), so an account only last month has is shown
+// under a section this month's pack has. An account carrying a balance or activity that the mapping leaves out keeps
+// the months apart: its name is returned, with no books.
+func relinked(b *books, mapping map[string]string, typed bool) (*books, string) {
+	out := &books{Currency: b.Currency, Typed: typed, Accounts: map[string]packAccount{}, Balances: map[string]*big.Rat{}, Activity: map[string]*big.Rat{},
 		CashFlow: b.CashFlow, Imported: b.Imported, Uncounted: b.Uncounted, ActivityUnavailable: b.ActivityUnavailable}
 	ids := map[string]bool{}
 	for _, m := range []map[string]*big.Rat{b.Balances, b.Activity} {

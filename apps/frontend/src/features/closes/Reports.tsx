@@ -231,7 +231,8 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         <>
           <SectionHeader id="figure-ledger" title={`Ledger rows behind this figure, ${pack.period}`} />
           <LedgerSelection key={`this-${account}`} closeId={closeId} snapshotId={pack.snapshot_id} accountId={account} stale={pack.stale} suggestions={[]} />
-          {prior && (
+          {/* Last month's rows are its own ledger's: drilled into only when they are QuickBooks', as this month's are. */}
+          {prior && (prior.source ?? pack.source) === "quickbooks" && (
             <>
               <SectionHeader title={`Ledger rows behind this figure, ${prior.period}`} />
               <LedgerSelection key={`prior-${account}`} closeId={prior.close_id} snapshotId={prior.snapshot_id} accountId={account} stale={prior.stale} suggestions={[]} />

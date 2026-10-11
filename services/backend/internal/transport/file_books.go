@@ -348,7 +348,7 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 				for key, id := range link.Accounts {
 					back[id] = key
 				}
-				if b, missing := relinked(captured, back); missing != "" {
+				if b, missing := relinked(captured, back, thisBooks.Typed); missing != "" {
 					comparison = "Last month's account " + missing + " is not mapped to the files' accounts."
 				} else if b.Currency != thisBooks.Currency {
 					comparison = "Last month's books are in a different currency."
