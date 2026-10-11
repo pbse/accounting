@@ -17,6 +17,7 @@ type AccountsRead = {
   accounts: FileAccount[];
   count: number;
   unmapped: number;
+  recorded: boolean;
   more: boolean;
   classes: Record<string, string[]>;
   on: boolean;
@@ -91,6 +92,7 @@ export function AccountMap({ client, id, onClose }: { client: string; id: string
         {data.map && ` The map was last confirmed ${dates.dayMonth(data.map.at)} by ${data.map.actor}, on ${monthName(data.map.period)}'s file: ${data.map.reason}`}
       </p>
       {editable && data.unmapped > 0 && <p className="note">Confirming accepts what is proposed for every account not mapped yet, on every page, with any class or type you set here.</p>}
+      {editable && !data.unmapped && !data.recorded && <p className="note">Every account is mapped already. Confirm the map for this file to record that it names them, so they stay mapped if an earlier file is deleted.</p>}
       <table className="ks-preview">
         <thead>
           <tr>
@@ -160,7 +162,7 @@ export function AccountMap({ client, id, onClose }: { client: string; id: string
           Close
         </button>
         {editable && (
-          <button type="button" className="primary" disabled={busy || !reason.trim() || (!data.unmapped && !Object.keys(set).length)} onClick={() => void confirm()}>
+          <button type="button" className="primary" disabled={busy || !reason.trim() || (data.recorded && !Object.keys(set).length)} onClick={() => void confirm()}>
             {busy ? "Confirming…" : "Confirm the map"}
           </button>
         )}

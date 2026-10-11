@@ -170,14 +170,18 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Confirm how the file is read before mapping its accounts.")
 			return
 		}
-		unmapped := 0
+		// recorded says every account the file names is mapped on it already: confirming it would change nothing.
+		unmapped, recorded := 0, true
 		for _, a := range accounts {
 			if a.Mapped == nil {
 				unmapped++
 			}
+			if a.Mapped == nil || !slices.Contains(a.Mapped.Files, id) {
+				recorded = false
+			}
 		}
 		from := min(offset, len(accounts))
-		out := map[string]any{"accounts": accounts[from:min(from+200, len(accounts))], "count": len(accounts), "unmapped": unmapped, "more": len(accounts) > from+200,
+		out := map[string]any{"accounts": accounts[from:min(from+200, len(accounts))], "count": len(accounts), "unmapped": unmapped, "recorded": recorded, "more": len(accounts) > from+200,
 			"classes": bookfiles.Types, "on": on, "can_confirm": canReview(r) && on, "map": nil}
 		if current != nil {
 			out["map"] = current
@@ -265,14 +269,19 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 				m.Class, m.Type, set = a.Proposal.Class, a.Proposal.Type, true
 			}
 			if set && (a.Mapped == nil || !sameMapping(*a.Mapped, m)) {
+				// A class or type changed keeps the files the account was confirmed on before.
+				if a.Mapped != nil {
+					m.Files = a.Mapped.Files
+				}
 				next[a.Key], changed = m, true
 			}
 		}
-		// Every account this file names that the map holds was confirmed on it: the files it came from are its own.
+		// Every account this file names that the map holds is confirmed on it, so a file deleted later leaves the
+		// accounts this one names: recording that is a change of its own, even when no class or type changes.
 		for _, a := range accounts {
 			if m, ok := next[a.Key]; ok && !slices.Contains(m.Files, id) {
 				m.Files = append(slices.Clone(m.Files), id)
-				next[a.Key] = m
+				next[a.Key], changed = m, true
 			}
 		}
 		for key := range in.Accounts {
@@ -282,7 +291,7 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		if !changed {
-			problem(w, 422, "Nothing to confirm: every account is mapped as it was.")
+			problem(w, 422, "Nothing to confirm: every account is mapped as it was, on this file.")
 			return
 		}
 		raw, _ := json.Marshal(next)

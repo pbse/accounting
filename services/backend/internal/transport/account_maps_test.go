@@ -153,22 +153,51 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 			t.Fatalf("utilities is new: %v", a)
 		}
 	}
-	call("user_a", partner, "POST", "/v1/closes/client/import/accounts?name=Acme%20Co&id="+october, map[string]any{"accept": true, "reason": "Utilities added", "based_on": firstMap}, 200)
+	if read["recorded"] != false {
+		t.Fatalf("October's file is not confirmed on yet: %v", read)
+	}
+	// Rent changes type on October's file, keeping the file it was confirmed on before.
+	second := call("user_a", partner, "POST", "/v1/closes/client/import/accounts?name=Acme%20Co&id="+october, map[string]any{"accept": true, "accounts": map[string]any{"n:6000": map[string]string{"class": "Expense", "type": "Expense"}},
+		"reason": "Utilities added; rent back above the line", "based_on": firstMap}, 200)["id"].(string)
+	files := func(key string) (string, string) {
+		t.Helper()
+		var typ, from sql.NullString
+		must(db.QueryRow(`SELECT accounts->$2->>'type',accounts->$2->>'files' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org, key).Scan(&typ, &from))
+		return typ.String, from.String
+	}
+	if typ, from := files("n:6000"); typ != "Expense" || from != `["`+september+`", "`+october+`"]` {
+		t.Fatalf("rent's new type, on both files: %s %s", typ, from)
+	}
+	// November's file names only accounts mapped already: confirming it records that it names them, and changes nothing
+	// else.
+	november := month("2026-11", "Number,Account,Type,Debit,Credit\n1000,Business Checking,Bank,1500.25,\n1100,Trade debtors,Current Asset,200.00,\n2000,Amex,Credit Card,,300.00\n3000,Owner's Equity,,,1000.00\n4000,Sales,,,700.25\n6000,Rent,,300.00,\n")
+	novemberPath := "/v1/closes/client/import/accounts?name=Acme%20Co&id=" + november
+	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["unmapped"] != 0.0 || read["recorded"] != false {
+		t.Fatalf("every account mapped, none on November's file yet: %v", read)
+	}
+	call("user_a", partner, "POST", novemberPath, map[string]any{"accept": true, "reason": "Same accounts as before", "based_on": second}, 200)
+	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["recorded"] != true {
+		t.Fatalf("November's file recorded: %v", read)
+	}
 	var versions int
-	var rent string
-	must(db.QueryRow(`SELECT count(*),(SELECT accounts->'n:6000'->>'type' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1) FROM books_account_maps WHERE organization_id=$1`, org).Scan(&versions, &rent))
-	if versions != 2 || rent != "Other Expense" {
-		t.Fatalf("each confirmation a version holding the whole map: %d versions, rent %s", versions, rent)
+	must(db.QueryRow(`SELECT count(*) FROM books_account_maps WHERE organization_id=$1`, org).Scan(&versions))
+	if versions != 3 {
+		t.Fatalf("each confirmation a version holding the whole map: %d", versions)
 	}
-	// Deleting October's file takes from the map what only it named, utilities, from every version; what September's
-	// file named too stays, now confirmed on September's alone.
-	call("user_a", []string{"workpapers:review", "clients:all", "data:manage"}, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+october, map[string]any{"reason": "Sent in error"}, 200)
+	// Deleting October's file takes from the map what only it named, utilities, from every version; deleting
+	// September's then leaves what November's names too.
+	manager := []string{"workpapers:review", "clients:all", "data:manage"}
+	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+october, map[string]any{"reason": "Sent in error"}, 200)
 	var utilities int
-	var rentFiles string
-	must(db.QueryRow(`SELECT count(*) FILTER (WHERE accounts::text LIKE '%Utilities%' OR accounts ? 'n:6100'),(SELECT accounts->'n:6000'->>'files' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1) FROM books_account_maps WHERE organization_id=$1`, org).Scan(&utilities, &rentFiles))
-	if utilities != 0 || rentFiles != `["`+september+`"]` {
-		t.Fatalf("a deleted file leaves nothing only it named: %d versions name utilities; rent from %s", utilities, rentFiles)
+	must(db.QueryRow(`SELECT count(*) FILTER (WHERE accounts::text LIKE '%Utilities%' OR accounts ? 'n:6100') FROM books_account_maps WHERE organization_id=$1`, org).Scan(&utilities))
+	if typ, from := files("n:6000"); utilities != 0 || typ != "Expense" || from != `["`+september+`", "`+november+`"]` {
+		t.Fatalf("a deleted file leaves nothing only it named: %d versions name utilities; rent %s from %s", utilities, typ, from)
 	}
+	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+september, map[string]any{"reason": "Sent in error"}, 200)
+	if typ, from := files("n:1000"); typ != "Bank" || from != `["`+november+`"]` {
+		t.Fatalf("the bank stays mapped, on November's file: %s %s", typ, from)
+	}
+	accountsPath = novemberPath
 	// With file imports switched off, the map is read, not changed.
 	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)
 	must(err)
