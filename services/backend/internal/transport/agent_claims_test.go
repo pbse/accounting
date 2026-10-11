@@ -503,6 +503,10 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Patient fees rose, driven entirely by new patients.", "account for 3000.00 of 4940.00",
 		e("t63", 0, "/changes/0/change", "4940.00"), e("t63", 0, "/changes/0/new/0/name", "New patients"))
 
+	// Round thirty-seven: a forecast week's month.
+	rejected("Cash is forecast to close at 23,400.00 in January.", "for the week of 2026-12-20", e("t30", 0, "/weeks/0/closing", "23400.00"))
+	ok("Cash is forecast to close at 23,400.00 in December.", e("t30", 0, "/weeks/0/closing", "23400.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

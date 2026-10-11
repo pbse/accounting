@@ -214,6 +214,8 @@ type claim struct {
 	row string
 	// account is the ledger account the field is of, when its row names one; source is the read it came from.
 	account, source string
+	// from and to are the days a forecast week runs, when the figure is a week's.
+	from, to string
 	// driver says the field is a driver of a movement (a payee row of a changes read), attributing it, not explaining it.
 	driver bool
 	// variance says a percentage is a variance against a budget (the budget comparison's signed percent).
@@ -323,6 +325,16 @@ func claimOf(read agentRead, path string) claim {
 	if len(ancestors) > 0 {
 		if v, ok := ancestors[len(ancestors)-1]["account_id"].(string); ok {
 			c.account = v
+		}
+		// A week's figure runs from its start to its end.
+		for i := len(ancestors) - 1; i >= 0; i-- {
+			if from := text(ancestors[i], "start"); len(from) == 10 {
+				c.from, c.to = from, text(ancestors[i], "end")
+				if len(c.to) != 10 {
+					c.to = c.from
+				}
+				break
+			}
 		}
 	}
 	// The row's identity, from the nearest object that has one.
@@ -901,6 +913,22 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 	// Book cash is the ledger's, not money available at the bank.
 	if c.keys["cash"] && claimAvailable.MatchString(lowerClause) {
 		return "the sentence calls book cash of " + o.normalized + " available at the bank"
+	}
+	// A forecast week's figure is of the months that week runs in.
+	if c.forecast && c.from != "" {
+		if months := nearestMonth(line, o); len(months) > 0 {
+			start, _ := time.Parse("2006-01-02", c.from)
+			end, _ := time.Parse("2006-01-02", c.to)
+			match := false
+			for _, m := range months {
+				for _, d := range []time.Time{start, end} {
+					match = match || m[0] == int(d.Month()) && (m[1] == 0 || m[1] == d.Year())
+				}
+			}
+			if !match {
+				return "the sentence puts the forecast " + o.normalized + " in another month; it is for the week of " + c.from
+			}
+		}
 	}
 	// The month named is the field's month: the month nearest the figure in its clause ("21,780.00 in October versus
 	// 19,940.00 in September" gives each its own), else any month the sentence names.

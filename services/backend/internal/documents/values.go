@@ -28,10 +28,11 @@ func AmountIn(text, amount string) bool { return amountIn(text, amount, false) }
 // a matching number alone never establishes an amount's meaning.
 func MoneyIn(text, amount string) bool { return amountIn(text, amount, true) }
 
-// A number followed by one of these is a quantity, rate or term, not money; one preceded by these is a reference.
+// A number followed by one of these is a quantity, rate or term, not money; one preceded by these is a reference. Both
+// are read on the number's own line, never across a line break.
 var (
-	notMoneyAfter  = regexp.MustCompile(`(?i)^\s*-?\s*(?:%|per\s?cent\b|months?\b|mos?\b\.?|years?\b|yrs?\b|days?\b|weeks?\b|hours?\b|hrs?\b|units?\b|pcs\b|pieces\b|items\b|qty\b|employees\b|people\b|shares\b|sq\.?\s?ft\b|feet\b|miles\b|kg\b|lbs?\b|x\b)`)
-	notMoneyBefore = regexp.MustCompile(`(?i)(?:#|\bno\.?|\bnumber|\bpage|\bp\.|\bref\.?|\binvoice|\bpolicy|\baccount|\bacct\.?|\bid|\bline)\s*:?\s*$`)
+	notMoneyAfter  = regexp.MustCompile(`(?i)^[ \t]*-?[ \t]*(?:%|per[ \t]?cent\b|months?\b|mos?\b\.?|years?\b|yrs?\b|days?\b|weeks?\b|hours?\b|hrs?\b|units?\b|pcs\b|pieces\b|items\b|qty\b|employees\b|people\b|shares\b|sq\.?[ \t]?ft\b|feet\b|miles\b|kg\b|lbs?\b|x\b)`)
+	notMoneyBefore = regexp.MustCompile(`(?i)(?:#|\bno\.?|\bnumber|\bpage|\bp\.|\bref\.?|\binvoice|\bpolicy|\baccount|\bacct\.?|\bid|\bline)[ \t]*:?[ \t]*$`)
 )
 
 func amountIn(text, amount string, money bool) bool {
