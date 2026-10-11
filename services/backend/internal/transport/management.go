@@ -518,7 +518,7 @@ func importCashFlow(db *sql.DB) http.HandlerFunc {
 			problem(w, 409, "Capture this month's Xero Trial Balance first, from a current connection.")
 			return
 		}
-		b, err := readLedgerMonth(m)
+		b, err := recordBooks(ctx, tx, m)
 		if err != nil {
 			problem(w, 409, "This month's capture could not be read: "+err.Error()+".")
 			return
@@ -669,7 +669,7 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	if this == nil {
 		return wait("Capture this month's QuickBooks period snapshot or Xero Trial Balance first.")
 	}
-	thisBooks, err := readLedgerMonth(this)
+	thisBooks, err := recordBooks(ctx, tx, this)
 	if err != nil {
 		return wait("This month's capture could not be read: " + err.Error() + ".")
 	}
@@ -702,7 +702,7 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 		case last.Source != this.Source || last.realm != this.realm:
 			comparison = "Last month was captured from a different ledger or company."
 		default:
-			if lastBooks, err = readLedgerMonth(last); err != nil {
+			if lastBooks, err = recordBooks(ctx, tx, last); err != nil {
 				comparison = "Last month's capture could not be read: " + err.Error() + "."
 			} else if lastBooks.Currency != thisBooks.Currency {
 				comparison, lastBooks = "Last month's capture is in a different currency.", nil
