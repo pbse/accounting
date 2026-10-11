@@ -1344,7 +1344,7 @@ html:has(.k-site) {
   letter-spacing: 0.06em;
   color: var(--ink-3);
 }
-.k-controls h2 {
+.k-controls :is(h2, h3) {
   font-size: 21px;
   line-height: 1.25;
   margin-bottom: 8px;
