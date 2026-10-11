@@ -22,10 +22,33 @@ import (
 )
 
 // AcceptanceFirm is the firm a run's cases are loaded into. Left empty, each case gets a firm of its own, worked as
-// "acceptance" and disabled afterwards. A live run through Context Machine names instead the firm and person its access
+// "user_acceptance", a member granted the case's client, and disabled afterwards. A live run through Context Machine names instead the firm and person its access
 // profile serves, since that provider reads only for them: every case is then a close of that one firm (so no two cases
 // may share a client), and each case's unfinished work is cancelled once observed.
-type AcceptanceFirm struct{ Organization, Subject string }
+type AcceptanceFirm struct {
+	Organization, Subject string
+	// ModelCalls, when positive, is the most model calls the run may make in this database today, across every firm it
+	// works in (CapEvaluationCalls).
+	ModelCalls int
+}
+
+// ErrEvaluationCeiling means an evaluation run has made every model call its ceiling allows today: what is left is not
+// run, and is never reported as passed.
+var ErrEvaluationCeiling = errors.New("the evaluation's daily model-call ceiling is reached")
+
+// CapEvaluationCalls holds an evaluation to ceiling model calls today in db, across every firm it has worked in, with the
+// app's own daily budget: org may make its own calls so far plus what the run has left, and the budget refuses the rest.
+func CapEvaluationCalls(ctx context.Context, db *sql.DB, org string, ceiling int) error {
+	var left int
+	if err := db.QueryRowContext(ctx, `SELECT $1::int-COALESCE(sum(calls),0)::int FROM model_calls WHERE day=(now() AT TIME ZONE 'UTC')::date`, ceiling).Scan(&left); err != nil {
+		return err
+	}
+	if left < 1 {
+		return ErrEvaluationCeiling
+	}
+	_, err := db.ExecContext(ctx, `UPDATE organizations SET max_model_calls_per_day=LEAST(100000,$2+COALESCE((SELECT calls FROM model_calls WHERE organization_id=$1 AND day=(now() AT TIME ZONE 'UTC')::date),0)) WHERE id=$1`, org, left)
+	return err
+}
 
 // RunAcceptanceCase loads one corpus case into db, adds its documents as an upload would, drives extraction, reading and
 // preparation until nothing is left to do, and reports what happened (docs/acceptance-corpus.md). model gives the reading
@@ -36,12 +59,24 @@ func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, firm 
 	var observed acceptance.CaseObserved
 	org, subject := firm.Organization, firm.Subject
 	if org == "" {
-		org, subject = "org_Acceptance"+rand.Text(), "acceptance"
+		org, subject = "org_Acceptance"+rand.Text(), "user_acceptance"
 		if _, err := db.ExecContext(ctx, `INSERT INTO organizations(id,name,max_model_calls_per_day) VALUES($1,$2,100000)`, org, "Acceptance "+c.ID); err != nil {
 			return observed, err
 		}
 		defer db.ExecContext(context.WithoutCancel(ctx), `UPDATE organizations SET enabled=false WHERE id=$1`, org)
 	} else if _, err := db.ExecContext(ctx, `INSERT INTO organizations(id,name,max_model_calls_per_day) VALUES($1,'Acceptance run',100000) ON CONFLICT (id) DO NOTHING`, org); err != nil {
+		return observed, err
+	}
+	if firm.ModelCalls > 0 {
+		if err := CapEvaluationCalls(ctx, db, org, firm.ModelCalls); err != nil {
+			return observed, err
+		}
+	}
+	// Through the context machine, background reading is only for a current member granted the client, as in the app.
+	if _, err := db.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) SELECT $1,$2,true,'Acceptance run','acceptance' WHERE NOT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, org, subject); err != nil {
+		return observed, err
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) SELECT $1,$2,$3,true,'Acceptance run','acceptance' WHERE NOT EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, subject, c.Client); err != nil {
 		return observed, err
 	}
 	ctx = auth.WithActor(ctx, &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org})
@@ -119,7 +154,14 @@ func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, firm 
 			return observed, fmt.Errorf("case %s sign-off: %w", c.ID, err)
 		}
 	}
-	return acceptanceObserve(ctx, db, closeID, uploads)
+	observed, err = acceptanceObserve(ctx, db, closeID, uploads)
+	// Work the ceiling cut short waits on the firm's daily limit: the case was not run through, so it is not scored.
+	for _, d := range observed.Documents {
+		if firm.ModelCalls > 0 && d.Error == preparation.ErrModelLimit.Error() {
+			return observed, ErrEvaluationCeiling
+		}
+	}
+	return observed, err
 }
 
 // acceptanceSignoff does the accountant's part once the agent is done, recorded under "acceptance reviewer": approve every

@@ -220,6 +220,8 @@ To return accounting calls to direct API, set `LLM_PROVIDER=api`, install `OPENA
 
 ## Local golden-set evaluation
 
+`scripts/local-context-machine.sh` sets this up for evaluation runs: a one-time Codex browser login in its own home (`~/.krith-eval`), a local token and read-only login, and the service on `127.0.0.1:8090` (`cmd/context-machine -addr`) with production's model settings in subscription mode. `scripts/evidence-run.sh` uses it while it runs ([slice 6 evidence](slice6-evidence.md)). The details:
+
 Use a migrated disposable local PostgreSQL database and a local context-machine process connected to it through a dedicated read-only role. No profile is required to replay data-only completion fixtures. If you want to remap recorded identities with the optional `-profile` flag, configure one synthetic local mapping, for example:
 
 ```json

@@ -4457,3 +4457,32 @@ Slice 6 owes fixtures with independently specified expected results and a concre
 Run here (local PostgreSQL, recorded answers): ten cases, no critical failures, nothing unprocessed. Accrual, payroll and loan each scored 1 document, abstained 1. Prepaid tallies were unchanged. `TestTheSampleCorpusRunsThroughThePipeline` asserts the new tallies, and `TestTheReviewPackageSetsExpectedBesideObservedForTheAccountant` covers the package.
 
 Labels are the builder's. Drafts for accruals, payroll, loans and the other methods are not yet scored, because the harness sets up only the prepaid procedure. No live model run or accountant confirmation is claimed.
+
+## 2026-10-11 — Evaluation runs: a daily model-call ceiling and a local context machine (B12)
+
+The user's answers:
+- every model call goes through the context machine by default;
+- page reading stays on Codex there (the Gemini key in Cloudflare is unused in this mode);
+- $20 a day caps the evaluation runs only.
+
+Production was confirmed (variables and secret names only) to run `LLM_PROVIDER=context_machine` on Codex `gpt-6.1-sol`, on the user's ChatGPT/Codex subscription. Added:
+- **`-max-model-calls N`** on `cmd/acceptance` and `cmd/agent-eval`. Through the app's own daily budget, each firm the run works in may make its own calls plus what the run has left. Cases or questions the ceiling cuts short, and those after, are listed as not run (exit 3), never as passed.
+- **`scripts/evidence-run.sh`** keeps a ledger of the day's calls under `$EVIDENCE_DIR`, with a default ceiling of 200 calls (the user's $20 at an estimated $0.10 a call), and records the ceiling in the manifest and summary.
+- **`scripts/local-context-machine.sh`**, run by the user, starts a local context machine with production's model settings after a one-time Codex browser login in its own home. The login is asked for again when the token has less than two hours left. The reader is granted as production's (`context-machine-role.sql`) on a migrated `krith_eval` database, so readiness passes. `evidence-run.sh` uses the machine while `/readyz` answers, and takes one run at a time. `cmd/context-machine` takes `-addr` for a loopback address.
+- **Subscription mode** now sends a static Codex token's ChatGPT account, as the managed login does.
+
+The acceptance harness now works its own firms as `user_acceptance`, a member granted each case's client. Through the context machine, background reading requires one: without it, every live job failed with "The job creator no longer has access to this client".
+
+Run here (local PostgreSQL, a local context machine with a placeholder login, so every upstream call was refused):
+- `TestAnEvaluationStopsAtItsDailyModelCallCeiling` fails without the cap and passes with it.
+- `TestProxyPinsReasoningAndSubscriptionCredentials` checks the account header.
+- The sample corpus and agent-eval transport tests, and the machine and llm packages, pass.
+- The local machine's `/readyz` answered 200. A second evidence run started while one held the lock was refused.
+- An evidence run with a ceiling of 5:
+  - provider model checks were skipped;
+  - live acceptance reached the model, spent 5 of 5 calls and listed six cases as not run;
+  - the golden set was not run;
+  - the summary said "ceiling reached for today".
+
+A real model run waits on the user's one-time Codex login. Whether the ChatGPT backend accepts a static subscription token is verified only then.
+

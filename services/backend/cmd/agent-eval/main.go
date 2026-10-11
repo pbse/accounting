@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -38,6 +39,7 @@ func main() {
 	only := flag.String("only", "", "replay only the questions whose id starts with this; a recording records every case one of them asks about, whole")
 	reportPath := flag.String("report", "", "write the full report, with every observation, as JSON here")
 	profile := flag.String("profile", "", "replay every recorded fixture as this single configured access_profile on a local context machine")
+	maxCalls := flag.Int("max-model-calls", 0, "the most model calls the replay may make in this database today; questions left when it is spent are reported not run (exit 3)")
 	flag.Parse()
 	if *set == "" || *database == "" {
 		flag.Usage()
@@ -90,6 +92,7 @@ func main() {
 		}
 	}
 	var observed []agenteval.Observed
+	notRun, spent := map[string]bool{}, false
 	for _, q := range golden.Questions {
 		if !strings.HasPrefix(q.ID, *only) {
 			continue
@@ -104,27 +107,48 @@ func main() {
 		if err = transport.EnsureAgentEvalFirm(ctx, db, rec); err != nil {
 			log.Fatal(err)
 		}
+		if *maxCalls > 0 && !spent {
+			if err = transport.CapEvaluationCalls(ctx, db, rec.Organization, *maxCalls); errors.Is(err, transport.ErrEvaluationCeiling) {
+				spent = true
+			} else if err != nil {
+				log.Fatal(err)
+			}
+		}
+		if spent {
+			notRun[q.ID] = true
+			continue
+		}
 		began := time.Now()
 		o := transport.RunAgentEvalQuestion(ctx, db, q, rec, client)
+		// Under a ceiling, the firm's limit is what the run has left: a turn it refuses was cut off, not answered.
+		if *maxCalls > 0 && o.Outcome == "limit" {
+			spent, notRun[q.ID] = true, true
+			continue
+		}
 		observed = append(observed, o)
 		log.Printf("%s: %s in %s, %d rounds, %d reads: %s", q.ID, o.Outcome, time.Since(began).Round(time.Second), o.Rounds, o.Reads, firstLine(o.Answer))
 	}
-	if *only != "" {
-		kept := golden.Questions[:0]
-		for _, q := range golden.Questions {
-			if strings.HasPrefix(q.ID, *only) {
-				kept = append(kept, q)
-			}
+	// Questions left out by -only or by the ceiling are not scored; the ceiling's are listed as not run.
+	kept, skipped := golden.Questions[:0], []string{}
+	for _, q := range golden.Questions {
+		if notRun[q.ID] {
+			skipped = append(skipped, q.ID)
+		} else if strings.HasPrefix(q.ID, *only) {
+			kept = append(kept, q)
 		}
-		golden.Questions = kept
 	}
+	golden.Questions = kept
 	report := agenteval.Score(golden, observed)
+	report.NotRun = skipped
 	fmt.Print(report.Markdown())
 	if *reportPath != "" {
 		raw, _ := json.MarshalIndent(report, "", " ")
 		if err = os.WriteFile(*reportPath, raw, 0o600); err != nil {
 			log.Fatal(err)
 		}
+	}
+	if len(skipped) > 0 {
+		os.Exit(3)
 	}
 	if !report.Passed() {
 		os.Exit(1)
