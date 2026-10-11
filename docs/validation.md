@@ -4314,6 +4314,12 @@ Slice 4 (takeover and coverage). Coverage decisions were bound to one capture, s
 
 Test: `TestCoverageRequestsQuarantineAndResolution` recaptures after excluding two accounts: both stay excluded with the carried reason, an account never excluded still asks, and another QuickBooks company's capture carries nothing; each seen to fail without its part of the fix. The closest coverage, Xero coverage, request and readiness tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — A document can answer a client's question (B04/B05)
+
+A reply that only sent documents never completed its request, so work never resumed: a question counted as answered only with typed text. The client page now offers "I'm attaching the document with this reply" per question; the server records such a question as answered, naming the attached files, and, while such an answer stands, work resumes only once none of the request's documents still waits for its scan or release (at submission or at each release, so the last release resumes it); a complete reply answered in text still resumes at once. The page no longer offers the recorded "Document attached…" text back as the client's note. A "document" answer with no file attached is refused.
+
+Test: `TestRequestTakesTheRestAfterTheFirmActs` answers its first question with the attached document and asserts the recorded answer names the file (refused before the change). The closest coverage, client-reply and partial-reply tests passed on a fresh local PostgreSQL.
+
 ## 2026-10-11 — A changed or revoked procedure authorizes nothing further (B11)
 
 Slice 5. A month's pinned copy of a procedure kept authorizing work after the firm published a new or disabled version: approval checked basis, currency and independence but not the procedure, and the standing-approval worker approves through the same path. `preparation.ProcedureCurrent` now refuses when the pinned copy is not the scope's current version, and `CheckProcedureMethod` (saving and straight-through work) calls it. Approval and every posting path's approval check (`draftApproved`) call `ApprovalAuthority`, which also refuses when the scope's latest version is disabled or the draft records a different method; a client with no procedure for the kind is unaffected, so existing drafts of kinds without procedures still approve.
