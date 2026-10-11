@@ -124,6 +124,27 @@ func ProposeLayout(t Table) (Layout, []string) {
 	if layout.HeaderRow == 0 {
 		return layout, append(questions, "Which row heads the Trial Balance, and what does each column hold?")
 	}
+	// A column headed "Class" is the account's classification when its values say one ("Asset", "Expense"), else a
+	// class the rows are split by ("Retail", "East").
+	for column, m := range layout.Columns {
+		if m != AccountType || !strings.EqualFold(strings.TrimSpace(headerText(t, layout.HeaderRow, column)), "class") {
+			continue
+		}
+		said, classes := 0, 0
+		for _, r := range t.Rows {
+			for _, c := range r.Cells {
+				if r.Number > layout.HeaderRow && c.Column == column && strings.TrimSpace(c.Value) != "" {
+					said++
+					if class, _, _ := classOf(c.Value); class != "" {
+						classes++
+					}
+				}
+			}
+		}
+		if said > 0 && classes*2 < said {
+			layout.Columns[column] = Dimension
+		}
+	}
 	has := func(m Meaning) bool {
 		for _, v := range layout.Columns {
 			if v == m {
@@ -265,6 +286,21 @@ func TotalOf(label string) (of string, grand bool) {
 	return strings.TrimSpace(totalLabel.ReplaceAllString(label, "")), false
 }
 
+// headerText is what the table's header row says over column.
+func headerText(t Table, headerRow, column int) string {
+	for _, r := range t.Rows {
+		if r.Number != headerRow {
+			continue
+		}
+		for _, c := range r.Cells {
+			if c.Column == column {
+				return c.Value
+			}
+		}
+	}
+	return ""
+}
+
 // grandTotal is a total of the whole table, never of a section.
 var grandTotal = regexp.MustCompile(`(?i)^grand\s+totals?\b`)
 
@@ -391,6 +427,13 @@ func coveredFrom(lines []Line, i int) int {
 // that cannot be read is a problem with its location.
 func (l Layout) Read(t Table) Reading {
 	reading := Reading{Lines: []Line{}, Problems: []string{}, Notes: []string{}, FormulasMarked: true}
+	var dimensionColumns []int
+	for column, m := range l.Columns {
+		if m == Dimension {
+			dimensionColumns = append(dimensionColumns, column)
+		}
+	}
+	sort.Ints(dimensionColumns)
 	// A layout reads the sheet it was confirmed for: another with the same columns is another sheet's figures.
 	if l.Table != "" && t.Name != l.Table {
 		reading.Problems = append(reading.Problems, fmt.Sprintf("The layout reads the sheet %q, not %q", l.Table, t.Name))
@@ -448,6 +491,7 @@ func (l Layout) Read(t Table) Reading {
 			continue
 		}
 		line := Line{Row: r.Number, Hidden: r.Hidden, Others: map[Meaning]string{}, Cells: map[Meaning]string{}, Cents: true}
+		dimensions := map[int]string{}
 		var debit, credit, balance *big.Rat
 		hasAmount, signed := false, false
 		// outside are the row's values in columns the layout does not name, and strays their columns: nothing is dropped
@@ -486,12 +530,7 @@ func (l Layout) Read(t Table) Reading {
 			case AccountType:
 				line.Type = strings.TrimSpace(c.Value)
 			case Dimension:
-				// Several dimensions (department and location) are one split, read together.
-				if v := strings.TrimSpace(c.Value); v != "" && line.Dimension != "" {
-					line.Dimension += " · " + v
-				} else if v != "" {
-					line.Dimension = v
-				}
+				dimensions[c.Column] = strings.TrimSpace(c.Value)
 			default:
 				if c.Formula != "" {
 					line.Formulas = append(line.Formulas, meaning)
@@ -562,6 +601,25 @@ func (l Layout) Read(t Table) Reading {
 				default:
 					line.Others[meaning] = exact(a.Value)
 				}
+			}
+		}
+		// The split: one dimension's value, or several named by their headers, a blank shown as one, so splits that
+		// differ by column stay apart.
+		if len(dimensionColumns) == 1 {
+			line.Dimension = dimensions[dimensionColumns[0]]
+		} else if len(dimensionColumns) > 1 {
+			parts, any := make([]string, len(dimensionColumns)), false
+			for i, column := range dimensionColumns {
+				v := dimensions[column]
+				if v != "" {
+					any = true
+				} else {
+					v = "—"
+				}
+				parts[i] = cmp.Or(strings.TrimSpace(headerText(t, l.HeaderRow, column)), strings.TrimRight(cellRef(column, 1), "1")) + ": " + v
+			}
+			if any {
+				line.Dimension = strings.Join(parts, " · ")
 			}
 		}
 		if line.Name == "" && line.Number == "" && !hasAmount {
