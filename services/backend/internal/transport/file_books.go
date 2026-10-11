@@ -303,6 +303,7 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 		}
 	}
 	comparative := false
+	var ledgerPrior *fluxMonth
 	switch err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, shiftMonth(period, -1)).Scan(&priorClose); {
 	case err == sql.ErrNoRows:
 		// A month that is no close can still be a reviewed comparative: its file accepted as the prior period's figures.
@@ -320,7 +321,41 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 			return nil, tieRefusal{503, "Last month's books source is unavailable."}
 		}
 		if source != "files" {
-			comparison = "Last month's books come from another source."
+			// Books from a ledger company are compared once a reviewer confirms it is the files' company, through the
+			// accounts mapped across.
+			m, err := periodBooks(ctx, tx, priorClose, shiftMonth(period, -1))
+			if err != nil {
+				return nil, tieRefusal{503, "Last month's books are unavailable."}
+			}
+			if m == nil {
+				comparison = "Last month's close has no month-end capture."
+				break
+			}
+			link, err := currentLink(ctx, tx, org, entity, m.Source, m.realm)
+			if err != nil {
+				return nil, tieRefusal{503, "Last month's books are unavailable."}
+			}
+			captured, readErr := recordBooks(ctx, tx, m)
+			switch {
+			case link == nil:
+				comparison = "Last month's books come from a ledger company not confirmed as the files' company: confirm it on the client's page."
+			case this.Basis != "accrual":
+				comparison = "Last month's ledger books are on the accrual basis, and this month's file is not."
+			case readErr != nil:
+				comparison = "Last month's capture could not be read: " + readErr.Error() + "."
+			default:
+				back := map[string]string{}
+				for key, id := range link.Accounts {
+					back[id] = key
+				}
+				if b, missing := relinked(captured, back); missing != "" {
+					comparison = "Last month's account " + missing + " is not mapped to the files' accounts."
+				} else if b.Currency != thisBooks.Currency {
+					comparison = "Last month's books are in a different currency."
+				} else {
+					lastBooks, ledgerPrior = b, m
+				}
+			}
 			break
 		}
 		if lastBooks, last, err = fileMonthBooks(ctx, tx, priorClose); err != nil {
@@ -345,6 +380,13 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"], pack["file"] = "files", this.Version, this.AsOf, false, status, this.File
 	note := "Figures are the client's books from its accepted file " + this.File + ", as of " + this.AsOf + "; approved drafts not yet posted are excluded."
 	switch {
+	case lastBooks != nil && ledgerPrior != nil:
+		prior := captureStatus(ctx, tx, priorClose, ledgerPrior)
+		pack["prior"] = map[string]any{"close_id": priorClose, "period": ledgerPrior.Period, "snapshot_id": ledgerPrior.SnapshotID, "as_of": ledgerPrior.CapturedAt, "stale": ledgerPrior.Stale, "status": prior, "source": ledgerPrior.Source}
+		note += " " + ledgerPrior.Period + " is compared from its " + map[string]string{"quickbooks": "QuickBooks", "xero": "Xero"}[ledgerPrior.Source] + " books, confirmed as the files' company, through the accounts mapped across."
+		if prior != "signed_off" {
+			status = prior
+		}
 	case lastBooks != nil && comparative:
 		// A reviewed comparative is no close and carries no sign-off: it is labelled, and leaves the pack's status alone.
 		pack["prior"] = map[string]any{"close_id": "", "period": shiftMonth(period, -1), "snapshot_id": "", "as_of": last.AsOf, "stale": false, "status": "comparative", "file": last.File}

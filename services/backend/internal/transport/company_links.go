@@ -1,10 +1,12 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"maps"
+	"math/big"
 	"net/http"
 	"slices"
 	"strings"
@@ -243,4 +245,52 @@ func registerCompanyLinks(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]string{"id": id})
 	})
+}
+
+// currentLink is client name's confirmed link to ledger company while it stands on the account map in force, or nil.
+func currentLink(ctx context.Context, q rowReader, org, name, ledger, company string) (*companyLink, error) {
+	l, err := latestCompanyLink(ctx, q, org, name, ledger, company)
+	if err != nil || l == nil || !l.Current {
+		return nil, err
+	}
+	return l, nil
+}
+
+// relinked is books b re-keyed through a confirmed company link, from b's account ids to the other side's. An account
+// carrying a balance or activity that the mapping leaves out keeps the months apart: its name is returned, with no
+// books.
+func relinked(b *books, mapping map[string]string) (*books, string) {
+	out := &books{Currency: b.Currency, Typed: b.Typed, Accounts: map[string]packAccount{}, Balances: map[string]*big.Rat{}, Activity: map[string]*big.Rat{},
+		CashFlow: b.CashFlow, Imported: b.Imported, Uncounted: b.Uncounted, ActivityUnavailable: b.ActivityUnavailable}
+	ids := map[string]bool{}
+	for _, m := range []map[string]*big.Rat{b.Balances, b.Activity} {
+		for id := range m {
+			ids[id] = true
+		}
+	}
+	for id := range b.Accounts {
+		ids[id] = true
+	}
+	for _, id := range slices.Sorted(maps.Keys(ids)) {
+		to, ok := mapping[id]
+		if !ok {
+			if v := b.Balances[id]; v != nil && v.Sign() != 0 {
+				return nil, cmp.Or(b.Accounts[id].Name, id)
+			}
+			if v := b.Activity[id]; v != nil && v.Sign() != 0 {
+				return nil, cmp.Or(b.Accounts[id].Name, id)
+			}
+			continue
+		}
+		if a, ok := b.Accounts[id]; ok {
+			out.Accounts[to] = a
+		}
+		if v := b.Balances[id]; v != nil {
+			out.Balances[to] = v
+		}
+		if v := b.Activity[id]; v != nil {
+			out.Activity[to] = v
+		}
+	}
+	return out, ""
 }

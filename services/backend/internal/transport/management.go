@@ -726,6 +726,7 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	}
 	var last *fluxMonth
 	var lastBooks *books
+	var filesPrior *fileMonth
 	comparison := ""
 	var priorClose string
 	switch err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, shiftMonth(period, -1)).Scan(&priorClose); {
@@ -737,7 +738,42 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 		if last, err = periodBooks(ctx, tx, priorClose, shiftMonth(period, -1)); err != nil {
 			return nil, tieRefusal{503, "Last month's snapshot is unavailable."}
 		}
+		source, err := closeBooksSource(ctx, tx, priorClose)
+		if err != nil {
+			return nil, tieRefusal{503, "Last month's books source is unavailable."}
+		}
 		switch {
+		case last == nil && source == "files":
+			// A month on files is compared once a reviewer confirms this company is the files' company, through the
+			// accounts mapped across.
+			fileBooks, month, err := fileMonthBooks(ctx, tx, priorClose)
+			if err != nil {
+				return nil, tieRefusal{503, "Last month's books are unavailable."}
+			}
+			link, err := currentLink(ctx, tx, org, entity, this.Source, this.realm)
+			if err != nil {
+				return nil, tieRefusal{503, "Last month's books are unavailable."}
+			}
+			switch {
+			case fileBooks == nil:
+				comparison = "Last month's books are its files, and none is accepted."
+			case len(month.Holds) > 0:
+				comparison = "Last month's file has checks that hold its statements."
+			case link == nil:
+				comparison = "Last month's books are its files, whose company is not yet confirmed as this one: confirm it on the client's page."
+			case month.Basis != "accrual":
+				comparison = "Last month's file is not on the accrual basis these books are on."
+			case fileBooks.ActivityUnavailable != "":
+				comparison = "Last month's activity is unavailable: " + fileBooks.ActivityUnavailable + "."
+			default:
+				if b, missing := relinked(fileBooks, link.Accounts); missing != "" {
+					comparison = "Last month's account " + missing + " is not mapped to this company's accounts."
+				} else if b.Currency != thisBooks.Currency {
+					comparison = "Last month's books are in a different currency."
+				} else {
+					lastBooks, filesPrior = b, month
+				}
+			}
 		case last == nil:
 			comparison = "Last month's close has no month-end capture."
 		case last.Source != this.Source || last.realm != this.realm:
@@ -760,7 +796,14 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, "Accrual"
 	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"] = this.Source, this.SnapshotID, this.CapturedAt, this.Stale, status
 	note := "Figures are the ledger as captured; approved drafts not yet posted are excluded."
-	if lastBooks != nil {
+	if lastBooks != nil && filesPrior != nil {
+		prior := boundStatus(ctx, tx, priorClose, fileCapture+filesPrior.Version)
+		pack["prior"] = map[string]any{"close_id": priorClose, "period": shiftMonth(period, -1), "snapshot_id": filesPrior.Version, "as_of": filesPrior.AsOf, "stale": false, "status": prior, "source": "files", "file": filesPrior.File}
+		note += " " + shiftMonth(period, -1) + " is compared from its accepted file " + filesPrior.File + ", its company confirmed as this one, through the accounts mapped across."
+		if prior != "signed_off" {
+			status = prior
+		}
+	} else if lastBooks != nil {
 		prior := captureStatus(ctx, tx, priorClose, last)
 		pack["prior"] = map[string]any{"close_id": priorClose, "period": last.Period, "snapshot_id": last.SnapshotID, "as_of": last.CapturedAt, "stale": last.Stale, "status": prior}
 		if prior != "signed_off" {

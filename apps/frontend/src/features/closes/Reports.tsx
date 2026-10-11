@@ -27,7 +27,8 @@ export type Pack =
       open: boolean;
       draft_commentary?: string;
       note: string;
-      prior?: { close_id: string; period: string; snapshot_id: string; as_of: string; stale: boolean; status: Status };
+      // source is the prior month's own, when it differs from this month's (a company confirmed across sources).
+      prior?: { close_id: string; period: string; snapshot_id: string; as_of: string; stale: boolean; status: Status; source?: string; file?: string };
       reclassified: string[];
       comparison_unavailable?: string;
       profit_and_loss: { sections: Section[]; measures: Line[] };
@@ -147,7 +148,7 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         {pack.note}{" "}
         {prior ? (
           <>
-            Compared with {prior.period} (<span className={statusLabels[prior.status][0]}>{statusLabels[prior.status][1]}</span>), {pack.source === "files" ? `as of ${dates.calendarDate(prior.as_of)}` : `captured ${dates.dateTime(prior.as_of)}`}
+            Compared with {prior.period} (<span className={statusLabels[prior.status][0]}>{statusLabels[prior.status][1]}</span>), {(prior.source ?? pack.source) === "files" ? `as of ${dates.calendarDate(prior.as_of)}` : `captured ${dates.dateTime(prior.as_of)}`}
             {prior.stale ? "; that capture is no longer current" : ""}. Totals are the sums of the accounts listed above them.
           </>
         ) : (
