@@ -202,7 +202,7 @@ func linesDigest(lines []quickbooks.LedgerLine) string {
 // writeBooksVersions writes the versions of up to limit captures waiting in books_pending, oldest first, and says
 // whether more may be waiting. A capture joins books_pending in the transaction that saves it, so none is missed.
 func writeBooksVersions(ctx context.Context, db *sql.DB, limit int) (bool, error) {
-	rows, err := db.QueryContext(ctx, `SELECT source,source_id::text FROM books_pending ORDER BY queued_at,source,source_id LIMIT $1`, limit)
+	rows, err := db.QueryContext(ctx, `SELECT source,source_id::text FROM books_pending ORDER BY queued_at,source,books_pending.source_id LIMIT $1`, limit)
 	if err != nil {
 		return false, err
 	}

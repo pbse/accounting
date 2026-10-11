@@ -328,7 +328,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 			}
 			// A reconnection replaces the connection; the attempt stays bound to its organisation.
 			var connection string
-			if err := db.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND tenant_id=$3 AND state='active' ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity, record.TenantID).Scan(&connection); err != nil {
+			if err := db.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND tenant_id=$3 AND state='active' ORDER BY lower(client_entity)=lower($2) DESC,xero_connections.id DESC LIMIT 1`, org, entity, record.TenantID).Scan(&connection); err != nil {
 				problem(w, 409, "Connect the same Xero organisation for this client to verify the attempt.")
 				return
 			}
@@ -556,7 +556,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 
 // xeroGrantRead answers with the client entity's current Xero posting grant, or that it has none.
 func xeroGrantRead(w http.ResponseWriter, r *http.Request, db *sql.DB, org, entity string) {
-	g, err := scanXeroGrant(db.QueryRowContext(r.Context(), `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity))
+	g, err := scanXeroGrant(db.QueryRowContext(r.Context(), `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY lower(client_entity)=lower($2) DESC,xero_posting_grants.id DESC LIMIT 1`, org, entity))
 	if err == sql.ErrNoRows {
 		jsonReply(w, 200, map[string]string{"state": "not_granted"})
 		return
@@ -641,5 +641,5 @@ func xeroBooksGrant(ctx context.Context, db *sql.DB, org, entity, closeID string
 	return scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL
  AND connection_id=COALESCE((SELECT s.connection_id FROM xero_snapshots s WHERE s.close_id::text=$3 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),
   (SELECT x.id FROM xero_connections x JOIN client_closes c ON c.id::text=$3 WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity(c.organization_id,c.entity) AND x.state='active'
-   ORDER BY x.id DESC LIMIT 1)) ORDER BY id DESC LIMIT 1`, org, entity, closeID))
+   ORDER BY x.id DESC LIMIT 1)) ORDER BY xero_posting_grants.id DESC LIMIT 1`, org, entity, closeID))
 }

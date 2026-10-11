@@ -280,7 +280,7 @@ func reconcileInvitations(ctx context.Context, db *sql.DB, org string) error {
 func settleInvitations(ctx context.Context, db *sql.DB, org string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	rows, err := db.QueryContext(ctx, `SELECT id::text,email,role_slug,invited_by,created_at,state FROM member_invitations WHERE organization_id=$1 AND workos_id IS NULL AND state IN ('sending','revoked') AND created_at<now()-interval '30 seconds' AND created_at>now()-interval '30 days' ORDER BY id LIMIT 10`, org)
+	rows, err := db.QueryContext(ctx, `SELECT id::text,email,role_slug,invited_by,created_at,state FROM member_invitations WHERE organization_id=$1 AND workos_id IS NULL AND state IN ('sending','revoked') AND created_at<now()-interval '30 seconds' AND created_at>now()-interval '30 days' ORDER BY member_invitations.id LIMIT 10`, org)
 	if err != nil {
 		return err
 	}

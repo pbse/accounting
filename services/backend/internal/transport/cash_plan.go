@@ -276,7 +276,7 @@ type cashObligation struct {
 
 func clientObligations(r *http.Request, db *sql.DB, org, entity string) ([]cashObligation, error) {
 	rows, err := db.QueryContext(r.Context(), `SELECT id::text,name,category,direction,amount::text,currency,first_on::text,every,COALESCE(until_on::text,''),vendor,basis,created_by,created_at,COALESCE(approved_by,''),approved_at,COALESCE(retired_by,''),retired_at,COALESCE(retire_reason,'')
- FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY (retired_at IS NULL) DESC,id DESC`, org, entity)
+ FROM cash_obligations WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY (retired_at IS NULL) DESC,cash_obligations.id DESC`, org, entity)
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +646,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		// The newest review of this view, and whether the plan still is what it reviewed.
 		var reviewID, reviewedDigest, reviewedBy string
 		var reviewedAt time.Time
-		err = db.QueryRowContext(ctx, `SELECT id::text,digest,reviewed_by,reviewed_at FROM cash_plan_reviews WHERE close_id::text=$1 AND scenario_id IS NOT DISTINCT FROM NULLIF($2,'')::bigint ORDER BY id DESC LIMIT 1`, r.PathValue("id"), scenarioID).Scan(&reviewID, &reviewedDigest, &reviewedBy, &reviewedAt)
+		err = db.QueryRowContext(ctx, `SELECT id::text,digest,reviewed_by,reviewed_at FROM cash_plan_reviews WHERE close_id::text=$1 AND scenario_id IS NOT DISTINCT FROM NULLIF($2,'')::bigint ORDER BY cash_plan_reviews.id DESC LIMIT 1`, r.PathValue("id"), scenarioID).Scan(&reviewID, &reviewedDigest, &reviewedBy, &reviewedAt)
 		switch {
 		case err == sql.ErrNoRows:
 			out["review"] = nil
@@ -883,7 +883,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var raw []byte
-		if err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'changes',changes,'created_by',created_by,'created_at',created_at) ORDER BY id DESC),'[]') FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND retired_at IS NULL AND `+visibleScenario("$3", "$4"), org, entity, executive(r), reviewerName(r)).Scan(&raw); err != nil {
+		if err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'changes',changes,'created_by',created_by,'created_at',created_at) ORDER BY cash_scenarios.id DESC),'[]') FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND retired_at IS NULL AND `+visibleScenario("$3", "$4"), org, entity, executive(r), reviewerName(r)).Scan(&raw); err != nil {
 			problem(w, 503, "Scenarios are unavailable.")
 			return
 		}

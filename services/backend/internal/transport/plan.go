@@ -55,7 +55,7 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
  (SELECT max(z.finished_at) FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.connection_id=x.id AND z.period=c.period AND z.state IN ('completed','unchanged')),
  COALESCE(h.state,''),xs.captured_at,COALESCE(xs.stale,false),c.period<to_char(now() AT TIME ZONE 'UTC','YYYY-MM'),
  (c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM') OR EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.state='active'))
- AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off',
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off',
  EXISTS(SELECT 1 FROM quickbooks_snapshots z WHERE z.close_id=c.id AND z.payload ? 'period'),books_source(c.organization_id,c.entity,c.period)
  FROM client_closes c
  LEFT JOIN quickbooks_connections x ON x.id=`+quickbooks.ReadingConnection("c.id")+`

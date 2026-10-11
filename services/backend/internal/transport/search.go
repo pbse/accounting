@@ -70,7 +70,7 @@ func searchWork(ctx context.Context, db *sql.DB, r *http.Request, closeID, query
  COALESCE(t.record->'VendorRef'->>'name',t.record->'CustomerRef'->>'name',t.record->'EntityRef'->>'name',''),''
  FROM c JOIN LATERAL (SELECT z.id FROM xero_snapshots z WHERE z.close_id=c.id AND z.period=c.period ORDER BY z.id DESC LIMIT 1) s ON true
  JOIN xero_transaction_rows t ON t.snapshot_id=s.id WHERE ('xero '||t.kind||' '||t.provider_id||' '||t.record::text) ILIKE ALL($5::text[]) ORDER BY t.txn_date DESC,t.provider_id LIMIT 8`},
-		{"procedure", closes + `, p AS (SELECT DISTINCT ON (lower(client_entity),kind) id,client_entity,kind,instructions,enabled,created_at FROM procedure_versions WHERE organization_id=$1 ORDER BY lower(client_entity),kind,id DESC)
+		{"procedure", closes + `, p AS (SELECT DISTINCT ON (lower(client_entity),kind) id,client_entity,kind,instructions,enabled,created_at FROM procedure_versions WHERE organization_id=$1 ORDER BY lower(client_entity),kind,procedure_versions.id DESC)
  SELECT (SELECT max(c.id)::text FROM c WHERE p.client_entity='' OR lower(c.entity)=lower(p.client_entity)),CASE WHEN p.client_entity='' THEN 'All clients' ELSE p.client_entity END,p.id::text,p.kind||' procedure',
  p.instructions,''
  FROM p WHERE p.enabled AND (p.kind||' '||p.instructions) ILIKE ALL($5::text[]) AND EXISTS(SELECT 1 FROM c WHERE p.client_entity='' OR lower(c.entity)=lower(p.client_entity)) ORDER BY p.id DESC LIMIT 8`},

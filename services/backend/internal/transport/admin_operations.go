@@ -95,7 +95,7 @@ func adminConnections(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return tx.QueryRowContext(ctx, `WITH c AS (`+adminConnectionRows+`)
  SELECT COALESCE((SELECT jsonb_agg(k ORDER BY k.provider,k.state) FROM (SELECT provider,state,count(*) AS connections FROM c WHERE $3='' OR organization=$3 GROUP BY 1,2) k),'[]'::jsonb),
   COALESCE((SELECT jsonb_agg(r ORDER BY r.state='reconnect_required' DESC,r.updated_at DESC,r.provider,r.close_id) FROM (SELECT * FROM c
-   WHERE ($1='' OR provider=$1) AND ($2='' OR state=$2) AND ($3='' OR organization=$3) ORDER BY state='reconnect_required' DESC,updated_at DESC,provider,close_id LIMIT $4 OFFSET $5) r),'[]'::jsonb)`,
+   WHERE ($1='' OR provider=$1) AND ($2='' OR state=$2) AND ($3='' OR organization=$3) ORDER BY c.state='reconnect_required' DESC,c.updated_at DESC,c.provider,c.close_id LIMIT $4 OFFSET $5) r),'[]'::jsonb)`,
 			filters[0], filters[1], filters[2], adminPage+1, offset).Scan(&counts, &rows)
 	})
 	if err != nil {

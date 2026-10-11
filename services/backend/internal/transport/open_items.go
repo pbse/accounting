@@ -78,7 +78,7 @@ func latestOpenItems(r *http.Request, db *sql.DB) (receivables, payables []openI
 // openItemDecisions is each decided document's newest decision for a client's ledger company, by "kind|id".
 func openItemDecisions(r *http.Request, db *sql.DB, org, entity, company string) (map[string]openItem, error) {
 	rows, err := db.QueryContext(r.Context(), `SELECT DISTINCT ON (kind,item_id) kind,item_id,label,COALESCE(document_date::text,''),id::text,owner,status,COALESCE(expected_on::text,''),note,actor,created_at FROM open_item_actions
- WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND company=$3 ORDER BY kind,item_id,id DESC`, org, entity, company)
+ WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND company=$3 ORDER BY kind,item_id,open_item_actions.id DESC`, org, entity, company)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func registerOpenItems(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var previous, owner string
-		err = tx.QueryRowContext(r.Context(), `SELECT id::text,owner FROM open_item_actions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND company=$3 AND kind=$4 AND item_id=$5 ORDER BY id DESC LIMIT 1`, org, entity, meta["company"], in.Kind, in.ItemID).Scan(&previous, &owner)
+		err = tx.QueryRowContext(r.Context(), `SELECT id::text,owner FROM open_item_actions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND company=$3 AND kind=$4 AND item_id=$5 ORDER BY open_item_actions.id DESC LIMIT 1`, org, entity, meta["company"], in.Kind, in.ItemID).Scan(&previous, &owner)
 		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Open item decisions are unavailable.")
 			return

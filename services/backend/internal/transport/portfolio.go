@@ -318,7 +318,7 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		rows, err := tx.QueryContext(r.Context(), `SELECT c.id::text,c.entity||' · '||c.period,COALESCE(c.due_on::text,'') FROM client_closes c WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$5 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
- AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'
  AND ($3='' OR ($6='on' AND c.due_on=$3::date) OR ($6='before' AND c.due_on<$3::date) OR ($6='by' AND c.due_on<=$3::date))
  AND (NOT $4 OR (c.owner<>'' AND c.owner=$5))
  AND ($7='' OR ($7<>'waiting_statements' AND EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id AND j.state=$7)) OR ($7='waiting_statements' AND `+waitingStatements+`))

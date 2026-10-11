@@ -24,7 +24,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	err := db.QueryRowContext(ctx, `UPDATE forwarded_files f SET state='scanning',claim=$1,claimed_at=now(),attempts=attempts+1,error=''
- WHERE f.id=(SELECT id FROM forwarded_files WHERE attempts<3 AND ((state='queued' AND next_attempt_at<=now()) OR (state='scanning' AND claimed_at<now()-interval '8 minutes')) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
+ WHERE f.id=(SELECT id FROM forwarded_files WHERE attempts<3 AND ((state='queued' AND next_attempt_at<=now()) OR (state='scanning' AND claimed_at<now()-interval '8 minutes')) ORDER BY forwarded_files.id FOR UPDATE SKIP LOCKED LIMIT 1)
  RETURNING f.id::text,f.body,f.digest,f.attempts`, claim).Scan(&id, &body, &digest, &attempts)
 	if err == sql.ErrNoRows {
 		return false, nil

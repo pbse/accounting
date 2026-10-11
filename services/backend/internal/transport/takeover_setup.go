@@ -152,7 +152,7 @@ func registerTakeoverSetup(mux *http.ServeMux, db *sql.DB) {
 		content, digest, problems, err := takeoverContent(r.Context(), tx, r.PathValue("id"))
 		var setups []byte
 		if err == nil {
-			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'digest',digest,'timezone',timezone,'confirmed_by',confirmed_by,'confirmed_at',confirmed_at) ORDER BY id DESC),'[]'::jsonb) FROM takeover_setups WHERE close_id::text=$1`, r.PathValue("id")).Scan(&setups)
+			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'digest',digest,'timezone',timezone,'confirmed_by',confirmed_by,'confirmed_at',confirmed_at) ORDER BY takeover_setups.id DESC),'[]'::jsonb) FROM takeover_setups WHERE close_id::text=$1`, r.PathValue("id")).Scan(&setups)
 		}
 		if err != nil {
 			problem(w, 503, "Takeover setup unavailable.")

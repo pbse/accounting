@@ -137,7 +137,7 @@ func productionClient(ctx context.Context, db *sql.DB, org, entity, closeID, kin
 	connectionID := g.ConnectionID
 	if kind == "" {
 		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency,company_name FROM quickbooks_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2)
- AND environment='production' AND state='active' AND realm=$3 AND company_name=client_entity ORDER BY id DESC LIMIT 1`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency, &company)
+ AND environment='production' AND state='active' AND realm=$3 AND company_name=client_entity ORDER BY quickbooks_connections.id DESC LIMIT 1`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency, &company)
 	} else {
 		err = db.QueryRowContext(ctx, `SELECT credential,access_expires_at,home_currency,company_name FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)
  AND environment='production' AND state='active' AND realm=$4 AND company_name=client_entity`, connectionID, org, entity, g.Realm).Scan(&encrypted, &expires, &currency, &company)
@@ -339,7 +339,7 @@ func readProductionPosting(ctx context.Context, db productionReader, closeID, pa
 	}
 	if err == nil {
 		var raw []byte
-		err = db.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(id::text ORDER BY id),'[]'::jsonb) FROM production_postings WHERE connection_id::text=$1 AND id::text<>$2 AND (state IN ('executing','unknown') OR (state='approved' AND approval_expires_at>now())) AND `+sharesAccount, p.ConnectionID, p.ID, accountIDs(p.LedgerBefore)).Scan(&raw)
+		err = db.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(id::text ORDER BY production_postings.id),'[]'::jsonb) FROM production_postings WHERE connection_id::text=$1 AND id::text<>$2 AND (state IN ('executing','unknown') OR (state='approved' AND approval_expires_at>now())) AND `+sharesAccount, p.ConnectionID, p.ID, accountIDs(p.LedgerBefore)).Scan(&raw)
 		if err == nil {
 			err = json.Unmarshal(raw, &p.Conflicts)
 		}
