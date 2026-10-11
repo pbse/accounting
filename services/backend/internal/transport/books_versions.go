@@ -93,7 +93,8 @@ func (v booksVersion) digest() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// captureMonth reads one month-end capture as periodBooks gives it to the readers, with its close, firm and month.
+// captureMonth reads one month-end capture as periodBooks gives it to the readers, with its close, firm and month. A
+// report the capture lacks reads as null, so the readers refuse it and its version is kept as unreadable.
 func captureMonth(ctx context.Context, q rowReader, source, id string) (m *fluxMonth, closeID, org string, err error) {
 	m = &fluxMonth{Source: source}
 	// A capture's id is its snapshot's bigint key; any other is no capture.
@@ -102,7 +103,7 @@ func captureMonth(ctx context.Context, q rowReader, source, id string) (m *fluxM
 	}
 	switch source {
 	case "quickbooks":
-		err = q.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,c.id::text,c.organization_id,c.period,s.payload->'accounts',s.payload->'reports'->'ProfitAndLoss',s.payload->'reports'->'GeneralLedger',COALESCE(s.payload->'reports'->'TrialBalance','null'),COALESCE(s.payload->'reports'->'CashFlow','null')
+		err = q.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,c.id::text,c.organization_id,c.period,COALESCE(s.payload->'accounts','null'),COALESCE(s.payload->'reports'->'ProfitAndLoss','null'),COALESCE(s.payload->'reports'->'GeneralLedger','null'),COALESCE(s.payload->'reports'->'TrialBalance','null'),COALESCE(s.payload->'reports'->'CashFlow','null')
  FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.id=$1::bigint AND s.payload ? 'period'`, id).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &closeID, &org, &m.Period, &m.accounts, &m.pl, &m.gl, &m.tb, &m.cashFlow)
 	case "xero":
 		err = q.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,c.id::text,c.organization_id,c.period,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.id=$1::bigint`, id).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &closeID, &org, &m.Period, &m.xero)
@@ -215,12 +216,23 @@ func writeBooksVersions(ctx context.Context, db *sql.DB, limit int) (bool, error
 	if err = rows.Err(); err != nil {
 		return false, err
 	}
+	// A capture whose version cannot be written goes to the back of the queue, so it never holds the rest up; the first
+	// failure is reported, and the capture is tried again after them.
+	var failed error
 	for _, c := range pending {
 		if err = writeBooksVersion(ctx, db, c.source, c.id); err != nil {
-			return false, fmt.Errorf("%s capture %s: %w", c.source, c.id, err)
+			if ctx.Err() != nil {
+				return false, err
+			}
+			if failed == nil {
+				failed = fmt.Errorf("%s capture %s: %w", c.source, c.id, err)
+			}
+			if _, e := db.ExecContext(ctx, `UPDATE books_pending SET queued_at=now() WHERE source=$1 AND source_id=$2::bigint`, c.source, c.id); e != nil {
+				return false, e
+			}
 		}
 	}
-	return len(pending) == limit, nil
+	return len(pending) == limit, failed
 }
 
 // RunBooksVersions keeps every month-end capture's books version written: the existing captures first, a batch at a

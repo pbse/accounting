@@ -69,9 +69,17 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,'Books client','fixture','active',$3,now(),'t-1') RETURNING id::text`, closeID, org, rand.Text()).Scan(&xeroConnection))
 	must(db.QueryRow(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,'t-1','2026-09','d','{}','fixture') RETURNING id::text`, closeID, xeroConnection).Scan(&xeroCapture))
 
+	// A capture with a month but none of its reports (an older capture) is kept as unreadable, never an error.
+	bare := ""
+	must(db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,'{"period":"2026-09"}'::jsonb,now(),'fixture') RETURNING id::text`, closeID, connection, rand.Text()).Scan(&bare))
 	for more := true; more; {
 		more, err = writeBooksVersions(t.Context(), db, 500)
 		must(err)
+	}
+	var bareRefused string
+	must(db.QueryRow(`SELECT unreadable FROM books_versions WHERE source='quickbooks' AND source_id=$1`, bare).Scan(&bareRefused))
+	if bareRefused == "" {
+		t.Fatal("a capture without its reports is kept as unreadable")
 	}
 	var currency, balances, activity, accountsKept, problem, company, asOf string
 	var typed bool
@@ -130,12 +138,12 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	must(err)
 	var after int
 	must(db.QueryRow(`SELECT count(*) FROM books_versions WHERE organization_id=$1`, org).Scan(&after))
-	if before != 4 || after != 4 {
+	if before != 5 || after != 5 {
 		t.Fatalf("one version per capture: %d then %d", before, after)
 	}
 	checked, mismatched, err := booksParity(t.Context(), db, org, 0)
 	must(err)
-	if checked != 4 || len(mismatched) != 0 {
+	if checked != 5 || len(mismatched) != 0 {
 		t.Fatalf("the readers agree with every version, a General Ledger refused as it was recorded included: %d %v", checked, mismatched)
 	}
 	// The worker's run checks every version and records what it found.
