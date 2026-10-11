@@ -30,7 +30,7 @@ type Row = { number: number; hidden?: boolean; cells: Cell[] };
 type Table = { name: string; hidden?: boolean; rows: Row[]; more: number };
 type Line = { row: number; ref: string; kind: "posting" | "total" | "heading"; number?: string; name: string; balance: string; cents: boolean };
 type Reading = { lines: Line[]; debits: string; credits: string; balanced: boolean; problems: string[]; notes: string[] };
-type Confirmed = { id: string; layout: Layout; reading: Reading; reason: string; actor: string; at: string; balanced: boolean };
+type Confirmed = { id: string; layout: Layout; reading: Reading; reason: string; actor: string; at: string; balanced: boolean; problems: number };
 type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; confirmed?: Confirmed };
 type ImportRead = {
   import: ImportRow;
@@ -56,6 +56,18 @@ const meanings: [Meaning | "", string][] = [
   ["movement", "Movement"],
   ["year_to_date", "Year to date"],
 ];
+// A row the reader cannot place is marked by a person: an account it took for a total, a total or heading it cannot name,
+// or a footer to leave out.
+type RowKind = "" | "postings" | "totals" | "headings" | "ignored";
+const rowKinds: [RowKind, string][] = [
+  ["", "As read"],
+  ["postings", "Account"],
+  ["totals", "Total"],
+  ["headings", "Heading"],
+  ["ignored", "Left out"],
+];
+// clean says a confirmed reading balances with no problem left.
+const clean = (c: Confirmed) => c.balanced && !c.problems;
 const filesPath = (name: string) => `/client/imports?name=${encodeURIComponent(name)}`;
 const importPath = (name: string, id: string) => `/client/import?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`;
 
@@ -74,7 +86,7 @@ export function FilesCard({ client }: { client: string }) {
     <>
       <Card
         icon="file"
-        tone={latest && !latest.confirmed?.balanced ? "wait" : "done"}
+        tone={latest && !(latest.confirmed && clean(latest.confirmed)) ? "wait" : "done"}
         title="Files"
         chip={<span className="pill neutral">{imports.length ? `${imports.length} sent` : "None sent"}</span>}
         action={
@@ -87,7 +99,7 @@ export function FilesCard({ client }: { client: string }) {
           ? "The client's files could not be read."
           : !latest
             ? "Send the client's Trial Balance as a CSV or Excel workbook for a month. Its layout is confirmed once and read the same way each month after."
-            : `${monthName(latest.period)}: ${latest.name}, sent ${dates.dayMonth(latest.at)}${latest.confirmed ? (latest.confirmed.balanced ? ", read and balanced." : ", read, with problems to resolve.") : ", its layout not confirmed yet."}`}
+            : `${monthName(latest.period)}: ${latest.name}, sent ${dates.dayMonth(latest.at)}${latest.confirmed ? (clean(latest.confirmed) ? ", read and balanced." : ", read, with problems to resolve.") : ", its layout not confirmed yet."}`}
         {imports.length > 0 && (
           <ul className="ks-filelist">
             {imports.slice(0, 6).map((i) => (
@@ -95,7 +107,7 @@ export function FilesCard({ client }: { client: string }) {
                 <button type="button" className="link" onClick={() => setOpen(i.id)}>
                   {monthName(i.period)} · {i.name}
                 </button>{" "}
-                {i.confirmed ? (i.confirmed.balanced ? <span className="pill">Balanced</span> : <span className="pill danger">Problems</span>) : <span className="pill muted">Layout to confirm</span>}
+                {i.confirmed ? clean(i.confirmed) ? <span className="pill">Balanced</span> : <span className="pill danger">Problems</span> : <span className="pill muted">Layout to confirm</span>}
               </li>
             ))}
           </ul>
@@ -140,6 +152,10 @@ function SendForm({ client, onSent, onCancel }: { client: string; onSent: (id: s
           File
           <input type="file" name="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
         </label>
+        <label className="checkbox-label">
+          <input type="checkbox" name="one_client" value="true" required /> It holds only {client}’s books
+        </label>
+        <p className="note">A file holding several clients’ books cannot be sent yet: whoever opens one client would see them all.</p>
         {error && <p role="alert">{error}</p>}
         <DialogActions>
           <button type="button" onClick={onCancel}>
@@ -188,6 +204,13 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
     }
   }
   const set = (change: Partial<Layout>) => (setLayout({ ...layout, ...change }), setReading(undefined));
+  const kindOf = (row: number): RowKind => (["postings", "totals", "headings", "ignored"] as const).find((k) => layout[k]?.includes(row)) ?? "";
+  const mark = (row: number, kind: RowKind) => {
+    const next: Partial<Layout> = {};
+    for (const k of ["postings", "totals", "headings", "ignored"] as const) next[k] = (layout[k] ?? []).filter((r) => r !== row);
+    if (kind) next[kind] = [...(next[kind] ?? []), row].sort((a, b) => a - b);
+    set(next);
+  };
   return (
     <div className="ks-import">
       {data.proposal?.questions.length ? (
@@ -270,11 +293,23 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
           <input value={layout.currency} maxLength={3} onChange={(e) => set({ currency: e.target.value.toUpperCase() })} />
         </label>
       </fieldset>
+      <p className="note">Mark a row only when the reading asks: an account it took for a total, a total or heading it cannot name, or a footer to leave out.</p>
       <table className="ks-preview">
         <tbody>
-          {table?.rows.slice(0, 25).map((r) => (
+          {table?.rows.map((r) => (
             <tr key={r.number} className={r.number === layout.header_row ? "header" : undefined}>
               <th>{r.number}</th>
+              <td>
+                {r.number > layout.header_row && (
+                  <select aria-label={`How row ${r.number} is read`} value={kindOf(r.number)} disabled={busy} onChange={(e) => mark(r.number, e.target.value as RowKind)}>
+                    {rowKinds.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </td>
               {columns.map((c) => (
                 <td key={c}>{r.cells.find((cell) => cell.column === c)?.value}</td>
               ))}
@@ -282,10 +317,14 @@ function LayoutForm({ client, id, data, start, onDone }: { client: string; id: s
           ))}
         </tbody>
       </table>
+      {table && table.more > 0 && <p className="note">The first {table.rows.length} rows are shown; {table.more} more are read the same way.</p>}
       {reading && (
         <div className="ks-reading">
           <p>
-            <span className={reading.balanced ? "pill" : "pill danger"}>{reading.balanced ? "Balanced" : "Not balanced"}</span> Debits {reading.debits}, credits {reading.credits},{" "}
+            <span className={reading.balanced && !reading.problems.length ? "pill" : "pill danger"}>
+              {!reading.balanced ? "Not balanced" : reading.problems.length ? "Balanced, with problems" : "Balanced"}
+            </span>{" "}
+            Debits {reading.debits}, credits {reading.credits},{" "}
             {reading.lines.filter((l) => l.kind === "posting").length} accounts.
           </p>
           {reading.problems.length > 0 && (

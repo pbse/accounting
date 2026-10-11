@@ -75,11 +75,13 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 		raw, _ := json.Marshal(body)
 		return send(subject, permissions, method, path, "application/json", raw, want)
 	}
+	oneClient := "true"
 	upload := func(subject string, permissions []string, name, period, content string, want int) map[string]any {
 		t.Helper()
 		var b bytes.Buffer
 		m := multipart.NewWriter(&b)
 		must(m.WriteField("period", period))
+		must(m.WriteField("one_client", oneClient))
 		f, e := m.CreateFormFile("file", name)
 		must(e)
 		_, e = f.Write([]byte(content))
@@ -98,6 +100,10 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	// Any member who sees the client whole sends a file for a month; one assigned to an alias alone does not.
 	upload("user_b", preparer, "tb.csv", "2026-13", september, 422)
 	upload("user_b", preparer, "statement.pdf", "2026-09", "%PDF-1.7", 422)
+	// The sender confirms the file holds only this client's books: one holding several waits for their split.
+	oneClient = ""
+	upload("user_b", preparer, "Acme TB September.csv", "2026-09", september, 422)
+	oneClient = "true"
 	id := upload("user_b", preparer, "Acme TB September.csv", "2026-09", september, 201)["id"].(string)
 	_, err = db.Exec(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme Trading Ltd','2026-07')`, org)
 	must(err)
@@ -136,12 +142,24 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	// October's file in the same layout is proposed with September's confirmed layout; one with other headers is not.
 	october := upload("user_b", preparer, "Acme TB October.csv", "2026-10", "Account,Debit,Credit\nBank,1700.00,\nCapital,,1000.00\nSales,,700.00\n", 201)["id"].(string)
 	again := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+october, nil, 200)["proposal"].(map[string]any)
-	if again["reused"] != true || again["layout"].(map[string]any)["currency"] != "USD" {
-		t.Fatalf("the confirmed layout is proposed again: %v", again)
+	if again["reused"] != true || again["layout"].(map[string]any)["currency"] != "USD" || again["layout"].(map[string]any)["as_of"] != "" {
+		t.Fatalf("the confirmed layout is proposed again, its date asked afresh: %v", again)
 	}
 	other := upload("user_b", preparer, "Acme TB other.csv", "2026-10", "Account,Balance\nBank,1700.00\nCapital,-1700.00\n", 201)["id"].(string)
 	if fresh := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+other, nil, 200)["proposal"].(map[string]any); fresh["reused"] != false {
 		t.Fatalf("other headers ask afresh: %v", fresh)
 	}
 	call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id=999999999", nil, 404)
+
+	// Headers the reader does not know, confirmed by a person, are proposed again when the next file has them.
+	custom := "Konto,Soll,Haben\nKasse,100.00,\nKapital,,100.00\n"
+	first := upload("user_b", preparer, "Konten Juli.csv", "2026-07", custom, 201)["id"].(string)
+	table := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+first, nil, 200)["tables"].([]any)[0].(map[string]any)["name"]
+	manual := map[string]any{"table": table, "header_row": 1, "columns": map[string]string{"0": "account_name", "1": "debit", "2": "credit"},
+		"style": map[string]any{"decimal_comma": false, "scale": 1}, "as_of": "2026-07-31", "currency": "USD"}
+	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+first, map[string]any{"action": "confirm", "layout": manual, "reason": "Headers named by hand"}, 200)
+	next := upload("user_b", preparer, "Konten August.csv", "2026-08", custom, 201)["id"].(string)
+	if p := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+next, nil, 200)["proposal"].(map[string]any); p["reused"] != true {
+		t.Fatalf("a layout confirmed by hand is proposed again: %v", p)
+	}
 }

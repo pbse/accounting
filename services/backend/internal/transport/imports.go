@@ -44,6 +44,8 @@ type confirmedRead struct {
 	Actor    string            `json:"actor"`
 	At       time.Time         `json:"at"`
 	Balanced bool              `json:"balanced"`
+	// Problems is how many problems the reading names: a balanced reading with problems still holds what depends on it.
+	Problems int `json:"problems"`
 }
 
 var (
@@ -122,7 +124,7 @@ func latestLayout(ctx context.Context, q rowReader, org, name, id string) (*conf
 	}
 	json.Unmarshal(layout, &c.Layout)
 	json.Unmarshal(reading, &c.Reading)
-	c.Balanced = c.Reading.Balanced
+	c.Balanced, c.Problems = c.Reading.Balanced, len(c.Reading.Problems)
 	return &c, nil
 }
 
@@ -145,10 +147,12 @@ func proposal(file bookfiles.File, saved *confirmedRead) (bookfiles.Layout, []st
 			if t.Name != saved.Layout.Table && len(file.Tables) > 1 {
 				continue
 			}
-			fresh, _ := bookfiles.ProposeLayout(t)
-			if fresh.HeaderRow == saved.Layout.HeaderRow && sameHeaders(t, saved.Layout) {
+			// The header row's text over the same columns is what makes it the same layout, whether the reader found that
+			// row itself or a person chose it. The date is this file's, and rows marked by number were the last file's.
+			if sameHeaders(t, saved.Layout) {
 				layout := saved.Layout
-				layout.Table = t.Name
+				layout.Table, layout.AsOf = t.Name, ""
+				layout.Headings, layout.Totals, layout.Postings, layout.Ignored = nil, nil, nil, nil
 				return layout, []string{"As of which date is this file, and is the layout the same as last time?"}, true
 			}
 		}
@@ -267,6 +271,11 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		period := strings.TrimSpace(r.FormValue("period"))
 		if !importPeriod.MatchString(period) {
 			problem(w, 422, "Say which month the file holds, as YYYY-MM.")
+			return
+		}
+		// A file holding several clients' books would show them all to whoever opens this client: it waits for their split.
+		if r.FormValue("one_client") != "true" {
+			problem(w, 422, "Confirm the file holds only "+name+"'s books. A file holding several clients' books cannot be sent yet.")
 			return
 		}
 		file, header, err := r.FormFile("file")

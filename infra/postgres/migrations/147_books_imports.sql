@@ -16,6 +16,9 @@ CREATE TABLE books_imports (
  content bytea NOT NULL CHECK (octet_length(content) BETWEEN 1 AND 52428800),
  format text NOT NULL CHECK (format IN ('csv','xlsx')),
  replaces bigint REFERENCES books_imports(id),
+ -- holds is what the sender confirmed the file holds: one client's books. A file holding several clients' books waits for
+ -- their split into one view per client, kept under access covering them all.
+ holds text NOT NULL DEFAULT 'one_client' CHECK (holds IN ('one_client')),
  actor text NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now()
 );

@@ -1066,6 +1066,10 @@ body {
   white-space: nowrap;
   text-align: left;
 }
+.ks-preview select {
+  font-size: 12px;
+  padding: 1px 4px;
+}
 .ks-preview tr.header td {
   background: var(--fill);
   font-weight: 600;
