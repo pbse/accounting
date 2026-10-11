@@ -87,6 +87,63 @@ type moneyEntry struct {
 	n     string
 }
 
+// metricAt is a measure named in a text, where.
+type metricAt struct {
+	start, end int
+	keys       []string
+}
+
+// metricsAt is every measure a text names, each phrase taken once at its longest, in order.
+func metricsAt(text string) []metricAt {
+	lower := []byte(strings.ToLower(text))
+	out := []metricAt{}
+	for _, m := range agentMetricTerms {
+		for _, at := range m.re.FindAllIndex(lower, -1) {
+			out = append(out, metricAt{at[0], at[1], m.keys})
+			for i := at[0]; i < at[1]; i++ {
+				if lower[i] != ' ' {
+					lower[i] = '#'
+				}
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].start < out[j].start })
+	return out
+}
+
+// nearestMetric is the measure named closest to a figure within its clause: the last one before it, else the first
+// after. near is the text where the field's own line, named there, is nearer the figure than that measure: between
+// the measure and the figure, or, when the measure follows the figure, all of the clause before the figure.
+func nearestMetric(line string, o occurrence) (map[string]bool, string) {
+	start := strings.Index(line, o.clause)
+	if start < 0 {
+		return nil, ""
+	}
+	var before, after *metricAt
+	for _, m := range metricsAt(o.clause) {
+		m := m
+		if start+m.end <= o.start {
+			before = &m
+		} else if start+m.start >= o.end && after == nil {
+			after = &m
+		}
+	}
+	pick, near := before, ""
+	if pick != nil {
+		near = line[start+pick.end : o.start]
+	} else if pick = after; pick != nil {
+		near = line[start:o.start] + " " + line[o.end:start+pick.start]
+	}
+	if pick == nil {
+		return nil, ""
+	}
+	out := map[string]bool{}
+	for _, k := range pick.keys {
+		out[k] = true
+	}
+	return out, near
+}
+
 // claim is what a cited field measures.
 type claim struct {
 	label    string
@@ -299,12 +356,13 @@ var (
 	claimCausal    = regexp.MustCompile(`\b(because|due to|driven by|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|led by|on the back of)\b`)
 	claimHedge     = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
 	claimRemainder = regexp.MustCompile(`\b(remainder|rest|other|others|unexplained|remaining|partly|in part|including|among|largely|mostly|mainly|part of)\b`)
-	claimMonth     = regexp.MustCompile(`\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b(?:\s+(\d{4}))?|\b(\d{4})-(\d{2})\b(?:-\d{2})?`)
-	claimCurrency  = regexp.MustCompile(`\b(USD|EUR|GBP|CAD|AUD|NZD|INR|JPY|CHF|SGD|HKD|MXN|SEK|NOK|DKK|ZAR)\b|[€£₹¥$]`)
-	claimBasis     = regexp.MustCompile(`\b(cash|accrual|modified cash)[ -]basis\b`)
-	claimClause    = regexp.MustCompile(`[;,:]\s+|\s+(?:and|but|while|whereas|with)\s+`)
-	monthNumbers   = map[string]int{"january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3, "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7, "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12}
-	dollarFamily   = map[string]bool{"USD": true, "CAD": true, "AUD": true, "NZD": true, "SGD": true, "HKD": true, "MXN": true}
+	// Month names in any case, except "may", which is a month only as May.
+	claimMonth    = regexp.MustCompile(`\b((?i:january|february|march|april|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)|May)\b(?:\s+(\d{4}))?|\b(\d{4})-(\d{2})\b(?:-\d{2})?`)
+	claimCurrency = regexp.MustCompile(`(?i)\b(USD|EUR|GBP|CAD|AUD|NZD|INR|JPY|CHF|SGD|HKD|MXN|SEK|NOK|DKK|ZAR)\b|[€£₹¥$]`)
+	claimBasis    = regexp.MustCompile(`\b(cash|accrual|modified cash)[ -]basis\b`)
+	claimClause   = regexp.MustCompile(`[;,:]\s+|\s+(?:and|but|while|whereas|with)\s+`)
+	monthNumbers  = map[string]int{"january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3, "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7, "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12}
+	dollarFamily  = map[string]bool{"USD": true, "CAD": true, "AUD": true, "NZD": true, "SGD": true, "HKD": true, "MXN": true}
 )
 
 // occurrence is where a figure sits in its sentence: its clause, the words just before it and just after.
@@ -478,20 +536,22 @@ func labelNamed(text, label string) bool {
 // or "" when the sentence says what the field measures. got is the field's value; o is where the sentence states it.
 func checkClaim(line string, o occurrence, c claim, got string, entities []string) string {
 	lowerLine, lowerClause := strings.ToLower(line), strings.ToLower(o.clause)
-	// What it measures: the metric named next to the figure, else in the sentence, must be the field's.
-	named := metricsIn(o.clause)
+	// What it measures: the metric named nearest the figure in its clause (before it, else after), else in the
+	// sentence, must be the field's; "net income is 8,000 versus receivables at 8,000" names two.
+	named, near := nearestMetric(line, o)
 	if len(named) == 0 {
-		named = metricsIn(line)
+		named, near = metricsIn(line), line
 	}
 	if len(c.keys) > 0 {
-		if len(named) > 0 && !overlaps(named, c.keys) && !labelNamed(o.clause, c.label) {
+		if len(named) > 0 && !overlaps(named, c.keys) && !labelNamed(near, c.label) {
 			return "the sentence calls " + o.normalized + " " + keysNamed(named) + ", but the cited field is " + c.describe()
 		}
 		if len(named) == 0 && !labelNamed(line, c.label) {
 			return "the sentence does not say what " + o.normalized + " measures; the cited field is " + c.describe()
 		}
 	} else if c.money || c.kind == "percent" {
-		if !labelNamed(line, c.label) {
+		// The line must be named, and nearer the figure than any other measure the clause names.
+		if !labelNamed(line, c.label) || len(named) > 0 && !labelNamed(near, c.label) {
 			if len(named) > 0 {
 				return "the sentence calls " + o.normalized + " " + keysNamed(named) + ", but the cited field is " + c.describe()
 			}
@@ -608,7 +668,7 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 		for _, m := range claimCurrency.FindAllString(o.clause, -1) {
 			code := map[string]string{"€": "EUR", "£": "GBP", "₹": "INR", "¥": "JPY"}[m]
 			if code == "" {
-				code = m
+				code = strings.ToUpper(m)
 			}
 			if code == "$" && !dollarFamily[c.currency] || code != "$" && code != c.currency {
 				return "the sentence states " + o.normalized + " in " + m + ", but the cited figure is in " + c.currency
@@ -634,7 +694,20 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim, reads map[string]agentRead) string {
 	lower := strings.ToLower(line)
 	at := claimCausal.FindStringIndex(lower)
-	if at == nil || claimHedge.MatchString(lower) {
+	if at == nil {
+		return ""
+	}
+	// A hedge counts only in the cause's own clause ("may be due to"), not elsewhere ("…, which may be reviewed").
+	clauseStart, clauseEnd := 0, len(lower)
+	for _, b := range claimClause.FindAllStringIndex(lower, -1) {
+		if b[1] <= at[0] {
+			clauseStart = b[1]
+		}
+		if b[0] >= at[1] && clauseEnd == len(lower) {
+			clauseEnd = b[0]
+		}
+	}
+	if claimHedge.MatchString(lower[clauseStart:clauseEnd]) {
 		return ""
 	}
 	// The cause is what follows the connective ("because of new patients"); a cited passage or cause field must name it.
@@ -931,6 +1004,18 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		}
 		if (c.kind == "change") != (claims[0].kind == "change") {
 			return "a derived figure mixes changes and amounts"
+		}
+		amountKind := func(k string) string {
+			if k == "prior" {
+				return "level"
+			}
+			return k
+		}
+		if amountKind(c.kind) != amountKind(claims[0].kind) {
+			return "a derived figure mixes a " + c.kind + " with a " + claims[0].kind
+		}
+		if c.forecast != claims[0].forecast || c.scenario != claims[0].scenario {
+			return "a derived figure mixes forecast and actual figures"
 		}
 		if c.currency != "" && claims[0].currency != "" && c.currency != claims[0].currency {
 			return "a derived figure mixes currencies"

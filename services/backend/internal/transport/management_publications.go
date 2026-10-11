@@ -300,6 +300,23 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Publication not found.")
 			return
 		}
+		// The version's state now (current, superseded, needing correction, sign-off lapsed), as the listing gives it, so
+		// a reader of one version, and the agent citing its figures, knows whether they still stand; unverified when the
+		// current pack cannot be built.
+		p.State = "unverified"
+		if tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}); err == nil {
+			defer tx.Rollback()
+			if pack, err := closeManagementPack(r.Context(), tx, r.PathValue("id")); err == nil {
+				current, _ := pack["digest"].(string)
+				if list, err := publications(r, tx, r.PathValue("id"), current, pack["overall"] == "signed_off" && pack["stale"] != true); err == nil {
+					for _, q := range list {
+						if q.ID == p.ID {
+							p.State = q.State
+						}
+					}
+				}
+			}
+		}
 		jsonReply(w, 200, map[string]any{"publication": p, "pack": p.Pack})
 	})
 	// Exports are rendered from the frozen version, so they always agree with what was published.

@@ -490,6 +490,10 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 	if csv := export(first.ID, "csv"); !strings.Contains(csv, "Net income,300.00") {
 		t.Fatalf("the original version's export is unchanged: %s", csv)
 	}
+	// Reading one version says whether it still stands, as the listing does.
+	if body := string(call("GET", base+"/management-pack/publications/"+first.ID, nil, 200)); !strings.Contains(body, `"state":"superseded"`) {
+		t.Fatalf("a superseded version read on its own says so: %s", body)
+	}
 }
 
 func TestManagementPackShowsTheLedgersCashFlowOnlyAsItTies(t *testing.T) {

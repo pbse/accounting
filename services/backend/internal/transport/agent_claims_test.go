@@ -184,6 +184,16 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Revenue rose 100.00, driven by Acme up 500.00 and Zenith down 400.00.",
 		e("t12", 0, "/rows/0/change", "100.00"), e("t12", 0, "/rows/0/drivers/0/change", "500.00"), e("t12", 0, "/rows/0/drivers/1/change", "-400.00"))
 
+	// Each figure takes its nearest metric; month and currency words in any case; no budget joins an actual; a hedge
+	// elsewhere in the sentence does not hedge the cause.
+	rejected("Net income is 8,000.00 versus receivables at 8,000.00.", "calls 8000 net income", e("t1", 0, "/receivables", "8000.00"))
+	rejected("Net income in september was 21,780.00.", "in another month", e("t2", 0, ni+"/amount", "21780.00"))
+	rejected("Net income is eur 21,780.00.", "in eur", e("t2", 0, ni+"/amount", "21780.00"))
+	ok("Net income may be 21,780.00 in October.", e("t2", 0, ni+"/amount", "21780.00"))
+	rejected("Rent and marketing total 8,540.00.", "mixes a level with a budget", derived(0, "sum", "8540.00", "t4", "/lines/0/month/budget", "t4", "/lines/1/month/actual"))
+	rejected("Revenue rose 4,940.00 because of higher fees, which may be reviewed.", "cause the reads do not show", e("t6", 0, "/rows/0/change", "4940.00"))
+	ok("Revenue rose 4,940.00, which may be due to higher fees.", e("t6", 0, "/rows/0/change", "4940.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

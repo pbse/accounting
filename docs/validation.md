@@ -4074,7 +4074,12 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - a quoted passage supports a cause only when it names it;
   - a derived figure may not be called a measure none of its inputs carries (rent plus marketing is never net income);
   - a month and its year to date are each qualified in their own clause;
-  - offsetting drivers (+500, −400) explain a net 100 change, the total being the cited change that is not a driver.
+  - offsetting drivers (+500, −400) explain a net 100 change, the total being the cited change that is not a driver;
+  - each figure takes the measure named nearest it ("net income is 8,000.00 versus receivables at 8,000.00" fails for its first figure);
+  - month names and currency codes in any case (september, eur) are checked, but "may" counts as a month only when written May;
+  - no derived figure joins a budget to an actual or a forecast to an actual;
+  - a hedge excuses a cause only in the cause's own clause;
+  - `TestManagement…`: reading one published version now returns its computed state (`superseded` after a correction), as the listing does, so the agent sees a superseded version as stale.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.
