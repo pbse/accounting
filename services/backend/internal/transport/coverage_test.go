@@ -399,6 +399,29 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 	if moved.Requests[0].Stale == "" || !moved.Requests[1].Open || moved.Requests[2].Open {
 		t.Fatalf("Coverage misreports which requests still take answers: %+v", moved.Requests)
 	}
+	// A recapture keeps the month's exclusions, saying where they came from; an account never excluded still asks.
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,$4,now(),'fixture')`, cid, conn, rand.Text(), string(raw))
+	must(err)
+	recaptured := view()
+	items := map[string]coverageRequirement{}
+	for _, item := range recaptured.Items {
+		items[item.AccountID] = item
+	}
+	if recaptured.SnapshotID == snapshot || items["c"].State != "excluded" || items["e"].State != "excluded" || items["c"].Reason != "Carried from an earlier capture of this month: Handled outside this close" || items["d"].State == "excluded" {
+		t.Fatalf("a recapture carries exclusions only: %+v", recaptured.Items)
+	}
+	// Another ledger company may give the same IDs to other accounts: its capture asks again.
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='disconnected' WHERE id::text=$1`, conn)
+	must(err)
+	var other string
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'999' FROM client_closes WHERE id=$1 RETURNING id::text`, cid, rand.Text()).Scan(&other))
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'999',$3,$4,now(),'fixture')`, cid, other, rand.Text(), string(raw))
+	must(err)
+	for _, item := range view().Items {
+		if item.Excluded {
+			t.Fatalf("another company's capture carries no exclusion: %+v", item)
+		}
+	}
 }
 
 func TestClientSubmissionRejectsUnknownFileField(t *testing.T) {
