@@ -67,7 +67,8 @@ type ClientRead = {
   whole: boolean;
   can_manage: boolean;
   can_connect: boolean;
-  // can_review says the reader may confirm the client's profile and choose where its books come from.
+  // can_review says the reader may confirm the client's profile; can_connect, connect its ledgers and choose where its
+  // books come from.
   can_review: boolean;
   books_sources?: BooksSource[];
   // can_grant says the reader may give and revoke the client's posting grants.
@@ -331,14 +332,14 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              client.can_connect || ledger.month || canRecord || client.can_review ? (
+              client.can_connect || ledger.month || canRecord ? (
                 <>
                   {canRecord && (
                     <button type="button" onClick={() => setDialog("ledger")}>
                       Ledger
                     </button>
                   )}
-                  {client.can_review && (
+                  {client.can_connect && (
                     <button type="button" onClick={() => setDialog("source")}>
                       Source
                     </button>
@@ -568,7 +569,7 @@ export default function ClientPage() {
           <ProfileForm key={client.profiles[0]?.id ?? "none"} client={name} profile={profile} history={client.profiles} first={months.length ? months[months.length - 1].period : undefined} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
         </Dialog>
       )}
-      {client.can_review && (
+      {client.can_connect && (
         <Dialog
           open={dialog === "source"}
           onClose={() => setDialog("")}

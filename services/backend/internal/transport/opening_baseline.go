@@ -73,10 +73,13 @@ func openingBlockers(ctx context.Context, tx *sql.Tx, closeID string, tie tieOut
 	}
 	if takeover {
 		var blockers []string
-		var confirmed bool
+		var confirmed, sameCompanies bool
 		var setupProfile []byte
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM takeover_setups WHERE close_id::text=$1),
- COALESCE((SELECT content->'profile' FROM takeover_setups WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1),'null'::jsonb)`, closeID).Scan(&confirmed, &setupProfile); err != nil {
+ COALESCE((SELECT content->'profile' FROM takeover_setups WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1),'null'::jsonb),
+ COALESCE((SELECT t.content->'companies' IS NULL OR (SELECT jsonb_agg(jsonb_build_object('provider',e->>'provider','company',e->>'company') ORDER BY e->>'provider',e->>'company') FROM jsonb_array_elements(t.content->'companies') e) IS NOT DISTINCT FROM (SELECT jsonb_agg(jsonb_build_object('provider',e->>'provider','company',e->>'company') ORDER BY e->>'provider',e->>'company') FROM jsonb_array_elements(`+takeoverCompanies+`) e)
+  FROM takeover_setups t WHERE t.close_id=c.id ORDER BY t.id DESC LIMIT 1),true)
+ FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&confirmed, &setupProfile, &sameCompanies); err != nil {
 			return nil, nil, err
 		}
 		if !confirmed {
@@ -92,6 +95,11 @@ func openingBlockers(ctx context.Context, tx *sql.Tx, closeID string, tie tieOut
 			json.Unmarshal(setupProfile, &then)
 			if (profile.State == "confirmed" || profile.State == "differs") && (then.Currency != profile.Currency || then.FiscalStart != profile.FiscalStart) {
 				blockers = append(blockers, "Confirm the takeover setup again: the client's currency or fiscal year was confirmed or corrected after it was confirmed.")
+			}
+			// The setup confirmed the company the books were read from: another provider or company since (not a change
+			// of its connection's state) asks again.
+			if !sameCompanies {
+				blockers = append(blockers, "Confirm the takeover setup again: the company its books are read from changed after it was confirmed.")
 			}
 		}
 		digest, _, refusal := openingContent(tie)

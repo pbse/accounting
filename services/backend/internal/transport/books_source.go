@@ -84,8 +84,9 @@ func readFrom(source string, quickbooksAt, xeroAt sql.NullTime) string {
 
 func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /v1/closes/client/books-source", func(w http.ResponseWriter, r *http.Request) {
-		if !canReview(r) {
-			problem(w, 403, "Choosing where a client's books come from requires workpapers:review.")
+		// Choosing a source is connecting the books, as connecting a ledger is (docs/books-sources.md, Who does what).
+		if !canConnect(r) {
+			problem(w, 403, "Choosing where a client's books come from requires integrations:manage.")
 			return
 		}
 		var in struct {
@@ -159,12 +160,12 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client's books source is unavailable.")
 			return
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT c.period,books_source(c.organization_id,c.entity,c.period),
+		rows, err := tx.QueryContext(ctx, `SELECT c.id,c.period,books_source(c.organization_id,c.entity,c.period),
  (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+`),
- (SELECT max(s.captured_at) FROM xero_snapshots s WHERE s.close_id=c.id)
+ (SELECT max(s.captured_at) FROM xero_snapshots s WHERE s.close_id=c.id),
+ COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off'
+  OR EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved')
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2)
- AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off'
-  OR EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'))
  AND (($3<>'' AND c.period=$3) OR ($3='' AND NOT EXISTS(SELECT 1 FROM books_sources o WHERE o.organization_id=c.organization_id AND client_identity(o.organization_id,o.client_entity)=client_identity(c.organization_id,c.entity) AND o.period=c.period)))
  ORDER BY c.period`, org, name, in.Period)
 		if err != nil {
@@ -172,14 +173,21 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var held []string
+		var changed []int64
 		for rows.Next() {
+			var id int64
 			var period, now string
 			var qbo, xero sql.NullTime
-			if err = rows.Scan(&period, &now, &qbo, &xero); err != nil {
+			var settled bool
+			if err = rows.Scan(&id, &period, &now, &qbo, &xero, &settled); err != nil {
 				break
 			}
-			if readFrom(now, qbo, xero) != readFrom(in.Source, qbo, xero) {
+			switch {
+			case readFrom(now, qbo, xero) == readFrom(in.Source, qbo, xero):
+			case settled:
 				held = append(held, period)
+			default:
+				changed = append(changed, id)
 			}
 		}
 		rows.Close()
@@ -193,6 +201,17 @@ func registerBooksSources(mux *http.ServeMux, db *sql.DB) {
 		if len(held) > 0 {
 			problem(w, 409, "This would change the books of months already signed off or with approved work ("+strings.Join(held, ", ")+"). Reopen them, or their work, first, or choose a source for other months alone.")
 			return
+		}
+		// A month whose books change asks for its drafts again: each draft still in review was prepared from the books it
+		// no longer reads, so changes are requested of it, saying why.
+		if len(changed) > 0 {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO workpaper_reviews(workpaper_id,decision,note,actor,paper_digest)
+ SELECT w.id::bigint,'changes_requested',$2,$3,w.digest FROM workpaper_review_state w WHERE w.close_id=ANY($1::bigint[]) AND w.review_state='pending'
+  AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`,
+				changed, "The month's books now come from "+map[string]string{"newest": "the newest capture", "quickbooks": "QuickBooks alone", "xero": "Xero alone"}[in.Source]+": prepare this from those books.", reviewerName(r)); err != nil {
+				problem(w, 503, "The client's books source could not be saved.")
+				return
+			}
 		}
 		var period any
 		if in.Period != "" {

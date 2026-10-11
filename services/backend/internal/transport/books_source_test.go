@@ -85,7 +85,7 @@ func TestTheBooksSourceIsChosenAndHonoured(t *testing.T) {
 		json.Unmarshal(w.Body.Bytes(), &out)
 		return out
 	}
-	partner := []string{"workpapers:review", "clients:all"}
+	partner := []string{"workpapers:review", "clients:all", "integrations:manage"}
 	read := func(closeID string) (string, string) {
 		t.Helper()
 		m, e := periodBooks(t.Context(), db, closeID, "2026-08")
@@ -163,5 +163,21 @@ func TestTheBooksSourceIsChosenAndHonoured(t *testing.T) {
 	must(db.QueryRow(`SELECT max(id)::text FROM books_sources WHERE organization_id=$1`, org).Scan(&newest))
 	if out := call("user_a", partner, map[string]any{"client": "Acme Co", "period": "2026-08", "source": "xero", "reason": "Xero for August", "rev": newest}, 409); !strings.Contains(out["message"].(string), "approved work") {
 		t.Fatalf("approved work holds the change: %v", out)
+	}
+
+	// September's draft in review was prepared from the books it reads now: moving September to QuickBooks asks for
+	// it again.
+	var draft string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','september-paper','{"input":{"currency":"USD"}}') RETURNING id::text`, september).Scan(&draft))
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id=$1`, draft)
+		db.Exec(`DELETE FROM workpapers WHERE id=$1`, draft)
+	})
+	must(db.QueryRow(`SELECT max(id)::text FROM books_sources WHERE organization_id=$1`, org).Scan(&newest))
+	call("user_a", partner, map[string]any{"client": "Acme Co", "period": "2026-09", "source": "quickbooks", "reason": "September back to QuickBooks", "rev": newest}, 200)
+	var state string
+	must(db.QueryRow(`SELECT review_state FROM workpaper_review_state WHERE id::text=$1`, draft).Scan(&state))
+	if state != "changes_requested" {
+		t.Fatalf("a draft from books the month no longer reads: %s", state)
 	}
 }
