@@ -162,14 +162,14 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 	var m fileMonth
 	var v booksVersion
 	var accounts, balances, activity, cashFlow, uncounted []byte
-	var unavailable string
+	var unavailable, org, entity, importID string
 	var checks []byte
-	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,i.name,v.as_of::text,v.basis,a.exported_on::timestamp AT TIME ZONE 'UTC',v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable,a.checks
+	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,i.name,v.as_of::text,v.basis,a.exported_on::timestamp AT TIME ZONE 'UTC',v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable,a.checks,c.organization_id,c.entity,a.import_id::text
  FROM client_closes c JOIN books_import_acceptances a ON a.organization_id=c.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(c.organization_id,c.entity) AND a.period=c.period
  JOIN books_imports i ON i.id=a.import_id JOIN books_versions v ON v.source='files' AND v.source_id=a.id::text AND v.close_id=c.id
  WHERE c.id::text=$1 AND a.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=c.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(c.organization_id,c.entity) AND b.period=c.period
    AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id))`, closeID).
-		Scan(&m.Version, &m.Acceptance, &m.File, &m.AsOf, &m.Basis, &m.ExportedAt, &v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &unavailable, &checks)
+		Scan(&m.Version, &m.Acceptance, &m.File, &m.AsOf, &m.Basis, &m.ExportedAt, &v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &unavailable, &checks, &org, &entity, &importID)
 	if err == sql.ErrNoRows {
 		return nil, nil, nil
 	}
@@ -195,6 +195,19 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 	for _, c := range kept {
 		if c.State == "holds" && c.Key != "activity" {
 			m.Holds = append(m.Holds, c.Title)
+		}
+	}
+	// A newer account map classifying one of the file's accounts differently holds its statements too, until the file is
+	// accepted again on it; the books stay as accepted meanwhile.
+	if state, found, err := readFileState(ctx, q, org, entity, importID); err != nil {
+		return nil, nil, err
+	} else if found {
+		changed, err := acceptedMapChanged(ctx, q, m.Acceptance, state.reading.Accounts)
+		if err != nil {
+			return nil, nil, err
+		}
+		if changed {
+			m.Holds = append(m.Holds, "the account map now classifies one of its accounts differently; accept the file again")
 		}
 	}
 	return b, &m, nil
