@@ -99,8 +99,10 @@ type fileState struct {
 	prior       string
 	missing     []string
 	// priorBalances are the prior accepted month's closing balances by key, and classes each key's class in the map
-	// in force, for the roll-forward.
+	// in force, for the roll-forward; priorIsBooks, that the prior month's books are its files, so that its accepted
+	// file is its books and not a supplement to a ledger's.
 	priorBalances map[string]string
+	priorIsBooks  bool
 	classes       map[string]string
 	// reexport is the prior month's newest file read since its accepted one, with its balances by key: the evidence
 	// that the prior month changed after it was accepted; nil without one.
@@ -275,6 +277,9 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 		}
 	}
 	s.priorBalances = balances
+	if err = q.QueryRowContext(ctx, `SELECT books_source($1,$2,$3)='files'`, org, name, s.prior).Scan(&s.priorIsBooks); err != nil {
+		return s, false, err
+	}
 	if s.reexport, err = priorReexportOf(ctx, q, org, name, s.prior, priorImport); err != nil {
 		return s, false, err
 	}
@@ -417,12 +422,14 @@ func rollForward(s fileState) importCheck {
 	}
 	// An amount that cannot be read holds whatever needed it: the file's own arithmetic, with both columns, or the
 	// comparison with the prior month.
-	if unread != "" && (movementColumn && openingColumn || s.prior != "") {
+	// The openings roll only from the prior month's books: an accepted file that only supplements a ledger's is not.
+	compared := s.prior != "" && s.priorIsBooks
+	if unread != "" && (movementColumn && openingColumn || compared) {
 		check.State, check.Detail = "holds", "An opening or movement cannot be read as exact, so the month's openings are not checked ("+unread+")."
 		return check
 	}
 	// With no accepted prior month the openings are not compared; the file's own arithmetic still is.
-	if s.prior == "" {
+	if !compared {
 		check.State, check.Detail, check.Holds = "note", "No accepted books for "+monthTitle(previousMonth(s.reading.Period))+" to roll from: the openings are not checked.", ""
 		if len(differences) > 0 {
 			check.State, check.Holds = "holds", "The accounts whose figures do not agree, and the statements built on them."
