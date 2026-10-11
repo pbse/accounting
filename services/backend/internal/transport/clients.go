@@ -40,7 +40,8 @@ type clientMonth struct {
 }
 
 type monthBooks struct {
-	// Source is quickbooks or xero for a capture, exports for labeled exports.
+	// Source is quickbooks or xero for a capture, files for an accepted file's books (At is when it was exported), exports
+	// for labeled exports.
 	Source string    `json:"source"`
 	At     time.Time `json:"at"`
 	// Stale says the capture's evidence was replaced or its connection is no longer active, or a labeled export was
@@ -130,14 +131,15 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 
 		// Every month opened under any of the client's names that the reader could open, newest first, each with where
 		// its books come from now: the newer of its QuickBooks period capture (from the connection its books are read
-		// from) and its Xero capture, as periodBooks chooses.
+		// from) and its Xero capture, as periodBooks chooses, or for a month on files its accepted file's books.
 		rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.entity,c.period,COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')='signed_off',
  COALESCE(c.due_on::text,''),c.priority,c.owner<>'',c.owner<>'' AND c.owner=$4,b.source,b.captured_at,b.stale
  FROM client_closes c LEFT JOIN LATERAL (SELECT * FROM (
    SELECT 'quickbooks' AS source,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active' AS stale FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id
     LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
     WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+`
-   UNION ALL SELECT 'xero',s.captured_at,x.state<>'active' FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id=c.id AND `+sourceAllows("c.id", "xero")+`) v
+   UNION ALL SELECT 'xero',s.captured_at,x.state<>'active' FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id=c.id AND `+sourceAllows("c.id", "xero")+`
+   UNION ALL SELECT 'files',f.exported_at,false FROM `+filesVersion("c.id")+` f) v
   ORDER BY captured_at DESC,source='quickbooks' DESC LIMIT 1) b ON true
  WHERE `+sameClient+` AND ($3 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$4 AND g.granted AND lower(g.client_entity)=lower(c.entity)))
  ORDER BY c.period DESC,c.id DESC`, org, name, firm, who)
@@ -155,7 +157,7 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 				break
 			}
 			if source.Valid {
-				m.Books = &monthBooks{Source: source.String, At: captured.Time, Stale: stale.Bool}
+				m.Books = &monthBooks{Source: source.String, At: captured.Time.UTC(), Stale: stale.Bool}
 			}
 			months = append(months, m)
 		}

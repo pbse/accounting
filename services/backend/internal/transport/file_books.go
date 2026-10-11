@@ -176,6 +176,8 @@ func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *
 	if err != nil {
 		return nil, nil, err
 	}
+	// The export day is a calendar date: said in UTC, whatever the server's zone, so a page reading its date reads that day.
+	m.ExportedAt = m.ExportedAt.UTC()
 	json.Unmarshal(accounts, &v.Accounts)
 	json.Unmarshal(balances, &v.Balances)
 	json.Unmarshal(activity, &v.Activity)
@@ -378,4 +380,14 @@ func fileBalanceExceptions(b *books) []ledger.BalanceException {
 	}
 	slices.SortFunc(out, func(a, b ledger.BalanceException) int { return strings.Compare(a.Account, b.Account) })
 	return out
+}
+
+// filesVersion is SQL for close expression c's books from its files, when they are its books: the version of the month's
+// newest current acceptance (as fileMonthBooks reads it, without the holds it reads besides), as id, and when its file
+// was exported, as exported_at; no row otherwise.
+func filesVersion(c string) string {
+	return `(SELECT v.id,a.exported_on::timestamp AT TIME ZONE 'UTC' AS exported_at FROM client_closes fc JOIN books_import_acceptances a ON a.organization_id=fc.organization_id AND client_identity(a.organization_id,a.client_entity)=client_identity(fc.organization_id,fc.entity) AND a.period=fc.period
+ JOIN books_versions v ON v.source='files' AND v.source_id=a.id::text AND v.close_id=fc.id
+ WHERE fc.id=` + c + ` AND books_source(fc.organization_id,fc.entity,fc.period)='files' AND a.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=fc.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(fc.organization_id,fc.entity) AND b.period=fc.period
+   AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id)))`
 }
