@@ -318,7 +318,7 @@ export function Books({ close, papers, needs, brief, briefRead, decisionsError, 
           </>
         ) : (
           <>
-            <NeedsYou closeId={close.id} papers={papers} needs={needs} teammates={0} brief={lines} briefRead={briefRead} decisionsError={decisionsError} base={base} preparing={false} />
+            <NeedsYou key={close.id} closeId={close.id} papers={papers} needs={needs} teammates={0} brief={lines} briefRead={briefRead} decisionsError={decisionsError} base={base} preparing={false} />
             <BalanceSheet close={close} board={board} base={base} />
           </>
         )}

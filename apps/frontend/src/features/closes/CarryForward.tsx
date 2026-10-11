@@ -12,7 +12,7 @@ type Item = {
   reason: string;
   job_id: string;
 };
-export function CarryForward({ closeId }: { closeId: string }) {
+export function CarryForward({ closeId, open }: { closeId: string; open?: boolean }) {
   const [preview, setPreview] = useState<{
     period: string;
     close_id: string;
@@ -69,7 +69,7 @@ export function CarryForward({ closeId }: { closeId: string }) {
     }
   }
   return (
-    <details>
+    <details open={open}>
       <summary>Carry work into the next month</summary>
       <p>
         Carry current approved prepaid schedules or explicitly selected current
