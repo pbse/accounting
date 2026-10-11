@@ -569,8 +569,12 @@ func (l Layout) Read(t Table) Reading {
 		}
 		// A row with no amounts heads a section when a total names it or a person said it does; otherwise it is an
 		// account with a zero balance (an export leaves a zero blank), said so when it has no number to show it is one.
-		// A total is named so ("Total …") or marked so, unless a person marked the row an account.
-		total := (totalName.MatchString(line.Label()) || slices.Contains(l.Totals, r.Number)) && !slices.Contains(l.Postings, r.Number)
+		// A total is named so ("Total …", in either account column) or marked so, unless a person marked the row an
+		// account. One named so in its number column ("TOTAL", "Assets") is the total of what its name says.
+		total := (totalName.MatchString(line.Name) || totalName.MatchString(line.Number) || slices.Contains(l.Totals, r.Number)) && !slices.Contains(l.Postings, r.Number)
+		if total && !totalName.MatchString(line.Name) && totalName.MatchString(line.Number) {
+			line.Name, line.Number = strings.TrimSpace(line.Number+" "+line.Name), ""
+		}
 		if line.Balance == nil && !total && (!totalled[strings.ToLower(line.Label())] || slices.Contains(l.Postings, r.Number)) && !slices.Contains(l.Headings, r.Number) {
 			line.Balance = new(big.Rat)
 			if line.Number == "" {

@@ -789,3 +789,20 @@ func TestAPlusSignIsASign(t *testing.T) {
 		t.Fatalf("+100: %v %v", a, err)
 	}
 }
+
+// A total marked in the number column is a total; word marks are read in text and in a workbook's formats.
+func TestTotalsInEitherColumnAndWordMarks(t *testing.T) {
+	file, _ := Read("tb.csv", []byte("Number,Account,Debit,Credit\n1000,Cash,100.00,\n3000,Capital,,100.00\nTOTAL,Assets,100.00,100.00\n"))
+	layout, _ := ProposeLayout(file.Tables[0])
+	if reading := layout.Read(file.Tables[0]); !reading.Balanced || reading.Debits != "100" || len(reading.Problems) != 0 {
+		t.Fatalf("a total in the number column: %+v", reading)
+	}
+	for text, mark := range map[string]string{"100.00 kr": "kr", "zł 100.00": "zł", "Rs 100": "Rs", "R 100": "R"} {
+		if a, err := ParseAmount(text, NumberStyle{}); err != nil || a.Mark != mark {
+			t.Fatalf("%s: %+v %v", text, a, err)
+		}
+	}
+	if got := formatMark(`#,##0.00 "kr"`); got != "kr" {
+		t.Fatalf("a word in a format: %q", got)
+	}
+}

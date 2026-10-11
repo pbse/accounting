@@ -526,7 +526,8 @@ func formatMark(code string) string {
 				j++
 			}
 			literal := strings.TrimSpace(string(runes[i+1 : min(j, len(runes))]))
-			if wholeCode.MatchString(literal) || strings.ContainsFunc(literal, symbol) {
+			_, word := wordCurrencies[literal]
+			if wholeCode.MatchString(literal) || word || strings.ContainsFunc(literal, symbol) {
 				add(literal)
 			}
 			i = j

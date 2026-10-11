@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -45,11 +46,21 @@ var currencyMarks = func() *regexp.Regexp {
 	for r := range symbolCurrencies {
 		symbols.WriteString(regexp.QuoteMeta(string(r)))
 	}
-	var prefixed []string
+	// Marks written as letters or with a prefix go first, longest first, so Rs is not read as R.
+	var written []string
 	for _, p := range prefixedDollars {
-		prefixed = append(prefixed, regexp.QuoteMeta(p.mark))
+		written = append(written, p.mark)
 	}
-	mark := `(?:` + strings.Join(prefixed, "|") + `|[` + symbols.String() + `])`
+	for w := range wordCurrencies {
+		written = append(written, w)
+	}
+	sort.Slice(written, func(i, j int) bool {
+		return len(written[i]) > len(written[j]) || len(written[i]) == len(written[j]) && written[i] < written[j]
+	})
+	for i, w := range written {
+		written[i] = regexp.QuoteMeta(w)
+	}
+	mark := `(?:` + strings.Join(written, "|") + `|[` + symbols.String() + `])`
 	return regexp.MustCompile(`^(?:[A-Z]{3}\s*)?` + mark + `?|` + mark + `?(?:\s*[A-Z]{3})?$`)
 }()
 
