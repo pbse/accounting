@@ -179,9 +179,10 @@ func MarkAgrees(mark, currency string) bool {
 }
 
 // pointGrouped and commaGrouped are a number with a decimal point or a decimal comma: its whole part, either plain or
-// grouped in threes by commas (points), spaces or apostrophes, and its decimals.
+// grouped in threes by commas (points), spaces or apostrophes, or with a decimal point in the Indian way (12,34,567: the
+// last three, then twos), and its decimals.
 var (
-	pointGrouped = regexp.MustCompile(`^(\d+|\d{1,3}(?:,\d{3})+|\d{1,3}(?: \d{3})+|\d{1,3}(?:'\d{3})+|)(?:\.(\d+))?$`)
+	pointGrouped = regexp.MustCompile(`^(\d+|\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3}|\d{1,3}(?: \d{3})+|\d{1,3}(?:'\d{3})+|)(?:\.(\d+))?$`)
 	commaGrouped = regexp.MustCompile(`^(\d+|\d{1,3}(?:\.\d{3})+|\d{1,3}(?: \d{3})+|\d{1,3}(?:'\d{3})+|)(?:,(\d+))?$`)
 )
 

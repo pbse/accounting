@@ -479,3 +479,32 @@ func TestCodesSignsAndCutText(t *testing.T) {
 		t.Fatalf("whole UTF-16: %v", err)
 	}
 }
+
+// A workbook forcing a full recalculation says so; a rounded comparative column holds only itself; and Indian grouping
+// is read.
+func TestRecalculationRoundingAndGrouping(t *testing.T) {
+	const main = `xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
+	file, err := Read("tb.xlsx", workbook(t, map[string]string{
+		"xl/workbook.xml":            `<workbook ` + main + `><sheets><sheet name="TB" sheetId="1" r:id="rId1"/></sheets><calcPr forceFullCalc="1"/></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml":   `<worksheet ` + main + `><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>`,
+	}))
+	if err != nil || !file.RecalculateOnOpen {
+		t.Fatalf("forceFullCalc asks for recalculation: %+v %v", file, err)
+	}
+	layout := Layout{HeaderRow: 1, Columns: map[int]Meaning{0: AccountName, 1: Opening, 2: Balance}, Style: NumberStyle{Scale: 1}}
+	var reading Reading
+	rounded2, _ := Read("tb.csv", []byte("Account,Opening,Balance\nBank,1.234,100.00\nCapital,-1.234,-100.00\n"))
+	if reading = layout.Read(rounded2.Tables[0]); len(reading.Problems) != 0 || !reading.Lines[0].Cents || len(reading.Lines[0].Rounded) != 1 || reading.Lines[0].Rounded[0] != Opening {
+		t.Fatalf("a rounded opening column holds only itself: %+v", reading)
+	}
+	for text, want := range map[string]string{"₹12,34,567.89": "1234567.89", "1,00,000": "100000", "12,345.67": "12345.67"} {
+		a, err := ParseAmount(text, NumberStyle{Scale: 1})
+		if err != nil || exact(a.Value) != want {
+			t.Fatalf("%s: %v %v", text, a.Value, err)
+		}
+	}
+	if _, err := ParseAmount("1,23,45", NumberStyle{Scale: 1}); err == nil {
+		t.Fatal("wrong grouping is still refused")
+	}
+}

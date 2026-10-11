@@ -63,6 +63,7 @@ func ReadWorkbook(body []byte) (File, error) {
 		} `xml:"workbookPr"`
 		Calc struct {
 			FullCalcOnLoad bool `xml:"fullCalcOnLoad,attr"`
+			ForceFullCalc  bool `xml:"forceFullCalc,attr"`
 		} `xml:"calcPr"`
 		Sheet []struct {
 			Name   string `xml:"name,attr"`
@@ -89,7 +90,8 @@ func ReadWorkbook(body []byte) (File, error) {
 	if err = read("xl/_rels/workbook.xml.rels", &rels); err != nil {
 		return file, errors.New("the workbook's sheets cannot be found")
 	}
-	file.RecalculateOnOpen = workbook.Calc.FullCalcOnLoad
+	// Either flag asks Excel to recalculate every formula: the stored results may be stale.
+	file.RecalculateOnOpen = workbook.Calc.FullCalcOnLoad || workbook.Calc.ForceFullCalc
 	target := func(id string) string {
 		for _, r := range rels.Rel {
 			if r.ID == id {

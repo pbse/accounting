@@ -194,10 +194,11 @@ type Line struct {
 	Debit, Credit *big.Rat `json:"-"`
 	// Amount is Balance as an exact decimal, for storing.
 	Amount string `json:"balance"`
-	// Other balances the file carries for the account, by meaning.
-	Others map[Meaning]string `json:"others,omitempty"`
-	Cents  bool               `json:"cents"`
-	Hidden bool               `json:"hidden,omitempty"`
+	// Other balances the file carries for the account, by meaning, and those of them not exact to the cent.
+	Others  map[Meaning]string `json:"others,omitempty"`
+	Rounded []Meaning          `json:"rounded,omitempty"`
+	Cents   bool               `json:"cents"`
+	Hidden  bool               `json:"hidden,omitempty"`
 }
 
 // Label is what names the row: its account name, else its account number (a Trial Balance with codes alone writes its
@@ -433,7 +434,14 @@ func (l Layout) Read(t Table) Reading {
 					continue
 				}
 				hasAmount = true
-				line.Cents = line.Cents && a.Cents
+				// Exact to the cent is asked of the month-end balance; another balance the file carries that is not is
+				// said of that column alone, held only from what uses it.
+				switch {
+				case meaning == Debit || meaning == Credit || meaning == Balance:
+					line.Cents = line.Cents && a.Cents
+				case !a.Cents && !slices.Contains(line.Rounded, meaning):
+					line.Rounded = append(line.Rounded, meaning)
+				}
 				// A currency written beside an amount must be the Trial Balance's: books in two currencies never add up.
 				if l.Currency != "" && a.Mark != "" && !MarkAgrees(a.Mark, l.Currency) {
 					reading.Problems = append(reading.Problems, fmt.Sprintf("%s: %q is marked in another currency than %s", c.Ref, c.Value, l.Currency))
