@@ -138,7 +138,9 @@ func TestTheClientPageManagesConnectionsHeldUnderAnAlias(t *testing.T) {
 	defer tx.Rollback()
 	status, err := readRetention(t.Context(), tx, lone, org)
 	must(err)
-	if !slices.ContainsFunc(status.Blockers, func(b string) bool { return strings.Contains(b, "disconnect its ledgers on the client's page") }) {
+	if !slices.ContainsFunc(status.Blockers, func(b string) bool {
+		return strings.Contains(b, "disconnect its ledgers and revoke their posting grants")
+	}) {
 		t.Fatalf("the last month keeps its deletion: %v", status.Blockers)
 	}
 }

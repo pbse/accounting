@@ -26,13 +26,14 @@ func ReadingConnection(close string) string {
 	return ReadingConnectionBefore + close + ReadingConnectionAfter
 }
 
-// The reading connection is the client's, under any of its names: production first, then one working (so a replacement
-// still being signed in leaves the working one read), then one under the month's own name.
+// The reading connection is the client's, under any of its names, the same for every month of the client whichever name
+// it was opened under: production first, then one working (so a replacement still being signed in leaves the working
+// one read), then the newest.
 // ReadingConnectionBefore and ReadingConnectionAfter enclose SQL for a close's ID to give ReadingConnection's SQL, for
 // SQL that must stay a constant.
 const (
 	ReadingConnectionBefore = `(SELECT r.id FROM quickbooks_connections r JOIN client_closes rc ON rc.organization_id=r.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(rc.organization_id,rc.entity) WHERE rc.id=`
-	ReadingConnectionAfter  = ` AND r.state<>'disconnected' ORDER BY r.environment='production' DESC,r.state IN ('active','refreshing') DESC,lower(r.client_entity)=lower(rc.entity) DESC,r.id DESC LIMIT 1)`
+	ReadingConnectionAfter  = ` AND r.state<>'disconnected' ORDER BY r.environment='production' DESC,r.state IN ('active','refreshing') DESC,r.id DESC LIMIT 1)`
 )
 
 func scheduleSync(ctx context.Context, db *sql.DB) error {
