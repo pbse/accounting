@@ -194,6 +194,30 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Revenue rose 4,940.00 because of higher fees, which may be reviewed.", "cause the reads do not show", e("t6", 0, "/rows/0/change", "4940.00"))
 	ok("Revenue rose 4,940.00, which may be due to higher fees.", e("t6", 0, "/rows/0/change", "4940.00"))
 
+	// Round three: a direction stated without its figure; a publication section keeps currency and basis; a ratio's
+	// written precision; an unverified publication; every cause; drivers per row; an introductory year to date.
+	rejected("Lab fees rose.", "moved the other way", e("t2", 0, "/profit_and_loss/sections/1/lines/0/change", "-260.00"))
+	rejected("Net income rose.", "not a change", e("t2", 0, ni+"/amount", "21780.00"))
+	ok("Net income rose.", e("t2", 0, ni+"/change", "1840.00"))
+	section := projectPublication(decode(`{"publication":{"id":"4","state":"current"},"pack":`+pack+`}`), "profit_and_loss")
+	raw, _ := json.Marshal(section)
+	reads["t14"] = agentRead{text: string(raw), value: decode(string(raw)), link: chatCitation{"Published report", "/dashboard/closes/7"}, title: "Published report", tool: "read_publication"}
+	rejected("Net income is €21,780.00.", "in €", e("t14", 0, "/profit_and_loss/measures/0/amount", "21780.00"))
+	rejected("On the cash basis, net income is 21,780.00.", "on the cash basis", e("t14", 0, "/profit_and_loss/measures/0/amount", "21780.00"))
+	reads["t13"] = read(`{"lines":[{"name":"Payroll","amount":"1749.00"},{"name":"Total income","amount":"10000.00"}]}`, "Statement", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Payroll is 17.0% of revenue.", "is 17.49, not 17.0%", derived(0, "ratio", "17.0%", "t13", "/lines/0/amount", "t13", "/lines/1/amount"))
+	ok("Payroll is 17.5% of revenue.", derived(0, "ratio", "17.5%", "t13", "/lines/0/amount", "t13", "/lines/1/amount"))
+	ok("Payroll is 17% of revenue.", derived(0, "ratio", "17%", "t13", "/lines/0/amount", "t13", "/lines/1/amount"))
+	reads["t15"] = read(`{"publication":{"id":"5","state":"unverified"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00"}]}}}`, "Published report", "read_publication", "", "")
+	rejected("Net income is 21,780.00.", "the cited read is stale", e("t15", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
+	ok("The published net income is 21,780.00, which could not be verified against the books.", e("t15", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
+	rejected("Revenue rose 4,940.00 because of the marketing campaign, and expenses rose due to seasonality.", "due to seasonality",
+		e("t6", 0, "/rows/0/change", "4940.00"), agentSupportEntry{step: "t11", sentence: 0, quote: "after the marketing campaign started"})
+	reads["t16"] = read(`{"state":"ready","changes":[{"account":"Patient fees","change":"4940.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}]},{"account":"Expenses","change":"3100.00"}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Patient fees rose 4,940.00, driven by new patients at 3,000.00, while expenses rose 3,100.00.", "account for 3000.00 of 4940.00",
+		e("t16", 0, "/changes/0/change", "4940.00"), e("t16", 0, "/changes/0/new/0/this_month", "3000.00"), e("t16", 0, "/changes/1/change", "3100.00"))
+	ok("Year to date, rent was 85,000.00.", e("t4", 0, "/lines/0/ytd/actual", "85000.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

@@ -638,17 +638,23 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	// Per sentence: the claims its entries cite, and the signed changes it states, for the cause and remainder checks.
 	sentenceClaims := make([]map[int]claim, len(lines))
 	sentenceEntries := make([][]agentSupportEntry, len(lines))
-	sentenceChanges := make([][]*big.Rat, len(lines))
 	sentenceMoney := make([][]moneyEntry, len(lines))
-	sentenceDriverChanges := make([][]*big.Rat, len(lines))
-	sentenceDrivers := make([]map[string]*big.Rat, len(lines))
+	// Per sentence and row: the totals stated, and each driver's movement once (a payee row cited by any field).
+	sentenceTotals := make([]map[string][]*big.Rat, len(lines))
+	sentenceDrivers := make([]map[string]map[string]*big.Rat, len(lines))
 	for i := range lines {
-		sentenceDrivers[i] = map[string]*big.Rat{}
+		sentenceTotals[i], sentenceDrivers[i] = map[string][]*big.Rat{}, map[string]map[string]*big.Rat{}
+	}
+	addDriver := func(sentence int, group, key string, movement *big.Rat) {
+		if sentenceDrivers[sentence][group] == nil {
+			sentenceDrivers[sentence][group] = map[string]*big.Rat{}
+		}
+		sentenceDrivers[sentence][group][key] = movement
 	}
 	driver := func(sentence int, step, path string) {
 		if read, ok := reads[step]; ok {
 			if row, movement, ok := driverMovement(read, path); ok {
-				sentenceDrivers[sentence][step+row] = movement
+				addDriver(sentence, rowGroup(step, path), step+row, movement)
 			}
 		}
 	}
@@ -707,7 +713,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				return nil, "a cited field does not bear on its sentence"
 			}
 			if n := normalizeFigure(got); n != "" && (fieldClaim.money || fieldClaim.kind == "percent" || strings.HasSuffix(n, "%")) && !isCalendar(n) {
-				sentenceMoney[s.sentence] = append(sentenceMoney[s.sentence], moneyEntry{fieldClaim, got, n})
+				sentenceMoney[s.sentence] = append(sentenceMoney[s.sentence], moneyEntry{fieldClaim, got, n, s.step, s.path})
 			}
 		case s.quote != "":
 			// A quote binds a document's text only; a JSON read is cited by the field that holds the value.
@@ -777,10 +783,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 					held, used[j] = true, true
 					if m.claim.kind == "change" {
 						if r, ok := new(big.Rat).SetString(m.n); ok {
+							group := rowGroup(m.step, m.path)
 							if m.claim.cause {
-								sentenceDriverChanges[i] = append(sentenceDriverChanges[i], r)
+								addDriver(i, group, m.step+m.path, r)
 							} else {
-								sentenceChanges[i] = append(sentenceChanges[i], r)
+								sentenceTotals[i][group] = append(sentenceTotals[i][group], r)
 							}
 						}
 					}
@@ -798,9 +805,19 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				bound[i][o.normalized] = true
 			}
 		}
-		for j := range sentenceMoney[i] {
+		changeCited := false
+		for _, m := range sentenceMoney[i] {
+			changeCited = changeCited || m.claim.kind == "change"
+		}
+		for j, m := range sentenceMoney[i] {
 			if !used[j] && reasons[j] != "" {
 				return nil, reasons[j]
+			}
+			// A field whose figure the sentence does not state still holds what the sentence says of it.
+			if !used[j] && reasons[j] == "" {
+				if why := figurelessClaim(line, m.claim, m.got, changeCited); why != "" {
+					return nil, why
+				}
 			}
 		}
 	}
@@ -808,11 +825,13 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		if why := checkCauses(lines[i], sentenceEntries[i], sentenceClaims[i], reads); why != "" {
 			return nil, why
 		}
-		drivers := sentenceDriverChanges[i]
-		for _, k := range slices.Sorted(maps.Keys(sentenceDrivers[i])) {
-			drivers = append(drivers, sentenceDrivers[i][k])
+		drivers := map[string][]*big.Rat{}
+		for group, rows := range sentenceDrivers[i] {
+			for _, k := range slices.Sorted(maps.Keys(rows)) {
+				drivers[group] = append(drivers[group], rows[k])
+			}
 		}
-		if why := checkRemainder(lines[i], sentenceChanges[i], drivers); why != "" {
+		if why := checkRemainder(lines[i], sentenceTotals[i], drivers); why != "" {
 			return nil, why
 		}
 	}

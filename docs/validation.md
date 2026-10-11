@@ -4079,7 +4079,14 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - month names and currency codes in any case (september, eur) are checked, but "may" counts as a month only when written May;
   - no derived figure joins a budget to an actual or a forecast to an actual;
   - a hedge excuses a cause only in the cause's own clause;
-  - `TestManagement…`: reading one published version now returns its computed state (`superseded` after a correction), as the listing does, so the agent sees a superseded version as stale.
+  - `TestManagement…`: reading one published version now returns its computed state (`superseded` after a correction), as the listing does, so the agent sees a superseded version as stale;
+  - a direction stated without its figure ("Lab fees rose" for −260.00, "Net income rose" citing only the amount) is held to the field;
+  - a publication section read keeps the pack's client, month, currency and basis;
+  - a ratio is checked at its written precision (17.49% is not "17.0%", is "17.5%" and "17%");
+  - an unverified publication needs a caveat;
+  - every causal clause of a sentence needs its own support;
+  - drivers are held to their own row's total, even with a second total in the sentence;
+  - an introductory "Year to date," qualifies the figure after it.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.
 - **Suites:** `go test ./internal/transport/` against local PostgreSQL migrated through 145 (`close_agent_test`) passed except `TestPackagePreservesBothWorkpapersAndEscapesSources`, which needs `pdftotext` (Poppler not installed on this machine); `go test ./internal/preparation/` passed; `go test ./internal/documents/` passed except `TestExtractMixedPDF` (same Poppler/Tesseract dependency). `go vet ./internal/transport/` clean.

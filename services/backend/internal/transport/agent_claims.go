@@ -3,8 +3,10 @@ package transport
 import (
 	"context"
 	"database/sql"
+	"maps"
 	"math/big"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -82,9 +84,10 @@ func metricsIn(text string) map[string]bool {
 
 // moneyEntry is a cited money field of a sentence: what it measures, its value and the value normalized.
 type moneyEntry struct {
-	claim claim
-	got   string
-	n     string
+	claim      claim
+	got        string
+	n          string
+	step, path string
 }
 
 // metricAt is a measure named in a text, where.
@@ -239,7 +242,7 @@ func claimOf(read agentRead, path string) claim {
 	if root, ok := read.value.(map[string]any); ok {
 		if pub, ok := root["publication"].(map[string]any); ok {
 			switch strings.ToLower(text(pub, "state")) {
-			case "superseded", "needs_correction", "signoff_lapsed":
+			case "superseded", "needs_correction", "signoff_lapsed", "unverified":
 				c.stale = true
 			}
 		}
@@ -343,6 +346,9 @@ func (c claim) describe() string {
 }
 
 var (
+	// The verbs of movement a figure-less sentence states ("net income rose").
+	claimRiseVerb  = map[string]bool{"rose": true, "risen": true, "rises": true, "rising": true, "increased": true, "increases": true, "grew": true, "grown": true, "grows": true, "climbed": true, "jumped": true, "gained": true, "improved": true}
+	claimFallVerb  = map[string]bool{"fell": true, "fallen": true, "falls": true, "falling": true, "decreased": true, "decreases": true, "dropped": true, "drops": true, "declined": true, "declines": true, "slipped": true, "lost": true, "worsened": true}
 	claimRise      = map[string]bool{"rose": true, "risen": true, "rises": true, "rising": true, "increased": true, "increases": true, "grew": true, "grown": true, "grows": true, "climbed": true, "jumped": true, "gained": true, "improved": true, "up": true, "higher": true, "more": true, "above": true, "ahead": true, "better": true, "increase": true}
 	claimFall      = map[string]bool{"fell": true, "fallen": true, "falls": true, "falling": true, "decreased": true, "decreases": true, "dropped": true, "drops": true, "declined": true, "declines": true, "slipped": true, "lost": true, "worsened": true, "down": true, "lower": true, "less": true, "below": true, "behind": true, "worse": true, "decrease": true, "short": true}
 	claimNeutral   = map[string]bool{"changed": true, "moved": true, "swung": true, "change": true, "movement": true, "swing": true, "variance": true, "difference": true, "differs": true, "differ": true, "off": true, "gap": true, "exceeds": true, "exceed": true, "over": true, "under": true}
@@ -351,7 +357,7 @@ var (
 	claimActual    = regexp.MustCompile(`\b(actual|actually|recorded|booked|posted|was|were|ended|closed)\b`)
 	claimBudget    = regexp.MustCompile(`\b(budget|budgets|budgeted|plan|planned|target)\b`)
 	claimYTD       = regexp.MustCompile(`\b(year to date|year-to-date|ytd|so far this year)\b`)
-	claimStaleSaid = regexp.MustCompile(`\b(stale|superseded|out of date|not current|no longer current|earlier|older|last captured|as of|before the latest|needs correction|needs a correction|as published|sign-off lapsed|lapsed)\b`)
+	claimStaleSaid = regexp.MustCompile(`\b(stale|superseded|out of date|not current|no longer current|earlier|older|last captured|as of|before the latest|needs correction|needs a correction|as published|sign-off lapsed|lapsed|unverified|not verified|could not be verified|may have changed)\b`)
 	claimAvailable = regexp.MustCompile(`\b(available|in the bank|spendable|on hand at the bank)\b`)
 	claimCausal    = regexp.MustCompile(`\b(because|due to|driven by|caused by|as a result of|owing to|thanks to|explained by|stems from|result of|led by|on the back of)\b`)
 	claimHedge     = regexp.MustCompile(`\b(may|might|could|possibly|perhaps|likely|appears|appear|seems|seem|suggests|suggest|probably|worth checking|hypothesis|unconfirmed|not confirmed|not yet confirmed|to confirm|one explanation)\b`)
@@ -532,6 +538,23 @@ func labelNamed(text, label string) bool {
 	return false
 }
 
+// introduced says whether a qualifier stands in a clause before the figure's that holds no figure of its own, as an
+// introductory phrase governs what follows ("Year to date, rent was 85,000.00").
+func introduced(line string, o occurrence, qualifier *regexp.Regexp) bool {
+	start := 0
+	for _, b := range claimClause.FindAllStringIndex(line, -1) {
+		if b[1] > o.start {
+			break
+		}
+		clause := line[start:b[0]]
+		if !agentFigure.MatchString(clause) && qualifier.MatchString(strings.ToLower(clause)) {
+			return true
+		}
+		start = b[1]
+	}
+	return false
+}
+
 // checkClaim holds one figure of a sentence to the field it cites. It returns why the sentence misstates the field,
 // or "" when the sentence says what the field measures. got is the field's value; o is where the sentence states it.
 func checkClaim(line string, o occurrence, c claim, got string, entities []string) string {
@@ -600,7 +623,7 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 	if !c.forecast && claimForecast.MatchString(lowerClause) && !claimActual.MatchString(lowerClause) && (strings.Contains(lowerClause, "forecast") || strings.Contains(lowerClause, "projected") || strings.Contains(lowerClause, "will be") || strings.Contains(lowerClause, "expected")) {
 		return "the sentence states " + o.normalized + " as a forecast, but the cited field is an actual (" + c.describe() + ")"
 	}
-	if c.ytd != claimYTD.MatchString(lowerClause) {
+	if c.ytd != (claimYTD.MatchString(lowerClause) || introduced(line, o, claimYTD)) {
 		if c.ytd {
 			return "the sentence states the year-to-date " + o.normalized + " as a month's"
 		}
@@ -693,37 +716,39 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 // words) or said as a possibility, never asserted from an amount alone.
 func checkCauses(line string, entries []agentSupportEntry, claims map[int]claim, reads map[string]agentRead) string {
 	lower := strings.ToLower(line)
-	at := claimCausal.FindStringIndex(lower)
-	if at == nil {
-		return ""
-	}
-	// A hedge counts only in the cause's own clause ("may be due to"), not elsewhere ("…, which may be reviewed").
-	clauseStart, clauseEnd := 0, len(lower)
-	for _, b := range claimClause.FindAllStringIndex(lower, -1) {
-		if b[1] <= at[0] {
-			clauseStart = b[1]
-		}
-		if b[0] >= at[1] && clauseEnd == len(lower) {
-			clauseEnd = b[0]
-		}
-	}
-	if claimHedge.MatchString(lower[clauseStart:clauseEnd]) {
-		return ""
-	}
-	// The cause is what follows the connective ("because of new patients"); a cited passage or cause field must name it.
-	cause := line[at[1]:]
-	for i, s := range entries {
-		switch {
-		case s.quote != "" && labelNamed(cause, s.quote):
-			return ""
-		case claims[i].cause:
-			got, _ := valueAt(reads[s.step].value, s.path)
-			if labelNamed(cause, got) || labelNamed(cause, claims[i].label) {
-				return ""
+	bounds := claimClause.FindAllStringIndex(lower, -1)
+	// Each cause the sentence states ("because of…", "due to…") is checked on its own.
+	for _, at := range claimCausal.FindAllStringIndex(lower, -1) {
+		// A hedge counts only in the cause's own clause ("may be due to"), not elsewhere ("…, which may be reviewed").
+		clauseStart, clauseEnd := 0, len(lower)
+		for _, b := range bounds {
+			if b[1] <= at[0] {
+				clauseStart = b[1]
+			}
+			if b[0] >= at[1] && clauseEnd == len(lower) {
+				clauseEnd = b[0]
 			}
 		}
+		if claimHedge.MatchString(lower[clauseStart:clauseEnd]) {
+			continue
+		}
+		// The cause is what follows the connective in its clause; a cited passage or cause field must name it.
+		cause := line[at[1]:clauseEnd]
+		supported := false
+		for i, s := range entries {
+			switch {
+			case s.quote != "" && labelNamed(cause, s.quote):
+				supported = true
+			case claims[i].cause:
+				got, _ := valueAt(reads[s.step].value, s.path)
+				supported = supported || labelNamed(cause, got) || labelNamed(cause, claims[i].label)
+			}
+		}
+		if !supported {
+			return "the sentence states a cause the reads do not show (" + strings.TrimSpace(line[at[0]:clauseEnd]) + "); cite it, or say it as a possibility"
+		}
 	}
-	return "the sentence states a cause the reads do not show; cite it, or say it as a possibility"
+	return ""
 }
 
 // driverMovement is a cited payee row's movement in a changes read: this month less last month, whichever of its fields
@@ -754,23 +779,67 @@ func driverMovement(read agentRead, path string) (string, *big.Rat, bool) {
 	return row, movement, ok
 }
 
-// checkRemainder holds a stated movement and its drivers together: when a sentence attributes one cited total change
-// to drivers whose movements do not add up to it, it must say what remains. The total is the cited change that is not
-// a driver; drivers may offset (+500 and −400 explain a net 100).
-func checkRemainder(line string, totals, drivers []*big.Rat) string {
+// checkRemainder holds a stated movement and its drivers together: when a sentence attributes a cited total change to
+// drivers of the same row whose movements do not add up to it, it must say what remains. The total is the row's cited
+// change that is not a driver; drivers may offset (+500 and −400 explain a net 100). Each row is held on its own, so a
+// second total in the sentence ("while expenses rose 3,100") never excuses the first's missing remainder.
+func checkRemainder(line string, totals, drivers map[string][]*big.Rat) string {
 	lower := strings.ToLower(line)
-	if len(totals) != 1 || len(drivers) == 0 || !claimCausal.MatchString(lower) && !strings.Contains(lower, " from ") && !strings.Contains(lower, "of which") {
+	if !claimCausal.MatchString(lower) && !strings.Contains(lower, " from ") && !strings.Contains(lower, "of which") {
 		return ""
 	}
-	total, rest := totals[0], new(big.Rat)
-	for _, d := range drivers {
-		rest.Add(rest, d)
+	for _, group := range slices.Sorted(maps.Keys(totals)) {
+		if len(totals[group]) != 1 || len(drivers[group]) == 0 {
+			continue
+		}
+		total, rest := totals[group][0], new(big.Rat)
+		for _, d := range drivers[group] {
+			rest.Add(rest, d)
+		}
+		if rest.Cmp(total) == 0 || claimRemainder.MatchString(lower) {
+			continue
+		}
+		gap := new(big.Rat).Sub(total, rest)
+		return "the drivers stated account for " + rest.FloatString(2) + " of " + total.FloatString(2) + "; say what the remaining " + gap.FloatString(2) + " is"
 	}
-	if rest.Cmp(total) == 0 || claimRemainder.MatchString(lower) {
-		return ""
+	return ""
+}
+
+// rowGroup is the row a change or driver belongs to: the path before its drivers ("/changes/0" for a payee of the
+// first changed account, "/rows/0" for /rows/0/drivers/1/change), or the object holding the field.
+func rowGroup(step, path string) string {
+	keys := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i, k := range keys {
+		if k == "drivers" || k == "new" || k == "missing" || k == "changed" || k == "unattributed" {
+			return step + "/" + strings.Join(keys[:i], "/")
+		}
 	}
-	gap := new(big.Rat).Sub(total, rest)
-	return "the drivers stated account for " + rest.FloatString(2) + " of " + total.FloatString(2) + "; say what the remaining " + gap.FloatString(2) + " is"
+	return step + "/" + strings.Join(keys[:max(0, len(keys)-1)], "/")
+}
+
+// figurelessClaim holds a sentence that states a money field's direction or standing without its figure ("net income
+// rose", "cash is available"): the direction is the change's sign, an amount is never said to have moved, book cash is
+// never called available, and a stale read is said to be stale. changeCited says another field of the sentence is a
+// change, which a direction may then describe.
+func figurelessClaim(line string, c claim, got string, changeCited bool) string {
+	lower := strings.ToLower(line)
+	rise, fall := false, false
+	for _, w := range wordsOf(line) {
+		rise = rise || claimRiseVerb[w]
+		fall = fall || claimFallVerb[w]
+	}
+	field, _ := new(big.Rat).SetString(strings.TrimSuffix(normalizeFigure(got), "%"))
+	switch {
+	case c.kind == "change" && field != nil && (rise && field.Sign() < 0 || fall && field.Sign() > 0):
+		return "the sentence says " + c.describe() + " moved the other way: the cited change is " + normalizeFigure(got)
+	case c.kind != "change" && (rise || fall) && !changeCited:
+		return "the sentence says " + c.describe() + " moved, but the cited field is an amount, not a change"
+	case c.keys["cash"] && claimAvailable.MatchString(lower):
+		return "the sentence calls book cash available at the bank"
+	case c.stale && !claimStaleSaid.MatchString(lower):
+		return "the sentence states " + c.describe() + " as current, but the cited read is stale"
+	}
+	return ""
 }
 
 // derive computes a figure the answer states from fields it names: their sum, the first less the others, or the first
@@ -823,9 +892,11 @@ func derivedMatches(op, stated string, value *big.Rat) bool {
 			return false
 		}
 		n = strings.TrimSuffix(n, "%")
+		// The precision is the one written ("17.0%" is to one place), not the normalized figure's.
 		decimals := 0
-		if i := strings.Index(n, "."); i >= 0 {
-			decimals = len(n) - i - 1
+		written := strings.Trim(stated, "()−-$% ")
+		if i := strings.Index(written, "."); i >= 0 {
+			decimals = len(strings.TrimRight(written[i+1:], "% )"))
 		}
 		want, ok := new(big.Rat).SetString(n)
 		if !ok {
@@ -931,12 +1002,13 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 	stated := normalizeFigure(s.value)
 	found := false
 	for _, o := range figuresIn(line) {
-		if o.normalized == stated {
+		// As written in the sentence, at its written precision.
+		if o.normalized == stated && derivedMatches(s.derive, line[o.start:o.end], computed) {
 			found = true
 		}
 	}
 	if !found {
-		return "a derived figure is not in its sentence"
+		return "a derived figure is not in its sentence as computed"
 	}
 	named := metricsIn(line)
 	lower := strings.ToLower(line)
