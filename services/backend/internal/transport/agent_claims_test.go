@@ -263,7 +263,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Forecast receipts for the two weeks total 40,600.00.", "incomplete inputs", derived(0, "sum", "40600.00", "t22", "/weeks/0/receipts", "t22", "/weeks/1/receipts"))
 	ok("Forecast receipts for the two weeks total 40,600.00, with open items incomplete.", derived(0, "sum", "40600.00", "t22", "/weeks/0/receipts", "t22", "/weeks/1/receipts"))
 	reads["t23"] = agentRead{text: `{"published":[{"close_id":"9","publication_id":"12","entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","net_income":"21780.00"}]}`, value: decode(`{"published":[{"close_id":"9","publication_id":"12","entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","net_income":"21780.00"}]}`), link: chatCitation{"Overview", "/dashboard/executive"}, title: "Your clients", tool: "executive_overview", executive: true}
-	if cited := ok("Net income is 17.0% of patient fees.", derived(0, "ratio", "17.0%", "t23", "/published/0/net_income", "t2", "/profit_and_loss/sections/0/lines/0/amount")); !strings.Contains(cited[0].Href, "publication=12") {
+	if cited := ok("Published net income is 17.0% of patient fees.", derived(0, "ratio", "17.0%", "t23", "/published/0/net_income", "t2", "/profit_and_loss/sections/0/lines/0/amount")); !strings.Contains(cited[0].Href, "publication=12") {
 		t.Fatalf("a derived figure's inputs link to their rows: %v", cited)
 	}
 
@@ -448,6 +448,11 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	reads["t54"] = read(`{"publication":{"id":"7","state":"current","reason":"Marketing invoices were coded to rent; corrected."},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00","change":"-500.00"}]}}}`, "Published report", "read_publication", "", "")
 	rejected("Net income fell 500.00 because of marketing.", "cause the reads do not show",
 		e("t54", 0, "/pack/profit_and_loss/measures/0/change", "-500.00"), e("t54", 0, "/publication/reason", "Marketing invoices were coded to rent; corrected."))
+
+	// Round twenty-eight: publication status holds for derived and figure-less claims too.
+	reads["t55"] = read(`{"publication":{"id":"8","state":"unverified"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"21780.00"},{"name":"Gross profit","amount":"104330.00"}]}}}`, "Published report", "read_publication", "", "")
+	rejected("Net income and gross profit total 126,110.00.", "could not be verified", derived(0, "sum", "126110.00", "t55", "/pack/profit_and_loss/measures/0/amount", "t55", "/pack/profit_and_loss/measures/1/amount"))
+	rejected("Net income is positive.", "could not be verified", e("t55", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))

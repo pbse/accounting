@@ -1123,6 +1123,10 @@ func figurelessClaim(line string, c claim, got string, changes []claim) string {
 		return "the sentence states the scenario " + c.describe() + " without saying it is a scenario"
 	case c.incomplete && !claimIncompleteSaid.MatchString(lower):
 		return "the sentence states the forecast without saying its inputs are incomplete"
+	case c.unverified && !claimUnverifiedSaid.MatchString(lower):
+		return "the sentence states " + c.describe() + " without saying it could not be verified against the books"
+	case c.published && !claimPublishedSaid.MatchString(lower):
+		return "the sentence states the published " + c.describe() + " as current; say it is the published report's"
 	}
 	return ""
 }
@@ -1469,6 +1473,12 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		}
 		if c.incomplete && !claimIncompleteSaid.MatchString(lower) {
 			return "the sentence computes from a forecast with incomplete inputs without saying so"
+		}
+		if c.unverified && !claimUnverifiedSaid.MatchString(lower) {
+			return "the sentence computes from a figure that could not be verified against the books without saying so"
+		}
+		if c.published && !claimPublishedSaid.MatchString(lower) {
+			return "the sentence computes from a published report's figures without saying they are the report's"
 		}
 		if !c.forecast && len(c.period) == 7 && len(months) == 1 {
 			if months := namedMonths(line); len(months) > 0 {
