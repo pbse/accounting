@@ -102,6 +102,14 @@ type fileState struct {
 	// in force, for the roll-forward.
 	priorBalances map[string]string
 	classes       map[string]string
+	// reexport is the prior month's newest file read since its accepted one, with its balances by key: the evidence
+	// that the prior month changed after it was accepted; nil without one.
+	reexport *priorReexport
+}
+
+type priorReexport struct {
+	name     string
+	balances map[string]string
 }
 
 // monthActivity is each profit and loss account's activity for the month, by key, in the profit and loss sign (revenue
@@ -240,10 +248,11 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	// is explained.
 	s.prior = previousMonth(reading.Period)
 	var priorLines []byte
-	err = q.QueryRowContext(ctx, `SELECT COALESCE(l.reading->'lines','[]'::jsonb) FROM books_import_acceptances a JOIN books_layouts l ON l.id=a.layout_id
+	var priorImport string
+	err = q.QueryRowContext(ctx, `SELECT COALESCE(l.reading->'lines','[]'::jsonb),a.import_id::text FROM books_import_acceptances a JOIN books_layouts l ON l.id=a.layout_id
  WHERE a.organization_id=$1 AND client_identity(a.organization_id,a.client_entity)=client_identity($1,$2) AND a.period=$3
   AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id)
- ORDER BY a.id DESC LIMIT 1`, org, name, s.prior).Scan(&priorLines)
+ ORDER BY a.id DESC LIMIT 1`, org, name, s.prior).Scan(&priorLines, &priorImport)
 	if err == sql.ErrNoRows {
 		s.prior = ""
 		return s, true, nil
@@ -251,15 +260,45 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 	if err != nil {
 		return s, false, err
 	}
-	var lines []bookfiles.Line
-	if err = json.Unmarshal(priorLines, &lines); err != nil {
+	order, balances, names, err := lineBalances(priorLines)
+	if err != nil {
 		return s, false, err
 	}
 	here := map[string]bool{}
 	for _, a := range reading.Accounts {
 		here[a.Key] = true
 	}
-	// An account on several rows there (one per department, say) had the balance of their sum.
+	for _, key := range order {
+		if !here[key] && nonZero(balances[key]) {
+			s.missing = append(s.missing, names[key])
+		}
+	}
+	s.priorBalances = balances
+	// A file of the prior month read since its accepted one is a re-export: the evidence of a change to that month.
+	var again []byte
+	var againName string
+	switch err = q.QueryRowContext(ctx, `SELECT i.name,COALESCE(l.reading->'lines','[]'::jsonb) FROM books_imports i JOIN books_layouts l ON l.id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=i.id)
+ WHERE i.organization_id=$1 AND client_identity(i.organization_id,i.client_entity)=client_identity($1,$2) AND i.period=$3 AND i.id>$4::bigint ORDER BY i.id DESC LIMIT 1`, org, name, s.prior, priorImport).Scan(&againName, &again); {
+	case err == sql.ErrNoRows:
+	case err != nil:
+		return s, false, err
+	default:
+		_, reexported, _, err := lineBalances(again)
+		if err != nil {
+			return s, false, err
+		}
+		s.reexport = &priorReexport{againName, reexported}
+	}
+	return s, true, nil
+}
+
+// lineBalances is a reading's lines as balances by account key, in the order read, with each account's name: an
+// account on several rows (one per department, say) has the balance of their sum.
+func lineBalances(raw []byte) ([]string, map[string]string, map[string]string, error) {
+	var lines []bookfiles.Line
+	if err := json.Unmarshal(raw, &lines); err != nil {
+		return nil, nil, nil, err
+	}
 	var order []string
 	balances, names := map[string]string{}, map[string]string{}
 	for _, l := range lines {
@@ -273,13 +312,7 @@ func readFileState(ctx context.Context, q rowReader, org, name, id string) (file
 		}
 		balances[key] = addAmounts(balances[key], l.Amount)
 	}
-	for _, key := range order {
-		if !here[key] && nonZero(balances[key]) {
-			s.missing = append(s.missing, names[key])
-		}
-	}
-	s.priorBalances = balances
-	return s, true, nil
+	return order, balances, names, nil
 }
 
 // rollForward compares each account's opening balance with the prior accepted month's closing balance
@@ -359,12 +392,17 @@ func rollForward(s fileState) importCheck {
 		}
 		return check
 	}
-	expected := map[string]*big.Rat{}
-	for key, b := range s.priorBalances {
-		expected[key], _ = new(big.Rat).SetString(b)
-	}
 	yearStart := s.fiscalStart > 0 && monthOf(s.reading.Period) == s.fiscalStart
-	if yearStart {
+	// The closing balances a month's openings come from: at the fiscal year's start, the profit and loss closed into the
+	// one retained earnings account; "" or why the year's result has nowhere to go.
+	expect := func(closing map[string]string) (map[string]*big.Rat, string) {
+		expected := map[string]*big.Rat{}
+		for key, b := range closing {
+			expected[key], _ = new(big.Rat).SetString(b)
+		}
+		if !yearStart {
+			return expected, ""
+		}
 		result := new(big.Rat)
 		for key, b := range expected {
 			if c := s.classes[key]; c == "Revenue" || c == "Expense" {
@@ -382,19 +420,46 @@ func rollForward(s fileState) importCheck {
 		case len(retained) == 1:
 			expected[retained[0]] = new(big.Rat).Add(cmp.Or(expected[retained[0]], new(big.Rat)), result)
 		case result.Sign() != 0:
-			check.State, check.Detail = "holds", "The year's result of "+result.FloatString(2)+" closes into retained earnings, and the file has "+map[bool]string{true: "no retained earnings account", false: "more than one"}[len(retained) == 0]+" to carry it to."
-			return check
+			return nil, "The year's result of " + result.FloatString(2) + " closes into retained earnings, and the file has " + map[bool]string{true: "no retained earnings account", false: "more than one"}[len(retained) == 0] + " to carry it to."
 		}
+		return expected, ""
 	}
+	expected, why := expect(s.priorBalances)
+	if why != "" {
+		check.State, check.Detail = "holds", why
+		return check
+	}
+	// A difference the prior month's re-export closes at is that month's change since it was accepted; any other is
+	// unexplained.
+	var again map[string]*big.Rat
+	if s.reexport != nil {
+		again, _ = expect(s.reexport.balances)
+	}
+	changed := []string{}
 	for _, a := range s.reading.Accounts {
 		e := cmp.Or(expected[a.Key], new(big.Rat))
 		if o := opening[a.Key]; o.Cmp(e) != 0 {
-			differences = append(differences, fmt.Sprintf("%s opens at %s, closed at %s (%s)", strings.TrimSpace(a.Number+" "+a.Name), o.FloatString(2), e.FloatString(2), new(big.Rat).Sub(o, e).FloatString(2)))
+			line := fmt.Sprintf("%s opens at %s, closed at %s (%s)", strings.TrimSpace(a.Number+" "+a.Name), o.FloatString(2), e.FloatString(2), new(big.Rat).Sub(o, e).FloatString(2))
+			if again != nil && o.Cmp(cmp.Or(again[a.Key], new(big.Rat))) == 0 {
+				changed = append(changed, line)
+			} else {
+				differences = append(differences, line)
+			}
 		}
 	}
 	prior := monthTitle(s.prior)
-	if len(differences) > 0 {
-		check.State, check.Detail = "holds", fmt.Sprintf("%d account%s %s not roll from %s's accepted books, unexplained: %s.", len(differences), suffix(len(differences)), map[bool]string{true: "does", false: "do"}[len(differences) == 1], prior, strings.Join(differences, "; "))
+	if n := len(changed) + len(differences); n > 0 {
+		parts := []string{}
+		if len(changed) > 0 {
+			parts = append(parts, prior+" changed after it was accepted, as its re-export "+s.reexport.name+" shows: "+strings.Join(changed, "; "))
+		}
+		if len(differences) > 0 {
+			parts = append(parts, "unexplained: "+strings.Join(differences, "; "))
+		}
+		check.State, check.Detail = "holds", fmt.Sprintf("%d account%s %s not roll from %s's accepted books, %s.", n, suffix(n), map[bool]string{true: "does", false: "do"}[n == 1], prior, strings.Join(parts, "; "))
+		if len(changed) > 0 {
+			check.Holds = "The accounts that do not roll, and the statements built on them, until " + prior + "'s re-export is accepted, or these accounts explained."
+		}
 		return check
 	}
 	check.State, check.Detail, check.Holds = "passes", "Every account opens at "+prior+"'s accepted closing balance", ""

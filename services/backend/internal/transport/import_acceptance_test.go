@@ -646,6 +646,12 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	if c := rollForward(s); c.State != "holds" || c.Detail != "1 account does not roll from November 2026's accepted books, unexplained: 1000 Business Checking opens at 1050.00, closed at 1000.00 (50.00)." {
 		t.Fatalf("a month that does not roll: %+v", c)
 	}
+	// A re-export of November closing where December opens is the evidence that November changed after it was accepted.
+	s.reexport = &priorReexport{"Acme 2026-11 again.csv", map[string]string{"n:1000": "1050", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"}}
+	if c := rollForward(s); c.State != "holds" || c.Detail != "1 account does not roll from November 2026's accepted books, November 2026 changed after it was accepted, as its re-export Acme 2026-11 again.csv shows: 1000 Business Checking opens at 1050.00, closed at 1000.00 (50.00)." || !strings.Contains(c.Holds, "re-export is accepted") {
+		t.Fatalf("a difference the prior month's re-export explains: %+v", c)
+	}
+	s.reexport = nil
 	// A movement the file does not give exactly is never taken as zero.
 	s.reading.Accounts[0].Movement, s.reading.Accounts[0].MovementHeld = "", "unreadable"
 	if c := rollForward(s); c.State != "holds" || !strings.Contains(c.Detail, "1000 Business Checking: unreadable") {
