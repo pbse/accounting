@@ -1,5 +1,5 @@
 import { useDates } from "../../data/time";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
 
 type Item = { id: string; kind: string; name: string; number?: string; date?: string; currency: string; amount: string };
@@ -24,7 +24,7 @@ const show = (amount: string, currency: string) => (currency ? money(amount, cur
 const label = (item: Item) => [item.kind === "document" ? "" : item.kind, item.name || "No name", item.number, item.date].filter(Boolean).join(" · ");
 
 // Uploaded prepaid invoices beside the latest capture's bills and purchases, paired only on a unique currency and exact amount.
-export function Matching({ closeId }: { closeId: string }) {
+export function Matching({ closeId, open }: { closeId: string; open?: boolean }) {
   const dates = useDates();
   const [report, setReport] = useState<Report>();
   const [error, setError] = useState("");
@@ -38,6 +38,10 @@ export function Matching({ closeId }: { closeId: string }) {
       .then((r) => n === latest.current && setReport(r))
       .catch((e) => n === latest.current && setError(e instanceof Error ? e.message : "Matching unavailable."));
   }
+  // Shown open (as Books' view), the panel reads at once rather than on a toggle.
+  useEffect(() => {
+    if (open) load();
+  }, [open, closeId]);
   const list = (title: string, items: Item[], more = "") =>
     items.length > 0 && (
       <>
@@ -66,7 +70,7 @@ export function Matching({ closeId }: { closeId: string }) {
       </>
     );
   return (
-    <details onToggle={(e) => e.currentTarget.open && load()}>
+    <details open={open} onToggle={(e) => e.currentTarget.open && load()}>
       <summary>Documents and ledger transactions</summary>
       {error && <p role="alert">{error}</p>}
       {!report ? null : report.state === "waiting" ? (

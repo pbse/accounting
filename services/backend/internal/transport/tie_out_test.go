@@ -59,6 +59,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	}
 	type board struct {
 		Snapshot     *struct{ Source string }
+		BooksSource  string `json:"books_source"`
 		Rows         []row
 		Unmatched    []struct{ Account, Reason string }
 		Unclassified []struct{ Account string }
@@ -78,7 +79,8 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 		}
 		return b, byName
 	}
-	if b, _ := read(); b.Snapshot != nil || len(b.Rows) != 0 {
+	// Without a snapshot there is nothing to tie, and the board says where the month's books come from.
+	if b, _ := read(); b.Snapshot != nil || len(b.Rows) != 0 || b.BooksSource != "newest" {
 		t.Fatalf("without a snapshot there is nothing to tie: %+v", b)
 	}
 

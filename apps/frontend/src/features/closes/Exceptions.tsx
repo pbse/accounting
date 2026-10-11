@@ -60,7 +60,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
     return item.type !== "uncategorized" && item.type !== "inconsistent_coding"
       ? undefined
       : scan.capture?.source === "xero"
-        ? item.kind === "Bill" ? ["evidence", "correct-xero"] : undefined
+        ? item.kind === "Bill" ? ["books", "correct-xero"] : undefined
         : ({ Bill: ["books", "correct-bills"], Purchase: ["books", "correct-purchases"], Deposit: ["books", "correct-deposits"] } as Record<string, [string, string]>)[item.kind];
   };
   async function copy(items: string[]) {
@@ -91,7 +91,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
         </p>
       ) : !scan.capture ? (
         <p className="empty">
-          Capture this month's QuickBooks transactions or Xero books on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every
+          Capture this month's QuickBooks transactions or Xero books in <Link to="?tab=books&view=ledger">the ledger and its captures</Link>. The agent then checks every
           transaction for possible duplicates, holding-account postings, payments without a payee and payees coded to different accounts, and
           asks about open invoices more than 60 days and bills more than 30 days past due at month-end.
         </p>
@@ -150,7 +150,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
       <h3>Balances to review</h3>
       {!balances.snapshot ? (
         <p className="empty">
-          Capture a period snapshot on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every Trial Balance account for a
+          Capture a period snapshot in <Link to="?tab=books&view=ledger">the ledger and its captures</Link>. The agent then checks every Trial Balance account for a
           balance opposite its normal side, such as a credit in receivables or an overdrawn bank account, and for suspense, clearing,
           undeposited-funds or uncategorized accounts that still hold a balance.
         </p>

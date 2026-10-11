@@ -7,27 +7,17 @@ import { Icon } from "@close/ui/components/Icon";
 import { IconTile } from "@close/ui/components/IconTile";
 import { Segmented } from "@close/ui/components/Segmented";
 import { StatGroup, StatTile } from "@close/ui/components/StatTile";
-import { BillCorrection } from "./BillCorrection";
-import { CreditApplications } from "./CreditApplications";
 import { CloseLede, signOffAvailable, useBrief } from "./Stands";
 import { CarryForward } from "./CarryForward";
 import { EmailReplies } from "./EmailReplies";
-import { Aging } from "./Aging";
 import { CashPlan } from "./CashPlan";
-import { OpenItems } from "./OpenItems";
-import { Matching } from "./Matching";
-import { Exceptions } from "./Exceptions";
-import { Flux } from "./Flux";
 import { Reports } from "./Reports";
 import { Budget } from "./Budget";
-import { TieOut } from "./TieOut";
 import { RetentionControls } from "./Enterprise";
 import { Evidence, PreparationJobs } from "./Evidence";
 import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
 import { Memory } from "./Memory";
-import { MonthBooks } from "./MonthBooks";
-import { Xero } from "./Xero";
 import { HistoricalExports } from "./HistoricalExports";
 import { Stripe } from "./Stripe";
 import { Readiness } from "./Readiness";
@@ -38,6 +28,7 @@ import { Replay } from "./Replay";
 import { RecurringAccruals } from "./RecurringAccruals";
 import { Requests } from "./Requests";
 import { EffortCard, EffortTracker, type Activity } from "./Effort";
+import { Books, BooksLede } from "./Books";
 import { AgentChip, CloseMenu, countsOf, needsFor, Overview, useDecisions, useGoalStatus } from "./Overview";
 import { workspaceRequest } from "./workspace";
 import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
@@ -114,6 +105,19 @@ function Package({ close }: { close: Close }) {
   );
 }
 
+// Each tab's own actions and exception paths, at the top of the close's ⋯ menu.
+const tabMenus = (base: string): Partial<Record<Tab, { title: string; items: { label: string; to: string }[] }>> => ({
+  books: {
+    title: "Books",
+    items: [
+      { label: "Capture the trial balance again", to: `${base}?tab=books&view=ledger` },
+      { label: "Client questions from the exceptions", to: `${base}?tab=books&view=exceptions` },
+      { label: "Correct a transaction in QuickBooks", to: `${base}?tab=books&view=corrections` },
+      { label: "Apply a payment or vendor credit", to: `${base}?tab=books&view=corrections` },
+    ],
+  },
+});
+
 export default function ClientClose() {
   const { id } = useParams();
   const location = useLocation();
@@ -186,11 +190,11 @@ export default function ClientClose() {
               Sign off
             </Link>
           )}
-          <CloseMenu close={close} status={goalRead.data} onPlanSaved={() => void reload()} />
+          <CloseMenu close={close} status={goalRead.data} onPlanSaved={() => void reload()} tab={tabMenus(base)[tab]} />
         </div>
       </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
-      <CloseLede close={close} counts={counts} />
+      {tab === "books" ? <BooksLede close={close} base={base} /> : <CloseLede close={close} counts={counts} />}
       {close.profile && (close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown") && (
         <p className="ks-lede-notes">
           <span className="chip warn" role={close.profile.state === "unknown" ? undefined : "alert"} title={close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>
@@ -213,22 +217,7 @@ export default function ClientClose() {
         ))}
       </nav>
       {tab === "overview" && <Overview close={close} papers={papers} needs={needs} teammates={teammates} brief={brief} briefRead={briefRead} decisionsError={decisionsError} base={base} onPrepared={() => void reload()} />}
-      {tab === "books" && (
-        <div className="stack">
-          <MonthBooks key={`books-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
-          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} />
-          <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
-          <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
-          <Flux key={`flux-${close.id}`} closeId={close.id} />
-          <Aging key={`aging-${close.id}`} closeId={close.id} />
-          <OpenItems key={`open-items-${close.id}`} closeId={close.id} />
-          <Matching key={`matching-${close.id}`} closeId={close.id} />
-          <BillCorrection closeId={close.id} />
-          <BillCorrection closeId={close.id} kind="purchases" />
-          <BillCorrection closeId={close.id} kind="deposits" />
-          <CreditApplications closeId={close.id} />
-        </div>
-      )}
+      {tab === "books" && <Books close={close} papers={papers} needs={needs.filter((need) => need.tab === "books")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
       {tab === "workpapers" && (
         <div className="stack">
       <StatGroup>

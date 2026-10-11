@@ -13,7 +13,7 @@ type Report =
 const show = (amount: string, currency: string) => (currency ? money(amount, currency) : `${amount} (currency unknown)`);
 
 // Receivables and payables aged at month-end from the latest capture's open items. Statements are downloads only.
-export function Aging({ closeId }: { closeId: string }) {
+export function Aging({ closeId, open }: { closeId: string; open?: boolean }) {
   const dates = useDates();
   const read = useQuery(workspaceQuery<Report>(`/${closeId}/aging`));
   const report = read.data;
@@ -73,7 +73,7 @@ export function Aging({ closeId }: { closeId: string }) {
       </table>
     );
   return (
-    <details>
+    <details open={open}>
       <summary>Receivables and payables aging</summary>
       {error && <p role="alert">{error}</p>}
       {report.state === "waiting" ? (

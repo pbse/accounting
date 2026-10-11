@@ -5,30 +5,31 @@ import { Link } from "react-router";
 import { RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
-type Status = "ties" | "ties_after_entries" | "within_materiality" | "differs" | "posting_unknown" | "unsupported";
-type Row = {
+export type TieStatus = "ties" | "ties_after_entries" | "within_materiality" | "differs" | "posting_unknown" | "unsupported";
+export type TieRow = {
   account_id: string;
   account: string;
   class: string;
   balance: string;
   expected: string | null;
   difference: string | null;
-  status: Status;
+  status: TieStatus;
   provisional: boolean;
   hint?: string;
   supports: { paper_id: string; kind: string; label: string; amount: string; review_state: string }[];
   entries: { paper_id: string; kind: string; amount: string; posting: "proposed" | "posted_after_capture" | "unknown" }[];
 };
-type Board = {
+export type Board = {
+  books_source?: string;
   snapshot: { id: string; captured_at: string; stale: boolean; source: "quickbooks" | "xero" | "files"; file?: string } | null;
   currency?: string;
   error?: string;
-  rows: Row[];
+  rows: TieRow[];
   unmatched: { account: string; paper_id: string; kind: string; amount: string; reason: string }[];
   unclassified: { account_id: string; account: string; balance: string }[];
 };
 
-const labels: Record<Status, [string, string]> = {
+const labels: Record<TieStatus, [string, string]> = {
   ties: ["Ties", "ok"],
   ties_after_entries: ["Ties after proposed entries", "info"],
   within_materiality: ["Differs by less than the firm's materiality", "info"],
@@ -39,7 +40,7 @@ const labels: Record<Status, [string, string]> = {
 const postings = { proposed: "proposed", posted_after_capture: "posted after this snapshot", unknown: "posting outcome unknown" };
 
 // Debit-minus-credit amounts read as an accountant writes them.
-const side = (amount: string) => (/^-?0(\.0+)?$/.test(amount) ? "0.00" : amount.startsWith("-") ? `${amount.slice(1)} Cr` : `${amount} Dr`);
+export const side = (amount: string) => (/^-?0(\.0+)?$/.test(amount) ? "0.00" : amount.startsWith("-") ? `${amount.slice(1)} Cr` : `${amount} Dr`);
 
 export function TieOut({ closeId }: { closeId: string }) {
   const dates = useDates();
@@ -47,7 +48,7 @@ export function TieOut({ closeId }: { closeId: string }) {
   const board = read.data;
   const error = read.error ? read.error.message || "The tie-out is unavailable." : "";
   if (!board) return error ? <p role="alert">{error}</p> : null;
-  const count = (status: Status) => board.rows.filter((row) => row.status === status).length;
+  const count = (status: TieStatus) => board.rows.filter((row) => row.status === status).length;
   const summary = [
     `${count("ties")} of ${board.rows.length} accounts tie`,
     count("ties_after_entries") && `${count("ties_after_entries")} tie once proposed entries post`,
@@ -61,7 +62,7 @@ export function TieOut({ closeId }: { closeId: string }) {
       <SectionHeader title="Balance sheet tie-out" />
       {!board.snapshot ? (
         <p className="empty">
-          Capture a period snapshot on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then compares every balance-sheet account
+          Capture a period snapshot in <Link to="?tab=books&view=ledger">the ledger and its captures</Link>. The agent then compares every balance-sheet account
           with the balance its schedules, accruals, loans and reconciliations support.
         </p>
       ) : (
@@ -89,7 +90,7 @@ export function TieOut({ closeId }: { closeId: string }) {
               )}
               <RowList columns={["Account", "Trial Balance", "Supported", ""]}>
                 {board.rows.map((row) => (
-                  <div className="row" key={row.account_id + row.account}>
+                  <div className="row" id={`tie-${row.account_id}`} key={row.account_id + row.account}>
                     <div>
                       <strong>{row.account}</strong>{" "}
                       <span className={`status ${labels[row.status][1]}`}>{labels[row.status][0]}</span>
