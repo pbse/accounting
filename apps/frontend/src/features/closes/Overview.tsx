@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Dialog } from "@close/ui/components/Dialog";
 import { Icon } from "@close/ui/components/Icon";
 import { Segmented } from "@close/ui/components/Segmented";
-import { workspaceQuery } from "../../data/queries";
+import { workPath, workspaceQuery } from "../../data/queries";
 import { closeTabs, type CloseTab } from "../../data/closeTabs";
 import { monthName, useDates } from "../../data/time";
 import { askAssistant } from "../dashboard/assistantStore";
@@ -14,7 +14,7 @@ import { goalNeeds, GoalPanel, handOver, headline, stepWords, useGoal, type Item
 import { PlanningControls } from "./Planning";
 import { area, needsOf, type Brief, type Counts, type Line } from "./Stands";
 import { Work } from "./Work";
-import { workspaceRequest } from "./workspace";
+import { amount, workspaceRequest } from "./workspace";
 import { paperLabel, type Close, type Paper } from "./WorkpaperView";
 
 // A close's Overview (docs/design-system.md, Close page): on the left what needs the person, at most three prepared
@@ -37,7 +37,7 @@ export const toHandOver = (status: Status | undefined) => !!status && !status.si
 
 // One thing for the person: a decision (or several approvals in one review), a blocker from the brief, or handing the
 // close to the agent; the one action that settles it, the tab where that is done, and the decisions it stands for.
-export type Need = { key: string; title: string; detail: string; action: string; to?: string; act?: () => void; tab?: CloseTab; count: number; blocker?: boolean };
+export type Need = { key: string; title: string; detail: string; action: string; to?: string; act?: () => void; tab?: CloseTab; count: number; blocker?: boolean; review?: string[] };
 
 // Each kind of decision: the line under its title, its one action, and the tab its action is on (none: on Overview).
 const kinds: Record<string, { detail: string; action: string; tab?: CloseTab }> = {
@@ -91,6 +91,7 @@ export function needsFor(events: AttentionEvent[] | undefined, brief: Brief | un
       to: `${base}/workpapers/${approvals[0].workpaper_id}`,
       tab: "workpapers",
       count: approvals.length,
+      review: approvals.map((e) => e.workpaper_id!),
     });
   }
   for (const e of mine) {
@@ -278,19 +279,213 @@ function Fold({ icon, title, lines, base, children }: { icon: "waiting" | "block
   );
 }
 
+type Review = { state: string; digest: string; review_id: string };
+type WorkItem = { workpaper_ids?: string[]; source_name?: string; agent_checkpoint?: { straight_through?: string } };
+type TieRow = { account: string; expected: string | null; difference: string | null; status: string; provisional: boolean; supports: { paper_id: string }[]; entries: { paper_id: string }[] };
+type Entry = { date: string; debit_account: string; credit_account: string; amount: string };
+type Effect = { entry: Entry; role: string };
+
+// The journal entries a draft proposes, whatever its kind, each with its date and what it is: an accrual's reversal
+// and a disposal fall in another month than the adjustment. A reconciliation proposes none.
+function entriesOf(p: Paper): Effect[] {
+  const one = (entry: Entry | null | undefined, role = "") => (entry ? [{ entry, role }] : []);
+  switch (p.kind) {
+    case "prepaid":
+      return [...one(p.paper.proposal), ...(p.paper.disposal ?? []).map((entry) => ({ entry, role: "disposal, booked by hand" }))];
+    case "accrual":
+      return [...one(p.paper.proposal), ...one(p.paper.reversal, "reversal")];
+    case "owner":
+      return one(p.paper.proposal);
+    case "loan":
+    case "payroll":
+      return p.paper.proposals.map((entry) => ({ entry, role: "" }));
+    case "settlement":
+      return [...one(p.paper.proposal), ...one(p.paper.refund_proposal, "refunds"), ...one(p.paper.revenue_proposal, "revenue")];
+  }
+  return [];
+}
+
+// Where a balance this draft supports stands, as the tie-out reads it: from every draft that supports the account, not
+// from this one alone, and whether the entries must still post or the capture is provisional.
+function tieWords(row: TieRow, id: string, currency: string) {
+  const others = new Set([...row.supports.map((s) => s.paper_id), ...row.entries.map((e) => e.paper_id)]);
+  others.delete(id);
+  const state =
+    row.status === "ties"
+      ? `ties at ${amount(row.expected ?? "", currency)}`
+      : row.status === "ties_after_entries"
+        ? `ties at ${amount(row.expected ?? "", currency)} once the entries post`
+        : row.status === "within_materiality"
+          ? "is within materiality"
+          : row.status === "differs"
+            ? `still differs by ${amount(row.difference ?? "", currency)}`
+            : "";
+  if (!state) return "";
+  const drafts = others.size ? `with this and ${others.size} other draft${others.size === 1 ? "" : "s"}` : "with this draft";
+  return `${row.account}, ${drafts}, ${state}${row.provisional ? " (provisional)" : ""}`;
+}
+
+// InPlaceReview opens one draft's approval where the decision is listed: what the agent did, its effect on the books
+// and whether the balance then ties, its sources, then Approve (one click; approving does not post) or Return with a
+// note. A payroll recording is approved on its own page, with its checks and its two confirmations together.
+function InPlaceReview({ closeId, base, listed, id, position, total, onDone }: { closeId: string; base: string; listed: Paper | undefined; id: string; position: number; total: number; onDone: (result: "approved" | "returned") => void }) {
+  const dates = useDates();
+  // A draft older than the page's latest hundred is read on its own: approval waits until its effect and sources show.
+  const record = useQuery({ ...workspaceQuery<Paper>(`/${closeId}/workpapers/${id}?record=1`), enabled: !listed });
+  const paper = listed ?? record.data;
+  const review = useQuery(workspaceQuery<Review>(`/${closeId}/workpapers/${id}/reviews`));
+  const work = useQuery(workspaceQuery<{ items: WorkItem[] }>(workPath(closeId, "all")));
+  const tie = useQuery(workspaceQuery<{ rows: TieRow[]; currency?: string }>(`/${closeId}/tie-out`));
+  const [returning, setReturning] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const card = useRef<HTMLDivElement>(null);
+  useEffect(() => card.current?.focus(), [id]);
+  const label = paper ? `${paperLabel(paper)} #${id}` : `Draft #${id}`;
+  const currency = (paper?.paper as { input?: { currency?: string } } | undefined)?.input?.currency ?? tie.data?.currency ?? "USD";
+  const item = work.data?.items.find((i) => i.workpaper_ids?.includes(id));
+  const did = item?.agent_checkpoint?.straight_through || (item?.source_name ? `Prepared from ${item.source_name}.` : "");
+  const entries = paper ? entriesOf(paper) : [];
+  const ties = (tie.data?.rows ?? []).filter((row) => row.supports.some((s) => s.paper_id === id) || row.entries.some((e) => e.paper_id === id)).map((row) => tieWords(row, id, currency)).filter(Boolean);
+  const changed = review.data?.state === "source_changed";
+  async function decide(decision: "approved" | "changes_requested") {
+    if (!review.data) return;
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/workpapers/${id}/reviews`, { decision, note: decision === "approved" ? "" : note.trim(), digest: review.data.digest, expected_review_id: review.data.review_id });
+      onDone(decision === "approved" ? "approved" : "returned");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The decision was not recorded. Refresh and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="ks-decision" role="region" aria-label={`Approval ${position} of ${total} · ${label}`} tabIndex={-1} ref={card}>
+      <div className="ks-dec-head">
+        <span className="ks-numeral">1</span>
+        <div>
+          <b>
+            Approval {position} of {total} · {label}
+          </b>
+          {paper && <p>Prepared {dates.dateTime(paper.created_at)}</p>}
+        </div>
+        <Link to={`${base}/workpapers/${id}`}>Open in Workpapers</Link>
+      </div>
+      <div className="ks-dec-body">
+        <div>
+          <h3 className="ks-label">What the agent did</h3>
+          <p>{did || (work.isPending ? "…" : "No document's work names this draft; its calculation and inputs are on its page.")}</p>
+        </div>
+        <div>
+          <h3 className="ks-label">Effect on the books</h3>
+          {entries.length ? (
+            <dl className="ks-dl">
+              {entries.map(({ entry: e, role }, n) => (
+                <div key={n}>
+                  <dt className="when">
+                    {e.date}
+                    {role ? ` · ${role}` : ""}
+                  </dt>
+                  <dt>{e.debit_account}</dt>
+                  <dd>Dr {amount(e.amount, currency)}</dd>
+                  <dt>{e.credit_account}</dt>
+                  <dd>Cr {amount(e.amount, currency)}</dd>
+                </div>
+              ))}
+              {ties.map((words) => (
+                <dd className="tie" key={words}>
+                  {words}
+                </dd>
+              ))}
+            </dl>
+          ) : (
+            <p>{paper ? "No journal entry: this draft records its result only." : record.isError ? "The draft could not be read." : "…"}</p>
+          )}
+        </div>
+        <div>
+          <h3 className="ks-label">Sources</h3>
+          <ul className="ks-cites">
+            {(paper?.paper.sources ?? []).map((source) => (
+              <li key={source.id}>
+                {source.name}
+                {source.location ? ` · ${source.location}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      {returning && (
+        <label className="ks-dec-note">
+          What needs changing
+          <textarea value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)} autoFocus />
+        </label>
+      )}
+      <div className="ks-dec-foot">
+        {paper?.kind === "payroll" ? (
+          <Link className="button primary" to={`${base}/workpapers/${id}`}>
+            Review payroll
+          </Link>
+        ) : returning ? (
+          <>
+            <button type="button" className="primary" disabled={busy || !note.trim() || !review.data} onClick={() => void decide("changes_requested")}>
+              {busy ? "Returning…" : "Return with this note"}
+            </button>
+            <button type="button" disabled={busy} onClick={() => setReturning(false)}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" className="primary" disabled={busy || changed || !review.data || !paper} onClick={() => void decide("approved")}>
+              {busy ? "Approving…" : "Approve"}
+            </button>
+            <button type="button" disabled={busy || !review.data} onClick={() => setReturning(true)}>
+              Return with a note
+            </button>
+          </>
+        )}
+        <span className="ks-quiet">{paper?.kind === "payroll" ? "Payroll is approved with its two confirmations on its page." : changed ? "Its sources changed: open it in Workpapers to review it again." : "Approving does not post. Posting is its own step."}</span>
+      </div>
+      {(error || review.error) && <p role="alert">{error || review.error?.message || "The review could not be read."}</p>}
+    </div>
+  );
+}
+
 // NeedsYou lists what needs the person, at most three at a time, the first one's action the page's one primary; the
-// rest fold to a line. When nothing does, one calm line says so, and why (the agent may still be preparing). What a
-// teammate's role decides, what waits on others, what could not be checked and what is done each fold to a line.
-function NeedsYou({ needs, teammates, brief, briefRead, decisionsError, base, preparing }: { needs: Need[]; teammates: number; brief: Brief | undefined; briefRead: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown }; decisionsError: string; base: string; preparing: boolean }) {
+// rest fold to a line. Drafts ready for approval open in place, one after another; each outcome stays as a line, and
+// the next decision is marked up next. When nothing needs the person, one calm line says so, and why (the agent may
+// still be preparing). What a teammate's role decides, what waits on others, what could not be checked and what is
+// done each fold to a line.
+function NeedsYou({ closeId, papers, needs, teammates, brief, briefRead, decisionsError, base, preparing }: { closeId: string; papers: Paper[]; needs: Need[]; teammates: number; brief: Brief | undefined; briefRead: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown }; decisionsError: string; base: string; preparing: boolean }) {
   const dates = useDates();
   const [all, setAll] = useState(false);
-  const shown = all ? needs : needs.slice(0, 3);
-  const rest = needs.slice(3);
+  const [session, setSession] = useState<{ ids: string[]; results: ("approved" | "returned")[] }>();
+  const labelOf = (id: string) => {
+    const paper = papers.find((p) => p.id === id);
+    return paper ? `${paperLabel(paper).toLowerCase()} #${id}` : `draft #${id}`;
+  };
+  // While a review is open its drafts are the session's, not the list's. Approvals that arrived since stay listed as more
+  // approvals, which continue the same session.
+  const listed = !session
+    ? needs
+    : needs.flatMap((need) => {
+        if (!need.review) return [need];
+        const more = need.review.filter((id) => !session.ids.includes(id));
+        return more.length ? [{ ...need, key: "approvals-more", review: more, count: more.length, title: more.length === 1 ? `Approve the ${labelOf(more[0])}` : `${more.length} more approvals in one review: ${list(more.map(labelOf))}` }] : [];
+      });
+  const shown = all ? listed : listed.slice(0, session ? 2 : 3);
+  const rest = listed.slice(shown.length);
   const total = needs.reduce((n, need) => n + need.count, 0);
   const lines = brief?.lines ?? [];
   const waiting = lines.filter((l) => l.state === "waiting");
   const unchecked = lines.filter((l) => l.state === "unknown");
   const done = lines.filter((l) => l.state === "done" || l.state === "info");
+  const finished = !!session && session.results.length === session.ids.length;
+  const approved = session?.results.filter((r) => r === "approved").length ?? 0;
+  const offset = session ? 1 : 0;
   return (
     <section className="bare ks-needs" aria-labelledby="needs-title">
       <h2 className="ks-label" id="needs-title">
@@ -299,27 +494,66 @@ function NeedsYou({ needs, teammates, brief, briefRead, decisionsError, base, pr
       </h2>
       {decisionsError && <p role="alert">{decisionsError} The close's decisions could not be read; this list may be incomplete.</p>}
       <div className="ks-tasks">
-        {shown.map((need, i) => (
-          <div className="ks-task" key={need.key}>
-            <span className="ks-numeral">{i + 1}</span>
-            <div>
-              <b>{need.title}</b>
-              <p>{need.detail}</p>
-            </div>
-            {need.act ? (
-              <button type="button" className={i === 0 ? "primary" : undefined} onClick={need.act}>
-                {need.action}
-              </button>
-            ) : need.to ? (
-              <Link className={i === 0 ? "button primary" : "button"} to={need.to}>
-                {need.action}
-              </Link>
-            ) : (
-              <span />
+        {session && (
+          <div className="ks-session" role="status">
+            {session.results.map((result, n) => (
+              <p className={result === "returned" ? "ks-outcome returned" : "ks-outcome"} key={session.ids[n]}>
+                <Icon name={result === "returned" ? "back" : "check"} />
+                {result === "returned" ? `Returned ${labelOf(session.ids[n])} with your note` : `Approved ${labelOf(session.ids[n])}`} · {n + 1} of {session.ids.length}
+              </p>
+            ))}
+            {finished && (
+              <p className={approved === session.ids.length ? "ks-outcome" : "ks-outcome returned"}>
+                <Icon name="check" />
+                {approved === session.ids.length ? `${approved === 1 ? "Approved" : `All ${approved} approved`} · posting is its own step` : `${approved} of ${session.ids.length} approved · what you returned goes back with your note`}
+              </p>
             )}
           </div>
-        ))}
-        {needs.length === 0 && !decisionsError && (
+        )}
+        {session && !finished && (
+          <InPlaceReview
+            key={session.ids[session.results.length]}
+            closeId={closeId}
+            base={base}
+            id={session.ids[session.results.length]}
+            listed={papers.find((p) => p.id === session.ids[session.results.length])}
+            position={session.results.length + 1}
+            total={session.ids.length}
+            onDone={(result) => setSession({ ...session, results: [...session.results, result] })}
+          />
+        )}
+        {shown.map((need, i) => {
+          // The first action is the page's one primary, unless a review is open; once it is done, the next one is.
+          const primary = i === 0 && (!session || finished);
+          return (
+            <div className="ks-task" key={need.key}>
+              <span className="ks-numeral">{i + 1 + offset}</span>
+              <div>
+                <b>
+                  {need.title}
+                  {i === 0 && finished && <span className="pill neutral ks-up-next">Up next</span>}
+                </b>
+                <p>{need.detail}</p>
+              </div>
+              {need.review ? (
+                <button type="button" className={primary ? "primary" : undefined} onClick={() => setSession(session ? { ids: [...session.ids, ...need.review!], results: session.results } : { ids: need.review!, results: [] })}>
+                  {need.action}
+                </button>
+              ) : need.act ? (
+                <button type="button" className={primary ? "primary" : undefined} onClick={need.act}>
+                  {need.action}
+                </button>
+              ) : need.to ? (
+                <Link className={primary ? "button primary" : "button"} to={need.to}>
+                  {need.action}
+                </Link>
+              ) : (
+                <span />
+              )}
+            </div>
+          );
+        })}
+        {needs.length === 0 && !session && !decisionsError && (
           <p className="ks-calm">
             <Icon name="check" />
             {preparing ? "Nothing needs you now. The agent is preparing, and brings each decision here when it is ready." : "Nothing needs you now."}
@@ -328,7 +562,7 @@ function NeedsYou({ needs, teammates, brief, briefRead, decisionsError, base, pr
         {rest.length > 0 && (
           <button type="button" className="ks-fold" aria-expanded={all} onClick={() => setAll(!all)}>
             <Icon name="arrow" />
-            {all ? "Show the first three" : `${rest.reduce((n, need) => n + need.count, 0)} more · ${list([...new Set(rest.map((need) => need.action.toLowerCase()))])}`}
+            {all ? "Show fewer" : `${rest.reduce((n, need) => n + need.count, 0)} more · ${list([...new Set(rest.map((need) => need.action.toLowerCase()))])}`}
             <Icon name="chevron" className="ks-chev" size={14} />
           </button>
         )}
@@ -616,7 +850,7 @@ export function Overview({ close, papers, needs, teammates, brief, briefRead, de
   return (
     <div className="ks-close-grid">
       <div className="ks-col">
-        <NeedsYou needs={[...handing, ...needs]} teammates={teammates} brief={brief} briefRead={briefRead} decisionsError={decisionsError} base={base} preparing={preparing(status)} />
+        <NeedsYou key={close.id} closeId={close.id} papers={papers} needs={[...handing, ...needs]} teammates={teammates} brief={brief} briefRead={briefRead} decisionsError={decisionsError} base={base} preparing={preparing(status)} />
         {status ? <AgentWork status={status} papers={papers} base={base} /> : error ? <p role="alert">{error}</p> : null}
         <AgentDetails closeId={close.id} onPrepared={onPrepared} />
       </div>

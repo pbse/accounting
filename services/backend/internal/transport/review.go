@@ -46,11 +46,12 @@ const bulkReason = `CASE
  ELSE '' END`
 
 // decideReview applies one decision inside the caller's transaction; the caller has locked the close.
-const decisionMessage = "Choose approve or request changes and explain your decision (1–2,000 bytes)."
+const decisionMessage = "Choose approve or request changes; a request for changes says why (1–2,000 bytes), and an approval's note is optional (up to 2,000 bytes)."
 
+// validDecision: an approval may carry a note; a request for changes must say why.
 func validDecision(decision, note string) bool {
 	note = strings.TrimSpace(note)
-	return (decision == "approved" || decision == "changes_requested") && len(note) > 0 && len(note) <= 2000
+	return (decision == "approved" || decision == "changes_requested" && len(note) > 0) && len(note) <= 2000
 }
 
 // payrollAttestations are the two confirmations a payroll recording is approved with, as a person gives them; no other

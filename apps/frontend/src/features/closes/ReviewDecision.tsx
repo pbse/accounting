@@ -202,7 +202,7 @@ export function ReviewDecision({
               value={note}
               maxLength={2000}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="Explain what you checked or what needs changing."
+              placeholder="What needs changing (required to request changes; optional to approve)."
             />
           </label>
           {payroll && (
@@ -215,7 +215,7 @@ export function ReviewDecision({
           <div className="export-actions">
             <button
               disabled={
-                busy || !note.trim() || review.state === "source_changed" || (payroll && !(finalSummary && notBooked))
+                busy || review.state === "source_changed" || (payroll && !(finalSummary && notBooked))
               }
               onClick={() => void decide("approved")}
             >

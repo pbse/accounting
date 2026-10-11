@@ -4509,3 +4509,20 @@ Tests and checks, all on local PostgreSQL:
 - The layout check passes: 95 page views at desktop and phone width, in Edge.
 - Screenshots of a close before and after hand-over, with two approvals, a document to confirm and a ledger blocker, at 1440 and 390; the ⋯ menu's focus and Escape; a confirm link opening the document's work.
 
+## 2026-10-11 — Approve or return a draft in place on Overview (B02/B06)
+
+This is Overview's second part, board 1c of the canvas. The user decided that approving needs no note, matching the board's one-click Approve; returning a draft still says why.
+- **Rule change:** `validDecision` accepts an approval with an empty note. Migration 164 relaxes `workpaper_reviews_note_check`: a note of up to 2,000 bytes, required only for `changes_requested`. The workpaper page's form no longer disables Approve without a note.
+- **Overview:** Start review opens the approvals in place, one after another:
+  - what the agent did: the job's straight-through reason, or the document it was prepared from;
+  - the effect on the books: every entry the draft proposes, whatever its kind, and the tie-out line for each balance it supports;
+  - the sources;
+  - Approve, or Return with a note.
+
+  The decision posts to the existing review route with the current digest and review id, so a stale card is refused. Each outcome stays as a line, and a summary follows. The next decision is marked up next, and its action becomes the page's primary. A draft whose sources changed cannot be approved here. Payroll goes to its own page, where its checks and two confirmations are presented together, as decided earlier.
+
+Tests and checks, on local PostgreSQL:
+- `TestReviewAndEvidenceReplacement` covers a request for changes with no note refused and an approval with no note accepted. It fails without the change.
+- `tsc` passes.
+- In Edge at 1440 and 390: Start review, Approve, then Return with a note, with the outcomes and "Up next" shown and focus moved to each card.
+
