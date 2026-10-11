@@ -591,3 +591,49 @@ func TestAFilesMonthsBalancesAreReviewed(t *testing.T) {
 		t.Fatalf("a files month's balances to review: %v", found)
 	}
 }
+
+// A file with openings rolls from the prior accepted month account by account: an opening column, or the month-end
+// balance less the month's movement. A difference is unexplained and named; at the fiscal year's start the profit and
+// loss opens at zero, the year's result carried into retained earnings.
+func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
+	account := func(number, name, balance, movement, class string) fileAccount {
+		return fileAccount{Key: "n:" + number, Number: number, Name: name, Balance: balance, Movement: movement, Mapped: &mappedAccount{Class: class}}
+	}
+	s := fileState{prior: "2026-11", priorBalances: map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"},
+		classes: map[string]string{"n:1000": "Asset", "n:3000": "Equity", "n:4000": "Revenue", "n:6000": "Expense"}}
+	s.reading = fileReading{Period: "2026-12", Accounts: []fileAccount{
+		account("1000", "Business Checking", "1200", "200", "Asset"),
+		account("3000", "Retained Earnings", "-1000", "", "Equity"),
+		account("4000", "Sales", "-700", "-200", "Revenue"),
+		account("6000", "Rent", "500", "", "Expense"),
+	}}
+	if c := rollForward(s); c.State != "passes" || c.Detail != "Every account opens at November 2026's accepted closing balance." {
+		t.Fatalf("a month that rolls: %+v", c)
+	}
+	s.reading.Accounts[0].Movement = "150"
+	if c := rollForward(s); c.State != "holds" || c.Detail != "1 account does not roll from November 2026's accepted books, unexplained: 1000 Business Checking opens at 1050.00, closed at 1000.00 (50.00)." {
+		t.Fatalf("a month that does not roll: %+v", c)
+	}
+	// January, the fiscal year's first month: the profit and loss opens at zero, last year's result in retained earnings.
+	s.fiscalStart, s.prior, s.reading.Period = 1, "2026-12", "2027-01"
+	s.priorBalances = map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-800", "n:6000": "500"}
+	s.reading.Accounts = []fileAccount{
+		account("1000", "Business Checking", "1200", "200", "Asset"),
+		account("3000", "Retained Earnings", "-1300", "", "Equity"),
+		account("4000", "Sales", "-300", "-300", "Revenue"),
+		account("6000", "Rent", "100", "100", "Expense"),
+	}
+	if c := rollForward(s); c.State != "passes" || !strings.Contains(c.Detail, "the year's result carried into retained earnings") {
+		t.Fatalf("the year's closing entries are modelled: %+v", c)
+	}
+	s.prior = ""
+	if c := rollForward(s); c.State != "note" {
+		t.Fatalf("no prior month to roll from: %+v", c)
+	}
+	for i := range s.reading.Accounts {
+		s.reading.Accounts[i].Movement = ""
+	}
+	if c := rollForward(s); c.Key != "" {
+		t.Fatalf("a file without openings has no roll-forward: %+v", c)
+	}
+}

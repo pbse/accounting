@@ -47,13 +47,16 @@ func monthEndFormula(l bookfiles.Line) bool {
 
 // movementHeld is why a line's movement cannot be used as read: unreadable, rounded at its source, or a formula's stored
 // result; "" when it can.
-func movementHeld(l bookfiles.Line) string {
+func movementHeld(l bookfiles.Line) string { return columnHeld(l, bookfiles.Movement) }
+
+// columnHeld is why a line's amount in column meaning m cannot be used as read, as movementHeld says it.
+func columnHeld(l bookfiles.Line, m bookfiles.Meaning) string {
 	switch {
-	case slices.Contains(l.Unread, bookfiles.Movement):
+	case slices.Contains(l.Unread, m):
 		return "unreadable"
-	case slices.Contains(l.Rounded, bookfiles.Movement):
+	case slices.Contains(l.Rounded, m):
 		return "rounded"
-	case slices.Contains(l.Formulas, bookfiles.Movement):
+	case slices.Contains(l.Formulas, m):
 		return "formula"
 	}
 	return ""
@@ -118,6 +121,9 @@ type fileAccount struct {
 	// for it); MovementHeld says one of its rows' movements was unreadable, rounded at its source, or a formula result.
 	Movement     string `json:"-"`
 	MovementHeld string `json:"-"`
+	// Opening and OpeningHeld are the same of the file's opening-balance column.
+	Opening     string `json:"-"`
+	OpeningHeld string `json:"-"`
 }
 
 // latestAccountMap is client name's map in force, or nil.
@@ -217,10 +223,15 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 					accounts[at].Movement = addAmounts(cmp.Or(accounts[at].Movement, "0"), m)
 				}
 				accounts[at].MovementHeld = graver(accounts[at].MovementHeld, movementHeld(l))
+				if o, ok := l.Others[bookfiles.Opening]; ok {
+					accounts[at].Opening = addAmounts(cmp.Or(accounts[at].Opening, "0"), o)
+				}
+				accounts[at].OpeningHeld = graver(accounts[at].OpeningHeld, columnHeld(l, bookfiles.Opening))
 				continue
 			}
 			seen[key] = len(accounts)
-			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents, Formula: monthEndFormula(l), Movement: l.Others[bookfiles.Movement], MovementHeld: movementHeld(l)}
+			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number), Cents: l.Cents, Formula: monthEndFormula(l), Movement: l.Others[bookfiles.Movement], MovementHeld: movementHeld(l),
+				Opening: l.Others[bookfiles.Opening], OpeningHeld: columnHeld(l, bookfiles.Opening)}
 			if current != nil {
 				if m, ok := current.Accounts[key]; ok {
 					a.Mapped = &m
