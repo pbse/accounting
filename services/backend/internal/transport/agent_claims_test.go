@@ -38,7 +38,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 			"scenario":{"name":"Bonus slips","weeks":[{"start":"2026-12-20","closing":"41400.00"}]}}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10"),
 		"t4": read(`{"currency":"USD","lines":[{"name":"Rent","month":{"actual":"8500.00","budget":"8000.00","variance":"500.00","percent":"6.3%"},"ytd":{"actual":"85000.00","budget":"80000.00","variance":"5000.00"}},
 			{"name":"Marketing","month":{"actual":"540.00","budget":"0.00","variance":"540.00","percent":null}}]}`, "Budget against actual", "budget_comparison", "Bluegrass Dental PLLC", "2026-10"),
-		"t5": read(`{"closes":[{"id":"9","entity":"Birch Dental","period":"2026-10","net_income":"21780.00"}]}`, "List client closes", "list_closes", "", ""),
+		"t5": read(`{"closes":[{"id":"9","entity":"Birch Dental","period":"2026-10","currency":"USD","net_income":"21780.00"}]}`, "List client closes", "list_closes", "", ""),
 		"t6": read(`{"rows":[{"account":"Revenue","change":"4940.00","drivers":[{"payee":"New patients","change":"3000.00"},{"payee":"Hygiene fees","change":"1000.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10"),
 		"t7": read(`{"publication":{"id":"3","state":"superseded"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","profit_and_loss":{"measures":[{"name":"Net income","amount":"20100.00"}]}}}`, "Published report", "read_publication", "", ""),
 	}
@@ -146,8 +146,8 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	// A ratio to a zero base is refused rather than invented.
 	rejected("Marketing is 100% of its budget.", "cannot be computed", derived(0, "ratio", "100%", "t4", "/lines/1/month/actual", "t4", "/lines/1/month/budget"))
 	// Review follow-ups. A client the reads never mention, named from the firm's clients, is still another client.
-	reads["t8"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","basis":"cash","profit_and_loss":{"measures":[{"name":"Net income","amount":"20500.00"}]}}`, "Management pack, cash basis", "management_pack", "Bluegrass Dental PLLC", "2026-10")
-	reads["t9"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-09","basis":"accrual","profit_and_loss":{"measures":[{"name":"Net income","amount":"19940.00"}]}}`, "September pack", "management_pack", "Bluegrass Dental PLLC", "2026-09")
+	reads["t8"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","basis":"cash","profit_and_loss":{"measures":[{"name":"Net income","amount":"20500.00"}]}}`, "Management pack, cash basis", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	reads["t9"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-09","currency":"USD","basis":"accrual","profit_and_loss":{"measures":[{"name":"Net income","amount":"19940.00"}]}}`, "September pack", "management_pack", "Bluegrass Dental PLLC", "2026-09")
 	reads["t10"] = read(`{"state":"ready","changes":[{"account":"Patient fees","change":"4940.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}],"changed":[{"name":"Hygiene fees","this_month":"6000.00","last_month":"5000.00"}],"unattributed":{"this_month":"940.00","last_month":"0.00"}}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
 	reads["t11"] = agentRead{text: "October patient visits rose after the marketing campaign started.", doc: true, link: chatCitation{"Evidence #9", "/dashboard/closes/7"}, title: "Read evidence text"}
 	if _, why := agentSupport("facts", "Acme Dental's net income is 21,780.00.", []agentSupportEntry{e("t2", 0, ni+"/amount", "21780.00")}, reads, nil, "Acme Dental", "Bluegrass Dental PLLC"); !strings.Contains(why, "to Acme Dental") {
@@ -246,6 +246,23 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Across September and October, net income is 1,840.00.", "as an amount", derived(0, "difference", "1840.00", "t2", ni+"/amount", "t9", "/profit_and_loss/measures/0/amount"))
 	reads["t19"] = read(`{"state":"ready","currency":"USD","unapproved_schedules":2,"weeks":[{"start":"2026-12-20","receipts":"14200.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
 	rejected("Forecast receipts and unapproved schedules total 14,202.00.", "combines money with a count", derived(0, "sum", "14202.00", "t19", "/weeks/0/receipts", "t19", "/unapproved_schedules"))
+
+	// Round seven: a shared word names no line; each row's remainder in its own part; every input's currency;
+	// incomplete inputs; derived citations link to their rows.
+	rejected("Patient fees were 9,860.00.", "the cited field is Lab fees", e("t2", 0, "/profit_and_loss/sections/1/lines/0/amount", "9860.00"))
+	ok("Lab fees were 9,860.00.", e("t2", 0, "/profit_and_loss/sections/1/lines/0/amount", "9860.00"))
+	reads["t20"] = read(`{"state":"ready","changes":[{"account":"Patient fees","change":"4940.00","new":[{"name":"New patients","this_month":"3000.00","last_month":"0.00"}]},{"account":"Rent","change":"500.00","changed":[{"name":"Landlord","this_month":"8500.00","last_month":"8300.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Patient fees rose 4,940.00, driven by new patients at 3,000.00, while rent rose 500.00 from the landlord, the rest unexplained.", "account for 3000.00 of 4940.00",
+		e("t20", 0, "/changes/0/change", "4940.00"), e("t20", 0, "/changes/0/new/0/this_month", "3000.00"), e("t20", 0, "/changes/1/change", "500.00"), e("t20", 0, "/changes/1/changed/0/last_month", "8300.00"))
+	reads["t21"] = read(`{"items":[{"label":"Prepaid insurance","amount":"550.00"}]}`, "Drafts", "list_work", "", "")
+	rejected("Prepaid insurance and rent total 9,050.00.", "unknown currency", derived(0, "sum", "9050.00", "t21", "/items/0/amount", "t4", "/lines/0/month/actual"))
+	reads["t22"] = read(`{"state":"ready","currency":"USD","open_items":{"complete":false},"weeks":[{"start":"2026-12-13","receipts":"26400.00"},{"start":"2026-12-20","receipts":"14200.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Forecast receipts for the two weeks total 40,600.00.", "incomplete inputs", derived(0, "sum", "40600.00", "t22", "/weeks/0/receipts", "t22", "/weeks/1/receipts"))
+	ok("Forecast receipts for the two weeks total 40,600.00, with open items incomplete.", derived(0, "sum", "40600.00", "t22", "/weeks/0/receipts", "t22", "/weeks/1/receipts"))
+	reads["t23"] = agentRead{text: `{"published":[{"close_id":"9","publication_id":"12","entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","net_income":"21780.00"}]}`, value: decode(`{"published":[{"close_id":"9","publication_id":"12","entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","net_income":"21780.00"}]}`), link: chatCitation{"Overview", "/dashboard/executive"}, title: "Your clients", tool: "executive_overview", executive: true}
+	if cited := ok("Net income is 17.0% of patient fees.", derived(0, "ratio", "17.0%", "t23", "/published/0/net_income", "t2", "/profit_and_loss/sections/0/lines/0/amount")); !strings.Contains(cited[0].Href, "publication=12") {
+		t.Fatalf("a derived figure's inputs link to their rows: %v", cited)
+	}
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))

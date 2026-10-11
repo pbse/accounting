@@ -549,19 +549,29 @@ func overlaps(a, b map[string]bool) bool {
 	return false
 }
 
-// labelNamed says whether a text names a row's line: one of its words of four letters or more that is not filler.
+// genericLineWords are words many lines share ("Lab fees", "Patient fees"), which never identify one line alone.
+var genericLineWords = map[string]bool{"the": true, "and": true, "for": true, "was": true, "are": true, "its": true, "not": true, "but": true, "has": true, "had": true, "per": true, "all": true, "any": true, "our": true, "out": true, "off": true, "own": true, "via": true,
+	"total": true, "fees": true, "fee": true, "expense": true, "expenses": true, "income": true, "costs": true, "cost": true, "account": true, "accounts": true, "other": true, "payable": true, "receivable": true, "balance": true, "amount": true, "net": true, "charges": true, "charge": true, "revenue": true, "sales": true}
+
+// labelNamed says whether a text names a row's line: one of the line's distinctive words (three letters or more, not
+// filler and not a word many lines share), or, when the line has none ("Other expense"), the line's whole name.
 func labelNamed(text, label string) bool {
 	in := map[string]bool{}
 	for _, w := range wordsOf(text) {
 		in[strings.Trim(w, "-")] = true
 	}
+	distinctive := false
 	for _, w := range wordsOf(label) {
 		w = strings.Trim(w, "-")
-		if len(w) >= 4 && !agentStopWords[w] && w != "total" && in[w] {
+		if len(w) < 3 || agentStopWords[w] || genericLineWords[w] {
+			continue
+		}
+		distinctive = true
+		if in[w] {
 			return true
 		}
 	}
-	return false
+	return !distinctive && strings.TrimSpace(label) != "" && strings.Contains(strings.ToLower(text), strings.ToLower(strings.TrimSpace(label)))
 }
 
 // introduced says whether a qualifier stands in a clause before the figure's that holds no figure of its own, as an
@@ -812,7 +822,7 @@ func driverMovement(read agentRead, path string) (string, *big.Rat, bool) {
 // drivers of the same row whose movements do not add up to it, it must say what remains. The total is the row's cited
 // change that is not a driver; drivers may offset (+500 and −400 explain a net 100). Each row is held on its own, so a
 // second total in the sentence ("while expenses rose 3,100") never excuses the first's missing remainder.
-func checkRemainder(line string, totals, drivers map[string][]*big.Rat) string {
+func checkRemainder(line string, totals, drivers map[string][]*big.Rat, at map[string]int) string {
 	lower := strings.ToLower(line)
 	if !claimCausal.MatchString(lower) && !claimAttribution.MatchString(lower) {
 		return ""
@@ -825,7 +835,14 @@ func checkRemainder(line string, totals, drivers map[string][]*big.Rat) string {
 		for _, d := range drivers[group] {
 			rest.Add(rest, d)
 		}
-		if rest.Cmp(total) == 0 || claimRemainder.MatchString(lower) {
+		// The row's part of the sentence runs from where its total is stated to where the next row's is.
+		from, to := at[group], len(lower)
+		for other, start := range at {
+			if other != group && start > from && start < to {
+				to = start
+			}
+		}
+		if rest.Cmp(total) == 0 || claimRemainder.MatchString(lower[from:to]) {
 			continue
 		}
 		gap := new(big.Rat).Sub(total, rest)
@@ -1034,7 +1051,7 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 			return "a derived money figure names a count (" + c.describe() + ")"
 		}
 		claims = append(claims, c)
-		cite(read.title+" › "+c.describe(), read.link.Href)
+		cite(read.title+" › "+c.describe(), fieldHref(read, in.path))
 	}
 	computed, ok := derive(s.derive, values)
 	if !ok {
@@ -1091,6 +1108,26 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 	if len(bases) > 1 {
 		return "a derived figure combines figures on different accounting bases"
 	}
+	// Every input's currency is the same, and a known currency is never mixed with an unknown one from another read.
+	currencies, unknownFrom, knownFrom := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for i, c := range claims {
+		if c.currency != "" {
+			currencies[c.currency] = true
+			knownFrom[s.of[i].step] = true
+		} else {
+			unknownFrom[s.of[i].step] = true
+		}
+	}
+	if len(currencies) > 1 {
+		return "a derived figure mixes currencies"
+	}
+	if len(currencies) == 1 {
+		for step := range unknownFrom {
+			if !knownFrom[step] {
+				return "a derived figure combines a figure of unknown currency with one in " + slices.Sorted(maps.Keys(currencies))[0]
+			}
+		}
+	}
 	if len(clientsOf) > 1 {
 		for e := range clientsOf {
 			if !strings.Contains(lower, e) {
@@ -1136,14 +1173,15 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		if c.forecast != claims[0].forecast || c.scenario != claims[0].scenario {
 			return "a derived figure mixes forecast and actual figures"
 		}
-		if c.currency != "" && claims[0].currency != "" && c.currency != claims[0].currency {
-			return "a derived figure mixes currencies"
-		}
+
 		if c.forecast && !claimForecast.MatchString(lower) {
 			return "the sentence computes from a forecast without saying so"
 		}
 		if c.stale && !claimStaleSaid.MatchString(lower) {
 			return "the sentence computes from a stale read without saying so"
+		}
+		if c.incomplete && !claimIncompleteSaid.MatchString(lower) {
+			return "the sentence computes from a forecast with incomplete inputs without saying so"
 		}
 		if !c.forecast && len(c.period) == 7 && len(months) == 1 {
 			if months := namedMonths(line); len(months) > 0 {

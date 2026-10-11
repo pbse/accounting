@@ -740,35 +740,17 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		if s.path != "" {
 			// The citation names the field from its typed facts (Cash · change), not its path.
 			label += " › " + fieldClaim.describe()
-			// A row that carries its own page (a search hit, a queue item, a listed close) links there, not to the read's.
-			idKey := "close_id"
-			if read.tool == "list_closes" {
-				idKey = "id"
-			}
-			if own := linkAt(read.value, s.path, idKey); own != "" {
-				if read.executive {
-					own = executiveRowLink(own)
-				}
-				href = own
-			}
-			// A report an executive's row names is cited as that version, which their Reports page opens: a listed
-			// report's own number, or the publication an overview row carries.
-			if read.executive && strings.Contains(href, "?close=") && !strings.Contains(href, "&publication=") {
-				id := rowField(read.value, s.path, "publication_id")
-				if id == "" && read.tool == "list_publications" {
-					id = rowField(read.value, s.path, "id")
-				}
-				if id != "" {
-					href += "&publication=" + url.QueryEscape(id)
-				}
-			}
+			href = fieldHref(read, s.path)
 		}
 		cite(label, href)
 	}
 	// Each stated money figure is bound by a cited field that measures it: the same number may be an amount in one
 	// place and a variance in another, so each place needs a field that fits it, and each money field must fit one.
+	remainderAt := make([]map[string]int, len(lines))
 	for i, line := range lines {
 		var movedTo []movedLevel
+		totalAt := map[string]int{}
+		remainderAt[i] = totalAt
 		used := make([]bool, len(sentenceMoney[i]))
 		reasons := make([]string, len(sentenceMoney[i]))
 		for _, o := range figuresIn(line) {
@@ -792,6 +774,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 								addDriver(i, group, m.step+m.path, r)
 							} else {
 								sentenceTotals[i][group] = append(sentenceTotals[i][group], r)
+								totalAt[group] = o.start
 							}
 						}
 					}
@@ -842,7 +825,7 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				drivers[group] = append(drivers[group], rows[k])
 			}
 		}
-		if why := checkRemainder(lines[i], sentenceTotals[i], drivers); why != "" {
+		if why := checkRemainder(lines[i], sentenceTotals[i], drivers, remainderAt[i]); why != "" {
 			return nil, why
 		}
 	}
@@ -1455,3 +1438,31 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 }
 
 const agentNote = "Written by the agent from the reads listed above, made with your permissions; open a linked page before relying on it."
+
+// fieldHref is where a cited field's citation links: the row's own page when it has one (a search hit, a queue item,
+// a listed close), an executive's report version when the row names one, else the read's page.
+func fieldHref(read agentRead, path string) string {
+	href := read.link.Href
+	idKey := "close_id"
+	if read.tool == "list_closes" {
+		idKey = "id"
+	}
+	if own := linkAt(read.value, path, idKey); own != "" {
+		if read.executive {
+			own = executiveRowLink(own)
+		}
+		href = own
+	}
+	// A report an executive's row names is cited as that version, which their Reports page opens: a listed report's
+	// own number, or the publication an overview row carries.
+	if read.executive && strings.Contains(href, "?close=") && !strings.Contains(href, "&publication=") {
+		id := rowField(read.value, path, "publication_id")
+		if id == "" && read.tool == "list_publications" {
+			id = rowField(read.value, path, "id")
+		}
+		if id != "" {
+			href += "&publication=" + url.QueryEscape(id)
+		}
+	}
+	return href
+}
