@@ -4286,3 +4286,13 @@ Test: `TestUnrelatedInvoicesInOneCloseArePreparedStraightThrough` adds four docu
 
 Not changed: a statement that shows this invoice's payment by vendor name still holds it (conservative); a credit note uploaded after a draft is saved does not reopen the draft.
 
+## 2026-10-11 — A later credit reopens the draft it names (B03/B04)
+
+Handoff slice 4, second part. Before: a draft's review state followed only its cited sources, so a credit note or amended invoice uploaded after a prepaid draft was saved left the draft approvable. Now migration `155_workpaper_later_evidence.sql` adds a trigger on evidence becoming readable (any route: upload, email, reply, forwarding). It links the document to each earlier prepaid draft of the close whose invoice vendor or number, from the reading that prepared it, the document names as whole words, when the document speaks of a credit, cancellation, refund, adjustment, reversal, void or amendment ("credit card" aside). `workpaper_source_review_state` treats a current linked document as source_changed; the "changed" notice names the document.
+
+Test: `TestUnrelatedInvoicesAreDraftedWithTheWorkerRunningBetweenReads` adds, after the three drafts are saved, a credit naming no draft's invoice (no change) and a credit note naming Acme's INV-778 (Acme's draft becomes source_changed; Beacon's and Carter's stay pending). The check was seen to fail with the trigger disabled. Closest tests (mixed close, attention, replacement recalculation) passed against a fresh local PostgreSQL migrated through 155.
+
+Review follow-ups: the trigger and a one-time backfill share one function; a draft is linked when it was prepared before the document became readable (its insertion as readable, or its reading finishing or changing), not before its upload; existing readable documents are linked once, conservatively, to every prepaid draft of their month they name (when each became readable is not recorded), except in a signed-off month for documents that arrived before its latest sign-off.
+
+Limits: the match is textual (vendor names are compared in lower case, not normalized for punctuation), so a credit naming the vendor differently is missed and a document that names the vendor and mentions credit terms reopens the draft for a person to look at.
+
