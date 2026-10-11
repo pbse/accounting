@@ -218,6 +218,15 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 	if len(this.Holds) > 0 {
 		return map[string]any{"state": "waiting", "reason": "The accepted file " + this.File + " has checks that hold its statements: " + strings.Join(this.Holds, "; ") + "."}, nil
 	}
+	// The firm's imported statement of cash flows completes the pack, as for a month on Xero.
+	var i cashFlowImport
+	var currency string
+	switch err = tx.QueryRowContext(ctx, `SELECT csv,source,attestation,actor,created_at,currency FROM cash_flow_imports WHERE close_id::text=$1 AND company='files' ORDER BY id DESC LIMIT 1`, closeID).Scan(&i.CSV, &i.Source, &i.Attestation, &i.Actor, &i.At, &currency); {
+	case err == nil && currency == thisBooks.Currency:
+		thisBooks.Imported = &i
+	case err != nil && err != sql.ErrNoRows:
+		return nil, tieRefusal{503, "The imported cash-flow statement is unavailable."}
+	}
 	var lastBooks *books
 	var last *fileMonth
 	comparison := ""
@@ -253,6 +262,9 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 		}
 	}
 	pack := managementPack(thisBooks, lastBooks)
+	if thisBooks.Imported == nil && len(thisBooks.CashFlow) == 0 {
+		pack["cash_flow"] = map[string]any{"unavailable": "The client's files give no Statement of Cash Flows: import the firm's statement for the month (CSV) to complete the pack. Balance changes alone cannot separate depreciation, assets bought on credit or borrowing from cash. Book cash and its change are on the balance sheet."}
+	}
 	signed, err := signedOff(ctx, tx, closeID)
 	if err != nil {
 		return nil, tieRefusal{503, "Close readiness unavailable."}

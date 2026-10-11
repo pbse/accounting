@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -333,6 +334,15 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	net := pack["profit_and_loss"].(statement).Measures
 	if pack["source"] != "files" || pack["file"] != "Acme 2027-01.csv" || pack["overall"] != "provisional" || pack["basis"] != "Accrual" || len(net) == 0 || net[len(net)-1].Amount != "500.25" || pack["profit_and_loss_unavailable"] != nil {
 		t.Fatalf("January's pack from its file: %v", pack)
+	}
+	// Its files give no statement of cash flows: the firm's, imported, completes it, checked against the file's bank.
+	if flow := pack["cash_flow"].(map[string]any); !strings.Contains(fmt.Sprint(flow["unavailable"]), "import the firm's statement") {
+		t.Fatalf("a files month's pack asks for the firm's statement: %v", flow)
+	}
+	signer := append([]string{"close:signoff"}, partner...)
+	imported := call("user_a", signer, "POST", "/v1/closes/"+januaryClose+"/cash-flow", map[string]any{"csv": "Section,Line,Amount\nBeginning cash,,1000\nOperating activities,Receipts from customers,500.25\nEnding cash,,1500.25\n", "source": "January cash flow.csv", "confirmed": true}, 200)
+	if flow := imported["cash_flow"].(map[string]any); flow["reconciled"] != true || !strings.Contains(imported["note"].(string), "imported from January cash flow.csv") {
+		t.Fatalf("the firm's statement completes a files month's pack: %v %v", flow, imported["note"])
 	}
 	// The budget comparison reads them too: the file's profit and loss accounts are the ones a budget maps to.
 	budget := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/budget", nil, 200)
