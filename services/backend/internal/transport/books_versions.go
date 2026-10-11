@@ -506,10 +506,12 @@ func adminBooks(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			readers = append(readers, name)
 		}
 	}
-	// The gate the readers switched on read by: how far the record is verified for this build, while it agreed.
+	// The gate the readers switched on read by: this build's latest run, whether it found every version agreeing, and
+	// how many versions it verified (those first read by a run no later than it).
 	var gate json.RawMessage
 	if err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('through',through,'clean',clean,'finished_at',finished_at) FROM books_record_gate WHERE build=$1),'null'::jsonb)`, wf.CodeVersion).Scan(&gate)
+		return tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('run',g.run,'through',g.through,'clean',g.clean,'finished_at',g.finished_at,
+ 'verified',(SELECT count(*) FROM books_versions v WHERE v.first_checked_run<=g.run)) FROM books_record_gate g WHERE g.build=$1),'null'::jsonb)`, wf.CodeVersion).Scan(&gate)
 	}); err != nil {
 		adminFirmProblem(w, err, "books read")
 		return

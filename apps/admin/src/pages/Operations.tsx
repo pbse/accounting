@@ -152,7 +152,7 @@ type BooksRecord = {
   // readers are those switched onto the record (BOOKS_RECORD_READERS); gate, how far the record is verified for this
   // build and whether its latest run agreed: a reader switched on reads the record only while it is clean.
   readers: string[];
-  gate: { through: number; clean: boolean; finished_at: string } | null;
+  gate: { run: number; through: number; clean: boolean; finished_at: string; verified: number } | null;
   parity: { checked: number; pending: number; since: number; waiting: number; mismatched: string[]; finished_at: string; build: string; later: { started_at: string; stalled: boolean } | null } | null;
 };
 
@@ -179,7 +179,7 @@ function MonthBooks() {
                 <span className={`status ${books.data.parity.mismatched.length ? "danger" : books.data.parity.pending || books.data.parity.since || books.data.parity.waiting || stale ? "warn" : "ok"}`}>
                   {books.data.parity.mismatched.length ? `${books.data.parity.mismatched.length} disagree` : books.data.parity.pending || books.data.parity.since || books.data.parity.waiting || stale ? "The readers agreed, so far" : "The readers agree"}
                 </span>{" "}
-                with the {books.data.parity.checked} versions checked {when(books.data.parity.finished_at)}.
+                with the {books.data.parity.checked === 1 ? "1 version" : `${books.data.parity.checked} versions`} checked {when(books.data.parity.finished_at)}.
               </p>
               {(books.data.parity.pending > 0 || books.data.parity.since > 0 || books.data.parity.waiting > 0 || stale) && (
                 <p className="note">
@@ -203,9 +203,15 @@ function MonthBooks() {
           <p>
             {!books.data.readers.length
               ? "No reader is switched onto the record: every one reads the captures."
-              : books.data.gate?.clean && books.data.gate.through > 0
-                ? `Reading from the record: ${books.data.readers.join(", ")}, for the versions this build's latest run checked (through #${books.data.gate.through}); later ones from their captures.`
-                : `Switched on: ${books.data.readers.join(", ")}. Still reading the captures: ${books.data.gate ? "this build's latest run found a disagreement" : "no run of this build has finished yet"}.`}
+              : books.data.gate?.clean && books.data.gate.verified > 0
+                ? `Reading from the record: ${books.data.readers.join(", ")}, for the ${books.data.gate.verified === 1 ? "version" : `${books.data.gate.verified} versions`} this build's latest run (#${books.data.gate.run}) read and found agreeing; versions written since, from their captures.`
+                : `Switched on: ${books.data.readers.join(", ")}. Still reading the captures: ${
+                    !books.data.gate
+                      ? "no run of this build has finished yet"
+                      : books.data.gate.clean
+                        ? "this build's latest run had no versions to read"
+                        : "this build's latest run found a disagreement"
+                  }.`}
           </p>
         </>
       )}

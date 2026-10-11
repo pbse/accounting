@@ -265,6 +265,10 @@ func TestEveryMonthEndCaptureGetsABooksVersion(t *testing.T) {
 	if parity := read["parity"].(map[string]any); parity["waiting"].(float64) < 1 || parity["build"] != read["build"] || parity["later"] != nil {
 		t.Fatalf("the gate counts captures without a version, for the build that ran it: %v", parity)
 	}
+	// The readers' gate names this build's latest run and how many versions it verified, those it read.
+	if gate := read["gate"].(map[string]any); gate["run"] == nil || gate["verified"].(float64) < 1 {
+		t.Fatalf("the readers' gate: %v", gate)
+	}
 	// A later run that never finished (it failed) leaves the gate uncleared, said so.
 	_, err = db.Exec(`INSERT INTO books_parity(started_at,build) VALUES(now()-interval '3 hours','dev')`)
 	must(err)
