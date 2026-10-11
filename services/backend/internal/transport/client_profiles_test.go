@@ -188,4 +188,13 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	})
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Oak Ltd", "currency": "USD", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Dollars", "rev": ""}, 409)
 	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Oak Ltd", "currency": "GBP", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Pounds, as its work is", "rev": ""}, 200)
+	// A month signed off under Canadian dollars, as kept with its sign-off, holds a later change to dollars even once
+	// nothing it reads says CAD any more.
+	var pine string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Pine Ltd','2026-05') RETURNING id::text`, org).Scan(&pine))
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor,profile) VALUES($1,'signed_off','fixture','{}','Done','fixture','{"currency":"CAD","fiscal_year_start":1,"state":"detected"}')`, pine)
+	must(err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, pine) })
+	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Pine Ltd", "currency": "USD", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Dollars", "rev": ""}, 409)
+	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Pine Ltd", "currency": "CAD", "fiscal_year_start": 1, "effective_from": "2026-01", "reason": "Canadian dollars, as signed off", "rev": ""}, 200)
 }

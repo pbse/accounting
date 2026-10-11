@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -165,23 +166,26 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 // another currency, or a signed-off month whose currency or fiscal year it would change.
 func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, currency string, start int) ([]string, error) {
 	// The new profile governs months from its own up to the next later profile's, which keeps the months after it.
+	// The months are locked, so a decision on one (a statement confirmed, a sign-off) waits for this change or sees it.
 	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off',
+ COALESCE((SELECT profile FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'null'::jsonb),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved' AND upper(COALESCE(NULLIF(w.paper->'input'->>'currency',''),'USD'))<>$4)
  OR EXISTS(SELECT 1 FROM statement_extractions s WHERE s.close_id=c.id AND s.confirmed IS NOT NULL AND COALESCE(s.confirmed->>'currency','')<>'' AND upper(s.confirmed->>'currency')<>$4)
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
  AND c.period<COALESCE((SELECT min(f.effective_from) FROM client_profiles f WHERE f.organization_id=$1 AND client_identity(f.organization_id,f.client_entity)=client_identity($1,$2) AND f.effective_from>$3),'9999-99')
- ORDER BY c.period`, org, name, from, currency)
+ ORDER BY c.period FOR UPDATE OF c`, org, name, from, currency)
 	if err != nil {
 		return nil, err
 	}
 	type month struct {
 		id, period          string
 		signed, contradicts bool
+		signedUnder         []byte
 	}
 	var months []month
 	for rows.Next() {
 		var m month
-		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.contradicts); err != nil {
+		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.signedUnder, &m.contradicts); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -200,10 +204,13 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 		if !m.signed {
 			continue
 		}
-		// A signed-off month was closed under the profile it reads now: a change to it waits for the month to reopen.
-		p, err := preparation.ClientProfile(ctx, tx, m.id)
-		if err != nil {
-			return nil, err
+		// A signed-off month was closed under the profile kept with its sign-off (or, for one signed off before profiles
+		// were kept, the one it reads now): a change to it waits for the month to reopen.
+		var p preparation.Profile
+		if json.Unmarshal(m.signedUnder, &p) != nil || p.Currency == "" {
+			if p, err = preparation.ClientProfile(ctx, tx, m.id); err != nil {
+				return nil, err
+			}
 		}
 		if p.FiscalStart != start || p.Currency != currency {
 			held = append(held, m.period)

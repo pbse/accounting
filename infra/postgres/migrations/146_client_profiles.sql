@@ -16,6 +16,9 @@ CREATE TABLE client_profiles (
  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX client_profiles_client ON client_profiles(organization_id,lower(client_entity),effective_from DESC,id DESC);
+-- The profile a month was signed off under (currency, fiscal-year start and state), kept with the sign-off, so a later
+-- profile change can be checked against it rather than against what the month reads now.
+ALTER TABLE close_signoffs ADD COLUMN profile jsonb;
 ALTER TABLE client_profiles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON client_profiles FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON client_profiles FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));

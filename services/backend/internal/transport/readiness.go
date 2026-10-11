@@ -387,7 +387,18 @@ func registerReadiness(mux *http.ServeMux, db *sql.DB) {
 				}
 				decision = "reopened"
 			}
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,$2,$3,$4,$5,$6)`, r.PathValue("id"), decision, current.Digest, string(current.Snapshot), in.Note, actor)
+			// The profile the month is signed off under is kept with the decision.
+			var signedProfile any
+			if decision == "signed_off" {
+				p, e := preparation.ClientProfile(r.Context(), tx, r.PathValue("id"))
+				if e != nil {
+					problem(w, 503, "The client's profile is unavailable.")
+					return
+				}
+				raw, _ := json.Marshal(p)
+				signedProfile = string(raw)
+			}
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor,profile) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`, r.PathValue("id"), decision, current.Digest, string(current.Snapshot), in.Note, actor, signedProfile)
 			if err == nil {
 				// "close.signed_off:<id>" or "close.reopened:<id>" for workflows (docs/workflow-engine.md).
 				_, err = wf.EmitForClose(r.Context(), tx, r.PathValue("id"), "close."+decision+":"+r.PathValue("id"), map[string]string{"close_id": r.PathValue("id"), "decision": decision}, actor)
