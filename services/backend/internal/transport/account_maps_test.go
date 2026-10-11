@@ -75,6 +75,12 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		return send(subject, permissions, method, path, "application/json", raw, want)
 	}
 	// A month's file, its layout confirmed: number, name, type, debit and credit.
+	confirmLayout := func(id string, table any, period string) {
+		t.Helper()
+		call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+id, map[string]any{"action": "confirm", "reason": "Layout checked", "layout": map[string]any{"table": table, "header_row": 1,
+			"columns": map[string]string{"0": "account_number", "1": "account_name", "2": "account_type", "3": "debit", "4": "credit"}, "style": map[string]any{"decimal_comma": false, "scale": 1},
+			"as_of": period + "-30", "currency": "USD"}}, 200)
+	}
 	month := func(period, content string) string {
 		t.Helper()
 		var b bytes.Buffer
@@ -90,10 +96,15 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		path := "/v1/closes/client/import?name=Acme%20Co&id=" + id
 		table := call("user_b", preparer, "GET", path, nil, 200)["tables"].([]any)[0].(map[string]any)["name"]
 		call("user_b", preparer, "GET", "/v1/closes/client/import/accounts?name=Acme%20Co&id="+id, nil, 409)
-		call("user_a", partner, "POST", path, map[string]any{"action": "confirm", "reason": "Layout checked", "layout": map[string]any{"table": table, "header_row": 1,
-			"columns": map[string]string{"0": "account_number", "1": "account_name", "2": "account_type", "3": "debit", "4": "credit"}, "style": map[string]any{"decimal_comma": false, "scale": 1},
-			"as_of": period + "-30", "currency": "USD"}}, 200)
+		confirmLayout(id, table, period)
 		return id
+	}
+	// readingOf is a file's confirmed reading, as the map records it.
+	readingOf := func(id string) string {
+		t.Helper()
+		var reading string
+		must(db.QueryRow(`SELECT max(id)::text FROM books_layouts WHERE import_id::text=$1`, id).Scan(&reading))
+		return reading
 	}
 	// Rent comes on two rows, one per office: one account, its balance their sum.
 	september := month("2026-09", "Number,Account,Type,Debit,Credit\n1000,Business Checking,Bank,1500.25,\n1100,Trade debtors,Current Asset,200.00,\n2000,Amex,Credit Card,,300.00\n3000,Owner's Equity,,,1000.00\n4000,Sales,,,750.25\n6000,Rent,,300.00,\n6000,Rent,,50.00,\n")
@@ -162,26 +173,36 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	files := func(key string) (string, string) {
 		t.Helper()
 		var typ, from sql.NullString
-		must(db.QueryRow(`SELECT accounts->$2->>'type',accounts->$2->>'files' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org, key).Scan(&typ, &from))
+		must(db.QueryRow(`SELECT accounts->$2->>'type',accounts->$2->>'readings' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org, key).Scan(&typ, &from))
 		return typ.String, from.String
 	}
-	if typ, from := files("n:6000"); typ != "Expense" || from != `["`+september+`", "`+october+`"]` {
+	septemberReading, octoberReading := readingOf(september), readingOf(october)
+	if typ, from := files("n:6000"); typ != "Expense" || from != `["`+septemberReading+`", "`+octoberReading+`"]` {
 		t.Fatalf("rent's new type, on both files: %s %s", typ, from)
 	}
 	// November's file names only accounts mapped already: confirming it records that it names them, and changes nothing
 	// else.
-	november := month("2026-11", "Number,Account,Type,Debit,Credit\n1000,Business Checking,Bank,1500.25,\n1100,Trade debtors,Current Asset,200.00,\n2000,Amex,Credit Card,,300.00\n3000,Owner's Equity,,,1000.00\n4000,Sales,,,700.25\n6000,Rent,,300.00,\n")
+	// A row naming no account (no number, no name) is counted, never mapped.
+	november := month("2026-11", "Number,Account,Type,Debit,Credit\n1000,Business Checking,Bank,1500.25,\n1100,Trade debtors,Current Asset,200.00,\n2000,Amex,Credit Card,,300.00\n3000,Owner's Equity,,,1000.00\n4000,Sales,,,725.25\n6000,Rent,,300.00,\n,,,25.00,\n")
 	novemberPath := "/v1/closes/client/import/accounts?name=Acme%20Co&id=" + november
-	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["unmapped"] != 0.0 || read["recorded"] != false {
-		t.Fatalf("every account mapped, none on November's file yet: %v", read)
+	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["unmapped"] != 0.0 || read["recorded"] != false || read["unidentified"] != 1.0 || read["count"] != 6.0 {
+		t.Fatalf("every account mapped, none on November's file yet, one row naming none: %v", read)
 	}
-	call("user_a", partner, "POST", novemberPath, map[string]any{"accept": true, "reason": "Same accounts as before", "based_on": second}, 200)
+	third := call("user_a", partner, "POST", novemberPath, map[string]any{"accept": true, "reason": "Same accounts as before", "based_on": second}, 200)["id"].(string)
 	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["recorded"] != true {
 		t.Fatalf("November's file recorded: %v", read)
 	}
+	// November's layout confirmed again asks for its map again; confirming it records the new reading too.
+	novemberFirst := readingOf(november)
+	confirmLayout(november, call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+november, nil, 200)["import"].(map[string]any)["confirmed"].(map[string]any)["layout"].(map[string]any)["table"], "2026-11")
+	if read = call("user_b", preparer, "GET", novemberPath, nil, 200); read["recorded"] != false {
+		t.Fatalf("a reading confirmed again is mapped again: %v", read)
+	}
+	call("user_a", partner, "POST", novemberPath, map[string]any{"accept": true, "reason": "Layout reconfirmed", "based_on": third}, 200)
+	novemberSecond := readingOf(november)
 	var versions int
 	must(db.QueryRow(`SELECT count(*) FROM books_account_maps WHERE organization_id=$1`, org).Scan(&versions))
-	if versions != 3 {
+	if versions != 4 {
 		t.Fatalf("each confirmation a version holding the whole map: %d", versions)
 	}
 	// Deleting October's file takes from the map what only it named, utilities, from every version; deleting
@@ -190,11 +211,11 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+october, map[string]any{"reason": "Sent in error"}, 200)
 	var utilities int
 	must(db.QueryRow(`SELECT count(*) FILTER (WHERE accounts::text LIKE '%Utilities%' OR accounts ? 'n:6100') FROM books_account_maps WHERE organization_id=$1`, org).Scan(&utilities))
-	if typ, from := files("n:6000"); utilities != 0 || typ != "Expense" || from != `["`+september+`", "`+november+`"]` {
+	if typ, from := files("n:6000"); utilities != 0 || typ != "Expense" || from != `["`+septemberReading+`", "`+novemberFirst+`", "`+novemberSecond+`"]` {
 		t.Fatalf("a deleted file leaves nothing only it named: %d versions name utilities; rent %s from %s", utilities, typ, from)
 	}
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+september, map[string]any{"reason": "Sent in error"}, 200)
-	if typ, from := files("n:1000"); typ != "Bank" || from != `["`+november+`"]` {
+	if typ, from := files("n:1000"); typ != "Bank" || from != `["`+novemberFirst+`", "`+novemberSecond+`"]` {
 		t.Fatalf("the bank stays mapped, on November's file: %s %s", typ, from)
 	}
 	accountsPath = novemberPath

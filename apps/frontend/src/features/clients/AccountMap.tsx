@@ -18,6 +18,7 @@ type AccountsRead = {
   count: number;
   unmapped: number;
   recorded: boolean;
+  unidentified: number;
   more: boolean;
   classes: Record<string, string[]>;
   on: boolean;
@@ -91,6 +92,11 @@ export function AccountMap({ client, id, onClose }: { client: string; id: string
         {data.count} account{data.count === 1 ? "" : "s"}: {data.count - data.unmapped} mapped, {data.unmapped} to map.
         {data.map && ` The map was last confirmed ${dates.dayMonth(data.map.at)} by ${data.map.actor}, on ${monthName(data.map.period)}'s file: ${data.map.reason}`}
       </p>
+      {data.unidentified > 0 && (
+        <p role="alert">
+          {data.unidentified} row{data.unidentified === 1 ? "" : "s"} with an amount name{data.unidentified === 1 ? "s" : ""} no account: read the file with its account column, or mark the row, before it can be mapped.
+        </p>
+      )}
       {editable && data.unmapped > 0 && <p className="note">Confirming accepts what is proposed for every account not mapped yet, on every page, with any class or type you set here.</p>}
       {editable && !data.unmapped && !data.recorded && <p className="note">Every account is mapped already. Confirm the map for this file to record that it names them, so they stay mapped if an earlier file is deleted.</p>}
       <table className="ks-preview">

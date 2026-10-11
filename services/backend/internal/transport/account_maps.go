@@ -24,17 +24,18 @@ import (
 // reviewer confirms. The map is the client's, versioned (books_account_maps), and next month's file finds its accounts
 // mapped already, by number, else by name.
 
-// mappedAccount is an account as the map holds it, with the files whose readings it was confirmed on: a file deleted
-// takes with it the accounts only it named (books_forget_file_accounts).
+// mappedAccount is an account as the map holds it, with the confirmed readings (books_layouts ids) it was confirmed on:
+// a file deleted takes with it the accounts only its readings named (books_forget_readings), and a file whose layout is
+// confirmed again has its map confirmed again.
 type mappedAccount struct {
-	Class  string   `json:"class"`
-	Type   string   `json:"type"`
-	Name   string   `json:"name"`
-	Number string   `json:"number,omitempty"`
-	Files  []string `json:"files,omitempty"`
+	Class    string   `json:"class"`
+	Type     string   `json:"type"`
+	Name     string   `json:"name"`
+	Number   string   `json:"number,omitempty"`
+	Readings []string `json:"readings,omitempty"`
 }
 
-// sameMapping says whether two entries map an account alike, whichever files they were confirmed on.
+// sameMapping says whether two entries map an account alike, whichever readings they were confirmed on.
 func sameMapping(a, b mappedAccount) bool {
 	return a.Class == b.Class && a.Type == b.Type && a.Name == b.Name && a.Number == b.Number
 }
@@ -91,23 +92,32 @@ func latestAccountMap(ctx context.Context, q rowReader, org, name string) (*acco
 	return &m, json.Unmarshal(raw, &m.Accounts)
 }
 
-// readingAccounts is import id's month and the accounts its confirmed reading names, once each, in the order read, an
-// account on several rows (one per department, say) with their balances summed, each with its proposal and with what
-// the map holds for it; false when its layout is not confirmed yet.
-func readingAccounts(ctx context.Context, q rowReader, org, name, id string, current *accountMap) (string, []fileAccount, bool, error) {
-	var period string
+// fileReading is a file's confirmed reading as its accounts are mapped: its month, which reading it is (the
+// books_layouts id), the accounts it names, and how many posting rows name no account.
+type fileReading struct {
+	Period, ID   string
+	Accounts     []fileAccount
+	Unidentified int
+}
+
+// readingAccounts is import id's confirmed reading: the accounts it names, once each, in the order read, an account on
+// several rows (one per department, say) with their balances summed, each with its proposal and with what the map
+// holds for it. A posting row with neither a number nor a name names no account: it is counted, never mapped. False
+// when the file's layout is not confirmed yet.
+func readingAccounts(ctx context.Context, q rowReader, org, name, id string, current *accountMap) (fileReading, bool, error) {
+	var f fileReading
 	var raw []byte
-	err := q.QueryRowContext(ctx, `SELECT i.period,COALESCE(l.reading->'lines','[]'::jsonb) FROM books_layouts l JOIN books_imports i ON i.id=l.import_id
- WHERE l.organization_id=$1 AND client_identity(l.organization_id,l.client_entity)=client_identity($1,$2) AND l.import_id::text=$3 ORDER BY l.id DESC LIMIT 1`, org, name, id).Scan(&period, &raw)
+	err := q.QueryRowContext(ctx, `SELECT i.period,l.id::text,COALESCE(l.reading->'lines','[]'::jsonb) FROM books_layouts l JOIN books_imports i ON i.id=l.import_id
+ WHERE l.organization_id=$1 AND client_identity(l.organization_id,l.client_entity)=client_identity($1,$2) AND l.import_id::text=$3 ORDER BY l.id DESC LIMIT 1`, org, name, id).Scan(&f.Period, &f.ID, &raw)
 	if err == sql.ErrNoRows {
-		return "", nil, false, nil
+		return f, false, nil
 	}
 	if err != nil {
-		return "", nil, false, err
+		return f, false, err
 	}
 	var lines []bookfiles.Line
 	if err = json.Unmarshal(raw, &lines); err != nil {
-		return "", nil, false, err
+		return f, false, err
 	}
 	accounts := []fileAccount{}
 	seen := map[string]int{}
@@ -117,6 +127,10 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 		case bookfiles.Heading:
 			heading = l.Name
 		case bookfiles.Posting:
+			if strings.TrimSpace(l.Number) == "" && strings.TrimSpace(l.Name) == "" {
+				f.Unidentified++
+				continue
+			}
 			key := bookfiles.AccountKey(l.Number, l.Name)
 			if at, ok := seen[key]; ok {
 				accounts[at].Balance = addAmounts(accounts[at].Balance, l.Amount)
@@ -132,7 +146,8 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 			accounts = append(accounts, a)
 		}
 	}
-	return period, accounts, true, nil
+	f.Accounts = accounts
+	return f, true, nil
 }
 
 func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
@@ -156,11 +171,12 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		current, err := latestAccountMap(r.Context(), db, org, name)
-		var accounts []fileAccount
+		var reading fileReading
 		var found bool
 		if err == nil {
-			_, accounts, found, err = readingAccounts(r.Context(), db, org, name, id, current)
+			reading, found, err = readingAccounts(r.Context(), db, org, name, id, current)
 		}
+		accounts := reading.Accounts
 		on, onErr := fileImportsOn(r.Context(), db, org)
 		if err != nil || onErr != nil {
 			problem(w, 503, "The accounts are unavailable.")
@@ -170,18 +186,18 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Confirm how the file is read before mapping its accounts.")
 			return
 		}
-		// recorded says every account the file names is mapped on it already: confirming it would change nothing.
+		// recorded says every account the reading names is mapped on it already: confirming it would change nothing.
 		unmapped, recorded := 0, true
 		for _, a := range accounts {
 			if a.Mapped == nil {
 				unmapped++
 			}
-			if a.Mapped == nil || !slices.Contains(a.Mapped.Files, id) {
+			if a.Mapped == nil || !slices.Contains(a.Mapped.Readings, reading.ID) || a.Mapped.Name != a.Name || a.Mapped.Number != a.Number {
 				recorded = false
 			}
 		}
 		from := min(offset, len(accounts))
-		out := map[string]any{"accounts": accounts[from:min(from+200, len(accounts))], "count": len(accounts), "unmapped": unmapped, "recorded": recorded, "more": len(accounts) > from+200,
+		out := map[string]any{"accounts": accounts[from:min(from+200, len(accounts))], "count": len(accounts), "unmapped": unmapped, "recorded": recorded, "unidentified": reading.Unidentified, "more": len(accounts) > from+200,
 			"classes": bookfiles.Types, "on": on, "can_confirm": canReview(r) && on, "map": nil}
 		if current != nil {
 			out["map"] = current
@@ -240,12 +256,12 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "The map was confirmed again since you opened it: reopen it to see what changed.")
 			return
 		}
-		var period string
-		var accounts []fileAccount
+		var reading fileReading
 		var found bool
 		if err == nil {
-			period, accounts, found, err = readingAccounts(r.Context(), tx, org, name, id, current)
+			reading, found, err = readingAccounts(r.Context(), tx, org, name, id, current)
 		}
+		period, accounts := reading.Period, reading.Accounts
 		if err != nil {
 			problem(w, 503, "The account map is unavailable.")
 			return
@@ -269,20 +285,26 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 				m.Class, m.Type, set = a.Proposal.Class, a.Proposal.Type, true
 			}
 			if set && (a.Mapped == nil || !sameMapping(*a.Mapped, m)) {
-				// A class or type changed keeps the files the account was confirmed on before.
+				// A class or type changed keeps the readings the account was confirmed on before.
 				if a.Mapped != nil {
-					m.Files = a.Mapped.Files
+					m.Readings = a.Mapped.Readings
 				}
 				next[a.Key], changed = m, true
 			}
 		}
-		// Every account this file names that the map holds is confirmed on it, so a file deleted later leaves the
-		// accounts this one names: recording that is a change of its own, even when no class or type changes.
+		// Every account this reading names that the map holds is confirmed on it, under the name and number it reads now:
+		// a file deleted later leaves the accounts this one names, and a layout confirmed again is mapped again. Recording
+		// that is a change of its own, even when no class or type changes.
 		for _, a := range accounts {
-			if m, ok := next[a.Key]; ok && !slices.Contains(m.Files, id) {
-				m.Files = append(slices.Clone(m.Files), id)
-				next[a.Key], changed = m, true
+			m, ok := next[a.Key]
+			if !ok || slices.Contains(m.Readings, reading.ID) && m.Name == a.Name && m.Number == a.Number {
+				continue
 			}
+			m.Name, m.Number = a.Name, a.Number
+			if !slices.Contains(m.Readings, reading.ID) {
+				m.Readings = append(slices.Clone(m.Readings), reading.ID)
+			}
+			next[a.Key], changed = m, true
 		}
 		for key := range in.Accounts {
 			if !named[key] {

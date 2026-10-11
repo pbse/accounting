@@ -13,7 +13,7 @@ CREATE TABLE books_account_maps (
  import_id bigint REFERENCES books_imports(id) ON DELETE SET NULL,
  period text NOT NULL CHECK (period ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
  -- accounts is the whole map: each account's key (its number, else its name) to its class, type, name and number, and
- -- the files whose readings it was confirmed on.
+ -- the confirmed readings (books_layouts ids) it was confirmed on.
  accounts jsonb NOT NULL CHECK (jsonb_typeof(accounts)='object'),
  reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 500),
  actor text NOT NULL,
@@ -25,12 +25,16 @@ CREATE POLICY tenant_read ON books_account_maps FOR SELECT USING (current_settin
 CREATE POLICY tenant_add ON books_account_maps FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_change ON books_account_maps FOR UPDATE USING (current_setting('app.organization',true) IN ('*',organization_id)) WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
 
--- books_forget_file_accounts removes from org's maps what only the files ids named: an account confirmed on no other
--- file goes from every version, and the files leave the rest, so a file deleted, or removed with its month, leaves
--- nothing of its content in a map.
-CREATE FUNCTION books_forget_file_accounts(org text, ids text[]) RETURNS void LANGUAGE sql AS $$
- UPDATE books_account_maps m SET accounts=COALESCE((SELECT jsonb_object_agg(e.key,jsonb_set(e.value,'{files}',COALESCE(e.value->'files','[]'::jsonb)-ids))
-   FROM jsonb_each(m.accounts) e WHERE jsonb_array_length(COALESCE(e.value->'files','[]'::jsonb)-ids)>0),'{}'::jsonb)
- WHERE m.organization_id=org AND EXISTS(SELECT 1 FROM jsonb_each(m.accounts) e WHERE COALESCE(e.value->'files','[]'::jsonb) ?| ids)
-$$;
+-- books_forget_readings removes from client name's maps what only the readings ids (books_layouts ids, of files being
+-- deleted) named: an account confirmed on no other reading goes from every version, and the readings leave the rest, so
+-- a file deleted, or removed with its month, leaves nothing of its content in a map. It takes the client's map lock
+-- first, as a confirmation does, so none under way carries the file's accounts past it.
+CREATE FUNCTION books_forget_readings(org text, name text, ids text[]) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtext('books_account_maps:'||org||':'||client_identity(org,name)));
+ UPDATE books_account_maps m SET accounts=COALESCE((SELECT jsonb_object_agg(e.key,jsonb_set(e.value,'{readings}',COALESCE(e.value->'readings','[]'::jsonb)-ids))
+   FROM jsonb_each(m.accounts) e WHERE jsonb_array_length(COALESCE(e.value->'readings','[]'::jsonb)-ids)>0),'{}'::jsonb)
+ WHERE m.organization_id=org AND client_identity(m.organization_id,m.client_entity)=client_identity(org,name)
+  AND EXISTS(SELECT 1 FROM jsonb_each(m.accounts) e WHERE COALESCE(e.value->'readings','[]'::jsonb) ?| ids);
+END $$;
 COMMIT;
