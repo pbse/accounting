@@ -552,3 +552,65 @@ func fileBooksPending(ctx context.Context, q rowReader, closeID string) (bool, e
  WHERE c.id::text=$1 AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id))`, closeID).Scan(&accepted)
 	return accepted, err
 }
+
+// monthChanged is how a file's reading differs from the books its month already accepted from another file: a
+// re-export of an accepted month is the evidence that the month changed after it was accepted (docs/books-sources.md,
+// Roll-forward and changed prior months). Each account is compared by its key; what was built on the accepted books
+// (a sign-off standing, a pack published) is listed. Nil when the month has no other accepted file.
+func monthChanged(ctx context.Context, q rowReader, org, name, importID string, s fileState) (map[string]any, error) {
+	var acceptance, other, file string
+	var at time.Time
+	switch err := q.QueryRowContext(ctx, `SELECT a.id::text,a.import_id::text,i.name,a.created_at FROM books_import_acceptances a JOIN books_imports i ON i.id=a.import_id
+ WHERE a.organization_id=$1 AND client_identity(a.organization_id,a.client_entity)=client_identity($1,$2) AND a.period=$3 AND a.import_id::text<>$4
+  AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id)
+ ORDER BY a.id DESC LIMIT 1`, org, name, s.reading.Period, importID).Scan(&acceptance, &other, &file, &at); {
+	case err == sql.ErrNoRows:
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	accepted, ok, err := acceptedFileBooks(ctx, q, org, name, acceptance, other)
+	if err != nil || !ok {
+		return nil, err
+	}
+	amount := func(s string) *big.Rat {
+		v, ok := new(big.Rat).SetString(cmp.Or(s, "0"))
+		if !ok {
+			return new(big.Rat)
+		}
+		return v
+	}
+	differences, here := []string{}, map[string]bool{}
+	for _, a := range s.reading.Accounts {
+		here[a.Key] = true
+		now, was := amount(a.Balance), amount(accepted.balances[a.Key])
+		label := strings.TrimSpace(a.Number + " " + a.Name)
+		switch _, known := accepted.balances[a.Key]; {
+		case !known && now.Sign() != 0:
+			differences = append(differences, label+": "+money(now)+", not in the accepted books.")
+		case now.Cmp(was) != 0:
+			differences = append(differences, fmt.Sprintf("%s: was %s, is now %s.", label, money(was), money(now)))
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(accepted.balances)) {
+		if was := amount(accepted.balances[key]); !here[key] && was.Sign() != 0 {
+			differences = append(differences, accepted.accounts[key].Name+": was "+money(was)+", not in this file.")
+		}
+	}
+	// What was built on the accepted books: a sign-off standing over them, and packs published from them.
+	effects := []string{}
+	var signed bool
+	var published int
+	if err = q.QueryRowContext(ctx, `SELECT COALESCE(bool_or((SELECT s.decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1)='signed_off'),false),
+ (SELECT count(*) FROM management_publications p WHERE p.close_id IN (SELECT id FROM client_closes WHERE organization_id=$1 AND client_identity(organization_id,entity)=client_identity($1,$2) AND period=$3))
+ FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period=$3`, org, name, s.reading.Period).Scan(&signed, &published); err != nil {
+		return nil, err
+	}
+	if signed {
+		effects = append(effects, "The month is signed off on the accepted books: reopen it before accepting this file.")
+	}
+	if published > 0 {
+		effects = append(effects, fmt.Sprintf("%d management pack publication%s for the month %s built on the accepted books.", published, suffix(published), map[bool]string{true: "was", false: "were"}[published == 1]))
+	}
+	return map[string]any{"file": file, "accepted_at": at.UTC(), "same": len(differences) == 0, "differences": differences, "effects": effects}, nil
+}

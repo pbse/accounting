@@ -581,6 +581,16 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	must(err)
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+january, map[string]any{"reason": "Sent in error"}, 409)
 	call("user_a", partner, "POST", januaryPath, with(call("user_a", partner, "GET", januaryPath, nil, 200), map[string]any{"exported_on": "2026-10-06"}), 409)
+	// A re-export of January says how the month changed since its books were accepted, and what was built on them.
+	reexport := send1("2027-01", "Number,Account,Debit,Credit\n1000,Business Checking,1600.25,\n3000,Owner's Equity,,1000.00\n4000,Sales,,800.25\n6000,Rent,200.00,\n")
+	confirmLayout(reexport, "2027-01-31")
+	changed, _ := call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+reexport, nil, 200)["accepted_books"].(map[string]any)
+	if changed["same"] != false || fmt.Sprint(changed["differences"]) != "[1000 Business Checking: was 1500.25, is now 1600.25. 4000 Sales: was -700.25, is now -800.25.]" || !strings.Contains(fmt.Sprint(changed["effects"]), "signed off") {
+		t.Fatalf("a re-export of an accepted month: %v", changed)
+	}
+	if call("user_a", partner, "GET", januaryPath, nil, 200)["accepted_books"] != nil {
+		t.Fatalf("the accepted file itself is not a change to its month")
+	}
 	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1::bigint,'reopened',repeat('a',64),'{}','Reopened','fixture')`, januaryClose)
 	must(err)
 	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+january, map[string]any{"reason": "Sent in error"}, 200)

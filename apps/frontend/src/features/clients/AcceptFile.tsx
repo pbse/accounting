@@ -35,8 +35,11 @@ type Supplement = {
   differences?: string[];
   reason?: string;
 };
+// A file for a month that already accepted another's books: how the month changed since, and what was built on them.
+type AcceptedBooks = { file: string; accepted_at: string; same: boolean; differences: string[]; effects: string[] };
 type AcceptanceRead = {
   confirmed: boolean;
+  accepted_books?: AcceptedBooks | null;
   supplement?: Supplement | null;
   checks: Check[];
   holds?: number;
@@ -104,6 +107,28 @@ function AcceptForm({ client, id, data, onClose }: { client: string; id: string;
               {was.final_adjustments ? ", with the final adjustments in." : ", before the final adjustments."}{" "}
               {!was.current && <strong>{was.map_changed ? "The account map has changed how this file's accounts are classified since then: the month's books keep the earlier map until you accept this one again." : "That was of an earlier reading or attestation: accept this one again."}</strong>}
             </p>
+          )}
+          {data.accepted_books && (
+            <>
+              <p>
+                {monthName(data.period ?? "")}’s books were accepted {dates.dayMonth(data.accepted_books.accepted_at)} from {data.accepted_books.file}.{" "}
+                {data.accepted_books.same
+                  ? "This file matches them, account for account."
+                  : "This file differs from them: the month changed after its books were accepted. Accepting this file makes it the month’s books."}
+              </p>
+              {!data.accepted_books.same && (
+                <ul>
+                  {data.accepted_books.differences.map((d) => (
+                    <li key={d}>{d}</li>
+                  ))}
+                </ul>
+              )}
+              {data.accepted_books.effects.map((e) => (
+                <p key={e} role="status">
+                  {e}
+                </p>
+              ))}
+            </>
           )}
           {data.supplement && (
             <>
