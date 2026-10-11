@@ -48,6 +48,23 @@ CREATE TABLE books_layouts (
 CREATE INDEX books_layouts_client ON books_layouts(organization_id,lower(client_entity),id DESC);
 CREATE INDEX books_layouts_import ON books_layouts(import_id,id DESC);
 
+-- books_import_deletions: a receipt for each file deleted (sent in error, or at the client's request), without its
+-- content: what it was, its digest, why it was deleted and by whom.
+CREATE TABLE books_import_deletions (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ organization_id text NOT NULL REFERENCES organizations(id),
+ client_entity text NOT NULL,
+ period text NOT NULL,
+ name text NOT NULL,
+ digest text NOT NULL,
+ reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 500),
+ actor text NOT NULL,
+ deleted_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE books_import_deletions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_read ON books_import_deletions FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
+CREATE POLICY tenant_add ON books_import_deletions FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
+
 ALTER TABLE books_imports ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON books_imports FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON books_imports FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));

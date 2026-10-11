@@ -34,7 +34,7 @@ type Reading = { lines: Line[]; debits: string; credits: string; balanced: boole
 type Status = { id: string; reason: string; actor: string; at: string; balanced: boolean; problems: number };
 // CSV is how a person chose to read a CSV file; empty, as the reader read it.
 type CSV = { encoding: string; delimiter: string };
-type Confirmed = Status & { layout: Layout; reading: Reading; csv?: CSV };
+type Confirmed = Status & { layout: Layout; reading: Reading; csv?: CSV; line_count?: number };
 type ImportRow = { id: string; period: string; name: string; format: string; actor: string; at: string; replaces?: string; replaces_reason?: string; confirmed?: Status };
 type ImportRead = {
   import: Omit<ImportRow, "confirmed"> & { confirmed?: Confirmed };
@@ -48,6 +48,7 @@ type ImportRead = {
   // on says the firm's file imports are on: off, a file is read and downloaded but not confirmed again.
   on?: boolean;
   can_confirm: boolean;
+  can_delete?: boolean;
   proposal?: { layout: Layout; questions: string[]; reused: boolean };
 };
 
@@ -289,6 +290,10 @@ function LayoutForm({
   const confirmedCsv = data.import.confirmed?.csv;
   const sameParse = !csv || (csv.encoding === confirmedCsv?.encoding && csv.delimiter === confirmedCsv?.delimiter);
   const [reading, setReading] = useState<Reading | undefined>(sameParse ? data.import.confirmed?.reading : undefined);
+  // The confirmed reading's lines are fetched in pages; a preview's come with it.
+  const [previewed, setPreviewed] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -308,6 +313,7 @@ function LayoutForm({
     try {
       const out = await workspaceRequest(importPath(client, id), { action, layout, reason: reason.trim(), csv: csv ?? { encoding: "", delimiter: "" } });
       setReading(out.reading);
+      setPreviewed(true);
       if (action === "confirm") onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The file could not be read with this layout.");
@@ -316,6 +322,18 @@ function LayoutForm({
     }
   }
   const set = (change: Partial<Layout>) => (setLayout({ ...layout, ...change }), setReading(undefined));
+  async function deleteFile() {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/client/import/delete?name=${encodeURIComponent(client)}&id=${encodeURIComponent(id)}`, { reason: deleteReason.trim() });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The file could not be deleted.");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function downloadFile() {
     try {
       const blob = await workspaceRequest(`/client/import/file?name=${encodeURIComponent(client)}&id=${encodeURIComponent(id)}`, undefined, true);
@@ -511,7 +529,11 @@ function LayoutForm({
               ))}
             </ul>
           )}
-          <ReadingLines lines={reading.lines} />
+          {previewed || !data.import.confirmed?.line_count ? (
+            <ReadingLines lines={reading.lines} />
+          ) : (
+            <ReadingLines lines={[]} total={data.import.confirmed.line_count} page={(offset) => workspaceRequest(`/client/import/lines?name=${encodeURIComponent(client)}&id=${encodeURIComponent(id)}&offset=${offset}`)} />
+          )}
         </div>
       )}
       {error && <p role="alert">{error}</p>}
@@ -522,7 +544,23 @@ function LayoutForm({
         </label>
       )}
       {data.on === false && <p className="note">File imports are switched off for your firm: this file can be read and downloaded, not read again with another layout.</p>}
+      {deleting && (
+        <label>
+          Why delete it
+          <input value={deleteReason} maxLength={500} onChange={(e) => setDeleteReason(e.target.value)} />
+        </label>
+      )}
       <DialogActions>
+        {data.can_delete &&
+          (deleting ? (
+            <button type="button" className="danger" disabled={busy || !deleteReason.trim()} onClick={() => void deleteFile()}>
+              Delete it
+            </button>
+          ) : (
+            <button type="button" className="danger" onClick={() => setDeleting(true)}>
+              Delete the file
+            </button>
+          ))}
         <button type="button" onClick={() => void downloadFile()}>
           Download the file
         </button>
@@ -541,17 +579,36 @@ function LayoutForm({
   );
 }
 
-// ReadingLines shows how each row was read, once opened, two hundred rows at a time: a file can hold thousands.
-function ReadingLines({ lines }: { lines: Line[] }) {
+// ReadingLines shows how each row was read, once opened, two hundred rows at a time: a file can hold thousands. The
+// lines are given, or fetched a page at a time from page, total in all.
+function ReadingLines({ lines, total, page }: { lines: Line[]; total?: number; page?: (offset: number) => Promise<{ lines: Line[] }> }) {
   const [shown, setShown] = useState(0);
+  const [fetched, setFetched] = useState<Line[]>([]);
+  const [error, setError] = useState("");
+  const all = page ? fetched : lines;
+  const count = total ?? lines.length;
+  async function more() {
+    const next = shown + 200;
+    if (page && fetched.length < Math.min(next, count)) {
+      try {
+        const got = await page(fetched.length);
+        setFetched([...fetched, ...got.lines]);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "The rows could not be read.");
+        return;
+      }
+    }
+    setShown(next);
+  }
   return (
-    <details onToggle={(e) => setShown((e.currentTarget as HTMLDetailsElement).open ? Math.max(shown, 200) : shown)}>
-      <summary>How each of the {lines.length} rows was read</summary>
+    <details onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && shown === 0 && void more()}>
+      <summary>How each of the {count} rows was read</summary>
+      {error && <p role="alert">{error}</p>}
       {shown > 0 && (
         <>
           <table className="ks-preview">
             <tbody>
-              {lines.slice(0, shown).map((l) => (
+              {all.slice(0, shown).map((l) => (
                 <tr key={l.row}>
                   <th>{l.row}</th>
                   <td>{lineKinds[l.kind]}</td>
@@ -561,9 +618,9 @@ function ReadingLines({ lines }: { lines: Line[] }) {
               ))}
             </tbody>
           </table>
-          {shown < lines.length && (
-            <button type="button" className="link" onClick={() => setShown(shown + 200)}>
-              Show {Math.min(200, lines.length - shown)} more
+          {shown < count && (
+            <button type="button" className="link" onClick={() => void more()}>
+              Show {Math.min(200, count - shown)} more
             </button>
           )}
         </>

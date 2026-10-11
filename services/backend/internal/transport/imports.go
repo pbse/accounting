@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -80,6 +81,8 @@ type confirmedRead struct {
 	At       time.Time         `json:"at"`
 	CSV      csvChoice         `json:"csv"`
 	Balanced bool              `json:"balanced"`
+	// LineCount is how many lines the reading has, when they are sent apart from it.
+	LineCount int `json:"line_count,omitempty"`
 	// Problems is how many problems the reading names: a balanced reading with problems still holds what depends on it.
 	Problems int `json:"problems"`
 }
@@ -480,6 +483,13 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "The file cannot be read that way: "+err.Error()+".")
 			return
 		}
+		// The confirmed reading comes with its totals, problems and notes; its lines, which can number thousands, come in
+		// pages of their own (/client/import/lines).
+		if confirmed != nil {
+			brief := *confirmed
+			brief.LineCount, brief.Reading.Lines = len(confirmed.Reading.Lines), []bookfiles.Line{}
+			confirmed = &brief
+		}
 		summary.Confirmed = confirmed
 		// Rows come in pages: from the first, or from the row a person asks for (?from=), so any row can be seen and
 		// marked.
@@ -512,7 +522,7 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "File imports are unavailable.")
 			return
 		}
-		out["on"], out["can_confirm"] = on, canReview(r) && on
+		out["on"], out["can_confirm"], out["can_delete"] = on, canReview(r) && on, canManageData(r)
 		// A later page of rows is rows alone: the reading and the proposal came with the first.
 		if from > 1 {
 			delete(out, "import")
@@ -524,6 +534,86 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			out["proposal"] = map[string]any{"layout": layout, "questions": questions, "reused": reused}
 		}
 		jsonReply(w, 200, out)
+	})
+	// The lines of an import's confirmed reading, two hundred from ?offset=.
+	mux.HandleFunc("GET /v1/closes/client/import/lines", func(w http.ResponseWriter, r *http.Request) {
+		name, ok := importOwner(w, r, db)
+		if !ok {
+			return
+		}
+		offset, err := strconv.Atoi(cmp.Or(r.URL.Query().Get("offset"), "0"))
+		if err != nil || offset < 0 {
+			problem(w, 422, "Say where the lines continue from, as a number.")
+			return
+		}
+		confirmed, err := latestLayout(r.Context(), db, organization(r), name, r.URL.Query().Get("id"))
+		if err != nil {
+			problem(w, 503, "The file's reading is unavailable.")
+			return
+		}
+		if confirmed == nil {
+			problem(w, 404, "The file has no confirmed reading.")
+			return
+		}
+		lines := confirmed.Reading.Lines
+		page := lines[min(offset, len(lines)):min(offset+200, len(lines))]
+		jsonReply(w, 200, map[string]any{"lines": page, "total": len(lines)})
+	})
+	// A file is deleted by a member who manages the firm's data, with a reason: sent in error, or at the client's
+	// request, whether or not its month has a close. A receipt says what it was, never what it held.
+	mux.HandleFunc("POST /v1/closes/client/import/delete", func(w http.ResponseWriter, r *http.Request) {
+		if !canManageData(r) {
+			problem(w, 403, "Deleting a file requires clients:all and data:manage.")
+			return
+		}
+		name, ok := importOwner(w, r, db)
+		if !ok {
+			return
+		}
+		var in struct {
+			Reason string `json:"reason"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if in.Reason = strings.TrimSpace(in.Reason); in.Reason == "" || utf8.RuneCountInString(in.Reason) > 500 {
+			problem(w, 422, "Say why (1–500 characters).")
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The file could not be deleted.")
+			return
+		}
+		defer tx.Rollback()
+		org, id := organization(r), r.URL.Query().Get("id")
+		var period, filename, digest string
+		var replaced bool
+		err = tx.QueryRowContext(r.Context(), `SELECT period,name,digest,EXISTS(SELECT 1 FROM books_imports n WHERE n.replaces=i.id) FROM books_imports i
+ WHERE i.id::text=$1 AND i.organization_id=$2 AND client_identity(i.organization_id,i.client_entity)=client_identity($2,$3) FOR UPDATE`, id, org, name).Scan(&period, &filename, &digest, &replaced)
+		if errors.Is(err, sql.ErrNoRows) {
+			problem(w, 404, "File not found.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The file could not be deleted.")
+			return
+		}
+		if replaced {
+			problem(w, 409, "A later file replaces this one: delete that one first.")
+			return
+		}
+		for _, q := range []string{`DELETE FROM books_layouts WHERE import_id::text=$1`, `DELETE FROM books_imports WHERE id::text=$1`} {
+			if _, err = tx.ExecContext(r.Context(), q, id); err != nil {
+				problem(w, 503, "The file could not be deleted.")
+				return
+			}
+		}
+		if _, err = tx.ExecContext(r.Context(), `INSERT INTO books_import_deletions(organization_id,client_entity,period,name,digest,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7)`, org, name, period, filename, digest, in.Reason, reviewerName(r)); err != nil || tx.Commit() != nil {
+			problem(w, 503, "The file could not be deleted.")
+			return
+		}
+		jsonReply(w, 200, map[string]bool{"deleted": true})
 	})
 	// One confirmed layout, with what it read: each version stays readable, its exit included.
 	mux.HandleFunc("GET /v1/closes/client/layout", func(w http.ResponseWriter, r *http.Request) {

@@ -47,7 +47,7 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
 			`DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`,
 			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			if _, e := db.Exec(q, org); e != nil {
@@ -261,4 +261,26 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	upload("user_b", preparer, "Acme TB September corrected.csv", "2026-09", september+"Suspense,0.00,\n", 201)
 	replaces, why = "", ""
 
+	// A confirmed reading comes without its lines, which come in pages of their own.
+	opened := call("user_a", partner, "GET", path, nil, 200)["import"].(map[string]any)["confirmed"].(map[string]any)
+	count := opened["line_count"].(float64)
+	if len(opened["reading"].(map[string]any)["lines"].([]any)) != 0 || count == 0 {
+		t.Fatalf("the reading's lines come apart: %v", opened)
+	}
+	if lines := call("user_a", partner, "GET", "/v1/closes/client/import/lines?name=Acme%20Co&id="+id, nil, 200); float64(len(lines["lines"].([]any))) != count {
+		t.Fatalf("the reading's lines: %v", lines)
+	}
+	// A file is deleted by a member who manages the firm's data, with a reason, leaving a receipt; one a later file
+	// replaces waits for that one.
+	manager := []string{"workpapers:review", "clients:all", "data:manage"}
+	call("user_b", preparer, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+changed, map[string]any{"reason": "Sent in error"}, 403)
+	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+changed, map[string]any{"reason": ""}, 422)
+	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+id, map[string]any{"reason": "Superseded"}, 409)
+	call("user_a", manager, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+changed, map[string]any{"reason": "Sent in error"}, 200)
+	call("user_a", partner, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+changed, nil, 404)
+	var receipts int
+	must(db.QueryRow(`SELECT count(*) FROM books_import_deletions WHERE organization_id=$1 AND reason='Sent in error'`, org).Scan(&receipts))
+	if receipts != 1 {
+		t.Fatalf("a deleted file leaves a receipt: %d", receipts)
+	}
 }
