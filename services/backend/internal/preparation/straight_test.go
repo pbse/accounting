@@ -77,7 +77,7 @@ func straightThroughEngineChecks(t *testing.T, engine string) {
 	}
 	// The same invoice with a page Gemini read differently from its PDF text goes to a person, who compares the original.
 	disputed := "--- Page 1 · PDF text; Gemini gemini-3.8-flash-001 read it differently, so check the original ---\n" + invoice
-	if _, why := StraightThrough(proposal, disputed, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200"))); !strings.Contains(why, "Gemini read page 1 of the invoice differently") {
+	if _, why := StraightThrough(proposal, disputed, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200"))); !strings.Contains(why, "The image model read page 1 of the invoice differently") {
 		t.Fatalf("a disputed page holds straight-through preparation for a person: %q", why)
 	}
 	var input prepaids.Input

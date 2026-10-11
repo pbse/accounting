@@ -6,6 +6,16 @@ import { spawnSync } from "node:child_process";
 
 const provider = process.env.LLM_PROVIDER || "api";
 if (!["api", "context_machine"].includes(provider)) throw new Error("LLM_PROVIDER must be api or context_machine");
+const apiImages = process.env.LLM_API_IMAGE_ENABLED || "false";
+if (!["true", "false"].includes(apiImages)) throw new Error("LLM_API_IMAGE_ENABLED must be true or false");
+if (provider === "api" && apiImages !== "true") {
+ for (const name of ["LLM_MODELS", "LLM_REASONING_EFFORTS"]) {
+  if (!process.env[name]) continue;
+  let policy; try { policy=JSON.parse(process.env[name]); } catch { throw new Error(`Invalid ${name}`); }
+  if (!policy || Array.isArray(policy) || typeof policy !== "object") throw new Error(`Invalid ${name}`);
+  if (policy.ocr !== undefined) throw new Error("API OCR overrides require LLM_API_IMAGE_ENABLED=true; configure Gemini with GEMINI_OCR_MODEL");
+ }
+}
 const uncapped = process.env.LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS || "false";
 if (!["true", "false"].includes(uncapped)) throw new Error("LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS must be true or false");
 const enabled = process.env.CONTEXT_MACHINE_ENABLED || "true";
@@ -46,7 +56,7 @@ const installed = secretNames('context-machine', process.argv.includes('--produc
 const has = name => installed.has(name);
 if (!has('CONTEXT_MACHINE_TOKEN')) throw new Error('Missing Cloudflare credential: CONTEXT_MACHINE_TOKEN');
 if (enabled === "true") {
-const missing = ["CONTEXT_MACHINE_DATABASE_URL"].filter(name => !has(name)).concat(["CONTEXT_MACHINE_PROFILES", "CONTEXT_MACHINE_MODEL"].filter(name => !process.env[name]));
+const missing = ["CONTEXT_MACHINE_DATABASE_URL"].filter(name => !has(name)).concat(["CONTEXT_MACHINE_MODEL"].filter(name => !process.env[name]));
 const personal = has('CODEX_AUTH_JSON');
 const selected = process.env.CONTEXT_MACHINE_MODEL;
 if (["codex", "claude"].includes(selected)) {
@@ -75,8 +85,8 @@ for (const [agent, prefix, keyName, tokenName] of [["codex", "CODEX", "OPENAI_AP
 }
 if (!agents.has(process.env.CONTEXT_MACHINE_MODEL)) throw new Error("Default context-machine agent is not configured");
 if (!["codex", "claude"].includes(process.env.CONTEXT_MACHINE_MODEL)) throw new Error("CONTEXT_MACHINE_MODEL must be codex or claude");
-let profiles;
-try { profiles = JSON.parse(process.env.CONTEXT_MACHINE_PROFILES); } catch { throw new Error("Invalid CONTEXT_MACHINE_PROFILES JSON"); }
+let profiles = [];
+try { if (process.env.CONTEXT_MACHINE_PROFILES) profiles = JSON.parse(process.env.CONTEXT_MACHINE_PROFILES); } catch { throw new Error("Invalid CONTEXT_MACHINE_PROFILES JSON"); }
 const codexMode = process.env.CODEX_AUTH_MODE || "auto", claudeMode = process.env.CLAUDE_AUTH_MODE || "auto";
 const personalSelected = codexMode === "chatgpt" || (codexMode === "auto" && personal && !has("OPENAI_API_KEY") && process.env.CODEX_MODEL) || claudeMode === "subscription" || (claudeMode === "auto" && !has("ANTHROPIC_API_KEY") && has("CLAUDE_CODE_OAUTH_TOKEN") && process.env.CLAUDE_MODEL);
 if (provider === "context_machine") {
@@ -84,7 +94,7 @@ if (provider === "context_machine") {
  const mode = process.env[`${agent.toUpperCase()}_AUTH_MODE`] || "auto";
  const subscription = agent === "codex" && (mode === "subscription" || mode === "chatgpt" || (mode === "auto" && !has("OPENAI_API_KEY")));
  if (subscription && uncapped !== "true") throw new Error("Codex subscription completions require LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS=true");
- const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat"];
+ const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat", "ocr"];
  for (const name of ["LLM_MODELS", "LLM_REASONING_EFFORTS"]) {
   if (!process.env[name]) continue;
   let values; try { values=JSON.parse(process.env[name]); } catch { throw new Error(`Invalid ${name}`); }
@@ -92,11 +102,11 @@ if (provider === "context_machine") {
   if (!values || Array.isArray(values) || typeof values !== "object" || Object.entries(values).some(([p,v]) => !purposes.includes(p) || typeof v !== "string" || !v || (name === "LLM_REASONING_EFFORTS" && !levels.includes(v)))) throw new Error(`Invalid context-machine ${name}`);
  }
 }
-if (personalSelected && (!Array.isArray(profiles) || profiles.length !== 1)) throw new Error("Personal subscriptions require exactly one owner access profile");
-// A subject of "*" serves every member of the organization, which only API-key agents may do; a personal login serves its owner.
+if (personalSelected && Array.isArray(profiles) && profiles.length > 0 && profiles.length !== 1) throw new Error("Personal subscriptions require exactly one owner access profile");
+// Research wildcard profiles require API-key agents; personal research stays scoped to one exact member.
 const personalAgent = personalSelected || codexMode === "subscription" || (codexMode === "auto" && !has("OPENAI_API_KEY") && has("CODEX_ACCESS_TOKEN") && process.env.CODEX_MODEL);
 if (personalAgent && Array.isArray(profiles) && profiles.some(p => p && p.subject === "*")) throw new Error("An organization-wide access profile (subject \"*\") requires API-key agents, not a personal subscription");
-if (!Array.isArray(profiles) || !profiles.length ||
+if (!Array.isArray(profiles) ||
     profiles.some(p => !p || ["organization", "subject", "access_profile"].some(k => typeof p[k] !== "string" || !p[k].trim())) ||
     new Set(profiles.map(p => p.access_profile)).size !== profiles.length)
   throw new Error("CONTEXT_MACHINE_PROFILES requires unique named organization/subject profiles");

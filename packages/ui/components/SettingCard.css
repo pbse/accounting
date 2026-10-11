@@ -74,18 +74,18 @@
   background: currentcolor;
 }
 .status-chip-on {
-  background: var(--positive-tint);
-  color: var(--positive-text);
+  background: var(--pos-tint);
+  color: var(--pos-text);
 }
 .status-chip-off {
   background: var(--fill);
   color: var(--ink-2);
 }
 .status-chip-info {
-  background: var(--blue-tint);
-  color: var(--blue-text);
+  background: var(--accent-tint);
+  color: var(--accent-text);
 }
 .status-chip-warn {
-  background: var(--attention-tint);
-  color: var(--attention-text);
+  background: var(--att-tint);
+  color: var(--att-text);
 }

@@ -30,7 +30,7 @@ test('deployment accepts complete private-service configuration', () => {
 test('deployment fails before mutation for missing credential metadata or invalid profiles', () => {
   for (const overrides of [
     { OPENAI_API_KEY: '' }, { CONTEXT_MACHINE_TOKEN: '' },
-    { CONTEXT_MACHINE_PROFILES: 'null' }, { CONTEXT_MACHINE_PROFILES: '[]' },
+    { CONTEXT_MACHINE_PROFILES: 'null' },
     { CONTEXT_MACHINE_MODEL: 'shell' },
   ]) {
     const result = check(overrides);
@@ -58,7 +58,7 @@ test('deployment selects available credentials without requiring the unused prov
 test('preflight reports missing selected-agent settings together without credentials', () => {
   const result = check({ CONTEXT_MACHINE_DATABASE_URL: '', CONTEXT_MACHINE_PROFILES: '', CODEX_MODEL: '', OPENAI_API_KEY: '' });
   assert.notEqual(result.status, 0);
-  for (const name of ['CONTEXT_MACHINE_DATABASE_URL', 'CONTEXT_MACHINE_PROFILES', 'CODEX_MODEL', 'OPENAI_API_KEY or CODEX_ACCESS_TOKEN']) assert.ok(result.stderr.includes(name), name);
+  for (const name of ['CONTEXT_MACHINE_DATABASE_URL', 'CODEX_MODEL', 'OPENAI_API_KEY or CODEX_ACCESS_TOKEN']) assert.ok(result.stderr.includes(name), name);
   assert.ok(!result.stderr.includes(configured.CONTEXT_MACHINE_TOKEN));
 });
 
@@ -165,6 +165,13 @@ fs.writeFileSync(process.env.CAPTURED, JSON.stringify({ args: process.argv.slice
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('data-only inference needs no owner profile while database research profiles remain validated', () => {
+ for(const profiles of ['', '[]']) {
+  assert.equal(check({CONTEXT_MACHINE_PROFILES:profiles,LLM_PROVIDER:'context_machine'}).status,0);
+  assert.equal(check({CONTEXT_MACHINE_PROFILES:profiles,LLM_PROVIDER:'context_machine',CODEX_AUTH_MODE:'subscription',CODEX_ACCESS_TOKEN:'test-only',OPENAI_API_KEY:'',LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS:'true'}).status,0);
+ }
+});
+
 test('personal Codex managed login and Claude subscriptions require one owner profile', () => {
   const auth = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'fake', refresh_token: 'fake', id_token: 'fake', account_id: 'owner' } });
   assert.equal(check({ OPENAI_API_KEY: '', CODEX_AUTH_JSON: auth, CODEX_AUTH_MODE: 'chatgpt' }).status, 0);
@@ -200,4 +207,47 @@ test('completion routing requires an enabled service and explicit subscription t
   const badEffort = check({ LLM_PROVIDER: 'context_machine', LLM_REASONING_EFFORTS: '{"work_command":"none"}' });
   assert.notEqual(badEffort.status, 0);
   assert.match(badEffort.stderr, /Invalid context-machine LLM_REASONING_EFFORTS/);
+});
+
+import {check as checkMergedCI,hasProvenance} from './check-merged-ci.mjs';
+const pr={merged_at:'now',merge_commit_sha:'merge',base:{ref:'main'},head:{sha:'head'}};
+function run(prs,states,attempts=3) {
+ let n=0,waits=0;
+ return { promise:checkMergedCI({repository:'owner/repo',sha:'merge',attempts,query:args=>args[0]==='api'?prs:states[Math.min(n++,states.length-1)],verify:async()=>true,pause:async()=>{waits++}}), waits:()=>waits };
+}
+test('a just-merged PR waits for its already-running CI, without rerunning checks',async()=>{
+ const r=run([pr],[[{status:'in_progress',conclusion:''}],[{status:'completed',conclusion:'success'}]]);
+ await r.promise; assert.equal(r.waits(),1);
+});
+test('failed, unrelated or absent CI cannot authorize deployment',async()=>{
+ for(const prs of [[pr]]) {
+  const r=run(prs,[[{status:'completed',conclusion:'failure'}]]);
+  await assert.rejects(r.promise); assert.equal(r.waits(),0);
+ }
+});
+test('pending CI has a bounded wait',async()=>{
+ const r=run([pr],[[{status:'in_progress'}]]);
+ await assert.rejects(r.promise,/still unavailable/); assert.equal(r.waits(),2);
+});
+
+test('merge association and CI artifact metadata can lag without losing a green deployment',async()=>{
+ let associations=0,checks=0,waits=0;
+ await checkMergedCI({repository:'owner/repo',sha:'merge',attempts:4,
+  query:args=>args[0]==='api'?(++associations===1?[]:[pr]):[{status:'completed',conclusion:'success',databaseId:7}],
+  verify:async(id,head)=>{assert.equal(id,7);assert.equal(head,'head');return ++checks>1},pause:async()=>{waits++}});
+ assert.equal(waits,2);
+});
+test('green CI for a different merge tree cannot authorize deployment',async()=>{
+ await assert.rejects(checkMergedCI({repository:'owner/repo',sha:'merge',query:args=>args[0]==='api'?[pr]:[{status:'completed',conclusion:'success'}],verify:async()=>{throw new Error('merged tree differs')},pause:async()=>{}}),/merged tree differs/);
+});
+test('API OCR requires explicit image consent before any deployment mutation',()=>{
+ assert.notEqual(check({LLM_API_IMAGE_ENABLED:'yes'}).status,0);
+ for(const name of ['LLM_MODELS','LLM_REASONING_EFFORTS']) assert.notEqual(check({CONTEXT_MACHINE_ENABLED:'false',[name]:'{"ocr":"medium"}'}).status,0);
+ assert.equal(check({CONTEXT_MACHINE_ENABLED:'false',LLM_API_IMAGE_ENABLED:'true',LLM_MODELS:'{"ocr":"gpt-6.1-sol"}'}).status,0);
+});
+
+test('expired provenance fails promptly with the right recovery instruction',()=>{
+ assert.throws(()=>hasProvenance([{name:'ci-provenance',expired:true}]),/expired; rerun CI/);
+ assert.equal(hasProvenance([]),false);
+ assert.equal(hasProvenance([{name:'ci-provenance',expired:false}]),true);
 });

@@ -16,11 +16,16 @@ import (
 
 func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 	var in llm.CompletionRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, llm.ImageRequestBytes))
 	dec.DisallowUnknownFields()
 	dec.UseNumber()
-	if dec.Decode(&in) != nil || dec.Decode(new(any)) != io.EOF || in.Version != 1 || !llm.IsAccountingPurpose(in.Request.Purpose) || !in.Deadline.After(time.Now()) || in.Request.Scope != nil || in.Request.MaxModelCalls != 0 || in.Request.MaxOutputTokens < 1 || in.Request.MaxOutputTokens > 32768 || in.Request.MaxResponseBytes < 1 || in.Request.MaxResponseBytes > 4<<20 {
+	if dec.Decode(&in) != nil || llm.ValidateImages(in.Request) != nil || llm.ValidateAgentImages(in.Agent, in.Request.Images) != nil || dec.Decode(new(any)) != io.EOF || in.Version != 1 || !llm.IsAccountingPurpose(in.Request.Purpose) || !in.Deadline.After(time.Now()) || in.Request.Scope != nil || in.Request.MaxModelCalls != 0 || in.Request.MaxOutputTokens < 1 || in.Request.MaxOutputTokens > 32768 || in.Request.MaxResponseBytes < 1 || in.Request.MaxResponseBytes > 4<<20 {
 		http.Error(w, "invalid completion", 400)
+		return
+	}
+	rawRequest, err := json.Marshal(in)
+	if err != nil || len(rawRequest) > llm.RequestByteLimit(in.Request) {
+		http.Error(w, "completion exceeded request limit", 400)
 		return
 	}
 	settings, ok := s.agents[in.Agent]
@@ -39,10 +44,6 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "completion policy mismatch", 400)
 		return
 	}
-	if !s.allows(in.Scope) {
-		http.Error(w, "unknown access profile", 403)
-		return
-	}
 	if in.Agent == "codex" && settings.mode != "api_key" && !in.Request.AllowUncappedOutputTokens {
 		http.Error(w, "Codex subscription requires allow_uncapped_output_tokens", 400)
 		return
@@ -56,23 +57,27 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	ctx, stop := context.WithDeadline(ctx, in.Deadline)
 	defer stop()
-	// A bounded wait handles concurrent completion/replay calls without retrying inference.
-	select {
-	case s.busy <- struct{}{}:
-		defer func() { <-s.busy }()
-	case <-ctx.Done():
-		http.Error(w, "completion deadline expired", 504)
-		return
+	if in.Request.Purpose == "ocr" {
+		// Background images never queue ahead of interactive completions. On busy,
+		// the document uses local reading for its remaining pages, without retries.
+		select {
+		case s.busy <- struct{}{}:
+			defer func() { <-s.busy }()
+		default:
+			http.Error(w, "image reading is busy", 429)
+			return
+		}
+	} else {
+		// Interactive callers wait only within their established deadline.
+		select {
+		case s.busy <- struct{}{}:
+			defer func() { <-s.busy }()
+		case <-ctx.Done():
+			http.Error(w, "completion deadline expired", 504)
+			return
+		}
 	}
-	if checkDatabase(ctx, s.db) != nil {
-		http.Error(w, "read-only database unavailable", 503)
-		return
-	}
-	if _, err := readRecords(ctx, s.db, in.Scope, 0); err != nil {
-		http.Error(w, "access denied", 403)
-		return
-	}
-	out, err := s.execute(ctx, runRequest{Model: in.Agent, Instructions: prompt, MaxModelCalls: 1, MaxOutputTokens: in.Request.MaxOutputTokens, CompletionSchema: schema, CompletionModel: model, CompletionEffort: effort})
+	out, err := s.execute(ctx, runRequest{Model: in.Agent, Instructions: prompt, MaxModelCalls: 1, MaxOutputTokens: in.Request.MaxOutputTokens, CompletionImages: in.Request.Images, CompletionSchema: schema, CompletionModel: model, CompletionEffort: effort})
 	if errors.Is(err, llm.ErrRefused) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(llm.CompletionResponse{Version: 1, Status: "refused", Scope: in.Scope})
@@ -107,20 +112,6 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(raw)
-}
-
-// allows accepts a completion scope that is a configured profile, or a member of an organization-wide profile; the
-// member's own membership and client grants are then checked by every read, as for an exact profile.
-func (s *server) allows(scope llm.Scope) bool {
-	if scope.Subject == "" || scope.Subject == llm.AnyMember {
-		return false
-	}
-	for _, p := range s.cfg.Profiles {
-		if scope == p || p.Subject == llm.AnyMember && p.Organization == scope.Organization && p.AccessProfile == scope.AccessProfile {
-			return true
-		}
-	}
-	return false
 }
 
 func completionPrompt(in llm.Request) (json.RawMessage, string, error) {

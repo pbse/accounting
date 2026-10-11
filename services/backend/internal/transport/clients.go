@@ -48,6 +48,43 @@ type monthBooks struct {
 	Stale bool `json:"stale,omitempty"`
 }
 
+// aboutAccounts is SQL for a request q about accounts alone, handled in its month's coverage: any work it covers came
+// from the client's own documents after it was approved.
+const aboutAccounts = `(q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND NOT ` + preparation.RequestReleased + `))`
+
+// unfinishedRequest is SQL for a request q of draft d that the client has not finished answering. Before any reply it is
+// waiting as attention counts it: work still waiting on it rather than on a newer request, or, about accounts alone,
+// coverage exactly as approved. After a reply short of complete it is open as its link counts it (requestOpen): no work
+// it was approved for is finished or taken over by a newer request, and its coverage has moved only by its own progress.
+var unfinishedRequest = `CASE WHEN ` + requestReplied("q.id") + ` THEN NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id AND complete)
+  AND NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND ((j.state IN ('completed','cancelled') AND NOT ` + preparation.RequestReleased + `)
+   OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))
+  AND ` + preparation.RequestCoverageFollowsReply + `
+ ELSE EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'
+  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)) OR ` + waitingCoverage + ` END`
+
+// openJobs is SQL for the work request q covers that is not finished and not taken over by a newer request.
+const openJobs = `request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state NOT IN ('completed','cancelled')
+  AND NOT EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>q.id)`
+
+// openRequest is a request to the client that it has not finished answering: who it is for, whether it reached them
+// (sent, with when; sending; failed; or not sent yet), whether they answered it in part or in full, and how many items
+// wait on it.
+type openRequest struct {
+	ID        string     `json:"id"`
+	CloseID   string     `json:"close_id"`
+	Period    string     `json:"period"`
+	Recipient string     `json:"recipient"`
+	State     string     `json:"state"`
+	Sent      *time.Time `json:"sent_at,omitempty"`
+	// Answer is answered or answered_in_part when the client has replied, in full or in part, else "".
+	Answer string `json:"answer,omitempty"`
+	// Job is the request's unfinished work, the first still waiting on the client first, where its delivery, reply and
+	// follow-up are handled; "" for a request about accounts alone, handled in its month's coverage.
+	Job   string `json:"job,omitempty"`
+	Items int    `json:"items"`
+}
+
 type owedClientMonth struct {
 	Period string `json:"period"`
 	DueOn  string `json:"due_on,omitempty"`
@@ -75,7 +112,12 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		name, known, allowed, whole, err := namedClient(ctx, tx, r, asked)
+		// The client's own name: its roster entry's, else the name its closes were opened with that is its own, else the
+		// own name its confirmed aliases record (or, with none of these, its newest close's). A member's access is to a name, as access to a close is: the client is theirs to
+		// open when any of its names is, showing the months they could open. What belongs to the client as a whole (its
+		// roster entry, the months it owes, its connections, currency and basis) is shown under its own name only, as the
+		// roster and a close's connection read show it.
+		name, known, allowed, whole, err := clientNamed(ctx, tx, org, asked, firm, who)
 		if err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
@@ -166,9 +208,63 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["months"], out["owed"] = months, owed
+		// What the client was asked and has not finished answering, across the months the reader can open, as Work and
+		// the attention list find it: the newest request of work still waiting on the client, and a request about
+		// accounts alone still current that has no complete reply (waitingCoverage, a partial reply kept). Each says
+		// whether it reached the client: its delivery recorded by a person, or an email the provider accepted that did not
+		// then bounce, fail or get suppressed; else whether its latest email is on its way or failed, or it is not sent
+		// yet. It says whether the client has answered it in part or in full, and how many items wait on it: the work
+		// still waiting on it rather than on a newer request, or the accounts it asks about.
+		ids := make([]string, len(months))
+		for i, m := range months {
+			ids[i] = m.ID
+		}
+		requests := []openRequest{}
+		var waiting *sql.Rows
+		if waiting, err = tx.QueryContext(ctx, `SELECT q.id::text,d.close_id::text,c.period,q.recipient,
+ COALESCE(q.delivered_at,(SELECT min(COALESCE(m.finished_at,m.created_at)) FROM email_delivery m WHERE m.request_id=q.id AND m.state='accepted' AND m.delivery NOT IN ('bounced','complained','failed','suppressed'))),
+ COALESCE((SELECT CASE WHEN m.state IN ('failed','unknown') OR m.delivery IN ('bounced','complained','failed','suppressed') THEN 'failed' WHEN m.state IN ('queued','sending') THEN 'sending' END
+  FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
+ COALESCE((SELECT CASE WHEN s.complete THEN 'answered' ELSE 'answered_in_part' END FROM request_submissions s WHERE s.request_id=q.id ORDER BY s.id DESC LIMIT 1),''),
+ CASE WHEN `+aboutAccounts+` THEN '' ELSE COALESCE((SELECT j.id::text FROM `+openJobs+` ORDER BY j.state='waiting_client' DESC,j.id LIMIT 1),'') END,
+ CASE WHEN `+aboutAccounts+` THEN jsonb_array_length(COALESCE(q.coverage_scope->'bindings','[]'::jsonb)) ELSE (SELECT count(*) FROM `+openJobs+`) END
+ FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id
+ WHERE d.close_id::text=ANY($1) AND `+unfinishedRequest+`
+ ORDER BY q.approved_at,q.id`, ids); err == nil {
+			for waiting.Next() {
+				var q openRequest
+				var sent sql.NullTime
+				var email string
+				if err = waiting.Scan(&q.ID, &q.CloseID, &q.Period, &q.Recipient, &sent, &email, &q.Answer, &q.Job, &q.Items); err != nil {
+					break
+				}
+				// A request that reached the client stays sent, whatever became of a later reminder; one whose every email
+				// bounced or failed has not reached it.
+				switch {
+				case sent.Valid:
+					q.State, q.Sent = "sent", &sent.Time
+				case email == "failed":
+					q.State = "failed"
+				case email == "sending":
+					q.State = "sending"
+				default:
+					q.State = "not_sent"
+				}
+				requests = append(requests, q)
+			}
+			waiting.Close()
+			if err == nil {
+				err = waiting.Err()
+			}
+		}
+		if err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		out["requests"] = requests
 		// A member who can open only some of the client's months, under another of its names, sees those alone.
 		if !whole {
-			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"] = nil, nil, true, []any{}, nil, nil, nil
+			out["roster"], out["template"], out["template_hidden"], out["quickbooks"], out["xero"], out["profile"], out["basis"] = nil, nil, true, []any{}, []any{}, nil, nil
 			jsonReply(w, 200, out)
 			return
 		}
@@ -213,17 +309,21 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		out["template"], out["template_hidden"] = template, !firm
 
-		// How the books arrive: the client's QuickBooks connections (production first, the one its books are read from)
-		// and its Xero connection, matched by the client's own name as connections are kept.
+		// How the books arrive: the client's QuickBooks connections (under its own name first, then production first, as
+		// its books are read) and its Xero connections, under any of its names. A connection is kept under the name of the
+		// close it was made from, which may since have been confirmed as an alias, and serves the months opened under
+		// that name; each says which name it is held under.
 		var quickbooksRaw, xeroRaw []byte
-		if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'environment',x.environment,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at) ORDER BY x.environment='production' DESC,x.id DESC)
-  FROM quickbooks_connections x WHERE x.organization_id=$1 AND lower(x.client_entity)=lower($2) AND x.state<>'disconnected'),'[]'::jsonb),
- (SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
-  FROM xero_connections x WHERE x.organization_id=$1 AND lower(x.client_entity)=lower($2) AND x.state<>'disconnected' ORDER BY x.id DESC LIMIT 1)`, org, name).Scan(&quickbooksRaw, &xeroRaw); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'client_entity',x.client_entity,'environment',x.environment,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
+  ORDER BY lower(x.client_entity)=lower($2) DESC,x.environment='production' DESC,x.id DESC)
+  FROM quickbooks_connections x WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity($1,$2) AND x.state<>'disconnected'),'[]'::jsonb),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id::text,'client_entity',x.client_entity,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'error',x.error,'confirmed_at',x.confirmed_at,'updated_at',x.updated_at)
+  ORDER BY lower(x.client_entity)=lower($2) DESC,x.id DESC)
+  FROM xero_connections x WHERE x.organization_id=$1 AND client_identity(x.organization_id,x.client_entity)=client_identity($1,$2) AND x.state<>'disconnected'),'[]'::jsonb)`, org, name).Scan(&quickbooksRaw, &xeroRaw); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
-		out["quickbooks"] = json.RawMessage(quickbooksRaw)
+		out["quickbooks"], out["xero"] = json.RawMessage(quickbooksRaw), json.RawMessage(xeroRaw)
 		// Which ledgers this server can connect, and the client's QuickBooks and Xero posting grants, if any.
 		out["quickbooks_setup"] = map[string]bool{"sandbox": quickbooks.OAuthConfigured(), "production": quickbooks.OAuthConfiguredFor("production")}
 		out["xero_configured"] = xero.Configured()
@@ -245,20 +345,18 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
-		if xeroRaw != nil {
-			out["xero"] = json.RawMessage(xeroRaw)
-		} else {
-			out["xero"] = nil
-		}
 
-		// The client's currency and fiscal year as its connected ledgers report them, and its approved basis (a client
-		// override first, then the firm's), as a close reads both.
+		// The client's currency and fiscal year as its connected ledgers report them, under any of its names, and its
+		// approved basis (a client override first, then the firm's), as a close reads it.
 		profile, err := preparation.ClientProfileOf(ctx, tx, org, name)
 		if err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
 		out["profile"] = profile
+		// The approved basis, as a close reads it for the name it was opened under: the client's own override, else the
+		// firm's. An override approved under a name since confirmed as the client's alias is that name's months' basis,
+		// so each is listed with the name it was approved under rather than folded into one client-wide value.
 		var basis, scope string
 		switch err = tx.QueryRowContext(ctx, `SELECT p.method,CASE WHEN p.client_entity<>'' THEN 'client' ELSE 'firm' END FROM procedure_versions p WHERE p.organization_id=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower($2)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, org, name).Scan(&basis, &scope); err {
 		case nil:
@@ -269,6 +367,30 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
+		aliasBases := []map[string]string{}
+		if err == nil || err == sql.ErrNoRows {
+			var rows *sql.Rows
+			if rows, err = tx.QueryContext(ctx, `SELECT DISTINCT ON (lower(p.client_entity)) p.client_entity,p.method FROM procedure_versions p
+ WHERE p.organization_id=$1 AND p.kind='basis' AND p.client_entity<>'' AND lower(p.client_entity)<>lower($2) AND client_identity(p.organization_id,p.client_entity)=client_identity($1,$2)
+ ORDER BY lower(p.client_entity),p.id DESC`, org, name); err == nil {
+				for rows.Next() {
+					var held, method string
+					if err = rows.Scan(&held, &method); err != nil {
+						break
+					}
+					aliasBases = append(aliasBases, map[string]string{"held_under": held, "method": method})
+				}
+				rows.Close()
+				if err == nil {
+					err = rows.Err()
+				}
+			}
+		}
+		if err != nil {
+			problem(w, 503, "The client is unavailable.")
+			return
+		}
+		out["alias_bases"] = aliasBases
 
 		// Who can do the client's work, for an administrator, who assigns it: the reviewers holding every client, and
 		// those assigned to this one, as the roster offers owners.
@@ -286,8 +408,9 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 }
 
 // clientPeople is rosterPeople's members who can do entity's work, judged with reviewers read before the snapshot: a
-// role reviewing every client, or a reviewer assigned to entity. Each keeps every client they are assigned to, so the
-// schedule's owner choice reads as the roster's does.
+// role reviewing every client, or a reviewer assigned to the client under any of its names (one assigned under a
+// confirmed alias opens that name's months). Each keeps every client they are assigned to, so the schedule's owner
+// choice, which needs an assignment under the client's own name, reads as the roster's does.
 func clientPeople(ctx context.Context, tx *sql.Tx, org, who string, reviewers map[string]reviewer, entity string) ([]rosterPerson, error) {
 	var people []rosterPerson
 	var err error
@@ -302,8 +425,25 @@ func clientPeople(ctx context.Context, tx *sql.Tx, org, who string, reviewers ma
 	if err != nil {
 		return nil, err
 	}
-	named := strings.ToLower(entity)
-	return slices.DeleteFunc(people, func(p rosterPerson) bool { return !p.FirmWide && !slices.Contains(p.Clients, named) }), nil
+	names := map[string]bool{strings.ToLower(entity): true}
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT lower(client_entity) FROM current_client_access WHERE organization_id=$1 AND granted AND client_identity(organization_id,client_entity)=client_identity($1,$2)`, org, entity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names[name] = true
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(people, func(p rosterPerson) bool {
+		return !p.FirmWide && !slices.ContainsFunc(p.Clients, func(c string) bool { return names[c] })
+	}), nil
 }
 
 // canGrant is a member of a hosted firm who may grant and revoke a client's production posting (posting:approve), as the
@@ -320,22 +460,21 @@ func canConnect(r *http.Request) bool {
 	return a != nil && a.Organization != "" && slices.Contains(a.Permissions, "integrations:manage")
 }
 
-// namedClient is the client that asked names, for the reader: its own name, its roster entry's, else the name its
-// closes were opened with that is its own (or, when none is, its newest close's); whether it exists and the reader may
-// open it; and whether the reader may see it whole. A member's access is to a name, as access to a close is: the client
-// is theirs to open when any of its names is, showing the months they could open. What belongs to the client as a whole
-// (its roster entry, the months it owes, its connections, currency and basis) is theirs under its own name only, as the
-// roster and a close's connection read show it.
-func namedClient(ctx context.Context, q querier, r *http.Request, asked string) (name string, known, allowed, whole bool, err error) {
+// clientNamed finds the client asked for under any of its names in firm org: its own name (its roster entry's, else the
+// name its closes were opened with that is its own, else the own name its confirmed aliases record, or, with none of
+// these, its newest close's), whether it is known, whether the member may open it under some name (allowed), and
+// whether under its own name (whole). firm says the member has firm access.
+func clientNamed(ctx context.Context, q rowReader, org, asked string, firm bool, who string) (name string, known, allowed, whole bool, err error) {
 	err = q.QueryRowContext(ctx, `WITH client AS (SELECT client_identity($1,$2) AS id),
  names AS (SELECT r.client_entity AS name,0 AS rank,'' AS period FROM current_client_roster r,client WHERE r.organization_id=$1 AND client_identity(r.organization_id,r.client_entity)=client.id
-  UNION ALL SELECT c.entity,CASE WHEN lower(c.entity)=client.id THEN 1 ELSE 2 END,c.period FROM client_closes c,client WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client.id),
+  UNION ALL SELECT c.entity,CASE WHEN lower(c.entity)=client.id THEN 1 ELSE 3 END,c.period FROM client_closes c,client WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client.id
+  UNION ALL SELECT a.client_entity,2,'' FROM client_aliases a,client WHERE a.organization_id=$1 AND a.retired_at IS NULL AND lower(a.client_entity)=client.id),
  own AS (SELECT name FROM names ORDER BY rank,period DESC LIMIT 1),
  granted AS (SELECT lower(g.client_entity) AS name FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$4 AND g.granted)
  SELECT COALESCE((SELECT name FROM own),''),EXISTS(SELECT 1 FROM names),
   $3 OR EXISTS(SELECT 1 FROM granted WHERE name IN (SELECT lower(name) FROM names)),
   $3 OR EXISTS(SELECT 1 FROM granted WHERE name=(SELECT lower(name) FROM own))`,
-		organization(r), asked, firmAccess(r), subject(r)).Scan(&name, &known, &allowed, &whole)
+		org, asked, firm, who).Scan(&name, &known, &allowed, &whole)
 	return
 }
 
@@ -347,7 +486,7 @@ func wholeClient(w http.ResponseWriter, r *http.Request, db *sql.DB) (name strin
 		problem(w, 404, "Client not found.")
 		return "", false
 	}
-	name, known, allowed, whole, err := namedClient(r.Context(), db, r, asked)
+	name, known, allowed, whole, err := clientNamed(r.Context(), db, organization(r), asked, firmAccess(r), subject(r))
 	if err != nil {
 		problem(w, 503, "The client is unavailable.")
 		return "", false

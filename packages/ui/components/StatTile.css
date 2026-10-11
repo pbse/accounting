@@ -14,7 +14,7 @@
   border: 0;
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--ring);
   color: var(--ink);
   text-align: left;
   text-decoration: none;
@@ -25,7 +25,7 @@
 .app-shell a.stat-tile:hover,
 .app-shell button.stat-tile:hover:not(:disabled) {
   background: var(--surface);
-  box-shadow: var(--shadow-card), 0 0 0 1px var(--line-strong);
+  box-shadow: var(--ring), 0 0 0 1px var(--line-2);
 }
 .stat-head {
   display: flex;

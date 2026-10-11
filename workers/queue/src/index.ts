@@ -54,6 +54,7 @@ interface Env {
   LLM_REASONING_EFFORTS?: string;
   LLM_MODELS?: string;
   LLM_PROVIDER?: string;
+  LLM_API_IMAGE_ENABLED?: string;
   LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS?: string;
   CONTEXT_MACHINE_PROFILES?: string;
   CODEX_MODEL?: string;

@@ -6,22 +6,22 @@
   border-radius: var(--radius-full);
   display: grid;
   place-items: center;
-  color: var(--on-chip);
+  color: var(--on-primary);
   font-size: 14px;
   font-weight: 600;
 }
 .avatar-teal {
-  background-color: var(--teal);
+  background-color: var(--client-teal);
 }
 .avatar-pink {
-  background-color: var(--pink);
+  background-color: var(--client-pink);
 }
 .avatar-blue {
-  background-color: var(--blue);
+  background-color: var(--accent);
 }
 .avatar-orange {
-  background-color: var(--orange);
+  background-color: var(--client-amber);
 }
 .avatar-violet {
-  background-color: var(--violet);
+  background-color: var(--client-violet);
 }

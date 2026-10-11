@@ -83,7 +83,8 @@ func registerAccess(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var exists bool
-		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2))`, org, in.Entity).Scan(&exists); err != nil || !exists {
+		// A client is one with a close, or one on the roster that has not opened its first month yet.
+		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2)) OR EXISTS(SELECT 1 FROM client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2))`, org, in.Entity).Scan(&exists); err != nil || !exists {
 			problem(w, 422, "Choose an existing client in your organization.")
 			return
 		}

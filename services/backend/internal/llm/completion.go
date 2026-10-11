@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/url"
 	"strings"
 	"time"
@@ -28,14 +27,11 @@ type CompletionResponse struct {
 }
 
 func (c *Client) completion(ctx context.Context, r route, in Request) (Response, error) {
+	if err := ValidateAgentImages(r.Agent, in.Images); err != nil {
+		return Response{}, err
+	}
 	id, _ := ctx.Value(identityKey{}).(identity)
-	var scope Scope
-	if id.subject != "" && id.subject != AnyMember {
-		scope = c.profile(id.organization, id.subject)
-	}
-	if scope.AccessProfile == "" || scope.Subject == AnyMember {
-		return Response{}, errors.New("context-machine completion requires a configured caller identity")
-	}
+	scope := Scope{Organization: id.organization, Subject: id.subject}
 	if in.Scope != nil || in.OnProgress != nil {
 		return Response{}, ErrIncomplete
 	}
@@ -49,7 +45,7 @@ func (c *Client) completion(ctx context.Context, r route, in Request) (Response,
 	in.AllowUncappedOutputTokens = r.Uncapped
 	endpoint, _ := url.Parse(r.URL)
 	endpoint.Path = "/v1/complete"
-	res, err := c.post(ctx, endpoint.String(), r.Token, CompletionRequest{1, r.Agent, r.Model, r.Effort, scope, deadline, in})
+	res, err := c.post(ctx, endpoint.String(), r.Token, CompletionRequest{1, r.Agent, r.Model, r.Effort, scope, deadline, in}, RequestByteLimit(in))
 	if err != nil {
 		return Response{}, err
 	}

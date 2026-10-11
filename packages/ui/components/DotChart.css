@@ -14,10 +14,10 @@
   height: auto;
 }
 .dot-chart circle {
-  fill: var(--bg);
+  fill: var(--surface);
 }
 .dot-chart circle.on {
-  fill: var(--blue);
+  fill: var(--accent);
 }
 .dot-chart-scale,
 .dot-chart-axis {

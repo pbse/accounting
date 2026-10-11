@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -36,6 +37,7 @@ func main() {
 	record := flag.Bool("record", false, "prepare the cases and record every expected read instead of replaying")
 	only := flag.String("only", "", "replay only the questions whose id starts with this; a recording records every case one of them asks about, whole")
 	reportPath := flag.String("report", "", "write the full report, with every observation, as JSON here")
+	profile := flag.String("profile", "", "replay every recorded fixture as this single configured access_profile on a local context machine")
 	flag.Parse()
 	if *set == "" || *database == "" {
 		flag.Usage()
@@ -69,6 +71,24 @@ func main() {
 	if llm.Model(llm.WithClient(ctx, client), "chat") == "" {
 		log.Fatal("a replay needs the chat model configured (LLM_PROVIDER with its OPENAI_* or CONTEXT_MACHINE_* settings)")
 	}
+	profiles := llm.EvaluationProfiles(llm.WithClient(ctx, client))
+	if llm.Engine(llm.WithClient(ctx, client), "chat") == string(llm.ContextMachine) {
+		if err = localContextMachine(client.ContextMachineEndpoint()); err != nil {
+			log.Fatal(err)
+		}
+	}
+	var owner *llm.Scope
+	if *profile != "" {
+		for _, p := range profiles {
+			if p.AccessProfile == *profile && p.Subject != llm.AnyMember {
+				p := p
+				owner = &p
+			}
+		}
+		if owner == nil {
+			log.Fatal("-profile must name an exact member profile in the local context-machine configuration")
+		}
+	}
 	var observed []agenteval.Observed
 	for _, q := range golden.Questions {
 		if !strings.HasPrefix(q.ID, *only) {
@@ -77,6 +97,9 @@ func main() {
 		rec, ok := records[q.Case]
 		if !ok {
 			log.Fatalf("question %s: case %s has no recorded reads; run with -record first", q.ID, q.Case)
+		}
+		if owner != nil {
+			rec.Organization, rec.Subject = owner.Organization, owner.Subject
 		}
 		if err = transport.EnsureAgentEvalFirm(ctx, db, rec); err != nil {
 			log.Fatal(err)
@@ -208,6 +231,21 @@ func local(database string) error {
 		if host != "localhost" && !(ip != nil && ip.IsLoopback()) && !strings.HasPrefix(host, "/") {
 			return fmt.Errorf("the golden set uses only a local database (localhost, a loopback address or a socket), not %q", host)
 		}
+	}
+	return nil
+}
+
+// Replay carries synthetic recorded data only, but it must never send it through
+// a production personal profile or create fixtures in a hosted database.
+func localContextMachine(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/v1/run" {
+		return fmt.Errorf("context-machine evaluation requires a local HTTP /v1/run endpoint")
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if host != "localhost" && !(ip != nil && ip.IsLoopback()) {
+		return fmt.Errorf("context-machine evaluation uses a local service, never the hosted personal profile")
 	}
 	return nil
 }

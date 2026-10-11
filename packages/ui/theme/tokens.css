@@ -1,6 +1,5 @@
 /* Krith design tokens, light only. Names and values match the Krith design system (docs/design-system.md).
-   Scoped to the product shell, so marketing and client pages keep their own styles. The Tray names at the end
-   alias to these until the last page has moved; delete each when its last use goes. */
+   Scoped to the product shell, so marketing and client pages keep their own styles. */
 
 /* Geist (OFL, fonts/OFL-geist.txt): everything the person operates. */
 @font-face {
@@ -135,51 +134,13 @@
   --notice: 38px;
   --icon: 16px;
   --mark: 24px;
+  --avatar: 28px;
+  --icon-tile: 28px;
+  --page-width: 1288px;
 
   /* Type and motion. */
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-
-  /* Tray names, aliased until the pages that use them move. Delete each with its last use. */
-  --bg: var(--surface);
-  --tile: var(--surface-side);
-  --line-strong: var(--line-2);
-  --on-chip: var(--on-primary);
-  --blue: var(--accent);
-  --blue-hover: var(--accent-text);
-  --blue-text: var(--accent-text);
-  --blue-tint: var(--accent-tint);
-  --orange: var(--client-amber);
-  --teal: var(--client-teal);
-  --violet: var(--client-violet);
-  --pink: var(--client-pink);
-  --gray: var(--client-slate);
-  --green: var(--client-green);
-  --red: var(--neg-text);
-  --positive-text: var(--pos-text);
-  --positive-tint: var(--pos-tint);
-  --negative-text: var(--neg-text);
-  --negative-tint: var(--neg-tint);
-  --attention-text: var(--att-text);
-  --attention-tint: var(--att-tint);
-  --teal-text: #0f766e;
-  --teal-tint: #e3f5f2;
-  --violet-text: #5b3fd6;
-  --violet-tint: #efeaff;
-  --spotlight: var(--att-tint);
-  --spotlight-text: var(--att-text);
-  --highlight: var(--fill);
-  --highlight-edge: var(--accent);
-  --space-1: 1px;
-  --page-width: 1288px;
-  --icon-tile: 36px;
-  --avatar: 36px;
-  --shadow-card: var(--ring);
-  --shadow-raised: var(--ring);
-  --shadow-tile: inset var(--ring);
-  --shadow-tile-hover: inset var(--ring-strong);
-  --shadow-pop: var(--float);
-  --font-brand: var(--font-serif);
 }

@@ -17,10 +17,13 @@ export function isEnrollmentError(message: string) {
   return !!authKitClientId && message.includes("firm or membership");
 }
 
-type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; quickbooks?: string; xero?: string; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean }[] };
-type Roster = { clients: RosterClient[]; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
-type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean };
-type ClientRow = { entity: string; active?: boolean; since?: string; owner?: string | null; quickbooks?: string; xero?: string; closes: ListedClose[]; owed: string[] };
+type RosterClient = { entity: string; active: boolean; since: string; owner: string | null; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean; owner?: string }[] };
+// connections are the states of each client's QuickBooks and Xero connections, and of its newest labeled exports (labeled, or stale once one is replaced),
+// by client identity (its own name in lower case).
+type Roster = { clients: RosterClient[]; connections?: Record<string, { quickbooks?: string; xero?: string; exports?: string }>; can_manage: boolean; template?: { owner: string } | null; people?: { subject: string; name: string }[] };
+type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean; owner?: string };
+// key is the client's own name in lower case (a confirmed alias resolves to it), as its connections are kept.
+type ClientRow = { key: string; entity: string; active?: boolean; since?: string; owner?: string | null; closes: ListedClose[]; owed: string[] };
 
 const monthName = monthShort;
 
@@ -68,13 +71,13 @@ export default function ClosesList() {
   const rows = new Map<string, ClientRow>();
   const row = (entity: string, key = entity.toLowerCase()) => {
     let found = rows.get(key);
-    if (!found) rows.set(key, (found = { entity, closes: [], owed: [] }));
+    if (!found) rows.set(key, (found = { key, entity, closes: [], owed: [] }));
     return found;
   };
   // The roster carries each client's whole history (every close under any of its names) and which months it can open:
   // every month from its first through this one that has no close and was not deleted as done. The recent and searched
   // closes add only clients the roster does not list.
-  for (const c of roster?.clients ?? []) Object.assign(row(c.entity), { active: c.active, since: c.since, owner: c.owner, quickbooks: c.quickbooks, xero: c.xero, owed: [...c.owed], closes: c.closes.map((cl) => ({ ...cl, client: c.entity.toLowerCase() })) });
+  for (const c of roster?.clients ?? []) Object.assign(row(c.entity), { active: c.active, since: c.since, owner: c.owner, owed: [...c.owed], closes: c.closes.map((cl) => ({ ...cl, client: c.entity.toLowerCase() })) });
   // The recent and searched closes carry each close's due date, priority and owner; a close the roster also lists
   // takes them from here.
   for (const c of closes) {
@@ -125,19 +128,29 @@ export default function ClosesList() {
     if (r.closes.length) return <span className="pill">Signed off</span>;
     return <span className="pill neutral">New</span>;
   };
-  // How the client's books arrive, from its connections (the QuickBooks one its books are read from first).
+  // How the client's books arrive: each ledger connected, with a word when it is not working, and labeled exports, with
+  // a word when one has been replaced since.
   const books = (r: ClientRow) => {
-    const state = r.quickbooks || r.xero;
-    if (!state) return "—";
-    const ledger = r.quickbooks ? "QuickBooks" : "Xero";
-    return state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`;
+    const states = roster?.connections?.[r.key];
+    const ledgers = (
+      [
+        ["QuickBooks", states?.quickbooks],
+        ["Xero", states?.xero],
+      ] as [string, string | undefined][]
+    )
+      .filter(([, state]) => state)
+      .map(([ledger, state]) => (state === "active" || state === "refreshing" ? ledger : state === "reconnect_required" ? `${ledger} · reconnect` : `${ledger} · connecting`));
+    if (states?.exports) ledgers.push(states.exports === "stale" ? "Exports · one replaced" : "Exports");
+    return ledgers.length ? ledgers.join(", ") : "—";
   };
   // What is up next, in the order the work comes (as the client's page says it): the oldest month open with its due
   // date, the earliest month it owes, or nothing until this month ends.
   const upNext = (r: ClientRow) => {
-    if (r.active === false) return "Nothing: no longer a client";
-    const open = r.closes.filter((c) => !c.signed_off && !c.unchecked).sort((a, b) => a.period.localeCompare(b.period))[0];
+    // A former client's unfinished month still comes first; it owes no new one.
+    const open = r.closes.filter((c) => !c.signed_off).sort((a, b) => a.period.localeCompare(b.period))[0];
+    if (open?.unchecked) return `${monthName(open.period)}: recheck the sign-off`;
     if (open) return `${monthName(open.period)} close${open.due_on ? (open.due_on < today ? `, overdue since ${dates.calendarDay(open.due_on)}` : `, due ${dates.calendarDay(open.due_on)}`) : ""}`;
+    if (r.active === false) return "Nothing: no longer a client";
     const owed = [...r.owed].sort();
     if (owed.length) return `Open ${monthName(owed[0])}`;
     if (r.closes.length && r.active) return `Nothing until ${dates.calendarDay(monthEndOf(thisMonth))}`;
@@ -145,8 +158,12 @@ export default function ClosesList() {
   };
   // Who holds the client's months, where the reader can see it: its own owner, else the firm template's.
   const people = roster?.people;
+  // Who holds the client's work: whoever holds the month in hand now, else, for the months still to open, the client's
+  // own owner or the template's. A client off the roster, or no longer a client, has no months scheduled to hold.
   const owner = (r: ClientRow) => {
-    const subject = r.owner ?? roster?.template?.owner ?? "";
+    const inHand = r.closes.filter((c) => !c.signed_off).sort((a, b) => a.period.localeCompare(b.period))[0];
+    const subject = inHand ? (inHand.owner ?? "") : r.active !== true ? undefined : (r.owner ?? roster?.template?.owner ?? "");
+    if (subject === undefined) return "—";
     return subject ? (people?.find((p) => p.subject === subject)?.name ?? subject) : "Nobody";
   };
   return (

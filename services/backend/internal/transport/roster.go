@@ -227,10 +227,6 @@ type rosterClient struct {
 	Rev        string   `json:"rev"` // the entry's row, new with every change
 	LastPeriod string   `json:"last_period"`
 	Owed       []string `json:"owed"`
-	// QuickBooks and Xero are the states of the client's connections (the QuickBooks one its books are read from),
-	// empty without one, so the Clients page can say how each client's books arrive.
-	QuickBooks string `json:"quickbooks,omitempty"`
-	Xero       string `json:"xero,omitempty"`
 	// Closes is every month opened under any of the client's names, newest first, with whether its sign-off stands.
 	Closes []rosterClose `json:"closes"`
 }
@@ -250,6 +246,8 @@ type rosterClose struct {
 	Priority  string `json:"priority,omitempty"`
 	Assigned  bool   `json:"assigned,omitempty"`
 	OwnedByMe bool   `json:"owned_by_me,omitempty"`
+	// Owner is who holds the close now (a subject), "" for nobody; a firm administrator sees whom it names.
+	Owner string `json:"owner,omitempty"`
 }
 
 func registerRoster(mux *http.ServeMux, db *sql.DB) {
@@ -280,9 +278,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		rows, err := tx.QueryContext(r.Context(), `SELECT r.client_entity,r.active,r.since,r.due_days,r.owner,r.reason,r.actor,r.created_at,r.id::text,
  COALESCE((SELECT max(c.period) FROM client_closes c WHERE c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)
-  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))),''),
- COALESCE((SELECT x.state FROM quickbooks_connections x WHERE x.organization_id=r.organization_id AND lower(x.client_entity)=lower(r.client_entity) AND x.state<>'disconnected' ORDER BY x.environment='production' DESC,x.id DESC LIMIT 1),''),
- COALESCE((SELECT x.state FROM xero_connections x WHERE x.organization_id=r.organization_id AND lower(x.client_entity)=lower(r.client_entity) AND x.state<>'disconnected' ORDER BY x.id DESC LIMIT 1),'')
+  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))),'')
  FROM current_client_roster r WHERE r.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(r.client_entity)))
  ORDER BY NOT r.active,lower(r.client_entity)`, org, firmAccess(r), subject(r))
 		if err != nil {
@@ -295,7 +291,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			var due sql.NullInt64
 			var override sql.NullString
 			var when time.Time
-			if err = rows.Scan(&c.Entity, &c.Active, &c.Since, &due, &override, &c.Reason, &c.Actor, &when, &c.Rev, &c.LastPeriod, &c.QuickBooks, &c.Xero); err != nil {
+			if err = rows.Scan(&c.Entity, &c.Active, &c.Since, &due, &override, &c.Reason, &c.Actor, &when, &c.Rev, &c.LastPeriod); err != nil {
 				break
 			}
 			if due.Valid {
@@ -318,7 +314,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		if err == nil {
 			var closes *sql.Rows
 			closes, err = tx.QueryContext(r.Context(), `SELECT r.client_entity,c.id::text,c.entity,c.period,COALESCE((SELECT decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')='signed_off',
- COALESCE(c.due_on::text,''),c.priority,c.owner<>'',c.owner<>'' AND c.owner=$3
+ COALESCE(c.due_on::text,''),c.priority,c.owner<>'',c.owner<>'' AND c.owner=$3,c.owner
  FROM current_client_roster r JOIN client_closes c ON c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)
  WHERE r.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(r.client_entity)))
  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND g.granted AND lower(g.client_entity)=lower(c.entity)))
@@ -327,7 +323,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				for closes.Next() {
 					var entity string
 					var cl rosterClose
-					if err = closes.Scan(&entity, &cl.ID, &cl.Entity, &cl.Period, &cl.SignedOff, &cl.DueOn, &cl.Priority, &cl.Assigned, &cl.OwnedByMe); err != nil {
+					if err = closes.Scan(&entity, &cl.ID, &cl.Entity, &cl.Period, &cl.SignedOff, &cl.DueOn, &cl.Priority, &cl.Assigned, &cl.OwnedByMe, &cl.Owner); err != nil {
 						break
 					}
 					if i, ok := index[strings.ToLower(entity)]; ok {
@@ -355,6 +351,38 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 		}
+		// How each client's books arrive, by client identity (its own name in lower case, as the Clients page groups
+		// it): the state of its QuickBooks connection (production first) and of its Xero connection, under any of its
+		// names, for every client the reader can see whole (the firm's, or one assigned to them under its own name, as
+		// the client's page shows them), on the roster or not; and, as "exports", whether the newest label of its
+		// uploaded exports, in place of a live ledger, is still on the current exports (labeled) or one has been
+		// replaced since (stale).
+		connections := map[string]map[string]string{}
+		if err == nil {
+			var rows *sql.Rows
+			if rows, err = tx.QueryContext(r.Context(), `SELECT DISTINCT ON (provider,client_identity($1,client_entity)) provider,client_identity($1,client_entity),state FROM (
+ SELECT 'quickbooks' AS provider,client_entity,state,environment='production' AS first,id FROM quickbooks_connections WHERE organization_id=$1 AND state<>'disconnected'
+ UNION ALL SELECT 'xero',client_entity,state,true,id FROM xero_connections WHERE organization_id=$1 AND state<>'disconnected'
+ UNION ALL SELECT 'exports',c.entity,CASE WHEN EXISTS(SELECT 1 FROM unnest(l.evidence_ids) e(id) WHERE NOT EXISTS(SELECT 1 FROM evidence v WHERE v.id=e.id AND v.close_id=l.close_id AND v.superseded_by IS NULL)) THEN 'stale' ELSE 'labeled' END,true,l.id
+  FROM close_export_labels l JOIN client_closes c ON c.id=l.close_id WHERE c.organization_id=$1 AND l.id=(SELECT max(n.id) FROM close_export_labels n WHERE n.close_id=l.close_id)) x
+ WHERE $2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=$1 AND g.subject=$3 AND g.granted AND lower(g.client_entity)=client_identity($1,x.client_entity))
+ ORDER BY provider,client_identity($1,client_entity),first DESC,id DESC`, org, firmAccess(r), subject(r)); err == nil {
+				for rows.Next() {
+					var provider, client, state string
+					if err = rows.Scan(&provider, &client, &state); err != nil {
+						break
+					}
+					if connections[client] == nil {
+						connections[client] = map[string]string{}
+					}
+					connections[client][provider] = state
+				}
+				rows.Close()
+				if err == nil {
+					err = rows.Err()
+				}
+			}
+		}
 		var owed []owedMonth
 		if err == nil {
 			owed, err = owedMonthsThrough(r.Context(), tx, time.Now().UTC().Format("2006-01"), org, firmAccess(r), canReview(r), subject(r), "")
@@ -369,7 +397,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		// A member sees no template, which is not the same as the firm having none: template_hidden says so.
-		out := map[string]any{"template": template, "template_hidden": !firmAccess(r), "clients": clients, "can_manage": canManageRoster(r)}
+		out := map[string]any{"template": template, "template_hidden": !firmAccess(r), "clients": clients, "connections": connections, "can_manage": canManageRoster(r)}
 		// An administrator chooses owners from the members who can do the work: a role reviewing every client (any
 		// client, and the template), or a reviewer, for the clients assigned to them.
 		if canManageRoster(r) {
