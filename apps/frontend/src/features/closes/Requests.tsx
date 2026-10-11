@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { useRef, useState } from "react";
 import { workspaceRequest } from "./workspace";
+import { ProposedRequest } from "./ProposedRequest";
 
 type Draft = {
   id: string;
@@ -76,6 +77,7 @@ export function Requests({
         wording. To approve a recipient and connect replies, load the saved
         draft from its Work inbox item. This editor never sends messages.
       </p>
+      <ProposedRequest closeId={closeId} onApproved={() => void read.refetch()} />
       {!loaded && !message && <p role="status">Loading saved request…</p>}
       <fieldset disabled={busy || !loaded}>
         <legend>Work needing information · choose up to 20</legend>

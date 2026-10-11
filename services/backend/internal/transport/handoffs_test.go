@@ -154,9 +154,15 @@ func TestHandADocumentToATeammate(t *testing.T) {
 		must(json.Unmarshal(call(subject, permissions, "GET", "/v1/closes/"+alpha+"/goal", nil, 200), &s))
 		return s
 	}
+	// last is the goal's newest event about hand-offs; the goal's drafted client requests are its own lines.
 	last := func() string {
 		s := read("user_a", partner)
-		return s.Goal.Events[len(s.Goal.Events)-1].Text
+		for i := len(s.Goal.Events) - 1; i >= 0; i-- {
+			if !strings.HasPrefix(s.Goal.Events[i].Text, "I drafted a client request") {
+				return s.Goal.Events[i].Text
+			}
+		}
+		return ""
 	}
 	handed := func(subject string, permissions []string) []string {
 		t.Helper()

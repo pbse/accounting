@@ -222,6 +222,7 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 	registerForwardedEvidence(mux, db)
 	registerReview(mux, db)
 	registerRequests(mux, db)
+	registerRequestProposals(mux, db)
 	registerWork(mux, db)
 	registerCarry(mux, db)
 	registerRecurring(mux, db)
