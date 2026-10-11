@@ -878,6 +878,11 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "This month's close is under legal hold or kept until a date still to come: its files are kept with it.")
 			return
 		}
+		// What only this file named leaves the client's account maps with it.
+		if _, err = tx.ExecContext(r.Context(), `SELECT books_forget_file_accounts($1,ARRAY[$2::text])`, org, id); err != nil {
+			problem(w, 503, "The file could not be deleted.")
+			return
+		}
 		for _, q := range []string{`DELETE FROM books_layouts WHERE import_id::text=$1`, `DELETE FROM books_imports WHERE id::text=$1`} {
 			if _, err = tx.ExecContext(r.Context(), q, id); err != nil {
 				problem(w, 503, "The file could not be deleted.")

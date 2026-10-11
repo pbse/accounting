@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"math/big"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,12 +24,33 @@ import (
 // reviewer confirms. The map is the client's, versioned (books_account_maps), and next month's file finds its accounts
 // mapped already, by number, else by name.
 
-// mappedAccount is an account as the map holds it.
+// mappedAccount is an account as the map holds it, with the files whose readings it was confirmed on: a file deleted
+// takes with it the accounts only it named (books_forget_file_accounts).
 type mappedAccount struct {
-	Class  string `json:"class"`
-	Type   string `json:"type"`
-	Name   string `json:"name"`
-	Number string `json:"number,omitempty"`
+	Class  string   `json:"class"`
+	Type   string   `json:"type"`
+	Name   string   `json:"name"`
+	Number string   `json:"number,omitempty"`
+	Files  []string `json:"files,omitempty"`
+}
+
+// sameMapping says whether two entries map an account alike, whichever files they were confirmed on.
+func sameMapping(a, b mappedAccount) bool {
+	return a.Class == b.Class && a.Type == b.Type && a.Name == b.Name && a.Number == b.Number
+}
+
+// addAmounts is two exact amounts' sum, written to the cent when it is exact to the cent.
+func addAmounts(a, b string) string {
+	x, okA := new(big.Rat).SetString(cmp.Or(a, "0"))
+	y, okB := new(big.Rat).SetString(cmp.Or(b, "0"))
+	if !okA || !okB {
+		return a
+	}
+	sum := x.Add(x, y)
+	if new(big.Rat).Mul(sum, big.NewRat(100, 1)).IsInt() {
+		return sum.FloatString(2)
+	}
+	return exactDecimal(sum)
 }
 
 // accountMap is a version of a client's map.
@@ -68,8 +91,9 @@ func latestAccountMap(ctx context.Context, q rowReader, org, name string) (*acco
 	return &m, json.Unmarshal(raw, &m.Accounts)
 }
 
-// readingAccounts is import id's month and the accounts its confirmed reading names, once each, in the order read,
-// each with its proposal and with what the map holds for it; false when its layout is not confirmed yet.
+// readingAccounts is import id's month and the accounts its confirmed reading names, once each, in the order read, an
+// account on several rows (one per department, say) with their balances summed, each with its proposal and with what
+// the map holds for it; false when its layout is not confirmed yet.
 func readingAccounts(ctx context.Context, q rowReader, org, name, id string, current *accountMap) (string, []fileAccount, bool, error) {
 	var period string
 	var raw []byte
@@ -86,7 +110,7 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 		return "", nil, false, err
 	}
 	accounts := []fileAccount{}
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	heading := ""
 	for _, l := range lines {
 		switch l.Kind {
@@ -94,10 +118,11 @@ func readingAccounts(ctx context.Context, q rowReader, org, name, id string, cur
 			heading = l.Name
 		case bookfiles.Posting:
 			key := bookfiles.AccountKey(l.Number, l.Name)
-			if seen[key] {
+			if at, ok := seen[key]; ok {
+				accounts[at].Balance = addAmounts(accounts[at].Balance, l.Amount)
 				continue
 			}
-			seen[key] = true
+			seen[key] = len(accounts)
 			a := fileAccount{Key: key, Number: l.Number, Name: l.Name, Balance: l.Amount, Ref: l.Ref, Proposal: bookfiles.Propose(l.Type, heading, l.Name, l.Number)}
 			if current != nil {
 				if m, ok := current.Accounts[key]; ok {
@@ -239,8 +264,15 @@ func registerAccountMaps(mux *http.ServeMux, db *sql.DB) {
 			} else if in.Accept && a.Mapped == nil && a.Proposal.Class != "" {
 				m.Class, m.Type, set = a.Proposal.Class, a.Proposal.Type, true
 			}
-			if set && (a.Mapped == nil || *a.Mapped != m) {
+			if set && (a.Mapped == nil || !sameMapping(*a.Mapped, m)) {
 				next[a.Key], changed = m, true
+			}
+		}
+		// Every account this file names that the map holds was confirmed on it: the files it came from are its own.
+		for _, a := range accounts {
+			if m, ok := next[a.Key]; ok && !slices.Contains(m.Files, id) {
+				m.Files = append(slices.Clone(m.Files), id)
+				next[a.Key] = m
 			}
 		}
 		for key := range in.Accounts {

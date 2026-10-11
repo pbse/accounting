@@ -44,7 +44,7 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM books_account_maps WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM books_account_maps WHERE organization_id=$1`, `DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
 			`DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
 			`DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`,
 			`DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
@@ -95,7 +95,8 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 			"as_of": period + "-30", "currency": "USD"}}, 200)
 		return id
 	}
-	september := month("2026-09", "Number,Account,Type,Debit,Credit\n1000,Business Checking,Bank,1500.25,\n1100,Trade debtors,Current Asset,200.00,\n2000,Amex,Credit Card,,300.00\n3000,Owner's Equity,,,1000.00\n4000,Sales,,,700.25\n6000,Rent,,300.00,\n")
+	// Rent comes on two rows, one per office: one account, its balance their sum.
+	september := month("2026-09", "Number,Account,Type,Debit,Credit\n1000,Business Checking,Bank,1500.25,\n1100,Trade debtors,Current Asset,200.00,\n2000,Amex,Credit Card,,300.00\n3000,Owner's Equity,,,1000.00\n4000,Sales,,,750.25\n6000,Rent,,300.00,\n6000,Rent,,50.00,\n")
 	accountsPath := "/v1/closes/client/import/accounts?name=Acme%20Co&id=" + september
 	read := call("user_b", preparer, "GET", accountsPath, nil, 200)
 	if read["count"] != 6.0 || read["unmapped"] != 6.0 || read["map"] != nil || read["can_confirm"] != false {
@@ -104,6 +105,9 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	proposed := map[string]string{}
 	for _, raw := range read["accounts"].([]any) {
 		a := raw.(map[string]any)
+		if a["key"] == "n:6000" && a["balance"] != "350.00" {
+			t.Fatalf("rent's two rows sum: %v", a)
+		}
 		p := a["proposal"].(map[string]any)
 		proposed[a["key"].(string)] = p["class"].(string) + "/" + p["type"].(string) + "/" + p["from"].(string)
 	}
@@ -155,6 +159,15 @@ func TestAFilesAccountsAreMappedOnceAndKnownNextMonth(t *testing.T) {
 	must(db.QueryRow(`SELECT count(*),(SELECT accounts->'n:6000'->>'type' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1) FROM books_account_maps WHERE organization_id=$1`, org).Scan(&versions, &rent))
 	if versions != 2 || rent != "Other Expense" {
 		t.Fatalf("each confirmation a version holding the whole map: %d versions, rent %s", versions, rent)
+	}
+	// Deleting October's file takes from the map what only it named, utilities, from every version; what September's
+	// file named too stays, now confirmed on September's alone.
+	call("user_a", []string{"workpapers:review", "clients:all", "data:manage"}, "POST", "/v1/closes/client/import/delete?name=Acme%20Co&id="+october, map[string]any{"reason": "Sent in error"}, 200)
+	var utilities int
+	var rentFiles string
+	must(db.QueryRow(`SELECT count(*) FILTER (WHERE accounts::text LIKE '%Utilities%' OR accounts ? 'n:6100'),(SELECT accounts->'n:6000'->>'files' FROM books_account_maps WHERE organization_id=$1 ORDER BY id DESC LIMIT 1) FROM books_account_maps WHERE organization_id=$1`, org).Scan(&utilities, &rentFiles))
+	if utilities != 0 || rentFiles != `["`+september+`"]` {
+		t.Fatalf("a deleted file leaves nothing only it named: %d versions name utilities; rent from %s", utilities, rentFiles)
 	}
 	// With file imports switched off, the map is read, not changed.
 	_, err = db.Exec(`UPDATE organizations SET file_imports=false WHERE id=$1`, org)

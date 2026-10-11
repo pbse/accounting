@@ -216,6 +216,14 @@ func TestAClientsBooksArriveAsFiles(t *testing.T) {
 	call("user_a", partner, "POST", "/v1/closes/client/import?name=Acme%20Co&id="+first, map[string]any{"action": "confirm", "layout": manual, "reason": "Headers named by hand"}, 200)
 	next := upload("user_b", preparer, "Konten August.csv", "2026-08", custom, 201)["id"].(string)
 	if p := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+next, nil, 200)["proposal"].(map[string]any); p["reused"] != true {
+		rows, _ := db.Query(`SELECT id,import_id,layout->'headers',layout->>'header_row',layout->>'table',encoding,delimiter FROM books_layouts WHERE organization_id=$1 ORDER BY id DESC LIMIT 3`, org)
+		for rows.Next() {
+			var a, b, c, d, e, f, g sql.NullString
+			rows.Scan(&a, &b, &c, &d, &e, &f, &g)
+			t.Logf("layout %v import %v headers %v row %v table %v enc %v delim %v", a.String, b.String, c.String, d.String, e.String, f.String, g.String)
+		}
+		full := call("user_b", preparer, "GET", "/v1/closes/client/import?name=Acme%20Co&id="+next, nil, 200)
+		t.Logf("first=%s next=%s read: enc %v delim %v unsure %v rows %v", first, next, full["encoding"], full["delimiter"], full["unsure"], full["tables"].([]any)[0].(map[string]any)["rows"])
 		t.Fatalf("a layout confirmed by hand is proposed again: %v", p)
 	}
 
