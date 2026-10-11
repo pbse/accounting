@@ -38,9 +38,15 @@ export type Pack =
       cash_flow: { unavailable: string } | { sections: Section[]; net_change: Line; beginning: Line; ending: Line; book_cash: string; reconciled: boolean; differences: string[]; disclosure?: string };
     };
 
-type Status = "provisional" | "signed_off" | "unknown";
+// A reviewed comparative is a prior month accepted from its file that is no close: shown as such, never signed off.
+type Status = "provisional" | "signed_off" | "unknown" | "comparative";
 
-const statusLabels = { provisional: ["status warn", "Provisional"], signed_off: ["status ok", "Sign-off stands"], unknown: ["status danger", "Status unknown"] } as const;
+const statusLabels = {
+  provisional: ["status warn", "Provisional"],
+  signed_off: ["status ok", "Sign-off stands"],
+  unknown: ["status danger", "Status unknown"],
+  comparative: ["status", "Reviewed comparative"],
+} as const;
 
 // The month's management accounts from the close's captured reports. Every figure links to its ledger rows when the
 // capture holds them; a reviewer publishes a signed-off pack as a frozen version.

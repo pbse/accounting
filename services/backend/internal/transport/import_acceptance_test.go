@@ -439,6 +439,23 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if pack["source"] != "files" || pack["file"] != "Acme 2027-01.csv" || pack["overall"] != "provisional" || pack["basis"] != "Accrual" || len(net) == 0 || net[len(net)-1].Amount != "500.25" || pack["profit_and_loss_unavailable"] != nil {
 		t.Fatalf("January's pack from its file: %v", pack)
 	}
+	// December, no close, accepted from its file, is a reviewed comparative: January is compared with it, labelled, and
+	// its status is left alone.
+	if comparison := pack["comparison_unavailable"]; comparison != "Last month has no close in this workspace." {
+		t.Fatalf("no comparison before December is accepted: %v", comparison)
+	}
+	call("user_a", partner, "POST", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+december, with(call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+december, nil, 200), map[string]any{"exported_on": "2026-10-05"}), 200)
+	// Only once December's books are its files: until then its file supplements whatever its books are.
+	if pack = packOf(); pack["prior"] != nil {
+		t.Fatalf("a file of a month whose books are not its files is no comparative: %v", pack["prior"])
+	}
+	var rev string
+	must(db.QueryRow(`SELECT COALESCE(max(id)::text,'') FROM books_sources WHERE organization_id=$1`, org).Scan(&rev))
+	call("user_a", []string{"integrations:manage", "clients:all"}, "POST", "/v1/closes/client/books-source", map[string]any{"client": "Acme Co", "period": "2026-12", "source": "files", "reason": "The takeover's comparatives are files", "rev": rev}, 200)
+	pack = packOf()
+	if prior, _ := pack["prior"].(map[string]any); prior["status"] != "comparative" || prior["file"] != "Acme 2026-12.csv" || prior["as_of"] != "2026-12-31" || !strings.Contains(pack["note"].(string), "2026-12 is a reviewed comparative") || pack["overall"] != "provisional" {
+		t.Fatalf("December as a reviewed comparative: %v %v", pack["prior"], pack["note"])
+	}
 	// Published, its export names the file and the date its books are as of.
 	frozen, _ := json.Marshal(pack)
 	if rows, err := publicationRows(publication{Pack: frozen}); err != nil || !strings.Contains(fmt.Sprint(rows), "from the accepted file Acme 2027-01.csv, as of 2027-01-31") {
@@ -449,7 +466,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		t.Fatalf("a files month's pack asks for the firm's statement: %v", flow)
 	}
 	signer := append([]string{"close:signoff"}, partner...)
-	imported := call("user_a", signer, "POST", "/v1/closes/"+januaryClose+"/cash-flow", map[string]any{"csv": "Section,Line,Amount\nBeginning cash,,1000\nOperating activities,Receipts from customers,500.25\nEnding cash,,1500.25\n", "source": "January cash flow.csv", "confirmed": true}, 200)
+	imported := call("user_a", signer, "POST", "/v1/closes/"+januaryClose+"/cash-flow", map[string]any{"csv": "Section,Line,Amount\nBeginning cash,,1600.25\nOperating activities,Rent paid,-100.00\nEnding cash,,1500.25\n", "source": "January cash flow.csv", "confirmed": true}, 200)
 	if flow := imported["cash_flow"].(map[string]any); flow["reconciled"] != true || !strings.Contains(imported["note"].(string), "imported from January cash flow.csv") {
 		t.Fatalf("the firm's statement completes a files month's pack: %v %v", flow, imported["note"])
 	}
@@ -724,7 +741,7 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 		}
 		return read
 	}
-	s := fileState{layout: columns(bookfiles.Movement), prior: "2026-11", priorBalances: map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"},
+	s := fileState{layout: columns(bookfiles.Movement), prior: "2026-11", priorIsBooks: true, priorBalances: map[string]string{"n:1000": "1000", "n:3000": "-1000", "n:4000": "-500", "n:6000": "500"},
 		classes: map[string]string{"n:1000": "Asset", "n:3000": "Equity", "n:4000": "Revenue", "n:6000": "Expense"}}
 	s.reading = fileReading{Period: "2026-12", Accounts: []fileAccount{
 		account("1000", "Business Checking", "1200", "200", "Asset"),
@@ -735,6 +752,12 @@ func TestAFileRollsForwardFromThePriorMonth(t *testing.T) {
 	if c := rollForward(s); c.State != "passes" || c.Detail != "Every account opens at November 2026's accepted closing balance." {
 		t.Fatalf("a month that rolls: %+v", c)
 	}
+	// A prior month whose books are a ledger's: its accepted file supplements them, and nothing rolls from it.
+	s.priorIsBooks = false
+	if c := rollForward(s); c.State != "note" {
+		t.Fatalf("a prior month whose file only supplements its books: %+v", c)
+	}
+	s.priorIsBooks = true
 	s.reading.Accounts[0].Movement = "150"
 	if c := rollForward(s); c.State != "holds" || c.Detail != "1 account does not roll from November 2026's accepted books, unexplained: 1000 Business Checking opens at 1050.00, closed at 1000.00 (50.00)." {
 		t.Fatalf("a month that does not roll: %+v", c)

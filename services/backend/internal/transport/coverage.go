@@ -406,26 +406,10 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 			}
 			// The work approved with the request, told apart later from work its released documents start.
 			scope, _ := json.Marshal(map[string]any{"snapshot_id": view.SnapshotID, "bindings": bindings, "jobs": append([]string{}, in.Jobs...)})
-			var draftID, rid string
+			var draftID, rid, token, passcode string
 			err = tx.QueryRowContext(r.Context(), `INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,$2,'[]',$3,$4) RETURNING id::text`, closeID, in.Body, contextDigest, actor).Scan(&draftID)
 			if err == nil {
-				err = tx.QueryRowContext(r.Context(), `INSERT INTO work_requests(draft_id,revision,recipient,approved_by,coverage_scope) VALUES($1,0,$2,$3,$4) RETURNING id::text`, draftID, recipient.Address, actor, string(scope)).Scan(&rid)
-			}
-			for _, id := range in.Jobs {
-				if err != nil {
-					break
-				}
-				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_client',error='' WHERE id=$1`, id)
-				if err == nil {
-					_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL WHERE job_id=$1`, id)
-				}
-				if err == nil {
-					_, err = tx.ExecContext(r.Context(), `INSERT INTO work_request_targets(request_id,job_id,revision) SELECT $1,job_id,revision FROM preparation_intakes WHERE job_id=$2`, rid, id)
-				}
-			}
-			token, passcode := rand.Text(), ""
-			if err == nil {
-				passcode, err = issueLink(r.Context(), tx, rid, actor, token)
+				rid, token, passcode, err = openConsolidated(r.Context(), tx, draftID, recipient.Address, actor, scope, in.Jobs)
 			}
 			if err != nil || tx.Commit() != nil {
 				problem(w, 409, "Request could not be confirmed. Refresh history before retrying.")
