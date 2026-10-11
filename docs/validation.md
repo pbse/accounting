@@ -4374,6 +4374,12 @@ Reminders required an unused link and no reply at all, so a client who answered 
 
 Test: `TestApprovedEmailDurableRetryAndScope` records a partial reply on a used link: the reminder period restarts from it, the goal offers the reminder, approval succeeds and the worker sends it; seen to fail without the fix (and without the worker's change, cancelled). The closest email, attention, goal, partial-reply, inbound-reply and Work tests passed on a fresh local PostgreSQL.
 
+## 2026-10-11 — The original budget stays comparable beside a reforecast (B07/B10)
+
+The budget comparison always used the newest approved version, so approving a reforecast silently replaced the original plan in the comparison, with no way to see the month against the plan agreed first. The comparison now lists every approved version of the same books that budgets the month (newest first, the default) and compares with any of them on request (`?baseline=`, **Compare with**); a version that does not budget the month, or another ledger's, is refused. Executives keep the newest approved baseline only.
+
+Test: `TestBudgetImportRemapApproveAndCompare` approves a reforecast: it becomes the default, both September budgets are offered, the original can be chosen, and the August-only budget is refused; seen to fail without the fix. The budget and executive tests passed on a fresh local PostgreSQL. Variance explanations tied to the total change are a separate change.
+
 ## 2026-10-11 — An amended payroll summary reopens the payroll draft (B04/B08)
 
 The later-evidence link (migration 155) covered prepaid drafts only, so an amended payroll summary arriving as a new document left an approved payroll draft standing unless someone recorded a replacement. Migration 159 extends `link_later_evidence_for`: a document read after a payroll draft, naming its provider (whole words) and speaking of an amendment, correction, revision, reissue, void or adjustment, is linked to the draft, which shows as changed at source and cannot be approved as it is; the attention notice says it names the payroll provider. The prepaid rule is unchanged, and documents already readable are not linked.

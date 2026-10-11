@@ -385,15 +385,33 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 			wait("The month's activity is unavailable: " + this.ActivityUnavailable + ".")
 			return
 		}
-		// The baseline is the newest approved version of these books that budgets this month.
-		baseline := slices.IndexFunc(list, func(v budgetVersion) bool {
+		// The baseline is the newest approved version of these books that budgets this month, or, for the firm, another
+		// approved one it chooses (the original plan beside a reforecast); approving a version never rewrites another.
+		eligible := func(v budgetVersion) bool {
 			_, covers := v.Lines[0].Months[period]
 			return v.ApprovedAt != nil && v.Company == company && covers
-		})
+		}
+		baseline := slices.IndexFunc(list, eligible)
 		if baseline < 0 {
 			out["state"] = "no_budget"
 			jsonReply(w, 200, out)
 			return
+		}
+		if !executive(r) {
+			choices := []map[string]any{}
+			// Only a version in the books' currency can be compared, so only those are offered.
+			for _, v := range list {
+				if eligible(v) && v.Currency == this.Currency {
+					choices = append(choices, map[string]any{"id": v.ID, "name": v.Name, "approved_at": v.ApprovedAt})
+				}
+			}
+			out["baselines"] = choices
+			if chosen := r.URL.Query().Get("baseline"); chosen != "" {
+				if baseline = slices.IndexFunc(list, func(v budgetVersion) bool { return v.ID == chosen && eligible(v) && v.Currency == this.Currency }); baseline < 0 {
+					problem(w, 422, "Choose an approved budget of these books that covers this month.")
+					return
+				}
+			}
 		}
 		version := list[baseline]
 		if version.Currency != this.Currency {
