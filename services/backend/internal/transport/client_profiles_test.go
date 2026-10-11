@@ -265,4 +265,28 @@ func TestAConfirmedProfileStandsAndAsks(t *testing.T) {
 	if p, e := preparation.ClientProfile(t.Context(), db, cedarLater); e != nil || p.State != "differs" || p.Currency != "CAD" {
 		t.Fatalf("a future profile leaves the question open: %+v %v", p, e)
 	}
+
+	// A takeover confirmed before the client's profile was is confirmed again once the profile is: the change is not
+	// held by the setup.
+	var fir string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period,takeover) VALUES($1,'Fir Ltd','2026-08',true) RETURNING id::text`, org).Scan(&fir))
+	_, err = db.Exec(`INSERT INTO takeover_setups(organization_id,close_id,digest,content,timezone,confirmed_by) VALUES($1,$2::bigint,'fixture','{}','America/New_York','fixture')`, org, fir)
+	must(err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM takeover_setups WHERE organization_id=$1`, org) })
+	firBlocked := func() bool {
+		t.Helper()
+		for _, b := range call("user_a", partner, "GET", "/v1/closes/"+fir+"/readiness", nil, 200)["blockers"].([]any) {
+			if strings.Contains(b.(string), "Confirm the takeover setup again") {
+				return true
+			}
+		}
+		return false
+	}
+	if firBlocked() {
+		t.Fatal("a setup with no profile confirmed yet stands")
+	}
+	call("user_a", partner, "POST", "/v1/closes/client/profile", map[string]any{"client": "Fir Ltd", "currency": "EUR", "fiscal_year_start": 7, "effective_from": "2026-08", "reason": "Euros, year from July", "rev": ""}, 200)
+	if !firBlocked() {
+		t.Fatal("the setup is confirmed again after the profile is")
+	}
 }

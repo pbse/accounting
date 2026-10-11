@@ -163,8 +163,8 @@ func registerClientProfiles(mux *http.ServeMux, db *sql.DB) {
 
 // profileChangeHolds is the months of the client the profile (currency, start) from month from would govern, up to the
 // next later profile, whose reviewed work it would contradict: an approved workpaper or a confirmed bank statement in
-// another currency, or a month signed off, with approved work or with a confirmed takeover setup whose currency or
-// fiscal year it would change.
+// another currency, or a month signed off or with approved work whose currency or fiscal year it would change. A
+// confirmed takeover setup is confirmed again after the change.
 func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, currency string, start int) ([]string, error) {
 	// The new profile governs months from its own up to the next later profile's, which keeps the months after it.
 	// The months are locked first, in a statement of their own, so a decision on one (a statement confirmed, a sign-off)
@@ -174,8 +174,7 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')='signed_off',
  COALESCE((SELECT profile FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'null'::jsonb),
- EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved') OR EXISTS(SELECT 1 FROM takeover_setups t WHERE t.close_id=c.id),
- COALESCE((SELECT t.content->'profile' FROM takeover_setups t WHERE t.close_id=c.id ORDER BY t.id DESC LIMIT 1),'null'::jsonb),
+ EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'),
  EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved' AND upper(COALESCE(NULLIF(w.paper->'input'->>'currency',''),'USD'))<>$4)
  OR EXISTS(SELECT 1 FROM statement_extractions s JOIN evidence e ON e.id=s.source_id AND e.superseded_by IS NULL WHERE s.close_id=c.id AND s.confirmed IS NOT NULL AND COALESCE(s.confirmed->>'currency','')<>'' AND upper(s.confirmed->>'currency')<>$4)
  FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=client_identity($1,$2) AND c.period>=$3
@@ -188,15 +187,14 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 		id, period          string
 		signed, contradicts bool
 		signedUnder         []byte
-		// reviewed says the month has approved work or a confirmed takeover setup; takenOverUnder is the profile the
-		// setup confirmed, when it confirmed one.
-		reviewed       bool
-		takenOverUnder []byte
+		// reviewed says the month has approved work. A confirmed takeover setup does not hold a change: the change asks
+		// for the setup to be confirmed again.
+		reviewed bool
 	}
 	var months []month
 	for rows.Next() {
 		var m month
-		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.signedUnder, &m.reviewed, &m.takenOverUnder, &m.contradicts); err != nil {
+		if err = rows.Scan(&m.id, &m.period, &m.signed, &m.signedUnder, &m.reviewed, &m.contradicts); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -215,17 +213,14 @@ func profileChangeHolds(ctx context.Context, tx *sql.Tx, org, name, from, curren
 		if !m.signed && !m.reviewed {
 			continue
 		}
-		// Approved work and a confirmed takeover setup were prepared under the month's fiscal year: a change to it waits
-		// for them to be reopened. Their currency is what they saved (approved work's is checked above; a setup's is the
-		// profile it confirmed), never what a connection reports now.
+		// Approved work was prepared under the month's fiscal year: a change to it waits for the work to be reopened. Its
+		// currency is the one it saved, checked above, never what a connection reports now.
 		if !m.signed {
 			p, err := preparation.ClientProfile(ctx, tx, m.id)
 			if err != nil {
 				return nil, err
 			}
-			var setup preparation.Profile
-			taken := json.Unmarshal(m.takenOverUnder, &setup) == nil && setup.Currency != ""
-			if p.FiscalStart != start || (taken && (setup.Currency != currency || setup.FiscalStart != start)) {
+			if p.FiscalStart != start {
 				held = append(held, m.period)
 			}
 			continue

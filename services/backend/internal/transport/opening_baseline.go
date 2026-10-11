@@ -74,11 +74,25 @@ func openingBlockers(ctx context.Context, tx *sql.Tx, closeID string, tie tieOut
 	if takeover {
 		var blockers []string
 		var confirmed bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM takeover_setups WHERE close_id::text=$1)`, closeID).Scan(&confirmed); err != nil {
+		var setupProfile []byte
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM takeover_setups WHERE close_id::text=$1),
+ COALESCE((SELECT content->'profile' FROM takeover_setups WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1),'null'::jsonb)`, closeID).Scan(&confirmed, &setupProfile); err != nil {
 			return nil, nil, err
 		}
 		if !confirmed {
 			blockers = append(blockers, "Confirm the takeover setup: the company, basis, procedures, access, account scope and timezone this client is taken over with.")
+		} else {
+			// The setup confirmed the client's currency and fiscal year as they were then: one confirmed or corrected since
+			// is confirmed with the setup again.
+			profile, err := preparation.ClientProfile(ctx, tx, closeID)
+			if err != nil {
+				return nil, nil, err
+			}
+			var then preparation.Profile
+			json.Unmarshal(setupProfile, &then)
+			if (profile.State == "confirmed" || profile.State == "differs") && (then.Currency != profile.Currency || then.FiscalStart != profile.FiscalStart) {
+				blockers = append(blockers, "Confirm the takeover setup again: the client's currency or fiscal year was confirmed or corrected after it was confirmed.")
+			}
 		}
 		digest, _, refusal := openingContent(tie)
 		var reviewed string
