@@ -51,7 +51,8 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM close_scopes WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
+		for _, q := range []string{`DELETE FROM books_company_links WHERE organization_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM close_scopes WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
 			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM coverage_bindings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_versions WHERE organization_id=$1`, `DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM books_import_acceptances WHERE organization_id=$1`, `DELETE FROM books_sources WHERE organization_id=$1`, `DELETE FROM client_profiles WHERE organization_id=$1`, `DELETE FROM books_import_scopes WHERE organization_id=$1`, `DELETE FROM books_account_maps WHERE organization_id=$1`,
 			`DELETE FROM books_import_deletions WHERE organization_id=$1`, `DELETE FROM books_import_pages WHERE organization_id=$1`, `DELETE FROM books_import_previews WHERE organization_id=$1`,
 			`DELETE FROM books_layouts WHERE organization_id=$1`, `DELETE FROM books_imports WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`,
@@ -597,6 +598,37 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	}
 	if line := ledgerLine(); line["state"] != "attention" || !strings.Contains(line["text"].(string), "Debits equal credits") {
 		t.Fatalf("the brief names a held file's checks: %v", line)
+	}
+	// October was captured from a QuickBooks company: a reviewer confirms it is the files' company, its accounts mapped
+	// across from a proposal by name.
+	var qbo, captured string
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,company_name) VALUES($1,'Acme Co','fixture','active',$2,now(),'123','Acme QBO') RETURNING id::text`, org, rand.Text()).Scan(&qbo))
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1::bigint,'snapshot.json',$2,'{}','fixture') RETURNING id::text`, octoberClose, rand.Text()).Scan(&captured))
+	ledgerAccounts := `[{"Id":"1","Name":"Business Checking","Classification":"Asset","AccountType":"Bank"},{"Id":"3","Name":"Owner's Equity","Classification":"Equity","AccountType":"Equity"},{"Id":"4","Name":"Sales","Classification":"Revenue","AccountType":"Income"},{"Id":"5","Name":"Rent","Classification":"Expense","AccountType":"Expense"}]`
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1::bigint,$2,'123',$3,$4,now(),'fixture')`, octoberClose, qbo, rand.Text(),
+		`{"period":"2026-10","source_id":"`+captured+`","accounts":`+ledgerAccounts+`,"reports":{"TrialBalance":{"Header":{"Currency":"USD"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Debit"},{"ColTitle":"Credit"}]},"Rows":{"Row":[]}},"ProfitAndLoss":{"Header":{"Currency":"USD"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Total"}]},"Rows":{"Row":[]}},"GeneralLedger":{}}}`)
+	must(err)
+	linksPath := "/v1/closes/client/company-links?name=Acme%20Co"
+	links := call("user_a", partner, "GET", linksPath, nil, 200)
+	companies := links["companies"].([]any)
+	if len(companies) != 1 {
+		t.Fatalf("the client's ledger companies: %v", links)
+	}
+	company := companies[0].(map[string]any)
+	proposal := company["proposal"].(map[string]any)
+	if company["ledger"] != "quickbooks" || company["company"] != "123" || company["name"] != "Acme QBO" || company["link"] != nil || proposal["n:1000"] != "1" || proposal["n:3000"] != "3" || proposal["n:4000"] != "4" || proposal["n:6000"] != "5" {
+		t.Fatalf("a proposal by name: %v", company)
+	}
+	confirm := func(accounts map[string]any, basedOn string, want int) map[string]any {
+		t.Helper()
+		return call("user_a", partner, "POST", linksPath, map[string]any{"ledger": "quickbooks", "company": "123", "accounts": accounts, "reason": "The same company, moved to QuickBooks", "based_on": basedOn, "map": links["map"]}, want)
+	}
+	call("user_a", partner, "POST", linksPath, map[string]any{"ledger": "quickbooks", "company": "123", "accounts": proposal, "reason": "On an earlier map", "based_on": "", "map": "1:stale"}, 409)
+	confirm(map[string]any{"n:1000": "1", "n:3000": "1"}, "", 422)
+	linked := confirm(proposal, "", 200)["id"]
+	confirm(proposal, "", 409)
+	if link := call("user_a", partner, "GET", linksPath, nil, 200)["companies"].([]any)[0].(map[string]any)["link"].(map[string]any); link["id"] != linked || link["current"] != true || link["accounts"].(map[string]any)["n:4000"] != "4" {
+		t.Fatalf("the confirmed link: %v", link)
 	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {

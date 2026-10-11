@@ -505,40 +505,27 @@ func fileSupplement(ctx context.Context, q rowReader, org, name, acceptance, fil
 // reconcileFile compares an accepted file's balances with a month's captured books: how many of the file's accounts it
 // matched to one of the books' accounts, and every difference, of an amount or of an account found on one side only.
 func reconcileFile(f acceptedFile, captured *books) (int, []string) {
-	normal := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
-	// A ledger account is known by its name, the last part of a parent's name, and either without a leading number.
-	byName := map[string][]string{}
-	for _, id := range slices.Sorted(maps.Keys(captured.Accounts)) {
-		whole := captured.Accounts[id].Name
-		last := whole[strings.LastIndex(whole, ":")+1:]
-		for _, n := range []string{whole, last, withoutNumber(whole), withoutNumber(last)} {
-			if n = normal(n); n != "" && !slices.Contains(byName[n], id) {
-				byName[n] = append(byName[n], id)
-			}
-		}
+	names := map[string]string{}
+	for key := range f.balances {
+		names[key] = f.accounts[key].Name
 	}
+	matches := accountsByName(names, captured.Accounts)
 	zero := new(big.Rat)
-	differences, matched, used := []string{}, 0, map[string]bool{}
+	differences, used := []string{}, map[string]bool{}
 	for _, key := range slices.Sorted(maps.Keys(f.balances)) {
 		stated, _ := new(big.Rat).SetString(f.balances[key])
 		if stated == nil {
 			stated = new(big.Rat)
 		}
 		account := f.accounts[key].Name
-		found := ""
-		for _, n := range []string{fileAccountName(key, account), account} {
-			if ids := byName[normal(n)]; len(ids) == 1 && !used[ids[0]] {
-				found = ids[0]
-				break
-			}
-		}
-		if found == "" {
+		found, ok := matches[key]
+		if !ok {
 			if stated.Sign() != 0 {
 				differences = append(differences, account+": "+money(stated)+" in the file, with no account of that name in the books.")
 			}
 			continue
 		}
-		used[found], matched = true, matched+1
+		used[found] = true
 		books := cmp.Or(captured.Balances[found], zero)
 		if stated.Cmp(books) != 0 {
 			differences = append(differences, fmt.Sprintf("%s: the file says %s, the books %s, a difference of %s.", account, money(stated), money(books), money(new(big.Rat).Sub(stated, books))))
@@ -549,7 +536,35 @@ func reconcileFile(f acceptedFile, captured *books) (int, []string) {
 			differences = append(differences, captured.Accounts[id].Name+": "+money(balance)+" in the books, not in the file.")
 		}
 	}
-	return matched, differences
+	return len(used), differences
+}
+
+// accountsByName matches each file account (its key to its name) to one of a ledger's accounts by name: without its
+// number, then whole. A ledger account is known by its name, the last part of a parent's name, and either without a
+// leading number; a name two ledger accounts share matches neither, and each ledger account is matched once, in the
+// file accounts' key order.
+func accountsByName(file map[string]string, ledger map[string]packAccount) map[string]string {
+	normal := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
+	byName := map[string][]string{}
+	for _, id := range slices.Sorted(maps.Keys(ledger)) {
+		whole := ledger[id].Name
+		last := whole[strings.LastIndex(whole, ":")+1:]
+		for _, n := range []string{whole, last, withoutNumber(whole), withoutNumber(last)} {
+			if n = normal(n); n != "" && !slices.Contains(byName[n], id) {
+				byName[n] = append(byName[n], id)
+			}
+		}
+	}
+	matches, used := map[string]string{}, map[string]bool{}
+	for _, key := range slices.Sorted(maps.Keys(file)) {
+		for _, n := range []string{fileAccountName(key, file[key]), file[key]} {
+			if ids := byName[normal(n)]; len(ids) == 1 && !used[ids[0]] {
+				matches[key], used[ids[0]] = ids[0], true
+				break
+			}
+		}
+	}
+	return matches
 }
 
 // withoutNumber is an account name without a leading account number ("1000 Checking" is "Checking").
