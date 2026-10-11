@@ -25,6 +25,8 @@ func TestAnAccountsClassIsProposedFromWhatTheFileSays(t *testing.T) {
 		{"", "", "Depreciation expense", "", Proposal{"Expense", "Expense", "name", ""}},
 		{"", "", "Equipment rental", "", Proposal{"Expense", "Expense", "name", ""}},
 		{"", "", "Sales Commissions", "", Proposal{"Expense", "Expense", "name", ""}},
+		{"", "", "Loan Interest Expense", "", Proposal{"Expense", "Other Expense", "name", ""}},
+		{"", "", "Bank Overdraft", "", Proposal{"Liability", "Other Current Liability", "name", ""}},
 		{"", "", "Credit Card Processing Fees", "", Proposal{"Expense", "Expense", "name", ""}},
 		{"", "", "Office equipment", "", Proposal{"Asset", "Fixed Asset", "name", ""}},
 		{"", "", "Interest income", "", Proposal{"Revenue", "Other Income", "name", ""}},

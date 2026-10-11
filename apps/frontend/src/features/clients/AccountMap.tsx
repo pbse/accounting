@@ -100,14 +100,13 @@ export function AccountMap({ client, id, onClose }: { client: string; id: string
       )}
       {editable && data.unmapped > 0 && <p className="note">Confirming accepts what is proposed for every account not mapped yet, on every page, with any class or type you set here.</p>}
       {editable && !data.unmapped && !data.recorded && <p className="note">Every account is mapped already. Confirm the map for this file to record that it names them, so they stay mapped if an earlier file is deleted.</p>}
-      <table className="ks-preview">
+      <table className="ks-preview ks-accounts">
         <thead>
           <tr>
             <th>Account</th>
             <th>Balance</th>
             <th>Class</th>
             <th>Type</th>
-            <th>Read from</th>
           </tr>
         </thead>
         <tbody>
@@ -115,7 +114,11 @@ export function AccountMap({ client, id, onClose }: { client: string; id: string
             const shown = set[a.key] ?? a.mapped ?? (a.proposal.class ? a.proposal : undefined);
             return (
               <tr key={a.key}>
-                <td>{a.number ? `${a.number} ${a.name}` : a.name}</td>
+                <td>
+                  {a.number ? `${a.number} ${a.name}` : a.name}
+                  <br />
+                  {set[a.key] ? <span className="pill neutral">Set here</span> : a.mapped ? <span className="pill">Mapped</span> : <span className={a.proposal.class ? "pill muted" : "pill danger"}>{fromText(a.proposal)}</span>}
+                </td>
                 <td>{a.balance}</td>
                 <td>
                   {editable ? (
@@ -144,7 +147,6 @@ export function AccountMap({ client, id, onClose }: { client: string; id: string
                     (shown?.type ?? "—")
                   )}
                 </td>
-                <td>{set[a.key] ? <span className="pill neutral">Set here</span> : a.mapped ? <span className="pill">Mapped</span> : <span className={a.proposal.class ? "pill muted" : "pill danger"}>{fromText(a.proposal)}</span>}</td>
               </tr>
             );
           })}

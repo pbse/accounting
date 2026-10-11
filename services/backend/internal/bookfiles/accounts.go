@@ -58,6 +58,8 @@ var rules = func() []rule {
 	return []rule{
 		r(`\bbank\s+(charges?|fees?|service|interest\s+(paid|expense))\b|\bmerchant\s+fees?\b|\b(equipment|vehicles?|computers?|office|furniture)\s+(rental|rent|hire|lease|leasing|repairs?|maintenance|expenses?)\b|\bcredit\s*card\s+(processing\s+)?(fees?|charges?|costs?)\b|\b(card\s+)?processing\s+fees?\b|\b(sales|selling)\s+(commissions?|expenses?|costs?|salar(y|ies)|wages|travel|promotions?|meetings?)\b`, "Expense", "Expense", false),
 		r(`\baccumulated\s+(depreciation|amorti[sz]ation)\b`, "Asset", "Fixed Asset", true),
+		r(`\b(loan|mortgage|note|debt)s?\s+(interest|fees?|costs?|charges?)\b`, "Expense", "Other Expense", true),
+		r(`\b(bank\s+)?overdrafts?\b`, "Liability", "Other Current Liability", false),
 		r(`\bcredit\s*cards?\b|\b(amex|american\s+express|visa|mastercard)\b`, "Liability", "Credit Card", true),
 		r(`\baccounts?\s+receivable\b|\breceivables?\b|\bdebtors?\b`, "Asset", "Accounts Receivable", true),
 		r(`\baccounts?\s+payable\b|\btrade\s+(payables?|creditors?)\b|\bcreditors?\b`, "Liability", "Accounts Payable", true),
