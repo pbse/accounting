@@ -278,9 +278,30 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 	var last *fileMonth
 	comparison := ""
 	var priorClose string
+	// Last month's books are compared only when they hold nothing, on the same basis and currency, with activity.
+	usable := func() {
+		switch {
+		case lastBooks == nil:
+		case len(last.Holds) > 0:
+			comparison, lastBooks = "Last month's file has checks that hold its statements.", nil
+		case last.Basis != this.Basis:
+			comparison, lastBooks = "Last month's books are on another basis.", nil
+		case lastBooks.Currency != thisBooks.Currency:
+			comparison, lastBooks = "Last month's books are in a different currency.", nil
+		case lastBooks.ActivityUnavailable != "" && thisBooks.ActivityUnavailable == "":
+			comparison, lastBooks = "Last month's activity is unavailable: "+lastBooks.ActivityUnavailable+".", nil
+		}
+	}
+	comparative := false
 	switch err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, shiftMonth(period, -1)).Scan(&priorClose); {
 	case err == sql.ErrNoRows:
+		// A month that is no close can still be a reviewed comparative: its file accepted as the prior period's figures.
 		comparison = "Last month has no close in this workspace."
+		if lastBooks, last, err = reviewedComparative(ctx, tx, org, entity, shiftMonth(period, -1)); err != nil {
+			return nil, tieRefusal{503, "Last month's books are unavailable."}
+		}
+		comparative = lastBooks != nil
+		usable()
 	case err != nil:
 		return nil, tieRefusal{503, "Last month's close is unavailable."}
 	default:
@@ -295,18 +316,10 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 		if lastBooks, last, err = fileMonthBooks(ctx, tx, priorClose); err != nil {
 			return nil, tieRefusal{503, "Last month's books are unavailable."}
 		}
-		switch {
-		case lastBooks == nil:
+		if lastBooks == nil {
 			comparison = "Last month has no accepted file."
-		case len(last.Holds) > 0:
-			comparison, lastBooks = "Last month's file has checks that hold its statements.", nil
-		case last.Basis != this.Basis:
-			comparison, lastBooks = "Last month's books are on another basis.", nil
-		case lastBooks.Currency != thisBooks.Currency:
-			comparison, lastBooks = "Last month's books are in a different currency.", nil
-		case lastBooks.ActivityUnavailable != "" && thisBooks.ActivityUnavailable == "":
-			comparison, lastBooks = "Last month's activity is unavailable: "+lastBooks.ActivityUnavailable+".", nil
 		}
+		usable()
 	}
 	pack := managementPack(thisBooks, lastBooks)
 	if thisBooks.Imported == nil && len(thisBooks.CashFlow) == 0 {
@@ -321,13 +334,18 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 	pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, basisTitle(this.Basis)
 	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"], pack["file"] = "files", this.Version, this.AsOf, false, status, this.File
 	note := "Figures are the client's books from its accepted file " + this.File + ", as of " + this.AsOf + "; approved drafts not yet posted are excluded."
-	if lastBooks != nil {
+	switch {
+	case lastBooks != nil && comparative:
+		// A reviewed comparative is no close and carries no sign-off: it is labelled, and leaves the pack's status alone.
+		pack["prior"] = map[string]any{"close_id": "", "period": shiftMonth(period, -1), "snapshot_id": "", "as_of": last.AsOf, "stale": false, "status": "comparative", "file": last.File}
+		note += " " + shiftMonth(period, -1) + " is a reviewed comparative, its accepted file " + last.File + ": not a close, and not signed off."
+	case lastBooks != nil:
 		prior := boundStatus(ctx, tx, priorClose, fileCapture+last.Version)
 		pack["prior"] = map[string]any{"close_id": priorClose, "period": shiftMonth(period, -1), "snapshot_id": last.Version, "as_of": last.AsOf, "stale": false, "status": prior}
 		if prior != "signed_off" {
 			status = prior
 		}
-	} else {
+	default:
 		pack["comparison_unavailable"] = comparison
 	}
 	if status != "signed_off" {
@@ -628,4 +646,39 @@ func monthChanged(ctx context.Context, q rowReader, org, name, importID string, 
 		effects = append(effects, fmt.Sprintf("%d management pack publication%s for the month %s built on the accepted books.", published, suffix(published), map[bool]string{true: "was", false: "were"}[published == 1]))
 	}
 	return map[string]any{"file": file, "accepted_at": at.UTC(), "same": len(differences) == 0, "differences": differences, "effects": effects}, nil
+}
+
+// reviewedComparative is a month that is no close, as its accepted file gives it (docs/books-sources.md, History and
+// takeover): prior-period figures for comparisons, with the checks they were accepted with that hold their statements.
+// Nil when the month has no current acceptance.
+func reviewedComparative(ctx context.Context, q rowReader, org, entity, period string) (*books, *fileMonth, error) {
+	var acceptance, importID, file string
+	var checks []byte
+	switch err := q.QueryRowContext(ctx, `SELECT a.id::text,a.import_id::text,i.name,a.checks FROM books_import_acceptances a JOIN books_imports i ON i.id=a.import_id
+ WHERE a.organization_id=$1 AND client_identity(a.organization_id,a.client_entity)=client_identity($1,$2) AND a.period=$3
+  AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id)
+ ORDER BY a.id DESC LIMIT 1`, org, entity, period).Scan(&acceptance, &importID, &file, &checks); {
+	case err == sql.ErrNoRows:
+		return nil, nil, nil
+	case err != nil:
+		return nil, nil, err
+	}
+	f, ok, err := acceptedFileBooks(ctx, q, org, entity, acceptance, importID)
+	if err != nil || !ok {
+		return nil, nil, err
+	}
+	b, err := booksOfVersion(booksVersion{Currency: strings.ToUpper(f.currency), Typed: true, Accounts: f.accounts, Balances: f.balances, Activity: f.activity})
+	if err != nil {
+		return nil, nil, err
+	}
+	b.ActivityUnavailable = f.missing
+	m := &fileMonth{Acceptance: acceptance, File: file, AsOf: f.asOf, Basis: f.basis}
+	var kept []importCheck
+	json.Unmarshal(checks, &kept)
+	for _, c := range kept {
+		if c.State == "holds" && c.Key != "activity" {
+			m.Holds = append(m.Holds, c.Title)
+		}
+	}
+	return b, m, nil
 }

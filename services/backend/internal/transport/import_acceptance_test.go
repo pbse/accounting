@@ -391,6 +391,16 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if pack["source"] != "files" || pack["file"] != "Acme 2027-01.csv" || pack["overall"] != "provisional" || pack["basis"] != "Accrual" || len(net) == 0 || net[len(net)-1].Amount != "500.25" || pack["profit_and_loss_unavailable"] != nil {
 		t.Fatalf("January's pack from its file: %v", pack)
 	}
+	// December, no close, accepted from its file, is a reviewed comparative: January is compared with it, labelled, and
+	// its status is left alone.
+	if comparison := pack["comparison_unavailable"]; comparison != "Last month has no close in this workspace." {
+		t.Fatalf("no comparison before December is accepted: %v", comparison)
+	}
+	call("user_a", partner, "POST", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+december, with(call("user_a", partner, "GET", "/v1/closes/client/import/acceptance?name=Acme%20Co&id="+december, nil, 200), map[string]any{"exported_on": "2026-10-05"}), 200)
+	pack = packOf()
+	if prior, _ := pack["prior"].(map[string]any); prior["status"] != "comparative" || prior["file"] != "Acme 2026-12.csv" || prior["as_of"] != "2026-12-31" || !strings.Contains(pack["note"].(string), "2026-12 is a reviewed comparative") || pack["overall"] != "provisional" {
+		t.Fatalf("December as a reviewed comparative: %v %v", pack["prior"], pack["note"])
+	}
 	// Published, its export names the file and the date its books are as of.
 	frozen, _ := json.Marshal(pack)
 	if rows, err := publicationRows(publication{Pack: frozen}); err != nil || !strings.Contains(fmt.Sprint(rows), "from the accepted file Acme 2027-01.csv, as of 2027-01-31") {
@@ -401,7 +411,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		t.Fatalf("a files month's pack asks for the firm's statement: %v", flow)
 	}
 	signer := append([]string{"close:signoff"}, partner...)
-	imported := call("user_a", signer, "POST", "/v1/closes/"+januaryClose+"/cash-flow", map[string]any{"csv": "Section,Line,Amount\nBeginning cash,,1000\nOperating activities,Receipts from customers,500.25\nEnding cash,,1500.25\n", "source": "January cash flow.csv", "confirmed": true}, 200)
+	imported := call("user_a", signer, "POST", "/v1/closes/"+januaryClose+"/cash-flow", map[string]any{"csv": "Section,Line,Amount\nBeginning cash,,1600.25\nOperating activities,Rent paid,-100.00\nEnding cash,,1500.25\n", "source": "January cash flow.csv", "confirmed": true}, 200)
 	if flow := imported["cash_flow"].(map[string]any); flow["reconciled"] != true || !strings.Contains(imported["note"].(string), "imported from January cash flow.csv") {
 		t.Fatalf("the firm's statement completes a files month's pack: %v %v", flow, imported["note"])
 	}

@@ -197,6 +197,8 @@ The opening baseline reviews the takeover month's month-end tie-out; it does not
 - **Reviewed comparatives.** Earlier months imported as files (or captured) and accepted as prior-period figures, with their scope and basis. They feed comparisons and trends; they are not closes and carry no sign-off. Publication rules that today require comparison months to be signed off are amended to accept a reviewed comparative, labelled as such.
 - **Cross-source identity.** Comparisons and budgets match months today by the provider's company identity (budget actuals key on source and realm). A client moving from files to a live ledger, or the other way, needs a person to confirm that both are the same company and to map the accounts across, once; until then the months are not compared.
 
+As built (reviewed comparatives): a month that is no close, with a file accepted for it, is a reviewed comparative. A month on files whose prior month has no close is compared with it, under the same rules as a closed prior month (no check holding its statements, the same basis and currency, its activity when this month has one); the pack labels it a reviewed comparative, names its file, and says it is not a close and not signed off, and the pack's own status is left to the month's sign-off, so a signed-off month compared with a comparative can be published. Until cross-source identity is confirmed, a month is compared only with months on the same source.
+
 ## One authoritative books version per month
 
 - Each client has a **default source**: QuickBooks, Xero or Files (more ledgers later). Each month records the books version it reads and where it came from.
