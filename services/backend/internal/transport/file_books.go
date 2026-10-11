@@ -140,3 +140,107 @@ func writeFileVersionsNow(ctx context.Context, db *sql.DB, org, name, period str
 		log.Print("A month's books from files could not be written: ", err)
 	}
 }
+
+// fileMonth is where a month on files took its books from: the version, the acceptance it is of, its as-of date and
+// basis.
+type fileMonth struct {
+	Version, Acceptance, AsOf, Basis string
+}
+
+// fileMonthBooks is close id's books from its files: the version of its current acceptance (on the file's latest
+// reading and scope), or nil when none is written.
+func fileMonthBooks(ctx context.Context, q rowReader, closeID string) (*books, *fileMonth, error) {
+	var m fileMonth
+	var v booksVersion
+	var accounts, balances, activity, cashFlow, uncounted []byte
+	var unavailable string
+	err := q.QueryRowContext(ctx, `SELECT v.id::text,v.source_id,v.as_of::text,v.basis,v.currency,v.typed,v.accounts,v.balances,v.activity,v.cash_flow,v.uncounted,v.activity_unavailable
+ FROM books_versions v JOIN books_import_acceptances a ON v.source='files' AND v.source_id=a.id::text
+ WHERE v.close_id::text=$1 AND a.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=a.import_id) AND a.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=a.import_id)
+ ORDER BY v.id DESC LIMIT 1`, closeID).Scan(&m.Version, &m.Acceptance, &m.AsOf, &m.Basis, &v.Currency, &v.Typed, &accounts, &balances, &activity, &cashFlow, &uncounted, &unavailable)
+	if err == sql.ErrNoRows {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	json.Unmarshal(accounts, &v.Accounts)
+	json.Unmarshal(balances, &v.Balances)
+	json.Unmarshal(activity, &v.Activity)
+	json.Unmarshal(uncounted, &v.Uncounted)
+	if len(cashFlow) > 0 {
+		v.CashFlow = cashFlow
+	}
+	b, err := booksOfVersion(v)
+	if err != nil {
+		return nil, nil, err
+	}
+	b.ActivityUnavailable = unavailable
+	return b, &m, nil
+}
+
+// closeFilesPack is the management pack of a month whose books are its files, compared with last month's when its
+// books are its files too, in the same currency. A month on files cannot be signed off yet, so the pack is provisional.
+func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, period string) (map[string]any, error) {
+	thisBooks, this, err := fileMonthBooks(ctx, tx, closeID)
+	if err != nil {
+		return nil, tieRefusal{503, "The month's books are unavailable."}
+	}
+	if thisBooks == nil {
+		return map[string]any{"state": "waiting", "reason": "This month's books are its files: accept a reading of the month's file first."}, nil
+	}
+	var lastBooks *books
+	var last *fileMonth
+	comparison := ""
+	var priorClose string
+	switch err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, shiftMonth(period, -1)).Scan(&priorClose); {
+	case err == sql.ErrNoRows:
+		comparison = "Last month has no close in this workspace."
+	case err != nil:
+		return nil, tieRefusal{503, "Last month's close is unavailable."}
+	default:
+		source, err := closeBooksSource(ctx, tx, priorClose)
+		if err != nil {
+			return nil, tieRefusal{503, "Last month's books source is unavailable."}
+		}
+		if source != "files" {
+			comparison = "Last month's books come from another source."
+			break
+		}
+		if lastBooks, last, err = fileMonthBooks(ctx, tx, priorClose); err != nil {
+			return nil, tieRefusal{503, "Last month's books are unavailable."}
+		}
+		switch {
+		case lastBooks == nil:
+			comparison = "Last month has no accepted file."
+		case lastBooks.Currency != thisBooks.Currency:
+			comparison, lastBooks = "Last month's books are in a different currency.", nil
+		case lastBooks.ActivityUnavailable != "" && thisBooks.ActivityUnavailable == "":
+			comparison, lastBooks = "Last month's activity is unavailable: "+lastBooks.ActivityUnavailable+".", nil
+		}
+	}
+	pack := managementPack(thisBooks, lastBooks)
+	signed, err := signedOff(ctx, tx, closeID)
+	if err != nil {
+		return nil, tieRefusal{503, "Close readiness unavailable."}
+	}
+	status := "provisional"
+	pack["open"] = !signed
+	pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, basisTitle(this.Basis)
+	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"] = "files", this.Version, this.AsOf, false, status
+	note := "Figures are the client's books from its accepted file, as of " + this.AsOf + "; approved drafts not yet posted are excluded. Provisional: a month on files is not signed off yet."
+	if lastBooks != nil {
+		pack["prior"] = map[string]any{"close_id": priorClose, "period": shiftMonth(period, -1), "snapshot_id": last.Version, "as_of": last.AsOf, "stale": false, "status": status}
+	} else {
+		pack["comparison_unavailable"] = comparison
+	}
+	if disclosure, ok := pack["cash_flow"].(map[string]any)["disclosure"].(string); ok {
+		note += " " + disclosure
+	}
+	return finishPack(ctx, tx, org, pack, note, status)
+}
+
+// basisTitle is a basis as the pack names it: Accrual, Cash or Modified cash.
+func basisTitle(basis string) string {
+	return map[string]string{"accrual": "Accrual", "cash": "Cash", "modified_cash": "Modified cash"}[basis]
+}

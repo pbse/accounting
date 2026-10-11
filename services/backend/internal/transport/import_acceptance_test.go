@@ -317,6 +317,27 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if bank != "1500.25" || sales != "700.25" || class != "Revenue" || unavailable != "" || source != januaryAccepted {
 		t.Fatalf("January's books from its file: bank %s, sales %s (%s), unavailable %q, from %s", bank, sales, class, unavailable, source)
 	}
+	// The month's management pack reads them: its profit and loss from the file's activity, provisional.
+	packOf := func() map[string]any {
+		t.Helper()
+		tx, err := db.BeginTx(t.Context(), nil)
+		must(err)
+		defer tx.Rollback()
+		pack, err := closeManagementPack(t.Context(), tx, januaryClose)
+		must(err)
+		return pack
+	}
+	pack := packOf()
+	net := pack["profit_and_loss"].(statement).Measures
+	if pack["source"] != "files" || pack["overall"] != "provisional" || pack["basis"] != "Accrual" || len(net) == 0 || net[len(net)-1].Amount != "500.25" || pack["profit_and_loss_unavailable"] != nil {
+		t.Fatalf("January's pack from its file: %v", pack)
+	}
+	// Without the month's activity, the profit and loss is unavailable, never zero.
+	_, err = db.Exec(`UPDATE books_versions SET activity='{}',activity_unavailable='a column with the month''s movement' WHERE close_id::text=$1`, januaryClose)
+	must(err)
+	if pack = packOf(); pack["profit_and_loss_unavailable"] == nil || len(pack["profit_and_loss"].(statement).Sections) != 0 {
+		t.Fatalf("a pack without activity: %v", pack["profit_and_loss_unavailable"])
+	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
 		t.Fatalf("parity leaves a file's books alone: %v %v", mismatched, err)
