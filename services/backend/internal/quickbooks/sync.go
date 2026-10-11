@@ -30,7 +30,7 @@ func ReadingConnection(close string) string {
 // SQL that must stay a constant.
 const (
 	ReadingConnectionBefore = `(SELECT r.id FROM quickbooks_connections r JOIN client_closes rc ON rc.organization_id=r.organization_id AND client_identity(r.organization_id,r.client_entity)=client_identity(rc.organization_id,rc.entity) WHERE rc.id=`
-	ReadingConnectionAfter  = ` AND r.state<>'disconnected' ORDER BY lower(r.client_entity)=lower(rc.entity) DESC,r.environment='production' DESC,r.id DESC LIMIT 1)`
+	ReadingConnectionAfter  = ` AND r.state<>'disconnected' ORDER BY r.environment='production' DESC,lower(r.client_entity)=lower(rc.entity) DESC,r.id DESC LIMIT 1)`
 )
 
 func scheduleSync(ctx context.Context, db *sql.DB) error {

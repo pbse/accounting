@@ -126,7 +126,7 @@ func planXeroPosting(ctx context.Context, db *sql.DB, org, entity, closeID, pape
 	if err != nil {
 		return plan, err
 	}
-	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND revoked_at IS NULL`, org, entity))
+	g, err := scanXeroGrant(db.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity))
 	if err != nil || time.Now().After(g.Expires) {
 		return plan, refusal{409, "An unexpired client-specific Xero posting grant is required."}
 	}
@@ -327,7 +327,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 			}
 			// A reconnection replaces the connection; the attempt stays bound to its organisation.
 			var connection string
-			if err := db.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND tenant_id=$3 AND state='active'`, org, entity, record.TenantID).Scan(&connection); err != nil {
+			if err := db.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND tenant_id=$3 AND state='active' ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity, record.TenantID).Scan(&connection); err != nil {
 				problem(w, 409, "Connect the same Xero organisation for this client to verify the attempt.")
 				return
 			}
@@ -489,7 +489,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var connection string
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE id::text=$1 AND state='active' AND tenant_id=$2 AND organization_id=$3 AND lower(client_entity)=lower($4) FOR UPDATE`, plan.grant.ConnectionID, plan.grant.TenantID, org, entity).Scan(&connection); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM xero_connections WHERE id::text=$1 AND state='active' AND tenant_id=$2 AND organization_id=$3 AND client_identity(organization_id,client_entity)=client_identity($3,$4) FOR UPDATE`, plan.grant.ConnectionID, plan.grant.TenantID, org, entity).Scan(&connection); err != nil {
 			problem(w, 409, "The Xero connection changed before this decision.")
 			return
 		}
@@ -535,7 +535,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 
 // xeroGrantRead answers with the client entity's current Xero posting grant, or that it has none.
 func xeroGrantRead(w http.ResponseWriter, r *http.Request, db *sql.DB, org, entity string) {
-	g, err := scanXeroGrant(db.QueryRowContext(r.Context(), `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND revoked_at IS NULL`, org, entity))
+	g, err := scanXeroGrant(db.QueryRowContext(r.Context(), `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity))
 	if err == sql.ErrNoRows {
 		jsonReply(w, 200, map[string]string{"state": "not_granted"})
 		return

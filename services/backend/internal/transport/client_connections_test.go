@@ -102,4 +102,18 @@ func TestTheClientPageManagesConnectionsHeldUnderAnAlias(t *testing.T) {
 	if reading != fresh {
 		t.Fatalf("the alias month reads through the client's connection: %q, not %q", reading, fresh)
 	}
+	// A production connection, under the client's own name and its company's, comes first for every month of the
+	// client; its posting grant, made on the client's page, is the alias month's grant too.
+	var production string
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,company_name,environment) VALUES($1,'Acme Co','fixture','active',$2,now(),'904','Acme Co','production') RETURNING id::text`, org, rand.Text()).Scan(&production))
+	must(db.QueryRow(`SELECT COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`::text,'')`, september).Scan(&reading))
+	if reading != production {
+		t.Fatalf("production comes first: %q, not %q", reading, production)
+	}
+	_, err = db.Exec(`INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,account_ids,kinds,max_amount,expires_at,reason,granted_by) VALUES($1,'Acme Co',$2,'904',ARRAY['1','2'],ARRAY['prepaid'],100,now()+interval '1 day','Synthetic','fixture')`, org, production)
+	must(err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM production_posting_grants WHERE organization_id=$1`, org) })
+	if g, e := readProductionGrant(t.Context(), db, org, "Acme Services LLC"); e != nil || g.ConnectionID != production {
+		t.Fatalf("the alias month's grant: %+v %v", g, e)
+	}
 }

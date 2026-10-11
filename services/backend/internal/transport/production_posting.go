@@ -107,12 +107,14 @@ func refuse(w http.ResponseWriter, err error) {
 
 // productionClient opens a client's production company under its grant: the saved grant when verifying an
 // earlier attempt, otherwise the current one, which must be unexpired and cover kind when kind is given.
-// The client's currency comes from the connection.
+// The client's currency comes from the connection. The grant and connection are the client's under any of its names
+// (a month opened under an alias posts through the client's), the month's own name first; the company's name must
+// match the name its connection is held under.
 func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedGrant string) (quickbooks.Sandbox, productionGrant, string, error) {
 	var g productionGrant
 	var err error
 	if savedGrant != "" {
-		g, err = scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.id=$1 AND g.organization_id=$2 AND lower(g.client_entity)=lower($3)`, savedGrant, org, entity))
+		g, err = scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.id=$1 AND g.organization_id=$2 AND client_identity(g.organization_id,g.client_entity)=client_identity($2,$3)`, savedGrant, org, entity))
 	} else {
 		g, err = readProductionGrant(ctx, db, org, entity)
 	}
@@ -127,9 +129,11 @@ func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedG
 	var currency sql.NullString
 	connectionID := g.ConnectionID
 	if kind == "" {
-		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND environment='production' AND state='active' AND realm=$3 AND company_name=$2`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency)
+		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency FROM quickbooks_connections WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2)
+ AND environment='production' AND state='active' AND realm=$3 AND company_name=client_entity ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency)
 	} else {
-		err = db.QueryRowContext(ctx, `SELECT credential,access_expires_at,home_currency FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND environment='production' AND state='active' AND realm=$4 AND company_name=$3`, connectionID, org, entity, g.Realm).Scan(&encrypted, &expires, &currency)
+		err = db.QueryRowContext(ctx, `SELECT credential,access_expires_at,home_currency FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND client_identity(organization_id,client_entity)=client_identity($2,$3)
+ AND environment='production' AND state='active' AND realm=$4 AND company_name=client_entity`, connectionID, org, entity, g.Realm).Scan(&encrypted, &expires, &currency)
 	}
 	if err != nil || time.Until(expires) < 2*time.Minute {
 		return quickbooks.Sandbox{}, g, "", refusal{409, "Refresh the active production connection before posting."}
@@ -161,7 +165,8 @@ func scanGrant(row *sql.Row) (productionGrant, error) {
 }
 
 func readProductionGrant(ctx context.Context, db *sql.DB, org, entity string) (productionGrant, error) {
-	return scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND lower(g.client_entity)=lower($2) AND g.revoked_at IS NULL LIMIT 1`, org, entity))
+	return scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND client_identity(g.organization_id,g.client_entity)=client_identity($1,$2) AND g.revoked_at IS NULL
+ ORDER BY lower(g.client_entity)=lower($2) DESC,g.id DESC LIMIT 1`, org, entity))
 }
 
 // postingKinds are the draft kinds enabled for production posting. New kinds stay off until the
