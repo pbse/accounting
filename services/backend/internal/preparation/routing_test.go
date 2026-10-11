@@ -8,20 +8,17 @@ import (
 	"testing"
 )
 
-func TestForeignContextMachineIdentityCannotSpendFirmBudget(t *testing.T) {
-	scope := llm.Scope{Organization: "own-firm", Subject: "owner", AccessProfile: "own"}
-	c, err := llm.New(llm.Config{Provider: "context_machine", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "fixed", Profiles: []llm.Scope{scope}})
+func TestApplicationIdentityCannotSpendAnotherFirmBudget(t *testing.T) {
+	c, err := llm.New(llm.Config{Provider: "context_machine", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "fixed"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var db *sql.DB // Any attempted budget write panics, proving rejection happens before SQL.
-	ctx := llm.WithClient(context.Background(), c)
-	for _, identity := range [][2]string{{"other-firm", "owner"}, {"own-firm", "other-user"}} {
-		if err := ReserveModelCalls(llm.WithIdentity(ctx, identity[0], identity[1]), db, identity[0], 3); !errors.Is(err, llm.ErrUnavailable) {
-			t.Fatal(err)
-		}
+	var db *sql.DB
+	ctx := llm.WithIdentity(llm.WithClient(context.Background(), c), "firm-a", "user")
+	if err := ReserveModelCalls(ctx, db, "firm-b", 3); !errors.Is(err, llm.ErrUnavailable) {
+		t.Fatal(err)
 	}
-	if llm.Allows(ctx, "other-firm") || !llm.Allows(ctx, "own-firm") {
-		t.Fatal("scheduled eligibility ignores configured organizations")
+	if !llm.Allows(llm.WithIdentity(ctx, "firm-b", "other"), "firm-b") {
+		t.Fatal("different firm requires owner profile")
 	}
 }

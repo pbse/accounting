@@ -76,7 +76,7 @@ type Request struct {
 	OnText func(string) bool `json:"-"`
 	// OnProgress receives provisional research progress, never executable actions.
 	OnProgress func(string) bool `json:"-"`
-	// Scope is required for research; completions derive it from trusted identity.
+	// Scope authorizes autonomous research database tools. Completions need no scope.
 	// It identifies a pre-provisioned,
 	// read-only access profile; it does not itself grant database permissions.
 	Scope *Scope
