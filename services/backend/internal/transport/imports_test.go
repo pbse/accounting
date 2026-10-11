@@ -391,8 +391,9 @@ func TestACSVChoiceIsCheckedAndKeysTheRowsKept(t *testing.T) {
 	}
 }
 
-// openTransactions logs the database's connections inside a transaction they have not finished: a stale read in a test
-// (issue #369) would come from a pooled connection left in one.
+// openTransactions logs the database's connections inside a transaction they have not finished, and probes every
+// connection the test's own pool holds: one whose transaction began before its statement is still inside an earlier
+// one, which would explain a stale read in a test (issue #369).
 func openTransactions(t *testing.T, db *sql.DB) {
 	t.Helper()
 	rows, err := db.Query(`SELECT pid,state,COALESCE(to_char(xact_start,'HH24:MI:SS.MS'),''),COALESCE(backend_xmin::text,''),left(query,160) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND xact_start IS NOT NULL`)
@@ -400,10 +401,32 @@ func openTransactions(t *testing.T, db *sql.DB) {
 		t.Logf("open transactions unavailable: %v", err)
 		return
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var pid, state, start, xmin, query string
 		rows.Scan(&pid, &state, &start, &xmin, &query)
 		t.Logf("connection %s %s since %s xmin %s: %s", pid, state, start, xmin, query)
+	}
+	rows.Close()
+	t.Logf("pool: %+v", db.Stats())
+	// Every idle connection at once, so none is handed out twice.
+	var held []*sql.Conn
+	defer func() {
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	for range db.Stats().Idle + 2 {
+		c, err := db.Conn(t.Context())
+		if err != nil {
+			break
+		}
+		held = append(held, c)
+		var pid, began, now string
+		var inTx bool
+		if err = c.QueryRowContext(t.Context(), `SELECT pg_backend_pid()::text,to_char(now(),'HH24:MI:SS.US'),to_char(statement_timestamp(),'HH24:MI:SS.US'),now()<>statement_timestamp()`).Scan(&pid, &began, &now, &inTx); err != nil {
+			t.Logf("probe: %v", err)
+			continue
+		}
+		t.Logf("probe connection %s: transaction began %s, statement at %s, inside an earlier transaction %v", pid, began, now, inTx)
 	}
 }
