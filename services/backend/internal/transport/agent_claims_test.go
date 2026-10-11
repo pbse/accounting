@@ -454,6 +454,12 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	rejected("Net income and gross profit total 126,110.00.", "could not be verified", derived(0, "sum", "126110.00", "t55", "/pack/profit_and_loss/measures/0/amount", "t55", "/pack/profit_and_loss/measures/1/amount"))
 	rejected("Net income is positive.", "could not be verified", e("t55", 0, "/pack/profit_and_loss/measures/0/amount", "21780.00"))
 
+	// Round twenty-nine: "up" holds a derived movement to its sign; a basis is not the cash measure.
+	reads["t56"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-09","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"22040.00"}]}}`, "September pack", "management_pack", "Bluegrass Dental PLLC", "2026-09")
+	rejected("Net income up 260.00 from September to October.", "computed difference is -260.00", derived(0, "difference", "260.00", "t2", ni+"/amount", "t56", "/profit_and_loss/measures/0/amount"))
+	ok("Net income down 260.00 from September to October.", derived(0, "difference", "260.00", "t2", ni+"/amount", "t56", "/profit_and_loss/measures/0/amount"))
+	ok("Net income is 20,500.00 on the cash basis.", e("t8", 0, "/profit_and_loss/measures/0/amount", "20500.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

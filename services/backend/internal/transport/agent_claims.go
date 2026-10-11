@@ -77,9 +77,24 @@ func lineMetrics(label string) map[string]bool {
 	return found
 }
 
+// basisPhrase is an accounting basis named in words ("on the cash basis"), whose "cash" is not the cash measure.
+var basisPhrase = regexp.MustCompile(`(?i)\b(?:modified cash|cash|accrual)[ -]basis\b`)
+
+// withoutBases blanks the accounting-basis phrases in a lowered text, keeping its length.
+func withoutBases(lower []byte) []byte {
+	for _, at := range basisPhrase.FindAllIndex(lower, -1) {
+		for i := at[0]; i < at[1]; i++ {
+			if lower[i] != ' ' {
+				lower[i] = '#'
+			}
+		}
+	}
+	return lower
+}
+
 // metricsIn is the measures a text names, each phrase taken once at its longest.
 func metricsIn(text string) map[string]bool {
-	lower := []byte(strings.ToLower(text))
+	lower := withoutBases([]byte(strings.ToLower(text)))
 	found := map[string]bool{}
 	for _, m := range agentMetricTerms {
 		for _, at := range m.re.FindAllIndex(lower, -1) {
@@ -113,7 +128,7 @@ type metricAt struct {
 
 // metricsAt is every measure a text names, each phrase taken once at its longest, in order.
 func metricsAt(text string) []metricAt {
-	lower := []byte(strings.ToLower(text))
+	lower := withoutBases([]byte(strings.ToLower(text)))
 	out := []metricAt{}
 	for _, m := range agentMetricTerms {
 		for _, at := range m.re.FindAllIndex(lower, -1) {
@@ -1578,7 +1593,8 @@ func derivedResult(op string, o occurrence, claims []claim, computed *big.Rat) s
 				}
 			}
 		}
-		if moved && (direction == "rise" && computed.Sign() < 0 || direction == "fall" && computed.Sign() > 0) {
+		// Any stated direction ("rose", "up", "down") is the computed difference's sign.
+		if direction == "rise" && computed.Sign() < 0 || direction == "fall" && computed.Sign() > 0 {
 			return "the sentence states a " + direction + " of " + o.normalized + ", but the computed difference is " + computed.FloatString(2)
 		}
 	}
