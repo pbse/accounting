@@ -221,7 +221,7 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Year to date, rent was 85,000.00.", e("t4", 0, "/lines/0/ytd/actual", "85000.00"))
 
 	// Round four: what a derived result is said to be; a stale or incomplete cash forecast; a remainder named, not qualified.
-	reads["t17"] = read(`{"lines":[{"name":"Revenue","amount":"100.00"},{"name":"Revenue","amount":"200.00"}]}`, "Statement", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	reads["t17"] = read(`{"lines":[{"account_id":"41","name":"Revenue","amount":"100.00"},{"account_id":"42","name":"Revenue","amount":"200.00"}]}`, "Statement", "management_pack", "Bluegrass Dental PLLC", "2026-10")
 	rejected("Revenue rose by 300.00.", "sum 300 as a change", derived(0, "sum", "300.00", "t17", "/lines/0/amount", "t17", "/lines/1/amount"))
 	ok("Net income rose 1,840.00 from September to October.", derived(0, "difference", "1840.00", "t2", ni+"/amount", "t9", "/profit_and_loss/measures/0/amount"))
 	rejected("Net income fell 1,840.00 from September to October.", "computed difference is 1840.00", derived(0, "difference", "1840.00", "t2", ni+"/amount", "t9", "/profit_and_loss/measures/0/amount"))
@@ -305,8 +305,8 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	reads["t30"] = read(`{"state":"ready","currency":"USD","opening":{"amount":"64120.00","stale":false},"open_items":{"complete":true},"weeks":[{"start":"2026-12-20","closing":"23400.00"}]}`, "Cash plan", "cash_plan", "Bluegrass Dental PLLC", "2026-10")
 	rejected("Cash closes positive next week.", "as a fact", e("t30", 0, "/weeks/0/closing", "23400.00"))
 	ok("Cash is forecast to close positive next week.", e("t30", 0, "/weeks/0/closing", "23400.00"))
-	reads["t31"] = read(`{"publication":{"id":"6","state":"superseded"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"20100.00"},{"name":"Net income","amount":"1000.00"}]}}}`, "Published report", "read_publication", "", "")
-	ok("The report is stale; its net income figures total 21,100.00.", derived(0, "sum", "21100.00", "t31", "/pack/profit_and_loss/measures/0/amount", "t31", "/pack/profit_and_loss/measures/1/amount"))
+	reads["t31"] = read(`{"publication":{"id":"6","state":"superseded"},"pack":{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","profit_and_loss":{"measures":[{"name":"Net income","amount":"20100.00"},{"name":"Gross profit","amount":"1000.00"}]}}}`, "Published report", "read_publication", "", "")
+	ok("The report is stale; its net income and gross profit total 21,100.00.", derived(0, "sum", "21100.00", "t31", "/pack/profit_and_loss/measures/0/amount", "t31", "/pack/profit_and_loss/measures/1/amount"))
 
 	// Round twelve: a driver's name is not the remainder; a hedge qualifies the cause, not something after it.
 	reads["t32"] = read(`{"rows":[{"account":"Revenue","change":"4940.00","drivers":[{"payee":"Other services","change":"3000.00"},{"payee":"Hygiene","change":"1000.00"}]}]}`, "Changes from last month", "flux", "Bluegrass Dental PLLC", "2026-10")
@@ -426,6 +426,11 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	// Round twenty-two: a whole number is a count, whatever its key.
 	reads["t51"] = read(`{"coverage":{"total":3,"resolved":1}}`, "The hand-over", "get_goal", "Bluegrass Dental PLLC", "2026-10")
 	ok("Coverage has 3 accounts.", e("t51", 0, "/coverage/total", "3"))
+
+	// Round twenty-three: an overview's published figure is the report's; one measure's two revisions are not added.
+	rejected("Net income is 21,780.00.", "say it is the published report's", e("t23", 0, "/published/0/net_income", "21780.00"))
+	ok("The published report shows net income of 21,780.00.", e("t23", 0, "/published/0/net_income", "21780.00"))
+	rejected("Net income totals 41,880.00.", "from two revisions", derived(0, "sum", "41880.00", "t2", ni+"/amount", "t7", "/pack/profit_and_loss/measures/0/amount"))
 
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))

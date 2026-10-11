@@ -176,6 +176,8 @@ type claim struct {
 	currency string
 	basis    string
 	stale    bool
+	// published says the figure is a published report's as frozen (an executive overview row), not the current books.
+	published bool
 	// row is what identifies the row the field sits in (an id, a week's start, an account), when it has one.
 	row string
 	// driver says the field is a driver of a movement (a payee row of a changes read), attributing it, not explaining it.
@@ -271,6 +273,10 @@ func claimOf(read agentRead, path string) claim {
 				c.stale = true
 			}
 		}
+	}
+	// An executive overview lists each client's newest published report as frozen: its figures are the report's.
+	if read.tool == "executive_overview" && keys[0] == "published" {
+		c.published = true
 	}
 	// The row's identity, from the nearest object that has one.
 	for i := len(ancestors) - 1; i >= 0 && c.row == ""; i-- {
@@ -456,6 +462,7 @@ var (
 	claimVarianceNamed = regexp.MustCompile(`\b(variance|difference|change|movement|swing|gap)\b`)
 	// Verbs that state a cause acting on a measure ("marketing raised revenue").
 	claimCausalVerb     = regexp.MustCompile(`\b(raised|drove|boosted|lifted|caused|pushed up|pushed down|cut|reduced|lowered|led to|resulted in|brought down|brought up|hurt|dragged down|weighed on|increased|decreased)\b`)
+	claimPublishedSaid  = regexp.MustCompile(`\b(published|publication|report|pack)\b`)
 	claimContrast       = regexp.MustCompile(`\b(but|however|yet|although|though|now|currently|today)\b`)
 	claimScenario       = regexp.MustCompile(`\b(scenario|what-if|if)\b`)
 	claimFromTo         = regexp.MustCompile(`(?i)\bfrom\s+(\w+(?:\s+\d{4})?)\s+to\s+(\w+(?:\s+\d{4})?)`)
@@ -884,6 +891,10 @@ func checkClaim(line string, o occurrence, c claim, got string, entities []strin
 			}
 		}
 	}
+	// A published report's frozen figure is said to be the report's, never the books' as they stand now.
+	if c.published && !claimPublishedSaid.MatchString(lowerLine) {
+		return "the sentence states the published " + c.describe() + " as current; say it is the published report's"
+	}
 	// A stale read is said to be one, of this figure: in its clause, or an introduction the sentence does not then
 	// contradict ("the old report is stale, but net income is 20,100.00 now"); a forecast built from incomplete inputs is
 	// said to be incomplete.
@@ -1229,7 +1240,7 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		return "a derived figure names too few or too many fields"
 	}
 	values, claims := []string{}, []claim{}
-	seenInputs, seenFacts := map[string]bool{}, map[string]bool{}
+	seenInputs, seenFacts := map[string]bool{}, []claim{}
 	for _, in := range s.of {
 		// A field counted twice is not a second figure.
 		if seenInputs[in.step+in.path] {
@@ -1251,11 +1262,14 @@ func deriveSupport(s agentSupportEntry, line string, reads map[string]agentRead,
 		c := claimOf(read, in.path)
 		// Nor is one fact read two ways (a report through the overview and through the report itself).
 		if s.derive == "sum" && c.entity != "" && c.period != "" {
-			fact := strings.ToLower(strings.Join([]string{c.entity, c.period, c.label, c.kind, c.field, c.row, strconvBool(c.ytd), strconvBool(c.forecast), strconvBool(c.scenario), normalizeFigure(got)}, "|"))
-			if seenFacts[fact] {
-				return "a derived figure counts the same figure twice, read two ways"
+			// The fact's identity, not its value: two revisions of one measure are alternatives, never addends. An
+			// unknown basis matches any.
+			for _, seen := range seenFacts {
+				if oneFact(seen, c) {
+					return "a derived figure counts the same figure twice, read two ways or from two revisions"
+				}
 			}
-			seenFacts[fact] = true
+			seenFacts = append(seenFacts, c)
 		}
 		// Money is computed with money and counts with counts; a ratio may compare two counts, never a count and money.
 		if len(claims) > 0 && c.money != claims[0].money {
@@ -1772,4 +1786,12 @@ func operandList(line string, o occurrence, claims []claim) bool {
 		}
 	}
 	return true
+}
+
+// oneFact says whether two cited fields are one fact: the same client, month, line, kind, field, row and scope, on
+// the same basis or one of them of unknown basis.
+func oneFact(a, b claim) bool {
+	return strings.EqualFold(a.entity, b.entity) && a.period == b.period && strings.EqualFold(a.label, b.label) && a.kind == b.kind &&
+		a.field == b.field && a.row == b.row && a.ytd == b.ytd && a.forecast == b.forecast && a.scenario == b.scenario &&
+		(a.basis == "" || b.basis == "" || a.basis == b.basis)
 }

@@ -49,7 +49,7 @@ func TestAnExecutiveCitationStaysOnTheirPages(t *testing.T) {
 	d.UseNumber()
 	d.Decode(&value)
 	reads := map[string]agentRead{"t1": {text: "{}", value: value, link: chatCitation{"Your business overview", "/dashboard/executive"}, title: "Your business overview", tool: "executive_overview", executive: true}}
-	cited, why := agentSupport("facts", "Net income is 10.00.", []agentSupportEntry{{"t1", 0, "/published/0/net_income", "10.00", "", "", nil}}, reads, nil)
+	cited, why := agentSupport("facts", "The published report shows net income of 10.00.", []agentSupportEntry{{"t1", 0, "/published/0/net_income", "10.00", "", "", nil}}, reads, nil)
 	if why != "" || len(cited) != 1 || cited[0].Href != "/dashboard/executive/reports?close=7&publication=3" {
 		t.Fatalf("a published row cites the executive's reports page at the version read: %v %s", cited, why)
 	}
