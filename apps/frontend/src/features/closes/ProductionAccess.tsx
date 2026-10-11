@@ -5,7 +5,7 @@ import { money, workspaceRequest } from "./workspace";
 
 type Connection = { id: string; state: string; realm: string; company_name: string; error: string };
 type Grant = { id?: string; state?: string; realm?: string; company?: string; account_ids?: string[]; kinds?: string[]; max_amount?: string; expires_at?: string; reason?: string };
-type Status = { production_configured: boolean; hosted: boolean; data: { production_connection: Connection | null } };
+type Status = { production_configured: boolean; connectable?: boolean; hosted: boolean; data: { production_connection: Connection | null } };
 
 export function ProductionAccess({ closeId, entity, currency }: { closeId: string; entity: string; currency: string }) {
   const dates = useDates();
@@ -83,9 +83,15 @@ export function ProductionAccess({ closeId, entity, currency }: { closeId: strin
       <p>Company: {c?.company_name || "Not confirmed"} · realm: {c?.realm || "—"} · connection: {c?.state || "not connected"}</p>
       {c?.error && <p role="alert">{c.error}</p>}
       <label><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> I checked that this connection belongs to {entity} and company {c?.company_name || "shown by Intuit"}.</label>
-      {!c && <button disabled={busy || !confirmed || !status.production_configured} onClick={() => void connectionAction("connect")}>Connect production QuickBooks</button>}
-      {c?.state === "authorizing" && callbackHere && <button disabled={busy || !confirmed} onClick={() => void connectionAction("callback")}>Complete production authorization</button>}
-      {c?.state === "pending_confirmation" && <button disabled={busy || !confirmed || c.company_name !== entity} onClick={() => void connectionAction("confirm")}>Confirm exact client and company</button>}
+      {status.connectable === false && (!c || ["authorizing", "pending_confirmation"].includes(c.state)) ? (
+        <p>QuickBooks cannot be connected for your firm yet; ask Krith support. Add each month’s exports under Historical exports instead.</p>
+      ) : (
+        <>
+          {!c && <button disabled={busy || !confirmed || !status.production_configured} onClick={() => void connectionAction("connect")}>Connect production QuickBooks</button>}
+          {c?.state === "authorizing" && callbackHere && <button disabled={busy || !confirmed} onClick={() => void connectionAction("callback")}>Complete production authorization</button>}
+          {c?.state === "pending_confirmation" && <button disabled={busy || !confirmed || c.company_name !== entity} onClick={() => void connectionAction("confirm")}>Confirm exact client and company</button>}
+        </>
+      )}
       {c?.state === "active" && <button disabled={busy || !confirmed} onClick={() => void connectionAction("refresh")}>Refresh production token</button>}
       {c && <button disabled={busy || !confirmed} onClick={() => void connectionAction("disconnect")}>Disconnect production company locally</button>}
       <h4>Client-specific production grant</h4>

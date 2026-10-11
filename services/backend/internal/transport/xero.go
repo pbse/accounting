@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/ledgers"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/secrets"
@@ -53,15 +54,17 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 	status := func(ctx context.Context, closeID string) (map[string]any, error) {
 		var connection, snapshots json.RawMessage
 		var latest []byte
-		err := db.QueryRowContext(ctx, `SELECT
+		var connectable bool
+		err := db.QueryRowContext(ctx, `SELECT `+ledgers.SwitchedSQL("c.organization_id", "xero")+`,
  COALESCE((SELECT jsonb_build_object('id',x.id::text,'state',x.state,'tenant_name',x.tenant_name,'tenants',CASE WHEN x.state='choose_tenant' THEN x.tenants ELSE '[]'::jsonb END,'confirmed_at',x.confirmed_at,'error',x.error) FROM xero_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'),'null'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'period',s.period,'captured_at',s.captured_at,'digest',s.digest,'tenant_id',s.tenant_id) ORDER BY s.id DESC) FROM xero_snapshots s WHERE s.close_id=c.id),'[]'::jsonb),
  (SELECT s.payload FROM xero_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1)
- FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&connection, &snapshots, &latest)
+ FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&connectable, &connection, &snapshots, &latest)
 		if err != nil {
 			return nil, err
 		}
-		out := map[string]any{"configured": xero.Configured(), "connection": connection, "snapshots": snapshots, "latest": nil}
+		// connectable says Xero is switched on for the firm, so a new connection may be made.
+		out := map[string]any{"configured": xero.Configured(), "connectable": connectable, "connection": connection, "snapshots": snapshots, "latest": nil}
 		if latest != nil {
 			currency, date, rows, e := xero.Balances(latest)
 			if e != nil {

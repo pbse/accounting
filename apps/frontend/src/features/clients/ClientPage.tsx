@@ -66,6 +66,8 @@ type ClientRead = {
   xero: XeroConnection[];
   // The ledger the client keeps, as recorded: not how its books arrive.
   ledger: KeptLedger | null;
+  // Which connectors may be connected for the firm: one switched off is not offered.
+  connectable?: { quickbooks: boolean; xero: boolean };
   profile: Profile | null;
   basis: {
     method: "accrual" | "cash" | "modified_cash";
@@ -557,6 +559,12 @@ function monthState(m: Month, today: string) {
   return <span className="pill neutral">Open</span>;
 }
 
+// connectOffer is how the client's books can arrive: the connectors switched on for the firm, else a month's exports.
+function connectOffer(client: ClientRead) {
+  const on = [client.connectable?.quickbooks !== false && "QuickBooks", client.connectable?.xero !== false && "Xero"].filter(Boolean);
+  return on.length ? `Connect ${on.join(" or ")}, or label the exports a month uses.` : "Label the exports a month uses.";
+}
+
 // How the client's books arrive, from its connections (the QuickBooks one its books are read from first, then Xero),
 // and the newest month's books: one line, a chip, and where the connection is managed today.
 function books(client: ClientRead, day: (value: string) => string) {
@@ -654,7 +662,7 @@ function books(client: ClientRead, day: (value: string) => string) {
   }
   return {
     short: newest?.books?.source === "exports" ? "books from exports" : "no ledger connected",
-    line: `No ledger is connected. Connect QuickBooks or Xero, or label the exports a month uses.${latest}`,
+    line: `No ledger is connected. ${connectOffer(client)}${latest}`,
     chip: ["Not connected", "pill neutral"] as [string, string],
     attention: false,
     connected: false,

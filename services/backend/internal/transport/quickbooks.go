@@ -243,11 +243,16 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
 		err := db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('connection',(SELECT jsonb_build_object('id',x.id::text,'environment',x.environment,'state',x.state,'realm',x.realm,'company_name',x.company_name,'confirmed_by',x.confirmed_by,'confirmed_at',x.confirmed_at,'error',x.error,'updated_at',x.updated_at) FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("c.id")+`), 'production_connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error) FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.environment='production' AND x.state<>'disconnected'), 'snapshots',COALESCE((SELECT jsonb_agg(v ORDER BY (v->>'id')::bigint DESC) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'account_count',jsonb_array_length(s.payload->'accounts'),'actor',s.actor,'period',s.payload->>'period','source_id',s.payload->>'source_id') v FROM quickbooks_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 20) recent),'[]'::jsonb)) FROM client_closes c WHERE c.id::text=$1`, r.PathValue("id")).Scan(&raw)
+		var connectable bool
+		if err == nil {
+			connectable, err = connectorOn(r.Context(), db, organization(r), "quickbooks")
+		}
 		if err != nil {
 			problem(w, 503, "QuickBooks status unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"configured": quickbooks.OAuthConfigured(), "production_configured": quickbooks.OAuthConfiguredFor("production"), "hosted": auth.Actor(r.Context()).Organization != "", "data": raw})
+		// connectable says QuickBooks is switched on for the firm, so a new connection may be made.
+		jsonReply(w, 200, map[string]any{"configured": quickbooks.OAuthConfigured(), "production_configured": quickbooks.OAuthConfiguredFor("production"), "connectable": connectable, "hosted": auth.Actor(r.Context()).Organization != "", "data": raw})
 	})
 	mux.HandleFunc("GET "+path+"/snapshots/{snapshot}", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte

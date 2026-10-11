@@ -10,6 +10,8 @@ type Tenant = { tenantId: string; tenantName: string };
 type Balance = { account_id: string; code: string; name: string; class: string; debit: string; credit: string; ytd_debit: string; ytd_credit: string };
 type Status = {
   configured: boolean;
+  // connectable says Xero is switched on for the firm: off, no new connection is offered.
+  connectable?: boolean;
   hosted: boolean;
   connection: { id: string; state: string; tenant_name: string; tenants: Tenant[]; error: string } | null;
   snapshots: { id: string; period: string; captured_at: string; digest: string }[];
@@ -91,6 +93,8 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
         <p className="empty">Xero is not configured on this server. Set the Xero app's client ID, secret and callback URL first.</p>
       ) : !status.hosted ? (
         <p className="empty">Connecting Xero needs a signed-in firm session with integrations access.</p>
+      ) : status.connectable === false && (!c || ["authorizing", "choose_tenant"].includes(c.state)) ? (
+        <p className="empty">Xero cannot be connected for your firm yet; ask Krith support. Add this month’s exports under Historical exports instead.</p>
       ) : !c ? (
         <>
           {confirm}

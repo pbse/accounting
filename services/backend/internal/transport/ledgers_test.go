@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -130,6 +131,24 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 	store.ServeHTTP(w, r)
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "cannot be connected") {
 		t.Fatalf("connecting a switched-off connector: %d %s", w.Code, w.Body.String())
+	}
+	// The month's panel and the client's page say so, and offer no connection.
+	read := func(path string) map[string]any {
+		t.Helper()
+		r := httptest.NewRequest("GET", path, nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: firm, Permissions: []string{"clients:all", "integrations:manage"}}))
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		var out map[string]any
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("GET %s: %d %s", path, w.Code, w.Body.String())
+		}
+		return out
+	}
+	if status := read("/v1/closes/" + closeID + "/quickbooks"); status["connectable"] != false {
+		t.Fatalf("the QuickBooks panel's switch: %v", status)
+	}
+	if page := read("/v1/closes/client?name=" + url.QueryEscape("QBO Secret Co")); page["connectable"].(map[string]any)["quickbooks"] != false {
+		t.Fatalf("the client page's switches: %v", page["connectable"])
 	}
 }
 

@@ -99,16 +99,25 @@ func readClientLedger(ctx context.Context, q interface {
 // switch decides whether a connector can be connected for the firm: it is how a connector reaches firms once it passes
 // its acceptance, or is held from one. Connections already made keep reading until they are disconnected.
 func connectorOff(ctx context.Context, w http.ResponseWriter, db *sql.DB, org, connector, name string) bool {
-	var on bool
-	if err := db.QueryRowContext(ctx, `SELECT `+ledgers.SwitchedSQL("$1", connector), org).Scan(&on); err != nil {
+	on, err := connectorOn(ctx, db, org, connector)
+	if err != nil {
 		problem(w, 503, name+"'s switch is unavailable.")
 		return true
 	}
 	if !on {
-		problem(w, 409, name+" cannot be connected for your firm yet; ask Krith support. Its files can be sent instead.")
+		problem(w, 409, name+" cannot be connected for your firm yet; ask Krith support. A month's exports can be added to it instead.")
 		return true
 	}
 	return false
+}
+
+// connectorOn says whether connector may be connected for firm org, as its panels show before offering to.
+func connectorOn(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, org, connector string) (bool, error) {
+	var on bool
+	err := q.QueryRowContext(ctx, `SELECT `+ledgers.SwitchedSQL("$1", connector), org).Scan(&on)
+	return on, err
 }
 
 // canRecordLedger is a member who may record or correct a client's ledger: one who manages the roster (who adds

@@ -344,6 +344,15 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		out["profile"] = profile
 		// The ledger the client keeps, as recorded, and its catalog entry.
+		// Which connectors may be connected for the firm, so the page offers only those.
+		connectable := map[string]bool{}
+		for _, connector := range []string{"quickbooks", "xero"} {
+			if connectable[connector], err = connectorOn(ctx, tx, org, connector); err != nil {
+				problem(w, 503, "The client is unavailable.")
+				return
+			}
+		}
+		out["connectable"] = connectable
 		if out["ledger"], err = readClientLedger(ctx, tx, org, name); err != nil {
 			problem(w, 503, "The client is unavailable.")
 			return

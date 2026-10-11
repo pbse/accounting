@@ -28,6 +28,8 @@ type Snapshot = {
 type Status = {
   configured: boolean;
   production_configured: boolean;
+  // connectable says QuickBooks is switched on for the firm: off, no new connection is offered.
+  connectable?: boolean;
   hosted: boolean;
   data: { connection: Connection | null; snapshots: Snapshot[] };
 };
@@ -183,6 +185,8 @@ export function QuickBooks({
   }
   const c = status?.data.connection;
   // Books are read from the client's production company once connected; it is connected and confirmed under Settings.
+  // Switched off for the firm, QuickBooks offers no new connection; one already made keeps reading.
+  const off = status?.connectable === false;
   const production = c ? c.environment === "production" : !!status?.production_configured;
   const company = production ? "production company" : "sandbox company";
   return (
@@ -252,10 +256,12 @@ export function QuickBooks({
                   : ""}
                 .
               </label>
-              {production && c?.state !== "active" && (
+              {off && (!c || ["authorizing", "pending_confirmation"].includes(c.state)) ? (
+                <p>QuickBooks cannot be connected for your firm yet; ask Krith support. Add this month’s exports under Historical exports instead.</p>
+              ) : production && c?.state !== "active" && (
                 <p>Connect and confirm the client's QuickBooks company under <Link to="?tab=settings">Settings → Production QuickBooks</Link>; its books are then read here.</p>
               )}
-              {!c && !production && (
+              {!off && !c && !production && (
                 <button
                   disabled={!confirmed || !status.configured}
                   onClick={() => void action("connect")}
@@ -263,7 +269,7 @@ export function QuickBooks({
                   Connect QuickBooks sandbox
                 </button>
               )}
-              {c?.state === "authorizing" && callback.has("qbo_code") && callback.get("qbo_env") !== "production" && (
+              {!off && c?.state === "authorizing" && callback.has("qbo_code") && callback.get("qbo_env") !== "production" && (
                 <button
                   disabled={!confirmed}
                   onClick={() => void action("callback")}
@@ -271,7 +277,7 @@ export function QuickBooks({
                   Complete authorization
                 </button>
               )}
-              {c?.state === "pending_confirmation" && !production && (
+              {!off && c?.state === "pending_confirmation" && !production && (
                 <button
                   disabled={!confirmed}
                   onClick={() => void action("confirm")}
