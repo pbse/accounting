@@ -24,7 +24,7 @@ const PRINCIPLES = [
 
 // How a firm works with the agents, in brief: each holds for the product today.
 const WORKING = [
-  { key: "01 · Goal", title: "Hand it a goal", text: "“Get these closes ready for review by Friday.” Agents plan the work and keep at it after you close the tab." },
+  { key: "01 · Goal", title: "Hand it a goal", text: "“Hand over my clients due Friday.” Agents plan the work and keep at it after you close the tab." },
   { key: "02 · Ask", title: "Ask as you would a colleague", text: "Ask about your clients in plain words. Answers point to the saved work behind them." },
   { key: "03 · Decide", title: "Start with the decisions", text: "Your day opens on what needs a person, not on a list of tasks. Agents draft the questions for clients; your team chooses what goes out." },
 ];
