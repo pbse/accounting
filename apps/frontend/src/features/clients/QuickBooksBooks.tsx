@@ -94,7 +94,12 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
   return (
     <>
       {button}
-      <Dialog open={open === "connect"} onClose={close} title="Connect QuickBooks" description={`Sign in to Intuit and choose ${name}’s company. Its books are then read for each month; nothing posts without a separate grant.`}>
+      <Dialog
+        open={open === "connect"}
+        onClose={close}
+        title="Connect QuickBooks"
+        description={`Sign in to Intuit and choose ${name}’s company. Its books are then read for each month; nothing posts without a separate grant.`}
+      >
         {error && <p role="alert">{error}</p>}
         {!setup.production && !setup.sandbox ? (
           <p className="note">QuickBooks is not set up on this server yet.</p>
@@ -116,7 +121,12 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
           </button>,
         )}
       </Dialog>
-      <Dialog open={open === "finish" && !!returned} onClose={close} title="Finish connecting QuickBooks" description={`Intuit returned with company ${answer.get("qbo_realm") ?? ""}. Finish to read its name and settings for ${name}.`}>
+      <Dialog
+        open={open === "finish" && !!returned}
+        onClose={close}
+        title="Finish connecting QuickBooks"
+        description={`Intuit returned with company ${answer.get("qbo_realm") ?? ""}. Finish to read its name and settings for ${name}.`}
+      >
         {error && <p role="alert">{error}</p>}
         {agree(<>I started this sign-in for {name}.</>)}
         {actions(
@@ -131,11 +141,17 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
         )}
       </Dialog>
       {pending && (
-        <Dialog open={open === "confirm"} onClose={close} title="Confirm the company" description={`Intuit connected ${pending.company_name || "a company"} (company ${pending.realm}). Its books are read for ${name} only once you confirm it is theirs.`}>
+        <Dialog
+          open={open === "confirm"}
+          onClose={close}
+          title="Confirm the company"
+          description={`Intuit connected ${pending.company_name || "a company"} (company ${pending.realm}). Its books are read for ${name} only once you confirm it is theirs.`}
+        >
           {error && <p role="alert">{error}</p>}
           {pending.environment === "production" && pending.company_name !== name && (
             <p className="note">
-              The company is named “{pending.company_name}”, not “{name}”. A production company’s name must match the client’s exactly before its books are read; rename one of them, or disconnect and choose another company.
+              The company is named “{pending.company_name}”, not “{name}”. A production company’s name must match the client’s exactly before its books are read; rename one of them, or disconnect and
+              choose another company.
             </p>
           )}
           {agree(
@@ -148,7 +164,12 @@ export function QuickBooksAction({ client, onChanged }: { client: Client; onChan
               <button type="button" className="danger" disabled={busy || !agreed} onClick={() => void act("disconnect", pending)}>
                 Disconnect
               </button>
-              <button type="button" className="primary" disabled={busy || !agreed || (pending.environment === "production" && pending.company_name !== name)} onClick={() => void act("confirm", pending)}>
+              <button
+                type="button"
+                className="primary"
+                disabled={busy || !agreed || (pending.environment === "production" && pending.company_name !== name)}
+                onClick={() => void act("confirm", pending)}
+              >
                 {busy ? "Confirming…" : "Confirm"}
               </button>
             </>,
@@ -266,30 +287,35 @@ export function PostingCard({ client, onChanged }: { client: Client; onChanged: 
   const labels = Object.fromEntries(kinds);
   return (
     <>
-    <Card
-      icon="shield"
-      tone={grant ? "reply" : "done"}
-      title="Posting"
-      chip={grant ? <span className="pill">Granted</span> : <span className="pill neutral">Not granted</span>}
-      action={
-        client.can_grant ? (
-          grant ? (
-            <button type="button" onClick={() => setOpen("revoke")}>
-              Revoke
-            </button>
-          ) : (
-            <button type="button" disabled={!ready} title={ready ? undefined : "Connect and confirm the production company, named as the client is, first"} onClick={() => setOpen("grant")}>
-              Grant
-            </button>
-          )
-        ) : undefined
-      }
-    >
-      {grant
-        ? `Approved ${grant.kinds.map((k) => (labels[k] ?? k).toLowerCase()).join(", ")} may post to QuickBooks accounts ${grant.account_ids.join(", ")}, up to ${money(grant.max_amount, currency)} each, until ${dates.date(grant.expires_at)}.`
-        : `Nothing posts to ${name}’s QuickBooks company: there is no grant. Each posting is still approved on its own.`}
-    </Card>
-      <Dialog open={open === "grant"} onClose={close} title="Grant production posting" description={`Which approved drafts may post to ${name}’s QuickBooks company, to which accounts, up to what, and until when.`}>
+      <Card
+        icon="shield"
+        tone={grant ? "reply" : "done"}
+        title="Posting"
+        chip={grant ? <span className="pill">Granted</span> : <span className="pill neutral">Not granted</span>}
+        action={
+          client.can_grant ? (
+            grant ? (
+              <button type="button" onClick={() => setOpen("revoke")}>
+                Revoke
+              </button>
+            ) : (
+              <button type="button" disabled={!ready} title={ready ? undefined : "Connect and confirm the production company, named as the client is, first"} onClick={() => setOpen("grant")}>
+                Grant
+              </button>
+            )
+          ) : undefined
+        }
+      >
+        {grant
+          ? `Approved ${grant.kinds.map((k) => (labels[k] ?? k).toLowerCase()).join(", ")} may post to QuickBooks accounts ${grant.account_ids.join(", ")}, up to ${money(grant.max_amount, currency)} each, until ${dates.date(grant.expires_at)}.`
+          : `Nothing posts to ${name}’s QuickBooks company: there is no grant. Each posting is still approved on its own.`}
+      </Card>
+      <Dialog
+        open={open === "grant"}
+        onClose={close}
+        title="Grant production posting"
+        description={`Which approved drafts may post to ${name}’s QuickBooks company, to which accounts, up to what, and until when.`}
+      >
         <form
           onSubmit={(event) => {
             event.preventDefault();

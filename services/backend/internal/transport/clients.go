@@ -324,10 +324,12 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out["quickbooks"], out["xero"] = json.RawMessage(quickbooksRaw), json.RawMessage(xeroRaw)
-		// Which ledgers this server can connect, and the client's QuickBooks and Xero posting grants, if any.
+		// Which ledgers this server can connect, and the client's QuickBooks and Xero posting grants, if any, under any of
+		// its names (its own first).
 		out["quickbooks_setup"] = map[string]bool{"sandbox": quickbooks.OAuthConfigured(), "production": quickbooks.OAuthConfiguredFor("production")}
 		out["xero_configured"] = xero.Configured()
-		switch grant, e := scanXeroGrant(tx.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND revoked_at IS NULL`, org, name)); e {
+		switch grant, e := scanXeroGrant(tx.QueryRowContext(ctx, `SELECT `+xeroGrantColumns+` WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND revoked_at IS NULL
+ ORDER BY lower(client_entity)=lower($2) DESC,id DESC LIMIT 1`, org, name)); e {
 		case nil:
 			out["xero_grant"] = grant
 		case sql.ErrNoRows:
@@ -336,7 +338,8 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client is unavailable.")
 			return
 		}
-		switch grant, e := scanGrant(tx.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND lower(g.client_entity)=lower($2) AND g.revoked_at IS NULL LIMIT 1`, org, name)); e {
+		switch grant, e := scanGrant(tx.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND client_identity(g.organization_id,g.client_entity)=client_identity($1,$2) AND g.revoked_at IS NULL
+ ORDER BY lower(g.client_entity)=lower($2) DESC,g.id DESC LIMIT 1`, org, name)); e {
 		case nil:
 			out["production_grant"] = grant
 		case sql.ErrNoRows:

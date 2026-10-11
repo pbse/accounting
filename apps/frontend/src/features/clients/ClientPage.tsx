@@ -8,6 +8,8 @@ import { clientPath } from "../../data/clients";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, monthShort, useDates, useToday } from "../../data/time";
 import { ClientForm, type Person, type RosterEntry } from "../closes/Roster";
+import { PostingCard, QuickBooksAction, type ProductionGrant } from "./QuickBooksBooks";
+import { XeroAction, XeroPostingCard, type XeroGrant } from "./XeroBooks";
 import { workspaceRequest } from "../closes/workspace";
 
 type Books = {
@@ -43,6 +45,7 @@ type XeroConnection = {
   client_entity: string;
   state: string;
   tenant_name: string;
+  tenants: { tenantId: string; tenantName: string }[];
   error: string;
 };
 type Profile = {
@@ -57,6 +60,8 @@ type ClientRead = {
   whole: boolean;
   can_manage: boolean;
   can_connect: boolean;
+  // can_grant says the reader may give and revoke the client's posting grants.
+  can_grant: boolean;
   roster: RosterEntry | null;
   template: { due_days: number | null; owner: string } | null;
   template_hidden: boolean;
@@ -64,6 +69,11 @@ type ClientRead = {
   owed: Owed[];
   quickbooks: QuickBooksConnection[];
   xero: XeroConnection[];
+  // Which ledgers this server can connect, and the client's posting grants.
+  quickbooks_setup?: { sandbox: boolean; production: boolean };
+  xero_configured?: boolean;
+  production_grant?: ProductionGrant | null;
+  xero_grant?: XeroGrant | null;
   profile: Profile | null;
   basis: {
     method: "accrual" | "cash" | "modified_cash";
@@ -201,16 +211,9 @@ export default function ClientPage() {
   // The one action: the oldest month open, else the earliest month it owes.
   const inHand = oldest;
   const next = active && !inHand && owed[0] ? owed[0] : null;
-  // Procedures are kept under the client's own name, so they are managed from its newest month opened under that name;
-  // a connection from the newest month opened under the name it is held under (a month under another name shows
-  // neither).
+  // Procedures are kept under the client's own name, so they are managed from its newest month opened under that name
+  // (a month under another name shows them not). Connections are managed here; labeled exports in their month.
   const latest = months.find((m) => m.entity.toLowerCase() === name.toLowerCase());
-  const managedIn = ledger.month ?? months.find((m) => m.entity.toLowerCase() === (ledger.held ?? name).toLowerCase());
-  // Each other connection needing attention, with the month that manages it.
-  const fixes = ledger.fix.flatMap((l) => {
-    const month = months.find((m) => m.entity.toLowerCase() === l.held.toLowerCase());
-    return month ? [{ ledger: l, month }] : [];
-  });
 
   // How each month is due and who holds it: the client's own terms, else the firm template's, said once.
   const people = client.people ?? [];
@@ -294,25 +297,23 @@ export default function ClientPage() {
             title="Books"
             chip={<span className={ledger.chip[1]}>{ledger.chip[0]}</span>}
             action={
-              client.can_connect && (managedIn || fixes.length) ? (
+              client.can_connect || ledger.month ? (
                 <>
-                  {managedIn && (
-                    <Link className="button" to={`/dashboard/closes/${managedIn.id}?tab=${ledger.tab}#${ledger.anchor}`}>
-                      {ledger.connected ? "Manage" : "Connect"} in {monthShort(managedIn.period)}
+                  {ledger.month && (
+                    <Link className="button" to={`/dashboard/closes/${ledger.month.id}?tab=evidence#historical-exports`}>
+                      {monthShort(ledger.month.period)}’s exports
                     </Link>
                   )}
-                  {fixes.map((f) => (
-                    <Link key={`${f.ledger.source}:${f.ledger.name}:${f.month.id}`} className="button" to={`/dashboard/closes/${f.month.id}?tab=${f.ledger.tab}#${f.ledger.anchor}`}>
-                      Fix {f.ledger.name}
-                    </Link>
-                  ))}
+                  <QuickBooksAction client={client} onChanged={reread} />
+                  <XeroAction client={client} onChanged={reread} />
                 </>
               ) : undefined
             }
           >
             {ledger.line}
-            {managedIn || !client.can_connect ? "" : ` Open a month under ${ledger.held ?? name} to ${ledger.connected ? "manage" : "connect"} its ledger.`}
           </Card>
+          <PostingCard client={client} onChanged={reread} />
+          <XeroPostingCard client={client} onChanged={reread} />
           <Card
             icon="history"
             tone={!roster ? "wait" : "done"}
@@ -549,7 +550,7 @@ function books(client: ClientRead, day: (value: string) => string) {
             ? "its organisation waits to be chosen"
             : "still connecting";
   // Each connection, under the client's own name first, then production first, as the API lists them: how it reads,
-  // its state, and the month that manages it.
+  // and its state.
   const ledgers: Ledger[] = [
     ...client.quickbooks.map((q) => ({
       source: "quickbooks",
@@ -560,8 +561,6 @@ function books(client: ClientRead, day: (value: string) => string) {
       chip: state(q.state, "Confirm the company"),
       status: status(q.state),
       ok: live(q.state),
-      tab: q.environment === "production" ? "settings" : "evidence",
-      anchor: q.environment === "production" ? "quickbooks-production" : "quickbooks-ledger",
     })),
     ...client.xero.map((x) => ({
       source: "xero",
@@ -572,13 +571,11 @@ function books(client: ClientRead, day: (value: string) => string) {
       chip: state(x.state, "Choose the organisation"),
       status: status(x.state),
       ok: live(x.state),
-      tab: "evidence",
-      anchor: "xero",
     })),
   ];
   // The card leads with how the newest month's books arrived: its labeled exports, managed in that month, or the
   // ledger it was captured from; with neither, a connection that works, else the first. Every other connection is said
-  // after it with its own state, and each that needs attention gets its own way in.
+  // after it with its own state; each ledger's own action on the card manages it.
   const source = newest?.books?.source;
   const also = (others: Ledger[]) => others.map((o) => ` ${o.name} is also connected (${o.status}).`).join("");
   if (newest?.books && source === "exports") {
@@ -586,14 +583,9 @@ function books(client: ClientRead, day: (value: string) => string) {
     return {
       short: "books from exports",
       line: `${latest.trim()}${ledgers.length ? also(ledgers) : " No ledger is connected."}`,
-      held: newest.entity as string | undefined,
       month: newest as ClientRead["months"][number] | undefined,
       chip: (newest.books.stale ? ["Exports replaced", "pill muted"] : failing.length ? failing[0].chip : ["From exports", "pill neutral"]) as [string, string],
       attention: !!newest.books.stale || failing.length > 0,
-      connected: true,
-      tab: "evidence",
-      anchor: "historical-exports",
-      fix: failing,
     };
   }
   // The connection a captured month was read from is the one of its source held under the month's own name, if any.
@@ -604,14 +596,9 @@ function books(client: ClientRead, day: (value: string) => string) {
     return {
       short: lead.short,
       line: `${lead.line}${also(others)}${latest}`,
-      held: lead.held as string | undefined,
       month: undefined as ClientRead["months"][number] | undefined,
       chip: lead.ok && failing.length ? failing[0].chip : lead.chip,
       attention: !lead.ok || failing.length > 0,
-      connected: true,
-      tab: lead.tab,
-      anchor: lead.anchor,
-      fix: failing,
     };
   }
   return {
@@ -619,16 +606,11 @@ function books(client: ClientRead, day: (value: string) => string) {
     line: `No ledger is connected. Connect QuickBooks or Xero, or label the exports a month uses.${latest}`,
     chip: ["Not connected", "pill neutral"] as [string, string],
     attention: false,
-    connected: false,
-    held: undefined as string | undefined,
     month: undefined as ClientRead["months"][number] | undefined,
-    tab: "evidence",
-    anchor: "quickbooks-ledger",
-    fix: [] as Ledger[],
   };
 }
 
-type Ledger = { source: string; short: string; name: string; line: string; held: string; chip: [string, string]; status: string; ok: boolean; tab: string; anchor: string };
+type Ledger = { source: string; short: string; name: string; line: string; held: string; chip: [string, string]; status: string; ok: boolean };
 
 // Names joined as a sentence lists them: "Ann", "Ann and Cy", "Ann, Bea and Cy".
 function listed(names: string[]) {

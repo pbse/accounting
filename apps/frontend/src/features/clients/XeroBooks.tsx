@@ -7,7 +7,12 @@ import { money, workspaceRequest } from "../closes/workspace";
 
 export type XeroConnection = { id: string; state: string; tenant_name: string; tenants: { tenantId: string; tenantName: string }[]; error: string };
 export type XeroGrant = { id: string; tenant_id: string; account_ids: string[]; kinds: string[]; max_amount: string; expires_at: string; reason: string; granted_by: string };
-type Client = { entity: string; can_connect: boolean; can_grant: boolean; xero: XeroConnection | null; xero_configured?: boolean; xero_grant?: XeroGrant | null; profile: { currency: string } | null };
+type Client = { entity: string; can_connect: boolean; can_grant: boolean; xero: XeroConnection[]; xero_configured?: boolean; xero_grant?: XeroGrant | null; profile: { currency: string } | null };
+
+// The connection a step acts on: the one Xero just returned for, else the one waiting for its organisation, else the
+// first (under the client's own name first, as the read lists them).
+const current = (client: Client, returning: boolean) =>
+  (returning ? client.xero.find((x) => x.state === "authorizing") : undefined) ?? client.xero.find((x) => x.state === "choose_tenant") ?? client.xero[0];
 
 const path = (name: string, what = "xero") => `/client/${what}?name=${encodeURIComponent(name)}`;
 
@@ -19,7 +24,7 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
   const name = client.entity;
   const hash = useBrowserHash();
   const answer = useMemo(() => new URLSearchParams(hash.slice(1)), [hash]);
-  const c = client.xero;
+  const c = current(client, answer.has("xero_code"));
   const returned = answer.has("xero_code") && c?.state === "authorizing";
   const [open, setOpen] = useState<"" | "connect" | "finish" | "choose" | "manage">("");
   const [busy, setBusy] = useState(false);
@@ -85,7 +90,12 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
   return (
     <>
       {button}
-      <Dialog open={open === "connect"} onClose={close} title="Connect Xero" description={`Sign in to Xero and authorise ${name}’s organisation. Its books are then read for each month; nothing posts without a separate grant.`}>
+      <Dialog
+        open={open === "connect"}
+        onClose={close}
+        title="Connect Xero"
+        description={`Sign in to Xero and authorise ${name}’s organisation. Its books are then read for each month; nothing posts without a separate grant.`}
+      >
         {error && <p role="alert">{error}</p>}
         {!client.xero_configured && <p className="note">Xero is not set up on this server yet.</p>}
         {agree(<>I may connect {name}’s books for the firm.</>)}
@@ -95,7 +105,12 @@ export function XeroAction({ client, onChanged }: { client: Client; onChanged: (
           </button>,
         )}
       </Dialog>
-      <Dialog open={open === "finish" && returned} onClose={close} title="Finish connecting Xero" description={`Xero returned from the sign-in. Finish to see which organisations it authorised for ${name}.`}>
+      <Dialog
+        open={open === "finish" && returned}
+        onClose={close}
+        title="Finish connecting Xero"
+        description={`Xero returned from the sign-in. Finish to see which organisations it authorised for ${name}.`}
+      >
         {error && <p role="alert">{error}</p>}
         {agree(<>I started this sign-in for {name}.</>)}
         {actions(
@@ -174,7 +189,7 @@ const kinds: [string, string][] = [
 export function XeroPostingCard({ client, onChanged }: { client: Client; onChanged: () => void }) {
   const dates = useDates();
   const name = client.entity;
-  const c = client.xero;
+  const c = current(client, false);
   const grant = client.xero_grant;
   const currency = client.profile?.currency ?? "USD";
   const [open, setOpen] = useState<"" | "grant" | "revoke">("");
@@ -243,7 +258,12 @@ export function XeroPostingCard({ client, onChanged }: { client: Client; onChang
           ? `Approved ${grant.kinds.map((k) => (labels[k] ?? k).toLowerCase()).join(", ")} may post to ${grant.account_ids.length} Xero accounts, up to ${money(grant.max_amount, currency)} each, until ${dates.date(grant.expires_at)}.`
           : `Nothing posts to ${name}’s Xero organisation: there is no grant. Each posting is still approved on its own.`}
       </Card>
-      <Dialog open={open === "grant"} onClose={close} title="Grant Xero posting" description={`Which approved drafts may post to ${name}’s Xero organisation, to which accounts, up to what, and until when.`}>
+      <Dialog
+        open={open === "grant"}
+        onClose={close}
+        title="Grant Xero posting"
+        description={`Which approved drafts may post to ${name}’s Xero organisation, to which accounts, up to what, and until when.`}
+      >
         <form
           onSubmit={(event) => {
             event.preventDefault();
