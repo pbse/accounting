@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -180,7 +181,7 @@ func TestPlanReadsTheBooksTheLedgerReadsUse(t *testing.T) {
 	}
 	_, err = db.Exec(`UPDATE xero_connections SET state='reconnect_required' WHERE id::text=$1`, xeroID)
 	must(err)
-	if s := plan(); s["books"].Text != "Reconnect QuickBooks for "+entity+" so I can read the books." {
+	if s := plan(); s["books"].Text != "Reconnect QuickBooks for "+entity+" on its page so I can read the books." || s["books"].Link != "/dashboard/clients/"+url.PathEscape(entity) {
 		t.Fatalf("with no active connection, reconnecting is a person's: %+v", s["books"])
 	}
 	// Once the books are read from production, the sandbox capture is not used, and it keeps the scheduled first capture

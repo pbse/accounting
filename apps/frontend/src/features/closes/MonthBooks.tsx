@@ -1,9 +1,10 @@
 import { workspaceQuery } from "../../data/queries";
 import { useQuery } from "@tanstack/react-query";
-import { useBrowserHash } from "../../data/browser";
 import { useDates } from "../../data/time";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
+import { clientPage } from "../../data/clients";
+import { monthName } from "../../data/time";
 import { workspaceRequest } from "./workspace";
 
 type Connection = {
@@ -28,8 +29,6 @@ type Snapshot = {
 type Status = {
   configured: boolean;
   production_configured: boolean;
-  // connectable says QuickBooks is switched on for the firm: off, no new connection is offered.
-  connectable?: boolean;
   hosted: boolean;
   data: { connection: Connection | null; snapshots: Snapshot[] };
 };
@@ -48,12 +47,17 @@ type TransactionSync = {
   latest?: boolean;
 };
 type TransactionRow = { kind: string; provider_id: string; revision: string; txn_date: string; provider_updated_at: string; currency: string; amount: string; record: unknown; capture_id: string; evidence_id: string };
-export function QuickBooks({
+// A month's books from QuickBooks (docs/books-sources.md, Client page): the company the client's books are read from,
+// connected on the client's page, and here this month's captures of it: its accrual reports, its account directory and
+// its transactions, each kept with when it was read, with the transactions read from the latest capture.
+export function MonthBooks({
   closeId,
   entity,
+  period,
 }: {
   closeId: string;
   entity: string;
+  period: string;
 }) {
   const dates = useDates();
   // The connection and its transaction captures, read with the page; the captures are read again every five seconds
@@ -75,17 +79,6 @@ export function QuickBooks({
   const error = actionError || (readFailed ? readFailed.message || "Connection unavailable." : "");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const hash = useBrowserHash();
-  // The provider's answer, once the page has hydrated (see useBrowserHash).
-  const callback = useMemo(() => new URLSearchParams(hash.slice(1)), [hash]);
-  useEffect(() => {
-    if (callback.has("qbo_code"))
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + window.location.search,
-      );
-  }, [callback]);
   const load = async () => {
     setError("");
     await Promise.all([connectionRead.refetch(), syncsRead.refetch()]);
@@ -136,26 +129,12 @@ export function QuickBooks({
     setBusy(true);
     setError("");
     try {
-      const result = await workspaceRequest(`/${closeId}/quickbooks`, {
+      await workspaceRequest(`/${closeId}/quickbooks`, {
         action: name,
         connection_id: status?.data.connection?.id ?? "",
         confirmed,
-        realm:
-          name === "callback"
-            ? callback.get("qbo_realm")
-            : status?.data.connection?.realm,
-        code: name === "callback" ? callback.get("qbo_code") : undefined,
-        state: name === "callback" ? callback.get("qbo_state") : undefined,
+        realm: status?.data.connection?.realm,
       });
-      if (name === "connect") {
-        window.location.assign(result.url);
-        return;
-      }
-      if (name === "callback") {
-        callback.delete("qbo_code");
-        callback.delete("qbo_state");
-        callback.delete("qbo_realm");
-      }
       setConfirmed(false);
       await load();
     } catch (e) {
@@ -184,139 +163,55 @@ export function QuickBooks({
     }
   }
   const c = status?.data.connection;
-  // Books are read from the client's production company once connected; it is connected and confirmed under Settings.
-  // Switched off for the firm, QuickBooks offers no new connection; one already made keeps reading.
-  const off = status?.connectable === false;
-  const production = c ? c.environment === "production" : !!status?.production_configured;
+  const production = c?.environment === "production";
   const company = production ? "production company" : "sandbox company";
   return (
-    <details id="quickbooks-ledger" open={(callback.has("qbo_code") && callback.get("qbo_env") !== "production") || hash === "#quickbooks-ledger"}>
-      <summary>QuickBooks ledger evidence</summary>
-      <p>
-        Reads {entity}'s QuickBooks {company}. This reader cannot post
-        journals. Intuit's accounting permission is broader than read-only; this
-        app uses these credentials only for the fixed read operations here.
-      </p>
+    <section id="quickbooks-ledger" aria-label={`${monthName(period)}’s books`}>
+      <h2>{monthName(period)}’s books</h2>
       {error && <p role="alert">{error}</p>}
-      <button
-        disabled={busy}
-        onClick={() => {
-          setError("");
-          void load();
-        }}
-      >
-        Refresh connection status
-      </button>
-      {!status && <p>Loading connection…</p>}
+      {!status && <p>Loading…</p>}
       {status && (
         <>
-          {!status.hosted && (
-            <p>
-              Connect from your firm’s signed-in workspace. Local preparation
-              works without QuickBooks.
-            </p>
-          )}
-          {!status.configured && !status.production_configured && (
-            <p>
-              Sandbox OAuth is not configured. Follow the QuickBooks onboarding
-              guide before connecting.
-            </p>
-          )}
           {c ? (
-            <>
-              <p>
-                {c.company_name || "Company not yet confirmed"} ·{" "}
-                {c.realm ? `realm ${c.realm} · ` : ""}
-                {c.state.replaceAll("_", " ")}
-              </p>
-              {c.error && <p role="alert">{c.error}</p>}
-              {["exchanging", "refreshing", "reconnect_required"].includes(
-                c.state,
-              ) && (
-                <p>
-                  If an exchange was interrupted, disconnect and reconnect.
-                  Credentials are never retried blindly.
-                </p>
-              )}
-            </>
+            <p>
+              Read from QuickBooks: {c.company_name || "company not confirmed yet"}
+              {c.realm ? ` (company ${c.realm})` : ""} · {c.state.replaceAll("_", " ")}. The connection is managed on <Link to={clientPage(entity)}>{entity}’s page</Link>.
+            </p>
           ) : (
-            <p>No company connected.</p>
+            <p>
+              No QuickBooks company is connected. Connect one on <Link to={clientPage(entity)}>{entity}’s page</Link>, or label the exports this month uses under Evidence.
+            </p>
           )}
-          {status.hosted && (
+          {c?.error && <p role="alert">{c.error}</p>}
+          {status.hosted && c?.state === "active" && (
             <fieldset disabled={busy}>
               <label>
-                <input
-                  type="checkbox"
-                  checked={confirmed}
-                  onChange={(e) => setConfirmed(e.target.checked)}
-                />{" "}
-                I authorize this action for {entity}
-                {c?.realm
-                  ? ` and ${company} ${c.company_name} (${c.realm})`
-                  : ""}
-                .
+                <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I read {entity}’s {company} {c.company_name} ({c.realm}) for {monthName(period)}.
               </label>
-              {off && (!c || ["authorizing", "pending_confirmation"].includes(c.state)) ? (
-                <p>QuickBooks cannot be connected for your firm yet; ask Krith support. Add this month’s exports under Historical exports instead.</p>
-              ) : production && c?.state !== "active" && (
-                <p>Connect and confirm the client's QuickBooks company under <Link to="?tab=settings">Settings → Production QuickBooks</Link>; its books are then read here.</p>
-              )}
-              {!off && !c && !production && (
-                <button
-                  disabled={!confirmed || !status.configured}
-                  onClick={() => void action("connect")}
-                >
-                  Connect QuickBooks sandbox
-                </button>
-              )}
-              {!off && c?.state === "authorizing" && callback.has("qbo_code") && callback.get("qbo_env") !== "production" && (
-                <button
-                  disabled={!confirmed}
-                  onClick={() => void action("callback")}
-                >
-                  Complete authorization
-                </button>
-              )}
-              {!off && c?.state === "pending_confirmation" && !production && (
-                <button
-                  disabled={!confirmed}
-                  onClick={() => void action("confirm")}
-                >
-                  Confirm this company belongs to the client
-                </button>
-              )}
-              {c?.state === "active" && (
-                <button
-                  disabled={!confirmed}
-                  onClick={() => void action("snapshot")}
-                >
-                  {busy ? "Reading accounts…" : "Capture account snapshot"}
-                </button>
-              )}
-              {c?.state === "active" && (
+              <div className="setting-actions">
                 <button disabled={!confirmed} onClick={() => void action("period_snapshot")}>
-                  {busy ? "Reading period evidence…" : "Capture this month’s accrual reports and plan coverage"}
+                  {busy ? "Reading the month…" : "Capture this month’s accrual reports and plan coverage"}
                 </button>
-              )}
-              {c?.state === "active" && (
+                <button disabled={!confirmed} onClick={() => void action("snapshot")}>
+                  {busy ? "Reading accounts…" : "Capture the account directory"}
+                </button>
                 <button disabled={!confirmed} onClick={() => void captureTransactions()}>
                   Refresh this month’s transactions in background
                 </button>
-              )}
-              {c && (
                 <button
-                  disabled={!confirmed}
-                  onClick={() => void action("disconnect")}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setError("");
+                    void load();
+                  }}
                 >
-                  Disconnect locally
+                  Refresh
                 </button>
-              )}
+              </div>
             </fieldset>
           )}
-          <p>
-            Disconnecting stops local use and removes stored tokens. Revoke the
-            app in Intuit as well to remove provider authorization.
-          </p>
+          {!status.hosted && <p className="note">Read the client’s QuickBooks company from your firm’s signed-in workspace. Local preparation works without QuickBooks.</p>}
           <h3>Captured ledger evidence</h3>
           <p>For the active connection, the worker checks unsigned-off current and prior-month closes automatically every 24 hours. It retries interrupted checks and records failures here. Identical captures reuse the current evidence; changed captures reopen dependent sandbox approvals. A partial read is never offered as complete evidence.</p>
           {syncs.length === 0 ? <p>No transaction capture requested.</p> : (
@@ -364,6 +259,6 @@ export function QuickBooks({
           </p>
         </>
       )}
-    </details>
+    </section>
   );
 }

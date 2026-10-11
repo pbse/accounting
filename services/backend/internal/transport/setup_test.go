@@ -128,7 +128,7 @@ func TestSetupFollowsTheFirmsOwnRecords(t *testing.T) {
 	if s, _ := read(); s.FirstDraft == nil || s.FirstDraft.Elapsed != nil || !strings.Contains(s.Steps[5].Detail, "was prepared without an earlier work document") {
 		t.Fatalf("a draft no document preceded has no elapsed time: %+v %q", s.FirstDraft, s.Steps[5].Detail)
 	}
-	if len(s.Reconnect) != 1 || s.Reconnect[0].Client != "Alpha" || s.Reconnect[0].Href != "/dashboard/closes/"+alpha+"?tab=settings#quickbooks-production" || !strings.Contains(s.Reconnect[0].Error, "Token refresh") || s.CanReconnect {
+	if len(s.Reconnect) != 1 || s.Reconnect[0].Client != "Alpha" || s.Reconnect[0].Href != "/dashboard/clients/Alpha" || !strings.Contains(s.Reconnect[0].Error, "Token refresh") || s.CanReconnect {
 		t.Fatalf("only the member's client's broken connection is listed, linked to its production panel: %+v", s.Reconnect)
 	}
 	exec(`UPDATE quickbooks_connections SET state='disconnected' WHERE organization_id=$1 AND environment='production'`, org)

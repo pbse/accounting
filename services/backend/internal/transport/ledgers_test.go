@@ -142,14 +142,14 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Exec(`DELETE FROM client_closes WHERE organization_id=$1`, firm) })
 	asFirm(t, map[string]string{"user_a": "partner"}, firm)
-	r := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/quickbooks", strings.NewReader(`{"action":"connect","confirmed":true,"environment":"sandbox"}`)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: firm, Permissions: []string{"clients:all", "integrations:manage"}}))
+	r := httptest.NewRequest("POST", "/v1/closes/client/quickbooks?name="+url.QueryEscape("QBO Secret Co"), strings.NewReader(`{"action":"connect","confirmed":true,"environment":"sandbox"}`)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: firm, Permissions: []string{"clients:all", "integrations:manage"}}))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	store.ServeHTTP(w, r)
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "cannot be connected") {
 		t.Fatalf("connecting a switched-off connector: %d %s", w.Code, w.Body.String())
 	}
-	// The month's panel and the client's page say so, and offer no connection.
+	// The client's page, where connections are made, says so and offers none.
 	read := func(path string) map[string]any {
 		t.Helper()
 		r := httptest.NewRequest("GET", path, nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: firm, Permissions: []string{"clients:all", "integrations:manage"}}))
@@ -160,9 +160,6 @@ func TestTheLedgerCatalogAndItsCounts(t *testing.T) {
 			t.Fatalf("GET %s: %d %s", path, w.Code, w.Body.String())
 		}
 		return out
-	}
-	if status := read("/v1/closes/" + closeID + "/quickbooks"); status["connectable"] != false {
-		t.Fatalf("the QuickBooks panel's switch: %v", status)
 	}
 	if page := read("/v1/closes/client?name=" + url.QueryEscape("QBO Secret Co")); page["connectable"].(map[string]any)["quickbooks"] != false {
 		t.Fatalf("the client page's switches: %v", page["connectable"])
