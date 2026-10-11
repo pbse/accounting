@@ -29,9 +29,10 @@ export default function ClientRequest() {
   const [refresh, setRefresh] = useState(0);
   const [passcode, setPasscode] = useState("");
   const [needsPasscode, setNeedsPasscode] = useState(false);
-  const [drafts, setDrafts] = useState<Record<number, { answer: string; later: boolean }>>({});
+  const [drafts, setDrafts] = useState<Record<number, { answer: string; later: boolean; attached?: boolean }>>({});
   useEffect(() => {
-    setDrafts(Object.fromEntries((request?.questions ?? []).map((q) => [q.position, { answer: q.answer, later: q.state === "awaiting_document" }])));
+    // A document answer's recorded text names the files; it is not the client's note, so it is not offered back as one.
+    setDrafts(Object.fromEntries((request?.questions ?? []).map((q) => [q.position, { answer: q.answer.startsWith("Document attached with this reply:") ? "" : q.answer, later: q.state === "awaiting_document" }])));
   }, [request]);
   async function call(body?: object | FormData): Promise<Request> {
     const response = await fetch(`${apiBaseUrl}/v1/client-request`, {
@@ -111,8 +112,8 @@ export default function ClientRequest() {
       // Each question sent is either answered or a document to follow; untouched ones stay as they were.
       const answers = (request?.questions ?? [])
         .map((q) => ({ q, d: drafts[q.position] ?? { answer: "", later: false } }))
-        .filter(({ q, d }) => (d.later || d.answer.trim()) && ((d.later ? "awaiting_document" : "answered") !== q.state || d.answer.trim() !== q.answer))
-        .map(({ q, d }) => ({ position: q.position, state: d.later ? "awaiting_document" : "answered", answer: d.answer.trim() }));
+        .filter(({ q, d }) => d.attached || ((d.later || d.answer.trim()) && ((d.later ? "awaiting_document" : "answered") !== q.state || d.answer.trim() !== q.answer)))
+        .map(({ q, d }) => ({ position: q.position, state: d.attached ? "document" : d.later ? "awaiting_document" : "answered", answer: d.answer.trim() }));
       submission.set("body", JSON.stringify({ answers }));
       submission.set("confirmed", String(data.has("confirmed")));
       const files = data.getAll("files").filter((file): file is File => file instanceof File && file.size > 0);
@@ -201,11 +202,16 @@ export default function ClientRequest() {
                             {q.text} <span className={statePills[q.state] ?? "pill neutral"}>{stateLabels[q.state] ?? q.state}</span>
                           </p>
                           <label>
-                            {d.later ? "Note about the document (optional)" : "Your answer"}
+                            {d.later || d.attached ? "Note about the document (optional)" : "Your answer"}
                             <textarea rows={3} value={d.answer} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, answer: e.target.value } })} />
                           </label>
                           <label>
-                            <input type="checkbox" checked={d.later} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, later: e.target.checked } })} /> I'll send the document later
+                            <input type="checkbox" checked={!!d.attached} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, attached: e.target.checked, later: e.target.checked ? false : d.later } })} /> I'm attaching the document
+                            with this reply
+                          </label>
+                          <label>
+                            <input type="checkbox" checked={d.later} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, later: e.target.checked, attached: e.target.checked ? false : d.attached } })} /> I'll send the
+                            document later
                           </label>
                         </li>
                       );
@@ -213,7 +219,7 @@ export default function ClientRequest() {
                   </ol>
                   <label>Supporting documents<input name="files" type="file" accept=".pdf,.txt,.csv" multiple /></label>
                   {(request.questions ?? []).some((q) => q.state === "awaiting_document") && (
-                    <p className="note">Sending a document you said would follow? Untick “I'll send the document later” on its question and say which file it is.</p>
+                    <p className="note">Sending a document you said would follow? Tick “I'm attaching the document with this reply” on its question and attach the file.</p>
                   )}
                   <p>Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total. Files stay quarantined until automated scanning and the firm's release.</p>
                   <label>
