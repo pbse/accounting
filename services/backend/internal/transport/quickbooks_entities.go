@@ -319,9 +319,9 @@ func ledgerCertification(ctx context.Context, q interface {
 	var snapshotAt time.Time
 	var report []byte
 	err := q.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,s.payload->'reports'->'TransactionList' FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
- WHERE s.close_id::text=$1 AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&snapshotID, &snapshotRealm, &snapshotAt, &report)
+ WHERE s.close_id::text=$1 AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&snapshotID, &snapshotRealm, &snapshotAt, &report)
 	if err == sql.ErrNoRows || err == nil && len(report) == 0 {
-		return map[string]any{"status": "unavailable", "reason": "No current QuickBooks period reports for this month."}, nil
+		return map[string]any{"status": "unavailable", "reason": "No current QuickBooks period reports for this month, or its books are not read from QuickBooks."}, nil
 	}
 	if err != nil {
 		return nil, err
