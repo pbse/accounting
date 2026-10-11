@@ -172,15 +172,29 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	if back.Code != 303 || !strings.HasPrefix(back.Header().Get("Location"), "https://app.example.test/dashboard/clients/Xero%20client#") {
 		t.Fatalf("the sign-in returns to the client's page: %d %s", back.Code, back.Header().Get("Location"))
 	}
-	call("user_other", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)
-	status := call("user_accountant", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 200)
+	// The sign-in is finished on the client's page, by whoever started it; a month cannot finish or start one.
+	monthStatus := func() map[string]any {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/"+september+"/xero", nil)
+		r = r.WithContext(auth.WithActor(r.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_accountant"}, Organization: org, Permissions: []string{"clients:all", "integrations:manage"}}))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		var out map[string]any
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	call("user_accountant", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)
+	call("user_accountant", september, map[string]any{"action": "connect", "confirmed": true}, 409)
+	call("user_other", "client", map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)
+	call("user_accountant", "client", map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 200)
+	status := monthStatus()
 	connection := status["connection"].(map[string]any)
 	tenants, _ := json.Marshal(connection["tenants"])
 	if status["hosted"] != true || connection["state"] != "choose_tenant" || strings.Contains(string(tenants), "t-old") || strings.Contains(string(tenants), "t-practice") || !strings.Contains(string(tenants), "t-a") || !strings.Contains(string(tenants), "t-b") {
 		t.Fatalf("only organisations from this sign-in are offered: %s", tenants)
 	}
-	call("user_accountant", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)
-	call("user_accountant", september, map[string]any{"action": "confirm", "connection_id": id, "tenant_id": "t-old", "confirmed": true}, 409)
+	call("user_accountant", "client", map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)
+	call("user_accountant", "client", map[string]any{"action": "confirm", "connection_id": id, "tenant_id": "t-old", "confirmed": true}, 409)
 	// A scheduled attempt an hour ago (as when a lapsed token stopped it) does not hold the next capture back
 	// once the organisation is confirmed again.
 	if err = db.QueryRow(`SELECT id::text FROM client_closes WHERE organization_id=$1 AND entity='Xero client' AND period=$2`, org, time.Now().UTC().Format("2006-01")).Scan(&due); err == sql.ErrNoRows {
@@ -196,7 +210,8 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	if isDue() {
 		t.Fatal("nothing is due before the organisation is confirmed")
 	}
-	status = call("user_accountant", september, map[string]any{"action": "confirm", "connection_id": id, "tenant_id": "t-b", "confirmed": true}, 200)
+	call("user_accountant", "client", map[string]any{"action": "confirm", "connection_id": id, "tenant_id": "t-b", "confirmed": true}, 200)
+	status = monthStatus()
 	if connection = status["connection"].(map[string]any); connection["state"] != "active" || connection["tenant_name"] != "Harbor Holdings Ltd" {
 		t.Fatalf("the chosen organisation is connected: %v", connection)
 	}

@@ -128,6 +128,11 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client close not found.")
 			return
 		}
+		// A connection is the client's, made, finished and confirmed on its page; a month only reads through it.
+		if in.Action == "connect" || in.Action == "callback" || in.Action == "confirm" {
+			problem(w, 409, "Connect Xero on the client's page; a month reads its books through the client's connection.")
+			return
+		}
 		if !xeroAct(ctx, w, db, a, entity, period, r.PathValue("id"), in) {
 			return
 		}
