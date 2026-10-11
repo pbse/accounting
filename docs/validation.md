@@ -4156,6 +4156,7 @@ Reproduced first: at `54cf4a39`, `substantiates` accepted any cited field whose 
   - an unverified publication is said to be unverified, never merely "stale", in direct, derived and figure-less claims alike, as is a published report's figure said to be the report's;
   - "up" and "down" hold a derived movement to its sign like "rose" and "fell";
   - "on the cash basis" is a basis, not the cash measure;
+  - a line's measure is the head of its name, within its statement ("Sales tax payable" is a payable, never sales), and its own name is no further measure;
   - `TestFirmClientsFindsTheNamesAnAnswerUses` (new, database): the firm's clients named in an answer are found by the database across all clients with no cap (including a two-letter name), and never another firm's.
 - **`TestAgentSupportBindsEveryFigureAndSentence` (updated).** It previously accepted "Cash differs by (1,250.00)." citing a ledger balance; that is a balance stated as a difference and is now a required rejection, replaced by "The cash ledger balance is (1,250.00)." Zero has no sign: (0.00) equals 0.00.
 - **`TestMoneyIn` (new) and `TestValueShownHoldsAmountsToTheirMeaning` (new).** A matching number that is a term, rate, count, page or reference does not establish a money fact or statement row amount; 1,200.00 still never establishes 12000.00; credits in parentheses and rates (`annual_rate`, through `AmountIn`) still pass.

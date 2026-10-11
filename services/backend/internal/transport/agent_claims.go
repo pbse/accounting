@@ -66,7 +66,13 @@ var agentMetricTerms = func() []metricTerm {
 // lineMetrics is the measures a report line's name gives it. A bare "income" names an income line ("Interest
 // income"), never net or operating income, which people may mean by the word but a line's name does not.
 func lineMetrics(label string) map[string]bool {
-	found := metricsIn(label)
+	// The head of the line's name is its last measure phrase ("Sales tax payable" is payable, not sales).
+	found := map[string]bool{}
+	if at := metricsAt(label); len(at) > 0 {
+		for _, k := range at[len(at)-1].keys {
+			found[k] = true
+		}
+	}
 	if found["revenue"] && found["net_income"] && found["operating_profit"] {
 		lower := strings.ToLower(label)
 		if !strings.Contains(lower, "net income") && !strings.Contains(lower, "operating income") && !strings.Contains(lower, "net operating income") {
@@ -176,6 +182,14 @@ func nearestMetric(line string, o occurrence) (map[string]bool, string) {
 	}
 	return out, near
 }
+
+// The pack's sections by statement, and the measures of each statement.
+var (
+	balanceSections = map[string]bool{"bank": true, "accounts receivable": true, "other current asset": true, "fixed asset": true, "other asset": true, "accounts payable": true, "credit card": true, "other current liability": true, "long term liability": true, "equity": true, "assets": true, "liabilities": true}
+	incomeSections  = map[string]bool{"income": true, "cost of goods sold": true, "expense": true, "other income": true, "other expense": true}
+	incomeMeasures  = map[string]bool{"revenue": true, "expenses": true, "net_income": true, "gross_profit": true, "operating_profit": true, "cogs": true}
+	balanceMeasures = map[string]bool{"receivables": true, "payables": true, "assets": true, "liabilities": true, "equity": true, "cash": true, "working_capital": true}
+)
 
 // claim is what a cited field measures.
 type claim struct {
@@ -324,6 +338,20 @@ func claimOf(read agentRead, path string) claim {
 	}
 	for k := range lineMetrics(c.label) {
 		c.keys[k] = true
+	}
+	// A line in a balance-sheet section is no income-statement measure, and the reverse.
+	for i := len(ancestors) - 1; i >= 0; i-- {
+		if _, hasLines := ancestors[i]["lines"]; !hasLines {
+			continue
+		}
+		section := strings.ToLower(text(ancestors[i], "name"))
+		balance := balanceSections[section]
+		for k := range c.keys {
+			if balance && incomeMeasures[k] || !balance && section != "" && balanceMeasures[k] && incomeSections[section] {
+				delete(c.keys, k)
+			}
+		}
+		break
 	}
 	words := strings.ReplaceAll(last, "_", " ")
 	if len(c.keys) == 0 {

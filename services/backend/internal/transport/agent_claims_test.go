@@ -460,6 +460,13 @@ func TestAgentClaimsBindWhatAFigureMeasures(t *testing.T) {
 	ok("Net income down 260.00 from September to October.", derived(0, "difference", "260.00", "t2", ni+"/amount", "t56", "/profit_and_loss/measures/0/amount"))
 	ok("Net income is 20,500.00 on the cash basis.", e("t8", 0, "/profit_and_loss/measures/0/amount", "20500.00"))
 
+	// Round thirty: a liability named for sales is not sales.
+	reads["t57"] = read(`{"entity":"Bluegrass Dental PLLC","period":"2026-10","currency":"USD","balance_sheet":{"sections":[{"name":"Other Current Liability","lines":[{"name":"Sales tax payable","amount":"500.00"}]}]}}`, "Management pack", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Sales were 500.00.", "the cited field is Sales tax payable", e("t57", 0, "/balance_sheet/sections/0/lines/0/amount", "500.00"))
+	ok("Sales tax payable is 500.00.", e("t57", 0, "/balance_sheet/sections/0/lines/0/amount", "500.00"))
+	reads["t58"] = read(`{"lines":[{"name":"Sales tax payable","amount":"500.00"}]}`, "Statement", "management_pack", "Bluegrass Dental PLLC", "2026-10")
+	rejected("Sales were 500.00.", "the cited field is Sales tax payable", e("t58", 0, "/lines/0/amount", "500.00"))
+
 	// Amounts and changes are not added together.
 	rejected("Net income and its change total 23,620.00.", "mixes changes and amounts", derived(0, "sum", "23620.00", "t2", ni+"/amount", "t2", ni+"/change"))
 }

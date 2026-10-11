@@ -893,13 +893,24 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 					covered[k] = true
 				}
 			}
-			for _, m := range metricsAt(lines[i]) {
+			// The cited lines' own names are not further measures ("Sales tax payable" names no sales).
+			scan := lines[i]
+			for _, c := range sentenceDerived[i] {
+				scan = blankName(scan, c.label)
+			}
+			for _, m := range sentenceMoney[i] {
+				scan = blankName(scan, m.claim.label)
+			}
+			for _, c := range sentenceClaims[i] {
+				scan = blankName(scan, c.label)
+			}
+			for _, m := range metricsAt(scan) {
 				hit := false
 				for _, k := range m.keys {
 					hit = hit || covered[k]
 				}
 				if !hit {
-					return nil, "the sentence names " + strings.Trim(strings.ToLower(lines[i][m.start:m.end]), " ,.;:()") + ", but nothing it cites measures it"
+					return nil, "the sentence names " + strings.Trim(strings.ToLower(scan[m.start:m.end]), " ,.;:()") + ", but nothing it cites measures it"
 				}
 			}
 		}
@@ -1576,4 +1587,30 @@ func fieldHref(read agentRead, path string) string {
 func valueOf(read agentRead, path string) string {
 	v, _ := valueAt(read.value, path)
 	return v
+}
+
+// blankName blanks a line's name in a text, ignoring case and keeping the text's length.
+func blankName(text, name string) string {
+	name = strings.TrimSpace(name)
+	if len(name) < 3 {
+		return text
+	}
+	lower, want := strings.ToLower(text), strings.ToLower(name)
+	if len(lower) != len(text) {
+		return text
+	}
+	out := []byte(text)
+	for from := 0; ; {
+		i := strings.Index(lower[from:], want)
+		if i < 0 {
+			break
+		}
+		for j := from + i; j < from+i+len(want); j++ {
+			if out[j] != ' ' {
+				out[j] = '#'
+			}
+		}
+		from += i + len(want)
+	}
+	return string(out)
 }
