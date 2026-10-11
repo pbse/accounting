@@ -32,6 +32,7 @@ export type Pack =
       comparison_unavailable?: string;
       profit_and_loss: { sections: Section[]; measures: Line[] };
       profit_and_loss_unavailable?: string;
+      file?: string;
       balance_sheet: { sections: Section[]; earnings: Line; total_assets: Line; total_liabilities: Line; total_equity: Line; difference: string };
       working_capital: Record<"book_cash" | "receivables" | "payables" | "current_assets" | "current_liabilities" | "working_capital", Line> | { unavailable: string };
       cash_flow: { unavailable: string } | { sections: Section[]; net_change: Line; beginning: Line; ending: Line; book_cash: string; reconciled: boolean; differences: string[]; disclosure?: string };
@@ -128,7 +129,10 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
           {pack.entity} · {pack.period}
         </strong>{" "}
         · {pack.basis} basis · {pack.currency} ·{" "}
-        {pack.source === "files" ? `from the client's accepted file, as of ${pack.as_of}` : `captured from ${pack.source === "quickbooks" ? "QuickBooks" : "Xero"} ${dates.dateTime(pack.as_of)}`} ·{" "}
+        {pack.source === "files"
+          ? `from the accepted file ${pack.file ?? ""}, as of ${dates.calendarDate(pack.as_of)}`
+          : `captured from ${pack.source === "quickbooks" ? "QuickBooks" : "Xero"} ${dates.dateTime(pack.as_of)}`}{" "}
+        ·{" "}
         <span className={statusClass}>{statusText}</span>
       </p>
       {pack.stale && <p role="alert">This capture is no longer current: its connection or evidence changed. Capture the month again before relying on these figures.</p>}
@@ -137,7 +141,7 @@ export function PackView({ closeId, pack, staff = false, onPack }: { closeId: st
         {pack.note}{" "}
         {prior ? (
           <>
-            Compared with {prior.period} (<span className={statusLabels[prior.status][0]}>{statusLabels[prior.status][1]}</span>), captured {dates.dateTime(prior.as_of)}
+            Compared with {prior.period} (<span className={statusLabels[prior.status][0]}>{statusLabels[prior.status][1]}</span>), {pack.source === "files" ? `as of ${dates.calendarDate(prior.as_of)}` : `captured ${dates.dateTime(prior.as_of)}`}
             {prior.stale ? "; that capture is no longer current" : ""}. Totals are the sums of the accounts listed above them.
           </>
         ) : (

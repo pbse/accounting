@@ -329,7 +329,7 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	}
 	pack := packOf()
 	net := pack["profit_and_loss"].(statement).Measures
-	if pack["source"] != "files" || pack["overall"] != "provisional" || pack["basis"] != "Accrual" || len(net) == 0 || net[len(net)-1].Amount != "500.25" || pack["profit_and_loss_unavailable"] != nil {
+	if pack["source"] != "files" || pack["file"] != "Acme 2027-01.csv" || pack["overall"] != "provisional" || pack["basis"] != "Accrual" || len(net) == 0 || net[len(net)-1].Amount != "500.25" || pack["profit_and_loss_unavailable"] != nil {
 		t.Fatalf("January's pack from its file: %v", pack)
 	}
 	// Without the month's activity, the profit and loss is unavailable, never zero.
@@ -337,6 +337,12 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	must(err)
 	if pack = packOf(); pack["profit_and_loss_unavailable"] == nil || len(pack["profit_and_loss"].(statement).Sections) != 0 {
 		t.Fatalf("a pack without activity: %v", pack["profit_and_loss_unavailable"])
+	}
+	// A check the file was accepted with that holds its statements holds the pack, named.
+	_, err = db.Exec(`UPDATE books_import_acceptances SET checks=checks||'[{"key":"balanced","title":"Debits equal credits","state":"holds"}]'::jsonb WHERE id::text=$1`, januaryAccepted)
+	must(err)
+	if pack = packOf(); pack["state"] != "waiting" || !strings.Contains(pack["reason"].(string), "Debits equal credits") {
+		t.Fatalf("a held file's pack waits: %v", pack)
 	}
 	// Parity compares captures with their versions; a file's version is its accepted reading, left alone.
 	if _, mismatched, err := booksParity(t.Context(), db, org, 0); err != nil || len(mismatched) != 0 {
