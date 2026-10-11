@@ -37,7 +37,7 @@ const toHandOver = (status: Status | undefined) => !!status && !status.signed_of
 
 // One thing for the person: a decision (or several approvals in one review), a blocker from the brief, or handing the
 // close to the agent; the one action that settles it, the tab where that is done, and the decisions it stands for.
-type Need = { key: string; title: string; detail: string; action: string; to?: string; act?: () => void; tab?: CloseTab; count: number; blocker?: boolean; review?: string[] };
+export type Need = { key: string; title: string; detail: string; action: string; to?: string; act?: () => void; tab?: CloseTab; count: number; blocker?: boolean; review?: string[] };
 
 // Each kind of decision: the line under its title, its one action, and the tab its action is on (none: on Overview).
 const kinds: Record<string, { detail: string; action: string; tab?: CloseTab }> = {
@@ -57,7 +57,11 @@ const kinds: Record<string, { detail: string; action: string; tab?: CloseTab }> 
 const kindOf = (e: AttentionEvent) => kinds[e.key.startsWith("held:") ? "held" : e.kind] ?? { detail: "", action: "Open" };
 const tabOf = (tab: string | undefined) => closeTabs.find(([key]) => key === tab)?.[0];
 // Where a brief line's work is: its tab, or on Overview the agent's details, where each document's work is.
-const briefLink = (line: Line, base: string) => (line.tab && line.tab !== "overview" ? `${base}?tab=${line.tab}` : `${base}#agent-details`);
+// Books' areas open their view: the ledger its captures, the balance sheet the full tie-out, exceptions the agent's
+// findings.
+const booksViews: Record<string, string> = { ledger: "ledger", "balance sheet": "tie-out", exceptions: "exceptions" };
+const briefLink = (line: Line, base: string) =>
+  line.tab === "books" && booksViews[line.area] ? `${base}?tab=books&view=${booksViews[line.area]}` : line.tab && line.tab !== "overview" ? `${base}?tab=${line.tab}` : `${base}#agent-details`;
 const list = (items: string[]) => (items.length < 3 ? items.join(" and ") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
 
 // Where an event's action is: the draft's own page, the document's work, coverage, or the tab its kind names.
@@ -157,7 +161,7 @@ function prepareForms(close: Close): [string, string][] {
 
 // CloseMenu is the close's ⋯ menu: its plan, preparing a draft by hand, and stopping the agent, the actions and
 // exception paths that are not the page's work.
-export function CloseMenu({ close, status, onPlanSaved }: { close: Close; status: Status | undefined; onPlanSaved: () => void }) {
+export function CloseMenu({ close, status, onPlanSaved, tab }: { close: Close; status: Status | undefined; onPlanSaved: () => void; tab?: { title: string; items: { label: string; to: string }[] } }) {
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<"" | "plan" | "prepare" | "stop">("");
   const [reason, setReason] = useState("");
@@ -167,7 +171,7 @@ export function CloseMenu({ close, status, onPlanSaved }: { close: Close; status
   const active = status?.goal?.state === "active";
   useEffect(() => {
     if (!open) return;
-    menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
     const away = (e: PointerEvent) => !menu.current?.contains(e.target as Node) && setOpen(false);
     const escape = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     document.addEventListener("pointerdown", away);
@@ -202,6 +206,17 @@ export function CloseMenu({ close, status, onPlanSaved }: { close: Close; status
       </button>
       {open && (
         <div className="ks-menu" role="menu" aria-label="This close">
+          {tab && (
+            <>
+              <div className="ks-menu-head">{tab.title}</div>
+              {tab.items.map((item) => (
+                <Link key={item.label} role="menuitem" to={item.to} onClick={() => setOpen(false)}>
+                  {item.label}
+                </Link>
+              ))}
+              <div className="ks-sep" role="separator" />
+            </>
+          )}
           <div className="ks-menu-head">This close</div>
           <button type="button" role="menuitem" onClick={() => pick("plan")}>
             Plan this close
@@ -459,7 +474,7 @@ function InPlaceReview({ closeId, base, listed, id, position, total, onDone }: {
 // the next decision is marked up next. When nothing needs the person, one calm line says so, and why (the agent may
 // still be preparing). What a teammate's role decides, what waits on others, what could not be checked and what is
 // done each fold to a line.
-function NeedsYou({ closeId, papers, needs, teammates, brief, briefRead, decisionsError, base, preparing }: { closeId: string; papers: Paper[]; needs: Need[]; teammates: number; brief: Brief | undefined; briefRead: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown }; decisionsError: string; base: string; preparing: boolean }) {
+export function NeedsYou({ closeId, papers, needs, teammates, brief, briefRead, decisionsError, base, preparing }: { closeId: string; papers: Paper[]; needs: Need[]; teammates: number; brief: Brief | undefined; briefRead: { dataUpdatedAt: number; isFetching: boolean; refetch: () => unknown }; decisionsError: string; base: string; preparing: boolean }) {
   const dates = useDates();
   const [all, setAll] = useState(false);
   const [session, setSession] = useState<{ ids: string[]; results: ("approved" | "returned")[] }>();
@@ -707,108 +722,131 @@ function AgentWork({ status, papers, base }: { status: Status; papers: Paper[]; 
 }
 
 type Effort = { tracked_seconds: number };
+// A figure on the rail: its value, what it counts, and "att" when it needs attention.
+export type Figure = [string, string, string?];
+export type MoreLink = { label: string; note?: string; to: string };
 
-// Rail is the same three panels on every tab: a few figures found nowhere else on the page, the agent in one line with
-// its activity folded, and more on this close.
-function Rail({ close, status, papers, brief, base }: { close: Close; status: Status | undefined; papers: Paper[]; brief: Brief | undefined; base: string }) {
+// Glance is the rail's first panel: a few figures found nowhere else on the page.
+export function Glance({ figures }: { figures: Figure[] }) {
+  return (
+    <section className="ks-panel" aria-labelledby="glance-title">
+      <h2 className="ks-label" id="glance-title">
+        At a glance
+      </h2>
+      {figures.length ? (
+        <div className="ks-figs">
+          {figures.map(([value, label, tone]) => (
+            <div className={`ks-fig ${tone ?? ""}`} key={label}>
+              <b>{value}</b>
+              <span>{label}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="ks-quiet">Nothing to count yet.</p>
+      )}
+    </section>
+  );
+}
+
+// AgentPanel is the agent in one line, with its activity folded behind a link.
+export function AgentPanel({ close, status }: { close: Close; status: Status | undefined }) {
   const dates = useDates();
-  const effort = useQuery(workspaceQuery<Effort>(`/${close.id}/effort`));
   const [history, setHistory] = useState(false);
   const [all, setAll] = useState<Status["activity"]>();
   const [error, setError] = useState("");
+  const latest = status?.activity[0];
+  const total = status?.activity_total ?? 0;
+  const line = status?.goal ? headline(status.goal, status.progress, goalNeeds(status)) : status?.signed_off ? "Signed off; nothing left to prepare." : status ? "Not handed over yet." : "";
+  return (
+    <section className="ks-panel" aria-labelledby="agent-title">
+      <h2 className="ks-label" id="agent-title">
+        The agent
+      </h2>
+      <p className="ks-agent-line">
+        <i className={preparing(status) ? "live" : undefined} aria-hidden="true" />
+        <span>
+          {line}
+          {latest && (
+            <small>
+              {latest.text} · {dates.dateTime(latest.at)}
+            </small>
+          )}
+        </span>
+      </p>
+      {total > 0 && (
+        <button type="button" className="ks-act-link" onClick={() => setHistory(true)}>
+          Activity · {total}
+        </button>
+      )}
+      <Dialog open={history} onClose={() => setHistory(false)} title="What happened" description={`${close.entity}, ${monthName(close.period)}`}>
+        <ol className="ks-activity">
+          {(all?.length === total ? all : (status?.activity ?? [])).map((a, n) => (
+            <li key={n}>
+              <small>{dates.dateTime(a.at)}</small> {a.text}
+            </li>
+          ))}
+        </ol>
+        {all?.length !== total && total > (status?.activity.length ?? 0) && (
+          <button type="button" onClick={() => void workspaceRequest(`/${close.id}/goal?activity=all`).then((d: Status) => setAll(d.activity), () => setError("The full history could not be read."))}>
+            Show all {total}
+          </button>
+        )}
+        {error && <p role="alert">{error}</p>}
+      </Dialog>
+    </section>
+  );
+}
+
+// MoreLinks is the rail's last panel: the tab's other views, or more on the close.
+export function MoreLinks({ title, links }: { title: string; links: MoreLink[] }) {
+  return (
+    <section className="ks-panel" aria-labelledby="more-title">
+      <h2 className="ks-label" id="more-title">
+        {title}
+      </h2>
+      <nav className="ks-links" aria-labelledby="more-title">
+        {links.map((link) => (
+          <Link to={link.to} key={link.to}>
+            <span>{link.label}</span>
+            {link.note && <small>{link.note}</small>}
+            <Icon name="chevron" size={14} />
+          </Link>
+        ))}
+      </nav>
+    </section>
+  );
+}
+
+// Rail is the same three panels on every tab; on Overview: what is approved, covered and in preparation, the time
+// spent, the agent, and more on this close.
+function Rail({ close, status, papers, brief, base }: { close: Close; status: Status | undefined; papers: Paper[]; brief: Brief | undefined; base: string }) {
+  const effort = useQuery(workspaceQuery<Effort>(`/${close.id}/effort`));
   const current = papers.filter((p) => !papers.some((q) => q.paper.revises === p.id));
   const approved = current.filter((p) => p.review_state === "approved").length;
   const coverage = status?.progress.coverage?.total ? status.progress.coverage : undefined;
   const working = status?.goal?.state === "active" ? status.progress.items.filter((i) => i.status === "working").length : 0;
-  const figures: [string, string, string?][] = [
-    ...(current.length ? ([[`${approved} of ${current.length}`, "drafts approved"]] as [string, string][]) : []),
-    ...(coverage ? ([[`${coverage.total - coverage.open} of ${coverage.total}`, "accounts covered", coverage.open ? "att" : ""]] as [string, string, string][]) : []),
-    ...(working ? ([[String(working), working === 1 ? "document the agent is preparing" : "documents the agent is preparing"]] as [string, string][]) : []),
-    ...(effort.data && effort.data.tracked_seconds > 0 ? ([[`${Math.max(1, Math.round(effort.data.tracked_seconds / 60))} min`, "time spent on this close"]] as [string, string][]) : []),
+  const figures: Figure[] = [
+    ...(current.length ? ([[`${approved} of ${current.length}`, "drafts approved"]] as Figure[]) : []),
+    ...(coverage ? ([[`${coverage.total - coverage.open} of ${coverage.total}`, "accounts covered", coverage.open ? "att" : ""]] as Figure[]) : []),
+    ...(working ? ([[String(working), working === 1 ? "document the agent is preparing" : "documents the agent is preparing"]] as Figure[]) : []),
+    ...(effort.data && effort.data.tracked_seconds > 0 ? ([[`${Math.max(1, Math.round(effort.data.tracked_seconds / 60))} min`, "time spent on this close"]] as Figure[]) : []),
   ];
-  const latest = status?.activity[0];
-  const total = status?.activity_total ?? 0;
-  const line = status?.goal ? headline(status.goal, status.progress, goalNeeds(status)) : status?.signed_off ? "Signed off; nothing left to prepare." : status ? "Not handed over yet." : "";
   // The sign-off line's own words, without repeating the row's name.
   const signOff = brief?.lines.find((l) => l.area === "sign-off")?.text.replace(/^Sign-off\s+/i, "");
   const next = status?.progress.signoff?.next_close;
   return (
     <aside className="ks-rail" aria-label="About this close">
-      <section className="ks-panel" aria-labelledby="glance-title">
-        <h2 className="ks-label" id="glance-title">
-          At a glance
-        </h2>
-        {figures.length ? (
-          <div className="ks-figs">
-            {figures.map(([value, label, tone]) => (
-              <div className={`ks-fig ${tone ?? ""}`} key={label}>
-                <b>{value}</b>
-                <span>{label}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="ks-quiet">Nothing to count yet.</p>
-        )}
-      </section>
-      <section className="ks-panel" aria-labelledby="agent-title">
-        <h2 className="ks-label" id="agent-title">
-          The agent
-        </h2>
-        <p className="ks-agent-line">
-          <i className={preparing(status) ? "live" : undefined} aria-hidden="true" />
-          <span>
-            {line}
-            {latest && (
-              <small>
-                {latest.text} · {dates.dateTime(latest.at)}
-              </small>
-            )}
-          </span>
-        </p>
-        {total > 0 && (
-          <button type="button" className="ks-act-link" onClick={() => setHistory(true)}>
-            Activity · {total}
-          </button>
-        )}
-        <Dialog open={history} onClose={() => setHistory(false)} title="What happened" description={`${close.entity}, ${monthName(close.period)}`}>
-          <ol className="ks-activity">
-            {(all?.length === total ? all : (status?.activity ?? [])).map((a, n) => (
-              <li key={n}>
-                <small>{dates.dateTime(a.at)}</small> {a.text}
-              </li>
-            ))}
-          </ol>
-          {all?.length !== total && total > (status?.activity.length ?? 0) && (
-            <button type="button" onClick={() => void workspaceRequest(`/${close.id}/goal?activity=all`).then((d: Status) => setAll(d.activity), () => setError("The full history could not be read."))}>
-              Show all {total}
-            </button>
-          )}
-          {error && <p role="alert">{error}</p>}
-        </Dialog>
-      </section>
-      <section className="ks-panel" aria-labelledby="more-title">
-        <h2 className="ks-label" id="more-title">
-          More on this close
-        </h2>
-        <nav className="ks-links" aria-labelledby="more-title">
-          <Link to={`${base}?tab=signoff`}>
-            <span>Sign-off checks</span>
-            {signOff && <small>{signOff[0].toUpperCase() + signOff.slice(1)}</small>}
-            <Icon name="chevron" size={14} />
-          </Link>
-          <Link to={`${base}#agent-details`}>
-            <span>The agent's plan, documents and accounts</span>
-            <Icon name="chevron" size={14} />
-          </Link>
-          {next && (
-            <Link to={`/dashboard/closes/${next}`}>
-              <span>Next month's close</span>
-              <Icon name="chevron" size={14} />
-            </Link>
-          )}
-        </nav>
-      </section>
+      <Glance figures={figures} />
+      <AgentPanel close={close} status={status} />
+      <MoreLinks
+        title="More on this close"
+        links={[
+          { label: "Sign-off checks", note: signOff ? signOff[0].toUpperCase() + signOff.slice(1) : undefined, to: `${base}?tab=signoff` },
+          { label: "The agent's plan, documents and accounts", to: `${base}#agent-details` },
+          ...(next ? [{ label: "Next month's close", to: `/dashboard/closes/${next}` }] : []),
+        ]}
+      />
     </aside>
   );
 }

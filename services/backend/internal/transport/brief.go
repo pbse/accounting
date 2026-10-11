@@ -112,7 +112,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 		boardRead := read("/tie-out", &board)
 		switch {
 		case !boardRead:
-			add("ledger", "unknown", "The ledger snapshot could not be read.", "evidence")
+			add("ledger", "unknown", "The ledger snapshot could not be read.", "books")
 		case board.Snapshot != nil && board.Snapshot.Source == "files":
 			// A month whose books are its files reads its accepted file's; no ledger certifies a file.
 			if board.Error != "" {
@@ -135,7 +135,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 				add("ledger", "attention", label.sentence(), "evidence")
 				needs = append(needs, "verify the labeled exports")
 			default:
-				add("ledger", "attention", "No month-end Trial Balance yet. Capture a period snapshot so balances can be tied.", "evidence")
+				add("ledger", "attention", "No month-end Trial Balance yet. Capture a period snapshot so balances can be tied.", "books")
 				needs = append(needs, "capture a month-end snapshot")
 			}
 		default:
@@ -146,9 +146,9 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 			when := board.Snapshot.CapturedAt.UTC().Format("Jan 2, 15:04 UTC")
 			switch {
 			case board.Error != "":
-				add("ledger", "unknown", fmt.Sprintf("The %s Trial Balance captured %s could not be read.", source, when), "evidence")
+				add("ledger", "unknown", fmt.Sprintf("The %s Trial Balance captured %s could not be read.", source, when), "books")
 			case board.Snapshot.Stale:
-				add("ledger", "attention", fmt.Sprintf("The %s Trial Balance from %s is out of date: its source was replaced or the connection is inactive. Capture a new snapshot.", source, when), "evidence")
+				add("ledger", "attention", fmt.Sprintf("The %s Trial Balance from %s is out of date: its source was replaced or the connection is inactive. Capture a new snapshot.", source, when), "books")
 				needs = append(needs, "capture a new snapshot")
 			default:
 				text, state := fmt.Sprintf("Books read from the %s Trial Balance captured %s.", source, when), "done"
@@ -168,7 +168,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 						text += " " + certificationSentence(certification)
 					}
 				}
-				add("ledger", state, text, "evidence")
+				add("ledger", state, text, "books")
 			}
 		}
 

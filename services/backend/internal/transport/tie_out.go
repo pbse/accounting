@@ -72,7 +72,10 @@ var tieHints = map[string]string{
 
 // tieOutcome is the tie-out of each balance-sheet account against its support.
 type tieOutcome struct {
-	Snapshot     map[string]any      `json:"snapshot"`
+	Snapshot map[string]any `json:"snapshot"`
+	// BooksSource is the month's books source (newest, quickbooks, xero or files), so a page with no snapshot says
+	// how this month's books arrive. Only the HTTP reply carries it.
+	BooksSource  string              `json:"books_source,omitempty"`
 	Currency     string              `json:"currency,omitempty"`
 	Error        string              `json:"error,omitempty"`
 	Rows         []tieRow            `json:"rows"`
@@ -106,6 +109,7 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Tie-out unavailable.")
 			return
 		}
+		out.BooksSource, _ = closeBooksSource(r.Context(), tx, r.PathValue("id"))
 		jsonReply(w, 200, out)
 	}
 }
