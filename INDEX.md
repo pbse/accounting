@@ -105,6 +105,7 @@ These are pointers into the existing implementation, not evidence that a package
 | [Cloudflare upload scanning](docs/cloudflare-upload-scanning.md) | Required PDF scanning, TXT/CSV scanner, quarantine/release and deployment. |
 | [Server rendering](docs/server-rendering.md) | Workspace pages rendered at the edge with their data: routes with loaders, TanStack Query, the Worker, headers, and the rules for code that renders on the server. |
 | [Page speed](docs/performance.md) | The 400 ms page budget, what made pages slow, container size and placement, connection pooling, prefetching in the browser, and reading `Server-Timing`. |
+| [Infrastructure plan](docs/infrastructure-plan.md) | Future plan, not built (2026-10-11): why a database round trip costs 33 ms when Cloudflare places the API container away from Neon, and the target of the Go API on an always-on host in AWS us-east-2 behind a Cloudflare Tunnel, Neon Free-plan limits, options not chosen and how to measure. |
 | [Deployment](docs/deployment.md) | Environments, configuration/secrets, migrations, deployment workflows, costs and activation gaps. |
 | [Operations](docs/operations.md) | Security settings, monitoring, retention, recovery, incidents and restore boundaries. |
 | [Migration README](infra/postgres/migrations/README.md) | Database migration conventions and operating instructions. Local checks use local PostgreSQL; never create a Neon branch. |
