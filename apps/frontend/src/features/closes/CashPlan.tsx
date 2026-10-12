@@ -5,11 +5,11 @@ import { type FormEvent, useEffect, useState } from "react";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
-type Item = { key?: string; on: string; amount: string; label: string; source: string; basis: string };
+export type Item = { key?: string; on: string; amount: string; label: string; source: string; basis: string };
 type Change = { kind: "move" | "add"; item?: string; on?: string; label?: string; direction?: string; amount?: string; first_on?: string; every?: string; until_on?: string };
-type Scenario = { id: string; name: string; changes: Change[] };
-type Week = { start: string; end: string; opening: string; receipts: string; disbursements: string; closing: string; lowest: string; lowest_on: string; items: Item[] };
-type Obligation = {
+export type Scenario = { id: string; name: string; changes: Change[] };
+export type Week = { start: string; end: string; opening: string; receipts: string; disbursements: string; closing: string; lowest: string; lowest_on: string; items: Item[] };
+export type Obligation = {
   id: string;
   name: string;
   category: string;
@@ -27,7 +27,7 @@ type Obligation = {
   retired_at: string | null;
   retire_reason: string;
 };
-type Plan =
+export type Plan =
   | { state: "waiting"; reason: string }
   | {
       state: "ready";
@@ -77,13 +77,14 @@ const readinessLabel = {
   incomplete: ["status warn", "Incomplete forecast"],
 } as const;
 
-const every: Record<string, string> = { once: "once", week: "every week", two_weeks: "every two weeks", month: "every month" };
+export const every: Record<string, string> = { once: "once", week: "every week", two_weeks: "every two weeks", month: "every month" };
 const negative = (value: string) => value.startsWith("-");
 
-// readOnly is an executive's view: the plan alone, without schedules to edit or the agent.
-export function CashPlan({ closeId, readOnly = false }: { closeId: string; readOnly?: boolean }) {
+// readOnly is an executive's view: the plan alone, without schedules to edit or the agent. scenario is the what-if it
+// opens on; onScenario hears each one chosen here.
+export function CashPlan({ closeId, readOnly = false, scenario: opened = "", onScenario }: { closeId: string; readOnly?: boolean; scenario?: string; onScenario?: (id: string) => void }) {
   const dates = useDates();
-  const [scenario, setScenario] = useState("");
+  const [scenario, setScenario] = useState(opened);
   // The plan (as it stands, or under a chosen scenario), the open obligations (not an executive's) and the scenarios,
   // read with the page.
   const view = useQuery(cashPlanQuery<Plan, Obligation, Scenario>(closeId, scenario, readOnly));
@@ -188,6 +189,7 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
             }
           }
           setScenario(id);
+          onScenario?.(id);
         }}
       />
       <Reviews closeId={closeId} plan={plan} scenario={scenario} readOnly={readOnly} />
@@ -226,7 +228,7 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
         </thead>
         <tbody>
           {plan.weeks.map((week) => (
-            <tr key={week.start}>
+            <tr key={week.start} id={`week-${week.start}`}>
               <th scope="row" style={{ textAlign: "left", fontWeight: 400 }}>
                 {week.start} to {week.end}
               </th>
@@ -259,7 +261,7 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
       </table>
       {(plan.past_due.length > 0 || plan.unscheduled.length > 0) && (
         <>
-          <SectionHeader title="Not in the weeks: no agreed date" />
+          <SectionHeader id="cash-unplaced" title="Not in the weeks: no agreed date" />
           <p className="note">These are left out rather than given a date nobody agreed. A promise or a bill-pay handoff on the close's open items places them.</p>
           <ul>
             {plan.past_due.map((item, i) => (
@@ -280,7 +282,7 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
       {plan.after_horizon.length > 0 && <p className="note">{plan.after_horizon.length} open items fall after the 13 weeks.</p>}
       {plan.other_currency.length > 0 && <p className="note">Left out (another currency): {plan.other_currency.join(", ")}.</p>}
       {!readOnly && <>
-      <SectionHeader title="Payroll, tax, debt and other schedules" />
+      <SectionHeader id="cash-schedules" title="Payroll, tax, debt and other schedules" />
       <p className="note">
         Commitments the open items do not show, from the client's own schedules (payroll provider, tax calendar, loan agreement, lease). Each counts once a person
         approves it; nothing here runs payroll or files tax. Name the vendor whose bills pay it: when one of their bills falls in a payment's week, you decide whether it pays it, so
@@ -424,7 +426,7 @@ function Scenarios({ closeId, plan, scenarios, selected, onSelect }: { closeId: 
   }
   return (
     <>
-      <SectionHeader title="What if" />
+      <SectionHeader id="cash-scenarios" title="What if" />
       {error && <p role="alert">{error}</p>}
       {scenarios.length > 0 && (
         <label>
@@ -596,7 +598,7 @@ function Reviews({ closeId, plan, scenario, readOnly }: { closeId: string; plan:
   }
   return (
     <>
-      <SectionHeader title="Reviewed versions" />
+      <SectionHeader id="cash-reviews" title="Reviewed versions" />
       {error && <p role="alert">{error}</p>}
       {saved && <p role="status">{saved}</p>}
       {list.length === 0 ? (
@@ -691,7 +693,7 @@ function Questions({ closeId, capture, questions, show, onDecided }: { closeId: 
   }
   return (
     <>
-      <SectionHeader title="Needs your decision: bills against schedules" />
+      <SectionHeader id="cash-questions" title="Needs your decision: bills against schedules" />
       {error && <p role="alert">{error}</p>}
       {questions.map((q) => (
         <fieldset key={`${q.obligation_id}-${q.on}`} disabled={busy}>
@@ -761,7 +763,7 @@ function Matches({ closeId, capture, matches, show, readOnly, onDecided }: { clo
   const state = (bill: Matched["bills"][number]) => (bill.state === "counted" ? `counted on ${bill.on}` : bill.state === "paid" ? "paid: no longer open" : bill.state);
   return (
     <>
-      <SectionHeader title="Bills against schedules" />
+      <SectionHeader id="cash-matches" title="Bills against schedules" />
       {error && <p role="alert">{error}</p>}
       <ul>
         {matches.map((m) => (
@@ -845,7 +847,7 @@ function Lapsed({ closeId, capture, lapsed, onCleared }: { closeId: string; capt
   }
   return (
     <>
-      <SectionHeader title="Decisions that no longer apply" />
+      <SectionHeader id="cash-lapsed" title="Decisions that no longer apply" />
       {error && <p role="alert">{error}</p>}
       <ul>
         {lapsed.map((d) => (

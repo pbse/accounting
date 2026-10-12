@@ -4,7 +4,6 @@ import { monthName, useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { CloseLede, signOffAvailable, useBrief } from "./Stands";
-import { CashPlan } from "./CashPlan";
 import { RetentionControls } from "./Enterprise";
 import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
@@ -19,6 +18,7 @@ import { Workpapers, WorkpapersLede } from "./Workpapers";
 import { Documents, DocumentsLede } from "./Documents";
 import { RequestsLede, RequestsTab } from "./RequestsTab";
 import { ReportsLede, ReportsTab } from "./ReportsTab";
+import { CashLede, CashTab } from "./CashTab";
 import { AgentChip, CloseMenu, countsOf, needsFor, Overview, useDecisions, useGoalStatus } from "./Overview";
 import { workspaceRequest } from "./workspace";
 import { useClose, type Close, type Profile } from "./WorkpaperView";
@@ -90,6 +90,14 @@ function Package({ close }: { close: Close }) {
 
 // Each tab's own actions and exception paths, at the top of the close's ⋯ menu.
 const tabMenus = (base: string): Partial<Record<Tab, { title: string; items: { label: string; to: string }[] }>> => ({
+  cash: {
+    title: "Cash plan",
+    items: [
+      { label: "Add a schedule", to: `${base}?tab=cash&view=plan#cash-schedules` },
+      { label: "Try a what-if", to: `${base}?tab=cash&view=plan#cash-scenarios` },
+      { label: "Review this plan", to: `${base}?tab=cash&view=plan#cash-reviews` },
+    ],
+  },
   reports: {
     title: "Reports",
     items: [
@@ -204,7 +212,7 @@ export default function ClientClose() {
         </div>
       </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
-      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : tab === "requests" ? <RequestsLede closeId={close.id} /> : tab === "reports" ? <ReportsLede closeId={close.id} period={close.period} /> : tab === "evidence" ? <DocumentsLede closeId={close.id} base={base} waiting={needs.filter((need) => need.tab === "evidence").reduce((n, need) => n + need.count, 0)} /> : <CloseLede close={close} counts={counts} />}
+      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : tab === "requests" ? <RequestsLede closeId={close.id} /> : tab === "reports" ? <ReportsLede closeId={close.id} period={close.period} /> : tab === "cash" ? <CashLede closeId={close.id} base={base} /> : tab === "evidence" ? <DocumentsLede closeId={close.id} base={base} waiting={needs.filter((need) => need.tab === "evidence").reduce((n, need) => n + need.count, 0)} /> : <CloseLede close={close} counts={counts} />}
       {close.profile && (close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown") && (
         <p className="ks-lede-notes">
           <span className="chip warn" role={close.profile.state === "unknown" ? undefined : "alert"} title={close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>
@@ -232,7 +240,7 @@ export default function ClientClose() {
       {tab === "evidence" && <Documents close={close} needs={needs.filter((need) => need.tab === "evidence")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} onChange={() => void reload()} />}
       {tab === "requests" && <RequestsTab close={close} papers={papers} needs={needs.filter((need) => need.tab === "requests")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} onChange={() => void reload()} />}
       {tab === "reports" && <ReportsTab close={close} papers={papers} needs={needs.filter((need) => need.tab === "reports")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
-      {tab === "cash" && <CashPlan key={`cash-${close.id}`} closeId={close.id} />}
+      {tab === "cash" && <CashTab close={close} papers={papers} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
       {tab === "signoff" && (
         <div className="stack">
           <TakeoverSetup key={`setup-${close.id}`} closeId={close.id} />
