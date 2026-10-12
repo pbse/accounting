@@ -1268,7 +1268,12 @@ func (s *seeder) review(ctx context.Context, closeID string, c *seed.Client, per
 		if str(p["kind"]) == "reconciliation" {
 			note = "Statement and register agree; no outstanding items."
 		}
-		code, out := s.callAs(ctx, owner, "POST", "/v1/closes/"+closeID+"/workpapers/"+str(p["id"])+"/reviews", map[string]any{"decision": "approved", "note": note, "digest": str(p["digest"]), "expected_review_id": str(p["review_id"])})
+		decision := map[string]any{"decision": "approved", "note": note, "digest": str(p["digest"]), "expected_review_id": str(p["review_id"])}
+		// A payroll recording is approved with its two confirmations, as the demonstration's administrator gives them.
+		if str(p["kind"]) == "payroll" {
+			decision["attestations"] = payrollAttestations
+		}
+		code, out := s.callAs(ctx, owner, "POST", "/v1/closes/"+closeID+"/workpapers/"+str(p["id"])+"/reviews", decision)
 		if code != 200 {
 			s.problem("%s %s: approve draft %s: %d %s", c.Name, period, str(p["id"]), code, out)
 		}
@@ -1425,7 +1430,18 @@ func (s *seeder) publish(ctx context.Context, closeID string, c *seed.Client, pe
 		return
 	}
 	commentary := fmt.Sprintf("%s: revenue held near plan with membership dues steady and corporate wellness billing on schedule. Payroll ran at two pay dates as usual. Utilities are accrued from Metro's estimate and reversed when the bill arrives. Cash ended the month covering about six weeks of operating payments.", monthName(period))
-	s.must(ctx, "publish pack", "POST", "/v1/closes/"+closeID+"/management-pack/publications", map[string]any{"action": "publish", "digest": str(field(out, "digest")), "commentary": commentary, "reason": "Monthly pack for the owner's board call", "confirmed": true})
+	drafts, ok := s.must(ctx, "line explanations", "GET", "/v1/closes/"+closeID+"/management-pack/explanations", nil)
+	if !ok {
+		return
+	}
+	// Each line that moved is published with the agent's drafted explanation, as a reviewer accepting it would.
+	explanations := []map[string]any{}
+	list, _ := field(drafts, "explanations").([]any)
+	for _, e := range list {
+		e, _ := e.(map[string]any)
+		explanations = append(explanations, map[string]any{"account_id": str(e["account_id"]), "text": str(e["text"])})
+	}
+	s.must(ctx, "publish pack", "POST", "/v1/closes/"+closeID+"/management-pack/publications", map[string]any{"action": "publish", "digest": str(field(out, "digest")), "commentary": commentary, "explanations": explanations, "reason": "Monthly pack for the owner's board call", "confirmed": true})
 }
 
 func monthName(period string) string {
