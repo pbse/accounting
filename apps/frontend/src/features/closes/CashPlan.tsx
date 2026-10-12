@@ -4,6 +4,7 @@ import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
+import { CashObservations } from "./CashObservations";
 
 export type Item = { key?: string; on: string; amount: string; label: string; source: string; basis: string };
 type Change = { kind: "move" | "add"; item?: string; on?: string; label?: string; direction?: string; amount?: string; first_on?: string; every?: string; until_on?: string };
@@ -125,12 +126,19 @@ export function CashPlan({ closeId, readOnly = false, scenario: opened = "", onS
     void act({ action: "add", ...form }, `Added ${form.name}; it counts once it is approved.`).then((ok) => ok && element.reset());
   }
   if (!plan) return error ? <p role="alert">{error}</p> : <p role="status">Preparing the cash plan…</p>;
-  if (plan.state === "waiting") return <p className="empty">{plan.reason}</p>;
+  if (plan.state === "waiting")
+    return (
+      <>
+        <p className="empty">{plan.reason}</p>
+        {!readOnly && <CashObservations closeId={closeId} />}
+      </>
+    );
   const show = (value: string) => amount(value, plan.currency);
   const cell = (value: string) => <td style={{ whiteSpace: "nowrap", color: negative(value) ? "var(--danger, #b42318)" : undefined }}>{show(value)}</td>;
   const active = obligations.filter((o) => !o.retired_at);
   return (
     <section aria-label="Cash plan">
+      {!readOnly && <CashObservations closeId={closeId} />}
       <p>
         <strong>{plan.entity}</strong> · 13 weeks from {plan.start} · {plan.currency} · opening book cash {show(plan.opening.amount)} at{" "}
         {dates.dateTime(plan.opening.as_of)}
