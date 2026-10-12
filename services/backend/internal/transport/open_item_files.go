@@ -39,6 +39,7 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 	open := map[string][]json.RawMessage{}
 	var ids, sides []string
 	asOf, problems, observed, sideProblems := "", 0, map[string]string{}, map[string]int{}
+	sideAsOf, sideOpen := map[string]string{}, map[string]*big.Rat{}
 	for rows.Next() {
 		var id, side, at string
 		var raw []byte
@@ -55,7 +56,12 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 			asOf = at
 		}
 		observed[map[string]string{"receivable": "Invoice", "payable": "Bill"}[side]] = at + "T23:59:59Z"
-		sideProblems[side] = n
+		sideProblems[side], sideAsOf[side], sideOpen[side] = n, at, new(big.Rat)
+		for _, item := range items {
+			if v, ok := new(big.Rat).SetString(item.Open); ok {
+				sideOpen[side].Add(sideOpen[side], v)
+			}
+		}
 		for _, item := range items {
 			kind, credit := map[string][2]string{"receivable": {"Invoice", "CreditMemo"}, "payable": {"Bill", "VendorCredit"}}[side], false
 			balance, _ := new(big.Rat).SetString(item.Open)
@@ -96,7 +102,11 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 		return nil, nil, nil, waiting("Send this month's open receivables and payables as files first; the aging uses the documents they hold.")
 	}
 	home := ""
-	if b, _, e := fileMonthBooks(ctx, db, closeID); e == nil && b != nil {
+	b, books, err := fileMonthBooks(ctx, db, closeID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if b != nil {
 		home = b.Currency
 	}
 	month, _ := time.Parse("2006-01", period)
@@ -114,6 +124,38 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 		}
 		completeBy[kind] = sent && sideProblems[side] == 0 && unresolved == 0
 	}
+	// Accrual books: a side's open items as of the month's end reconcile to its control accounts in the month's books
+	// (receivables, debit; payables, credit); a difference holds that side's open items, not the close. Cash-basis books
+	// carry no receivables or payables: the list is the client's operational one, outside the books.
+	held, outside := []string{}, ""
+	if b != nil && books.Basis == "accrual" {
+		for _, side := range []string{"receivable", "payable"} {
+			if sideAsOf[side] != monthEnd.Format("2006-01-02") {
+				continue
+			}
+			kind, control, sign := map[string]string{"receivable": "Accounts Receivable", "payable": "Accounts Payable"}[side], new(big.Rat), int64(1)
+			if side == "payable" {
+				sign = -1
+			}
+			for key, a := range b.Accounts {
+				if a.Type == kind && b.Balances[key] != nil {
+					control.Add(control, new(big.Rat).Mul(b.Balances[key], big.NewRat(sign, 1)))
+				}
+			}
+			if control.Cmp(sideOpen[side]) != 0 {
+				difference := new(big.Rat).Sub(control, sideOpen[side])
+				held = append(held, fmt.Sprintf("The open %ss total %s, but the books' %s accounts hold %s at the month's end, a difference of %s: reconcile them before relying on these %ss.",
+					side, sideOpen[side].FloatString(2), strings.ToLower(kind), control.FloatString(2), difference.FloatString(2), side))
+				completeBy[map[string]string{"receivable": "Invoice", "payable": "Bill"}[side]] = false
+			}
+		}
+	} else if b != nil {
+		outside = "The books are on a " + strings.ReplaceAll(books.Basis, "_", " ") + " basis, which carries no receivables or payables: these open items are the client's operational list, outside the books."
+	}
+	note := filesAgingNote
+	if outside != "" {
+		note = outside + " " + note
+	}
 	completeness := ""
 	if len(sides) < 2 {
 		completeness = "Only the open " + sides[0] + "s were sent for this month as a file."
@@ -121,9 +163,12 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 	if problems > 0 {
 		completeness = strings.TrimSpace(completeness + " Some rows of the files could not be read.")
 	}
+	if len(held) > 0 {
+		completeness = strings.TrimSpace(completeness + " " + strings.Join(held, " "))
+	}
 	// The files' open items were true at the end of their earliest as-of date, as a capture's are at its time.
 	return receivables, payables, map[string]any{"source": "files", "company": company, "capture_id": "files:" + strings.Join(ids, "+"), "captured_at": asOf + "T23:59:59Z", "month_end": monthEnd.Format("2006-01-02"),
-		"complete": unreadable == 0 && problems == 0 && len(sides) == 2, "completeness": completeness, "note": filesAgingNote, "buckets": quickbooks.AgingBuckets, "observed": observed, "complete_by_kind": completeBy}, nil
+		"complete": unreadable == 0 && problems == 0 && len(sides) == 2 && len(held) == 0, "completeness": completeness, "note": note, "buckets": quickbooks.AgingBuckets, "observed": observed, "complete_by_kind": completeBy, "outside": outside}, nil
 }
 
 const filesAgingNote = "Balances as of each file's as-of date, aged against the close's month-end. A document paid after month-end but before that date is not shown."

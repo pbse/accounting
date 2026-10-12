@@ -657,6 +657,11 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	}
 	openItems("receivable", "Customer,Num,Due Date,Open Balance\nBeta LLC,1001,02/14/2027,250.00\n")
 	openItems("payable", "Vendor,Num,Due Date,Open Balance\nLandlord,R-2,02/05/2027,100.00\n")
+	// At the month's end, on accrual books, the open receivables reconcile to the receivables control accounts: January's
+	// books hold none, so its 250.00 of open receivables are held, its payables likewise.
+	if open := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/open-items", nil, 200); open["complete"] != false || !strings.Contains(open["completeness"].(string), "The open receivables total 250.00, but the books' accounts receivable accounts hold 0.00") {
+		t.Fatalf("open items held by their control accounts: %v", open)
+	}
 	plan := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200)
 	if opening, _ := plan["opening"].(map[string]any); plan["state"] != "ready" || plan["start"] != "2027-02-01" || opening["amount"] != "1500.25" || plan["currency"] != "USD" ||
 		plan["open_items"].(map[string]any)["missing_later"] != false || strings.Contains(fmt.Sprint(plan["readiness"]), "are not captured here") {
