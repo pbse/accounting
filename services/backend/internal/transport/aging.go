@@ -25,6 +25,12 @@ func (w waiting) Error() string { return string(w) }
 // latestAging reads the open items of the close's latest completed transaction capture on its reading connection, or
 // of its newer Xero snapshot.
 func latestAging(r *http.Request, db *sql.DB) (receivables, payables []quickbooks.AgingParty, meta map[string]any, err error) {
+	// A month whose books are its files reads its open items from its open-items files.
+	if source, e := closeBooksSource(r.Context(), db, r.PathValue("id")); e != nil && e != sql.ErrNoRows {
+		return nil, nil, nil, e
+	} else if source == "files" {
+		return filesAging(r.Context(), db, r.PathValue("id"))
+	}
 	books, err := latestXeroBooks(r.Context(), db, r.PathValue("id"))
 	if err != nil {
 		return nil, nil, nil, err
