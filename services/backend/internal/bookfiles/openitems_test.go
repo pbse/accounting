@@ -84,8 +84,9 @@ func TestOpenItemsAmountsAreReadInTheirColumnsStyle(t *testing.T) {
 	}
 	layout, _ := ProposeOpenItemsAt(f, f.Tables[0].Name, 1)
 	layout.Columns = map[int]Role{0: RoleParty, 1: RoleDocument, 2: RoleOpen}
+	layout.Style.Scale = 1000
 	items, problems := ReadOpenItems(f, RestyleOpenItems(f, layout))
-	if len(items) != 2 || items[1].Open != "1000.25" || len(problems) != 0 {
+	if len(items) != 2 || items[1].Open != "1000250.00" || len(problems) != 0 {
 		t.Fatalf("amounts in the column's style: %v %v", items, problems)
 	}
 	layout.Style = NumberStyle{Scale: 1}

@@ -153,15 +153,18 @@ func headingRoles(row Row) map[int]Role {
 	return columns
 }
 
-// RestyleOpenItems is layout l with its amounts' style read again from the column it now gives the open amount, as a
-// person may have named another: the dates' order is kept as given.
+// RestyleOpenItems is layout l with how its amounts mark decimals read again from the column it now gives the open
+// amount, as a person may have named another: the dates' order and the amounts' scale are kept as given.
 func RestyleOpenItems(f File, l OpenItemsLayout) OpenItemsLayout {
 	for _, t := range f.Tables {
 		for _, row := range t.Rows {
 			if t.Name == l.Table && row.Number == l.HeaderRow {
-				order := l.DateOrder
+				order, scale := l.DateOrder, l.Style.Scale
 				l = layoutAt(t, row, l.Columns)
 				l.DateOrder = order
+				if scale != 0 {
+					l.Style.Scale = scale
+				}
 				return l
 			}
 		}
