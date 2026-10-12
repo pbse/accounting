@@ -54,3 +54,19 @@ func TestOpenItemsKeepCreditsAndUnreadableDocuments(t *testing.T) {
 		t.Fatalf("an export's unnumbered rows: %v %v", items, problems)
 	}
 }
+
+// A summary section above a detailed one is not taken for it; headings naming no number are still proposed, for a
+// person to name the number's column.
+func TestOpenItemsProposeTheDetailedHeadings(t *testing.T) {
+	f, err := Read("sections.csv", []byte("Customer,Open Balance\nAcme Co,500.00\n\nDate,Reference,Customer,Open Balance\n15 Jan 2027,INV-1,Acme Co,500.00\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout, ok := ProposeOpenItems(f); !ok || layout.HeaderRow != 4 {
+		t.Fatalf("the detailed headings: %v %v", layout, ok)
+	}
+	f, _ = Read("unnamed.csv", []byte("Customer,Transaction ID,Open Balance\nAcme Co,T-1,500.00\n"))
+	if layout, ok := ProposeOpenItems(f); !ok || layout.HeaderRow != 1 {
+		t.Fatalf("headings naming no number: %v %v", layout, ok)
+	}
+}

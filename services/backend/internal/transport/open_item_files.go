@@ -212,7 +212,7 @@ func registerOpenItemFiles(mux *http.ServeMux, db *sql.DB) {
 				total.Add(total, v)
 			}
 		}
-		preview := items
+		preview := append([]bookfiles.OpenItem{}, items...)
 		if len(preview) > 20 {
 			preview = preview[:20]
 		}

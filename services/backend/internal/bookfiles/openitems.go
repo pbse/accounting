@@ -91,6 +91,17 @@ func roleOf(heading string) Role {
 // headings name an amount and a document number or a party (whose number column a person then names), its columns' roles, its dates' order and its amounts' style. ok is false when no
 // row does.
 func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
+	// Headings naming a number are looked for first, through every table, before ones naming only a party: a summary
+	// section above a detailed one must not be taken for it.
+	for _, numbered := range []bool{true, false} {
+		if l, ok = proposeOpenItems(f, numbered); ok {
+			return l, true
+		}
+	}
+	return l, false
+}
+
+func proposeOpenItems(f File, numbered bool) (l OpenItemsLayout, ok bool) {
 	for _, t := range f.Tables {
 		for i, row := range t.Rows {
 			if i >= 30 {
@@ -112,7 +123,7 @@ func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
 			if !slices.Contains(mapValues(columns), RoleOpen) && amount >= 0 {
 				columns[amount] = RoleOpen
 			}
-			if !slices.Contains(mapValues(columns), RoleOpen) || (!slices.Contains(mapValues(columns), RoleDocument) && !slices.Contains(mapValues(columns), RoleParty)) {
+			if !slices.Contains(mapValues(columns), RoleOpen) || !slices.Contains(mapValues(columns), RoleDocument) && (numbered || !slices.Contains(mapValues(columns), RoleParty)) {
 				continue
 			}
 			l = OpenItemsLayout{Table: t.Name, HeaderRow: row.Number, Columns: columns}
