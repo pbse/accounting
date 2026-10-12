@@ -387,8 +387,13 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 				u.Path = "/scan-file"
 				url = u.String()
 			}
-			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(4 * time.Minute))
-			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+			// A books file may wait for the scanner's signature update and then its longer binary scan.
+			wait := 3 * time.Minute
+			if fileScan {
+				wait = 5 * time.Minute
+			}
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + time.Minute))
+			ctx, cancel := context.WithTimeout(r.Context(), wait)
 			defer cancel()
 			scanRequest, e := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 			if e != nil {

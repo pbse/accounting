@@ -57,7 +57,8 @@ func Handler(key, database string) http.Handler {
 			return
 		}
 		defer lock.Unlock()
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+		// Room for a signature update (two minutes at most) and then a binary scan (150 seconds).
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 		defer cancel()
 		if time.Since(updated) > 6*time.Hour {
 			if os.MkdirAll(database, 0700) != nil || strings.ContainsAny(database, "\r\n") {
