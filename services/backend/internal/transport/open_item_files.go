@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -201,8 +202,8 @@ func registerOpenItemFiles(mux *http.ServeMux, db *sql.DB) {
 			if !ok && len(read.Tables) > 0 {
 				layout = bookfiles.OpenItemsLayout{Table: read.Tables[0].Name, Columns: map[int]bookfiles.Role{}, Style: bookfiles.NumberStyle{Scale: 1}}
 			}
-		} else if err = json.Unmarshal([]byte(r.FormValue("layout")), &layout); err != nil {
-			problem(w, 422, "The layout cannot be read.")
+		} else if err = json.Unmarshal([]byte(r.FormValue("layout")), &layout); err != nil || !slices.Contains([]int64{0, 1, 1000, 1000000}, layout.Style.Scale) {
+			problem(w, 422, "The layout cannot be read: amounts are in units, thousands (1000) or millions (1000000).")
 			return
 		} else {
 			// The amounts' style is read from the column the layout gives the open amount, which a person may have changed.
