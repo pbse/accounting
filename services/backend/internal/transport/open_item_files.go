@@ -190,7 +190,7 @@ func registerOpenItemFiles(mux *http.ServeMux, db *sql.DB) {
 		if proposed {
 			var ok bool
 			if layout, ok = bookfiles.ProposeOpenItems(read); !ok {
-				problem(w, 422, "No row of the file heads columns naming a customer or vendor (or a document number) and an amount. Export the open items with their headings.")
+				problem(w, 422, "No row of the file heads columns naming each document's number and an amount. Export the open items with their numbers and headings.")
 				return
 			}
 		} else if err = json.Unmarshal([]byte(r.FormValue("layout")), &layout); err != nil || layout.Style.Scale == 0 {

@@ -50,14 +50,9 @@ type OpenItem struct {
 }
 
 // Key is a stable name for the document within its side: its party, number and whether it is a credit, so a decision
-// about it carries over to the next export; a document without a number is named by its dates and amount.
+// about it carries over to the next export.
 func (i OpenItem) Key(side string) string {
-	name := side + "|" + strings.ToLower(strings.Join(strings.Fields(i.Party), " ")) + "|" + map[bool]string{true: "credit", false: "document"}[strings.HasPrefix(i.Open, "-")] + "|"
-	if i.Document != "" {
-		name += strings.ToLower(strings.TrimSpace(i.Document))
-	} else {
-		name += i.Date + "|" + i.Due + "|" + i.Open
-	}
+	name := side + "|" + strings.ToLower(strings.Join(strings.Fields(i.Party), " ")) + "|" + map[bool]string{true: "credit", false: "document"}[strings.HasPrefix(i.Open, "-")] + "|" + strings.ToLower(strings.TrimSpace(i.Document))
 	sum := sha256.Sum256([]byte(name))
 	return hex.EncodeToString(sum[:12])
 }
@@ -93,7 +88,7 @@ func roleOf(heading string) Role {
 }
 
 // ProposeOpenItems proposes how to read an export of open items: the first row, among each table's first 30, whose
-// headings name a party and an amount, its columns' roles, its dates' order and its amounts' style. ok is false when no
+// headings name a document number and an amount, its columns' roles, its dates' order and its amounts' style. ok is false when no
 // row does.
 func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
 	for _, t := range f.Tables {
@@ -117,7 +112,7 @@ func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
 			if !slices.Contains(mapValues(columns), RoleOpen) && amount >= 0 {
 				columns[amount] = RoleOpen
 			}
-			if !slices.Contains(mapValues(columns), RoleOpen) || (!slices.Contains(mapValues(columns), RoleParty) && !slices.Contains(mapValues(columns), RoleDocument)) {
+			if !slices.Contains(mapValues(columns), RoleOpen) || !slices.Contains(mapValues(columns), RoleDocument) {
 				continue
 			}
 			l = OpenItemsLayout{Table: t.Name, HeaderRow: row.Number, Columns: columns}
@@ -148,8 +143,8 @@ func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
 	return l, false
 }
 
-// dateShaped is whether text begins as a date does, with a digit or a month's name, whether it reads or not (a
-// mistyped date is a document's problem): a label such as "Total 2027" does not.
+// dateShaped is whether text begins as a date does, with a digit or a month's name, whether it reads or not: a row
+// without a number but with one is reported, not passed over as a summary.
 func dateShaped(text string) bool {
 	fields := strings.Fields(strings.ToLower(text))
 	if len(fields) == 0 {
@@ -172,9 +167,9 @@ func mapValues(m map[int]Role) []Role {
 
 // ReadOpenItems reads the documents an export holds open by its confirmed layout, with the problems found. A row
 // without an open amount is a heading: one holding only a name is the party of the documents below it that name none
-// (as an aged report grouped by contact is laid out). A document has a party and a number or a date: a row with an
-// amount and neither (a subtotal, a total, a grand total) is a summary, left aside. An export with none open is read as
-// none, which is what a side all paid gives.
+// (as an aged report grouped by contact is laid out). An open item is followed up by its number, so a row without one
+// is never counted: one with anything written as a date is a document left out, named as a problem; any other is a
+// summary (a subtotal, a total), left aside. An export with none open is read as none, which a side all paid gives.
 func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 	var table *Table
 	for i := range f.Tables {
@@ -195,16 +190,8 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 	if _, ok := roles[RoleOpen]; !ok {
 		return nil, []string{"Say which column holds each document's open amount."}
 	}
-	if _, party := roles[RoleParty]; !party {
-		if _, document := roles[RoleDocument]; !document {
-			return nil, []string{"Say which column names each document's customer or vendor, or its number."}
-		}
-	}
-	_, numbered := roles[RoleDocument]
-	_, dated := roles[RoleDate]
-	_, due := roles[RoleDue]
-	if !numbered && !dated && !due {
-		return nil, []string{"Say which column holds each document's number or date: a row with neither is a summary."}
+	if _, numbered := roles[RoleDocument]; !numbered {
+		return nil, []string{"Say which column holds each document's number: each open item is followed up by it. Export the open items with their numbers."}
 	}
 	items, problems, heading := []OpenItem{}, []string{}, ""
 	total := func(s string) bool { return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "total") }
@@ -252,9 +239,10 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 				unread = append(unread, fmt.Sprintf("Row %d: the %s %q cannot be read as a date.", row.Number, map[Role]string{RoleDate: "date", RoleDue: "due date"}[d.role], cells[column].Value))
 			}
 		}
-		// Neither a number nor anything written as a date: a summary row (its label may sit in the date column). A date
-		// that cannot be read is the document's problem, not a summary's.
-		if (document == "" && !dateLike) || (party == "" && document == "" && heading == "") {
+		if document == "" {
+			if dateLike {
+				problems = append(problems, fmt.Sprintf("Row %d has no document number, so it is left out.", row.Number))
+			}
 			continue
 		}
 		if item.Party == "" {
