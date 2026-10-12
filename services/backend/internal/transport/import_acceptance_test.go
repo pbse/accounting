@@ -695,6 +695,25 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 		strings.Contains(fmt.Sprint(plan["readiness"]), "send them as of the same date") {
 		t.Fatalf("the plan opens from the observed cash: %v", plan)
 	}
+	// A reviewed plan is compared with the book cash recorded after it, on its date.
+	reviewedPlan, _ := json.Marshal(plan)
+	_, err = db.Exec(`INSERT INTO cash_plan_reviews(organization_id,close_id,company,currency,plan,digest,assumptions,reviewed_by) VALUES($1,$2::bigint,'files:'||client_identity($1,'Acme Co'),'USD',$3,$4,'Synthetic review of the files plan','fixture')`, org, januaryClose, string(reviewedPlan), plan["digest"])
+	must(err)
+	call("user_a", partner, "POST", "/v1/closes/"+januaryClose+"/cash-observations", map[string]any{"kind": "book", "as_of": "2027-02-10",
+		"accounts": []map[string]string{{"name": "1000 Business Checking", "balance": "1450.25"}}, "note": "Trial Balance run to 10 February", "confirmed": true}, 201)
+	actuals := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan/reviews", nil, 200)["reviews"].([]any)[0].(map[string]any)["actuals"].([]any)
+	// The observation on 10 February, and February's accepted file as of its end.
+	if len(actuals) != 2 || actuals[0].(map[string]any)["on"] != "2027-02-10" || actuals[0].(map[string]any)["actual"] != "1450.25" || actuals[1].(map[string]any)["on"] != "2027-02-28" || actuals[1].(map[string]any)["actual"] != "1300.25" {
+		t.Fatalf("a files plan's actuals: %v", actuals)
+	}
+	// A later month that no longer reads its books from files gives no actual from its old file.
+	var override string
+	must(db.QueryRow(`INSERT INTO books_sources(organization_id,client_entity,period,source,reason,actor) VALUES($1,'Acme Co','2027-02','quickbooks','Synthetic switch','fixture') RETURNING id::text`, org).Scan(&override))
+	if actuals := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan/reviews", nil, 200)["reviews"].([]any)[0].(map[string]any)["actuals"].([]any); len(actuals) != 1 {
+		t.Fatalf("a month switched away from files: %v", actuals)
+	}
+	_, err = db.Exec(`DELETE FROM books_sources WHERE id=$1::bigint`, override)
+	must(err)
 	// The tie-out compares the file's balance-sheet accounts with their support: the bank, to be reconciled.
 	tie := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200)
 	if rows := tie["rows"].([]any); tie["snapshot"].(map[string]any)["source"] != "files" || len(rows) != 1 || rows[0].(map[string]any)["account_id"] != "n:1000" || rows[0].(map[string]any)["hint"] != "Reconcile it to the bank statement." {
