@@ -45,8 +45,9 @@ Stays on Cloudflare: upload scanner, context machine, queues, Email Routing, con
 
 - **The host.** The same `services/backend` image, run in AWS us-east-2 because it is Neon's own region: ECS Fargate
   (2 vCPU, 4 GiB, ARM; nothing to patch; about $60–70 a month) or one Lightsail VM running Docker (cheapest, about
-  $24 a month). It runs the API and the preparation worker. AWS App Runner is closed to new customers since
-  2026-04-30, so it is not an option.
+  $24 a month). It runs the API and the preparation worker. AWS App Runner is
+  [no longer open to new customers](https://docs.aws.amazon.com/apprunner/latest/dg/what-is-apprunner.html), so it is
+  not an option.
 - **The link.** `cloudflared` runs beside the API and dials out to Cloudflare. The edge Worker reaches the API through a
   [Workers VPC](https://developers.cloudflare.com/workers-vpc/) service binding instead of the `api-enam` Durable
   Object; the API has no public address, load balancer or NAT gateway. Workers VPC is in beta; the fallback is a Tunnel
@@ -56,8 +57,9 @@ Stays on Cloudflare: upload scanner, context machine, queues, Email Routing, con
   so a page's several loader reads each cost 1–2 ms instead of 30–60. Static files are still served from the edge
   nearest the visitor.
 - **What the API needs from Cloudflare.** Only the context machine, which the container now reaches through
-  `outboundByHost` (`context-machine.internal`). Off Cloudflare it calls the context machine's Worker over HTTPS with
-  its token. The scanner, email and model providers are already ordinary URLs.
+  `outboundByHost` (`context-machine.internal`) and a service binding. Its Worker has no public route
+  (`workers_dev: false`), so the move adds one: a route on our zone that only a Cloudflare Access service token (or
+  the context machine's own token) may call. The scanner, email and model providers are already ordinary URLs.
 - **Deploys and secrets.** Deploy production builds the image, pushes it to ECR and updates the service; migrations
   run as now. The owner sets the API's secrets in AWS with a script run in their own terminal, as for Cloudflare.
 
@@ -71,8 +73,11 @@ scale to zero after 5 idle minutes cannot be turned off ([Neon pricing](https://
 [Free plan limits](https://neon.com/faqs/free-plan-limits-and-quotas)). Today the API holds connections open all day,
 so the compute never sleeps: 70.8 CU-hours were used by 2026-10-11, on course for the cap around 2026-10-15.
 
-On Free, whichever host runs the API, it must let the database sleep: close idle connections after a few minutes and
-open none at start, so a quiet firm uses no compute. The first request after about five quiet minutes then waits
+On Free, whichever host runs the API, the database must be allowed to sleep. The API closes idle connections after a
+few minutes and opens none at start. The preparation worker is the harder part: its workflow engine polls every 10
+seconds when idle and writes a heartbeat every 30 (`services/backend/internal/wf/engine.go`), so as it runs today the
+database never sleeps. It has to run only while there is work, woken by the queue or the schedule and stopping once
+idle, before a quiet firm uses no compute. The first request after about five quiet minutes then waits
 roughly half a second while Neon wakes. Neon's Launch plan removes that wait (scale to zero can be turned off; about
 $20 a month at a 0.25 CU floor, $0.106 per CU-hour) and lifts the 1 GB storage limit and the 6-hour restore window.
 
@@ -88,21 +93,21 @@ $20 a month at a 0.25 CU floor, $0.106 per CU-hour) and lifts the 1 GB storage l
 ## Steps when built
 
 1. Probe: a throwaway task in AWS us-east-2 times a round trip to Neon; continue only if it is about 1 ms.
-2. Build the service, the Tunnel, the Workers VPC binding behind a switch, and the deploy step; keep the `api-enam`
-   container as the fallback the switch returns to.
+2. Build the service, the Tunnel, the Workers VPC binding behind a switch, the context machine's protected route
+   and the deploy step; keep the `api-enam` container as the fallback the switch returns to.
 3. Switch over, measure `Server-Timing` on the main pages, keep the fallback for a week, then remove the API and
    preparation-worker containers.
 
 ## Independent of hosting
 
-Home, the Clients list, the roster and Measure recheck every signed-off close on every read through `closeReadiness`
-(about 24 round trips a close), and the owner keeps that recheck exact. Even at 1 ms a trip this grows with every month
-signed off, so the rechecks should run in parallel on one shared snapshot (`pg_export_snapshot`), and `closeReadiness`
+Reads recheck signed-off closes through `closeReadiness` (about 24 round trips a close), and the owner keeps that
+recheck exact: Home every signed-off close up to this month (`outstanding` in `morning.go`), the Clients list and the
+roster the last three months, Measure twelve. Home's cost grows with every month signed off even at 1 ms a trip, so the rechecks should run in parallel on one shared snapshot (`pg_export_snapshot`), and `closeReadiness`
 should fold its independent reads into fewer statements.
 
 ## Measuring
 
-- A round trip: `GET /v1/client-request` with a made-up `Authorization: Bearer` value makes exactly one query; read
-  `db` in its `Server-Timing`.
+- A round trip: `GET /v1/client-request` with a made-up `Authorization: Bearer` value of 26–128 characters makes
+  exactly one query (a shorter one is refused before any); read `db` in its `Server-Timing`.
 - Where the container runs: the Containers API, `GET /accounts/{account}/containers/applications/{id}/instances-v2`.
 - Where a Durable Object runs: GraphQL `durableObjectsInvocationsAdaptiveGroups`, dimension `coloCode`.
