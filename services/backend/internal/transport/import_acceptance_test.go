@@ -664,7 +664,8 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	}
 	plan := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200)
 	if opening, _ := plan["opening"].(map[string]any); plan["state"] != "ready" || plan["start"] != "2027-02-01" || opening["amount"] != "1500.25" || plan["currency"] != "USD" ||
-		plan["open_items"].(map[string]any)["missing_later"] != false || strings.Contains(fmt.Sprint(plan["readiness"]), "are not captured here") {
+		plan["open_items"].(map[string]any)["missing_later"] != false || strings.Contains(fmt.Sprint(plan["readiness"]), "are not captured here") ||
+		!strings.Contains(fmt.Sprint(plan["readiness"]), "The open receivables total 250.00") {
 		t.Fatalf("a files month's plan opens from its file's bank balances: %v", plan)
 	}
 	// Open payables as of another date than the bank balances leave the plan a gap: a payment between them is in neither.

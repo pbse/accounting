@@ -50,7 +50,7 @@ function cashNeeds(plan: Ready, obligations: Obligation[], base: string): Need[]
 function reviewBlock(plan: Ready) {
   if (plan.review && plan.review.state !== "inputs_changed") return "reviewed";
   if (plan.opening.stale) return "Capture the books again first";
-  if (!plan.open_items.complete) return "The capture did not read every open item";
+  if (!plan.open_items.complete) return plan.open_items.completeness || "The capture did not read every open item";
   if (plan.questions.length || plan.matches.some((m) => m.bills.some((b) => b.confirm || b.unknown))) return "Settle the bills against schedules first";
   return "";
 }

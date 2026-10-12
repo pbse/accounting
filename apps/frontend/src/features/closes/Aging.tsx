@@ -7,7 +7,7 @@ import { money, workspaceRequest } from "./workspace";
 type Party = { id: string; name: string; currency: string; buckets: string[]; unaged: string; credits: string; open: string; unresolved: number };
 type Report =
   | { state: "waiting"; reason: string }
-  | { state: "ready"; captured_at: string; month_end: string; complete: boolean; note: string; buckets: string[]; receivables: Party[] | null; payables: Party[] | null };
+  | { state: "ready"; source?: string; captured_at: string; month_end: string; complete: boolean; completeness?: string; note: string; buckets: string[]; receivables: Party[] | null; payables: Party[] | null };
 
 // An unknown currency is shown as a plain amount rather than guessed.
 const show = (amount: string, currency: string) => (currency ? money(amount, currency) : `${amount} (currency unknown)`);
@@ -83,7 +83,11 @@ export function Aging({ closeId, open }: { closeId: string; open?: boolean }) {
           <p className="note">
             {report.note} Captured {dates.dateTime(report.captured_at)}; aged against {report.month_end}.
           </p>
-          {!report.complete && <p role="status">Incomplete: some open items could not be read in this capture, so totals may be missing documents.</p>}
+          {!report.complete && (
+            <p role="status">
+              {report.source === "files" && report.completeness ? `Incomplete: ${report.completeness}` : "Incomplete: some open items could not be read in this capture, so totals may be missing documents."}
+            </p>
+          )}
           {table("Receivables", report.receivables, true)}
           {table("Payables", report.payables, false)}
           <p className="note">Statements are downloads for the firm to use through its own channel. Nothing is sent, collected, paid or written off.</p>

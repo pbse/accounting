@@ -39,7 +39,7 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 	open := map[string][]json.RawMessage{}
 	var ids, sides []string
 	asOf, problems, observed, sideProblems := "", 0, map[string]string{}, map[string]int{}
-	sideAsOf, sideOpen := map[string]string{}, map[string]*big.Rat{}
+	sideAsOf, sideOpen, sideCurrencies := map[string]string{}, map[string]*big.Rat{}, map[string][]string{}
 	for rows.Next() {
 		var id, side, at string
 		var raw []byte
@@ -60,6 +60,9 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 		for _, item := range items {
 			if v, ok := new(big.Rat).SetString(item.Open); ok {
 				sideOpen[side].Add(sideOpen[side], v)
+			}
+			if c := strings.ToUpper(strings.TrimSpace(item.Currency)); c != "" && !slices.Contains(sideCurrencies[side], c) {
+				sideCurrencies[side] = append(sideCurrencies[side], c)
 			}
 		}
 		for _, item := range items {
@@ -142,7 +145,11 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 					control.Add(control, new(big.Rat).Mul(b.Balances[key], big.NewRat(sign, 1)))
 				}
 			}
-			if control.Cmp(sideOpen[side]) != 0 {
+			// Amounts in another currency than the books' cannot be added to theirs: the side is held, not compared.
+			if foreign := slices.DeleteFunc(slices.Clone(sideCurrencies[side]), func(c string) bool { return strings.EqualFold(c, home) }); len(foreign) > 0 {
+				held = append(held, fmt.Sprintf("The open %ss include documents in %s, which cannot be reconciled to the books' %s accounts in %s.", side, strings.Join(foreign, ", "), strings.ToLower(kind), home))
+				completeBy[map[string]string{"receivable": "Invoice", "payable": "Bill"}[side]] = false
+			} else if control.Cmp(sideOpen[side]) != 0 {
 				difference := new(big.Rat).Sub(control, sideOpen[side])
 				held = append(held, fmt.Sprintf("The open %ss total %s, but the books' %s accounts hold %s at the month's end, a difference of %s: reconcile them before relying on these %ss.",
 					side, sideOpen[side].FloatString(2), strings.ToLower(kind), control.FloatString(2), difference.FloatString(2), side))
