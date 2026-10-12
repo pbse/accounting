@@ -915,8 +915,22 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 			start, _ := time.Parse("2006-01-02", v.Start)
-			later, e := db.QueryContext(r.Context(), `SELECT s.captured_at,COALESCE(s.payload->'accounts','[]'::jsonb) FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id
+			// Later book cash: the books' later captures; for books from files, the client's later cash observations and
+			// later months' accepted files (their bank accounts), each as of its date's end, read as a capture's directory.
+			var later *sql.Rows
+			var e error
+			if strings.HasPrefix(v.company, "files:") {
+				later, e = db.QueryContext(r.Context(), `SELECT at,jsonb_build_array(jsonb_build_object('Id','files','Name','Book cash','AccountType','Bank','CurrentBalance',book)) FROM (
+ SELECT (o.as_of+1)::timestamp AT TIME ZONE 'UTC'-interval '1 second' AS at,o.book_cash AS book FROM cash_observations o JOIN client_closes c ON c.id=o.close_id JOIN books_versions bv ON bv.id::text=o.books_version
+  WHERE c.organization_id=$1 AND 'files:'||client_identity(c.organization_id,c.entity)=$4 AND bv.currency=$5
+ UNION ALL
+ SELECT at,book FROM (SELECT DISTINCT ON (v.close_id) (v.as_of+1)::timestamp AT TIME ZONE 'UTC'-interval '1 second' AS at,(SELECT COALESCE(sum((v.balances->>k)::numeric),0) FROM jsonb_object_keys(v.accounts) k WHERE v.accounts->k->>'type'='Bank') AS book
+  FROM books_versions v JOIN client_closes c ON c.id=v.close_id WHERE v.source='files' AND c.organization_id=$1 AND 'files:'||client_identity(c.organization_id,c.entity)=$4 AND v.currency=$5 ORDER BY v.close_id,v.id DESC) newest
+ ) x WHERE at>$2 AND at<$3 ORDER BY at LIMIT 30`, org, v.asOf, start.AddDate(0, 0, 13*7), v.company, v.Currency)
+			} else {
+				later, e = db.QueryContext(r.Context(), `SELECT s.captured_at,COALESCE(s.payload->'accounts','[]'::jsonb) FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id
  WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND s.captured_at>$3 AND s.captured_at<$4 AND `+sourceAllows("c.id", "quickbooks")+` AND 'quickbooks:'||x.environment||':'||x.realm=$5 AND COALESCE(x.home_currency,'')=$6 ORDER BY s.captured_at LIMIT 30`, org, entity, v.asOf, start.AddDate(0, 0, 13*7), v.company, v.Currency)
+			}
 			if e != nil {
 				problem(w, 503, "Reviews are unavailable.")
 				return
