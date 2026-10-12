@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { drawLandscape } from "./landscape";
+import { pageMeta } from "./meta";
 
 // The public site's frame (docs/marketing-site.md): a masthead that stays at the top, the page, and a footer that ends
 // in a pen-and-ink landscape.
@@ -30,6 +31,12 @@ export function MarketingLayout() {
     if (target) target.scrollIntoView({ behavior: newPage || first ? "instant" : "smooth" });
     else if (!first) window.scrollTo({ top: 0, behavior: newPage ? "instant" : "smooth" });
   }, [pathname, hash, key]);
+  // The static HTML already carries the page's title and description; moving between pages keeps them in step.
+  useEffect(() => {
+    const meta = pageMeta(pathname);
+    document.title = meta.title;
+    document.querySelector('meta[name="description"]')?.setAttribute("content", meta.description);
+  }, [pathname]);
   return (
     <div className="k-site">
       <a className="k-skip" href="#main">
@@ -72,6 +79,9 @@ export function MarketingLayout() {
               </li>
               <li>
                 <Link to="/security">Security</Link>
+              </li>
+              <li>
+                <Link to="/faq">FAQ</Link>
               </li>
             </ul>
           </nav>

@@ -213,7 +213,8 @@ export default {
       return serveWorkspace(request, {
         enabled: env.AUTH_SESSION === "server",
         render: renderWorkspace,
-        asset: (r) => env.ASSETS.fetch(r),
+        // Every workspace page is the app's empty page, index.html, served for "/"; another path would find 404.html.
+        asset: (r) => env.ASSETS.fetch(new Request(new URL("/", r.url), r)),
         call: (apiPath, cookie) => api(env).fetch(new Request(new URL(apiPath, request.url), { headers: { Cookie: cookie, Accept: "application/json" } })),
         log: (message) => console.error(message),
       });

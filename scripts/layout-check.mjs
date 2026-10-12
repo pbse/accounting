@@ -363,7 +363,7 @@ for (const app of apps) {
     return heading();
   };
   const missing = await headingOf(`${frontend}/layout-check-missing-page`);
-  for (const path of ["/contact", "/security", "/privacy", "/about", "/login"]) {
+  for (const path of ["/contact", "/security", "/privacy", "/about", "/faq", "/login"]) {
     const expected = await headingOf(frontend + path);
     if (!expected || expected === missing) {
       failures.push(`public site ${path}: a direct load does not open the page (heading "${expected}")`);
