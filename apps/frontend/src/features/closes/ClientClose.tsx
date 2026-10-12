@@ -38,7 +38,7 @@ const tabMenus = (base: string): Partial<Record<Tab, { title: string; items: { l
   settings: {
     title: "Settings",
     items: [
-      { label: "Replay the confirmed readings", to: `${base}?tab=settings&view=replay` },
+      { label: "Check the agent reads the same again", to: `${base}?tab=settings&view=replay` },
       { label: "Learn a procedure from evidence", to: `${base}?tab=settings&view=procedures` },
       { label: "Delete this close", to: `${base}?tab=settings&view=retention` },
     ],
@@ -131,6 +131,17 @@ export default function ClientClose() {
     frame = requestAnimationFrame(find);
     return () => cancelAnimationFrame(frame);
   }, [tab, location.hash]);
+  // A narrow window scrolls the tabs: the strip, never the page, brings the current one into view, again once the
+  // badges widen it.
+  useEffect(() => {
+    const strip = document.querySelector(".ks-tabs");
+    const current = strip?.querySelector('[aria-current="page"]');
+    if (!strip || !current) return;
+    const s = strip.getBoundingClientRect();
+    const c = current.getBoundingClientRect();
+    if (c.right > s.right) strip.scrollLeft += c.right - s.right;
+    else if (c.left < s.left) strip.scrollLeft -= s.left - c.left;
+  }, [tab, loading, decisionsRead.dataUpdatedAt]);
   if (deleted)
     return (
       <p role="status">

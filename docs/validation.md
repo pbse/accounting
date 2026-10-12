@@ -4779,3 +4779,23 @@ Tests and checks, on local PostgreSQL:
 - Screenshots on the demonstration data (`cmd/seed`): two clients' Settings (desktop and phone) and the procedures view.
 - On phone, close tables stack each row into one column, as they already did. Settings keeps each setting's current value in its stacked row.
 
+## 2026-10-12 — Close Settings: scope, authority and repeatability (B01/B06/B11/B12)
+
+The handoff's Settings follow-up (`docs/agent-first-implementation-handoff.md`, "B01/B06/B11/B12 — Client Settings follow-up") against the Settings tab shipped in #457:
+- **Scope and effective period:** each setting says what it applies to: this close, this client, the client over the firm's defaults, the firm, or every month of the client. The hand-over names its next month. Client procedure overrides name the month each applies from.
+- **Connection apart from authority:** "Ledger connection" names the company and when it was confirmed. "Posting authority" lists each grant's company, limit, kinds, expiry and who granted it, and says each posting still needs its own approval, or that nothing is written. A grant counts as able to post only while it is unexpired and its connection is active; the server also checks, at each posting, that its granter is still a member. Grants are changed and revoked on the client's page, which both rows open.
+- **Remembered information:** other names show who confirmed each. Past account choices are labelled as suggestions from approved drafts, never applied as rules.
+- **Standing approvals:** each names its kind, the month it starts, who granted it and whether it is in force, and says that changed terms or a revoked approval end it.
+- **Repeatability:** the replay is no longer a summary row or a rail figure. Its view is named "Repeatability check" and says it checks repeatability, not accuracy.
+- **Retention:** "this close; no firm-wide policy", with the legal-hold state.
+- **Lede:** "Monthly closes from", the first month the roster owes a close (not when the relationship began).
+- **Data:** read from `GET /client?name=`, the read the client page already makes, with its connections, grants and roster. No API change.
+- **Layout at constrained widths:**
+  - Below about 1100px the close page's rail folds below its column for every tab. At 980px it used to squeeze the table until a setting's name ran into the next cell.
+  - A narrow window scrolls the tab strip (never the page) to bring the current tab into view, including after the decision badges widen it.
+
+Tests and checks, on local PostgreSQL:
+- `tsc` passes.
+- The layout check passes: 96 page views on a fresh migrated database, in Edge.
+- A width check of Settings on the demonstration data at 1440, 1024, 980, 768 and 390px and at 200% zoom: no page overflow, no cell spilling into its neighbour, all nine tabs reachable, and the current tab fully in view at 980px.
+
