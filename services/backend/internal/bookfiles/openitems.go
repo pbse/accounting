@@ -148,6 +148,14 @@ func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
 	return l, false
 }
 
+// dateShaped is whether text is written as a date is (in numbers, or with a month's name), read or not: a label such as
+// "Total 2027" is not.
+func dateShaped(text string) bool {
+	text = strings.TrimSpace(text)
+	fields := strings.Fields(text)
+	return len(fields) > 0 && (numericDate.MatchString(fields[0]) || dayMonthYear.MatchString(text) || monthDayYear.MatchString(text))
+}
+
 func mapValues(m map[int]Role) []Role {
 	out := make([]Role, 0, len(m))
 	for _, v := range m {
@@ -232,7 +240,7 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 			if !ok || strings.TrimSpace(cells[column].Value) == "" {
 				continue
 			}
-			dateLike = dateLike || cells[column].Kind == Date || strings.ContainsAny(cells[column].Value, "0123456789")
+			dateLike = dateLike || cells[column].Kind == Date || dateShaped(cells[column].Value)
 			var err error
 			if *d.to, err = readDate(cells[column], l.DateOrder); err != nil {
 				unread = append(unread, fmt.Sprintf("Row %d: the %s %q cannot be read as a date.", row.Number, map[Role]string{RoleDate: "date", RoleDue: "due date"}[d.role], cells[column].Value))

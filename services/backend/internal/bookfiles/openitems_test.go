@@ -41,7 +41,7 @@ func TestOpenItemsKeepCreditsAndUnreadableDocuments(t *testing.T) {
 	if invoice.Key("receivable") == credit.Key("receivable") {
 		t.Fatal("an invoice and a credit of one number share a name")
 	}
-	f, err := Read("unnumbered.csv", []byte("Customer,Date,Open Balance\nAcme Co,01/02/2027,100.00\n"))
+	f, err := Read("unnumbered.csv", []byte("Customer,Date,Open Balance\nAcme Co,01/02/2027,100.00\nTotal 2027,,100.00\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
