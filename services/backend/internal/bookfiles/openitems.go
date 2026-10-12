@@ -153,6 +153,22 @@ func headingRoles(row Row) map[int]Role {
 	return columns
 }
 
+// RestyleOpenItems is layout l with its amounts' style read again from the column it now gives the open amount, as a
+// person may have named another: the dates' order is kept as given.
+func RestyleOpenItems(f File, l OpenItemsLayout) OpenItemsLayout {
+	for _, t := range f.Tables {
+		for _, row := range t.Rows {
+			if t.Name == l.Table && row.Number == l.HeaderRow {
+				order := l.DateOrder
+				l = layoutAt(t, row, l.Columns)
+				l.DateOrder = order
+				return l
+			}
+		}
+	}
+	return l
+}
+
 // layoutAt is the layout of table t headed by row, with columns' roles: the order its dates are in and how its amounts
 // are written, as the rows below say.
 func layoutAt(t Table, row Row, columns map[int]Role) OpenItemsLayout {
@@ -295,6 +311,10 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 		item.Open = amount.Value.FloatString(2)
 		problems = append(problems, unread...)
 		items = append(items, item)
+	}
+	// Rows read as documents but none of them kept (their amounts unreadable, say) is not an export with none open.
+	if len(items) == 0 && len(problems) > 0 {
+		return nil, problems
 	}
 	return items, problems
 }

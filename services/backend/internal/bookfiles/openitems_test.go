@@ -74,3 +74,22 @@ func TestOpenItemsProposeTheDetailedHeadings(t *testing.T) {
 		t.Fatalf("headings naming no number: %v %v", layout, ok)
 	}
 }
+
+// A column a person names the open amount is read in its own style; a file whose amounts none read is not one with
+// none open.
+func TestOpenItemsAmountsAreReadInTheirColumnsStyle(t *testing.T) {
+	f, err := Read("saldo.csv", []byte("Kunde;Rechnung;Saldo\nAcme GmbH;R-1;12,50\nBeta AG;R-2;1.000,25\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, _ := ProposeOpenItemsAt(f, f.Tables[0].Name, 1)
+	layout.Columns = map[int]Role{0: RoleParty, 1: RoleDocument, 2: RoleOpen}
+	items, problems := ReadOpenItems(f, RestyleOpenItems(f, layout))
+	if len(items) != 2 || items[1].Open != "1000.25" || len(problems) != 0 {
+		t.Fatalf("amounts in the column's style: %v %v", items, problems)
+	}
+	layout.Style = NumberStyle{Scale: 1}
+	if items, problems = ReadOpenItems(f, layout); items != nil || len(problems) == 0 {
+		t.Fatalf("a file whose amounts none read: %v %v", items, problems)
+	}
+}

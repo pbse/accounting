@@ -201,9 +201,12 @@ func registerOpenItemFiles(mux *http.ServeMux, db *sql.DB) {
 			if !ok && len(read.Tables) > 0 {
 				layout = bookfiles.OpenItemsLayout{Table: read.Tables[0].Name, Columns: map[int]bookfiles.Role{}, Style: bookfiles.NumberStyle{Scale: 1}}
 			}
-		} else if err = json.Unmarshal([]byte(r.FormValue("layout")), &layout); err != nil || layout.Style.Scale == 0 {
+		} else if err = json.Unmarshal([]byte(r.FormValue("layout")), &layout); err != nil {
 			problem(w, 422, "The layout cannot be read.")
 			return
+		} else {
+			// The amounts' style is read from the column the layout gives the open amount, which a person may have changed.
+			layout = bookfiles.RestyleOpenItems(read, layout)
 		}
 		items, problems := bookfiles.ReadOpenItems(read, layout)
 		// The headings read by, and each table's first rows, any of which a person may say holds the headings.
