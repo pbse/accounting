@@ -1451,6 +1451,156 @@ html:has(.k-site) {
   color: var(--ink);
   text-underline-offset: 4px;
 }
+/* FAQ: a workpaper-style index of the topics, then each topic's questions, opened one at a time. */
+.k-faq-index {
+  max-width: 560px;
+  margin: clamp(40px, 5vw, 56px) auto 0;
+}
+.k-faq-index ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.k-faq-index li,
+.k-faq-total {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 2px 20px;
+  align-items: center;
+  padding: 9px 0;
+}
+.k-faq-index li {
+  border-bottom: 1px solid var(--rule);
+}
+.k-faq-index li a {
+  font-size: 18px;
+  line-height: 1.35;
+  color: var(--ink);
+  text-decoration: none;
+}
+.k-faq-index li a:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+}
+.k-faq-count {
+  font-size: 19px;
+  text-align: right;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+/* A total, as a ledger writes one: a rule above, a double rule below. */
+.k-faq-total {
+  margin: 0;
+  border-top: 1px solid var(--ink);
+  border-bottom: 3px double var(--ink);
+}
+.k-faq-total span:first-child {
+  grid-column: 2;
+  font-size: 18px;
+  font-style: italic;
+}
+.k-faq-topic {
+  max-width: 1000px;
+  margin: clamp(56px, 7vw, 88px) auto 0;
+  display: grid;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+  gap: 16px 24px;
+  align-items: start;
+}
+.k-faq-topic h2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: clamp(24px, 2.6vw, 30px);
+  line-height: 1.15;
+}
+.k-faq-topic > div {
+  border-top: 1px solid var(--ink);
+}
+.k-qa {
+  border-bottom: 1px solid var(--rule);
+}
+.k-qa summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 20px;
+  padding: 16px 0;
+  font-size: 19px;
+  line-height: 1.4;
+  color: var(--ink);
+  list-style: none;
+  cursor: pointer;
+}
+.k-qa summary::-webkit-details-marker {
+  display: none;
+}
+.k-qa summary::after {
+  content: "+";
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--rule-2);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-2);
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.k-qa summary:hover::after {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.k-qa[open] summary::after {
+  content: "\2212";
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.k-qa summary:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.k-qa p {
+  max-width: 38em;
+  padding: 0 0 20px;
+  font-size: 17px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+.k-faq-more {
+  margin-top: 16px;
+  font-family: var(--sans);
+  font-size: 14px;
+}
+.k-faq-more a {
+  color: var(--ink);
+  text-underline-offset: 4px;
+}
+.k-faq-ask {
+  max-width: 1000px;
+  margin: clamp(64px, 8vw, 104px) auto 0;
+  padding: 28px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px 28px;
+  border-top: 1px solid var(--ink);
+  border-bottom: 3px double var(--ink);
+}
+.k-faq-ask p {
+  font-size: clamp(24px, 2.6vw, 30px);
+  line-height: 1.2;
+}
+@media (max-width: 600px) {
+  .k-faq-topic {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .k-doc {
   max-width: 40em;
   min-width: 0;

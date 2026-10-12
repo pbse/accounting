@@ -3,3 +3,5 @@ Disallow: /dashboard
 Disallow: /admin
 Disallow: /request
 Disallow: /login
+
+Sitemap: https://getkrith.com/sitemap.xml
