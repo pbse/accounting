@@ -1476,7 +1476,7 @@ html:has(.k-site) {
   line-height: 1.65;
   color: var(--ink-2);
 }
-.k-doc :is(p + p, ul + p, .k-tablewrap + p) {
+.k-doc :is(p + p, ul + p) {
   margin-top: 12px;
 }
 .k-doc ul {
@@ -1492,35 +1492,6 @@ html:has(.k-site) {
 .k-doc a {
   color: var(--ink);
   text-underline-offset: 3px;
-}
-.k-tablewrap {
-  overflow-x: auto;
-}
-.k-doc table {
-  width: 100%;
-  min-width: 480px;
-  border-collapse: collapse;
-  font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.5;
-}
-.k-doc :is(th, td) {
-  text-align: left;
-  vertical-align: top;
-  padding: 12px 14px 12px 0;
-  border-bottom: 1px solid var(--rule);
-  color: var(--ink-2);
-}
-.k-doc thead th {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  border-bottom: 1px solid var(--ink);
-}
-.k-doc tbody th {
-  color: var(--ink);
-  font-weight: 600;
 }
 .k-signin {
   display: grid;
