@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"slices"
 	"strings"
 )
@@ -253,6 +254,13 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 	}
 	items, problems, heading := []OpenItem{}, []string{}, ""
 	total := func(s string) bool { return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "total") }
+	grand := func(s string) bool {
+		s = strings.ToLower(strings.TrimSpace(s))
+		return strings.HasPrefix(s, "total") || strings.HasPrefix(s, "grand total")
+	}
+	// The export's own total: a total row after the last document, which the documents read must add up to.
+	var reported *big.Rat
+	reportedRow := 0
 	for _, row := range table.Rows {
 		if row.Number <= l.HeaderRow {
 			continue
@@ -300,9 +308,14 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 		if document == "" {
 			if dateLike {
 				problems = append(problems, fmt.Sprintf("Row %d has no document number, so it is left out.", row.Number))
+			} else if slices.ContainsFunc(texts, grand) {
+				if v, err := cellAmount(openCell, l.Style); err == nil {
+					reported, reportedRow = v.Value, row.Number
+				}
 			}
 			continue
 		}
+		reported = nil
 		if item.Party == "" {
 			item.Party = heading
 		}
@@ -314,6 +327,18 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 		item.Open = amount.Value.FloatString(2)
 		problems = append(problems, unread...)
 		items = append(items, item)
+	}
+	// Checked on its own terms: the documents read add up to the export's total, when it gives one.
+	if reported != nil {
+		sum := new(big.Rat)
+		for _, item := range items {
+			if v, ok := new(big.Rat).SetString(item.Open); ok {
+				sum.Add(sum, v)
+			}
+		}
+		if sum.Cmp(reported) != 0 {
+			problems = append(problems, fmt.Sprintf("The documents read total %s, but the file's total in row %d is %s: some are missing or unread.", sum.FloatString(2), reportedRow, reported.FloatString(2)))
+		}
 	}
 	// Rows read as documents but none of them kept (their amounts unreadable, say) is not an export with none open.
 	if len(items) == 0 && len(problems) > 0 {

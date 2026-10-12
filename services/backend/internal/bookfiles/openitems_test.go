@@ -49,8 +49,8 @@ func TestOpenItemsKeepCreditsAndUnreadableDocuments(t *testing.T) {
 	layout, _ := ProposeOpenItems(f)
 	items, problems := ReadOpenItems(f, layout)
 	// The numbered document is read (its ambiguous date named); the unnumbered one is reported as left out, never
-	// counted; the summary is left aside.
-	if len(items) != 1 || items[0].Document != "1001" || len(problems) != 2 || !strings.Contains(problems[1], "Row 3 has no document number") {
+	// counted; the summary is left aside, its total showing what is missing.
+	if len(items) != 1 || items[0].Document != "1001" || len(problems) != 3 || !strings.Contains(problems[1], "Row 3 has no document number") || !strings.Contains(problems[2], "the file's total in row 4 is 150.00") {
 		t.Fatalf("an export's unnumbered rows: %v %v", items, problems)
 	}
 }
@@ -92,5 +92,23 @@ func TestOpenItemsAmountsAreReadInTheirColumnsStyle(t *testing.T) {
 	layout.Style = NumberStyle{Scale: 1}
 	if items, problems = ReadOpenItems(f, layout); items != nil || len(problems) == 0 {
 		t.Fatalf("a file whose amounts none read: %v %v", items, problems)
+	}
+}
+
+// An export is checked on its own terms: its documents add up to its total row, or the difference is a problem.
+func TestOpenItemsAddUpToTheExportsTotal(t *testing.T) {
+	for _, c := range []struct {
+		total    string
+		problems int
+	}{{"600.00", 0}, {"700.00", 1}} {
+		f, err := Read("total.csv", []byte("Customer,Num,Open Balance\nAcme Co,1001,500.00\nTotal for Acme Co,,500.00\nBeta LLC,1002,100.00\nTOTAL,,"+c.total+"\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		layout, _ := ProposeOpenItems(f)
+		items, problems := ReadOpenItems(f, layout)
+		if len(items) != 2 || len(problems) != c.problems {
+			t.Fatalf("total %s: %v %v", c.total, items, problems)
+		}
 	}
 }
