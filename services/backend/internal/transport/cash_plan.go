@@ -215,6 +215,15 @@ func filesCash(ctx context.Context, db *sql.DB, closeID string) (ok bool, b *boo
 	return true, b, month, accounts, company, nil
 }
 
+// currentFilesVersion is SQL for the books version close alias c reads from its files: its newest current acceptance's
+// (on its file's latest reading and scope), while the month's books source is its files; null otherwise.
+func currentFilesVersion(c string) string {
+	return `(SELECT cv.id::text FROM books_versions cv JOIN books_import_acceptances ca ON ca.id::text=cv.source_id WHERE cv.source='files' AND cv.close_id=` + c + `.id
+ AND books_source(` + c + `.organization_id,` + c + `.entity,` + c + `.period)='files'
+ AND ca.id=(SELECT max(b.id) FROM books_import_acceptances b WHERE b.organization_id=` + c + `.organization_id AND client_identity(b.organization_id,b.client_entity)=client_identity(` + c + `.organization_id,` + c + `.entity) AND b.period=` + c + `.period
+  AND b.layout_id=(SELECT max(x.id) FROM books_layouts x WHERE x.import_id=b.import_id) AND b.scope_id=(SELECT max(y.id) FROM books_import_scopes y WHERE y.import_id=b.import_id)))`
+}
+
 // bookCash is a capture's book cash: its home-currency bank accounts' balances at the capture; accounts in another
 // currency, and home-currency ones whose balance cannot be read, are named apart. Not ok when the accounts or the home
 // currency cannot be read.
@@ -922,10 +931,10 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			if strings.HasPrefix(v.company, "files:") {
 				later, e = db.QueryContext(r.Context(), `SELECT at,jsonb_build_array(jsonb_build_object('Id','files','Name','Book cash','AccountType','Bank','CurrentBalance',book)) FROM (
  SELECT (o.as_of+1)::timestamp AT TIME ZONE 'UTC'-interval '1 second' AS at,o.book_cash AS book FROM cash_observations o JOIN client_closes c ON c.id=o.close_id JOIN books_versions bv ON bv.id::text=o.books_version
-  WHERE c.organization_id=$1 AND 'files:'||client_identity(c.organization_id,c.entity)=$4 AND bv.currency=$5
+  WHERE c.organization_id=$1 AND 'files:'||client_identity(c.organization_id,c.entity)=$4 AND bv.currency=$5 AND o.books_version=`+currentFilesVersion("c")+`
  UNION ALL
- SELECT at,book FROM (SELECT DISTINCT ON (v.close_id) (v.as_of+1)::timestamp AT TIME ZONE 'UTC'-interval '1 second' AS at,(SELECT COALESCE(sum((v.balances->>k)::numeric),0) FROM jsonb_object_keys(v.accounts) k WHERE v.accounts->k->>'type'='Bank') AS book
-  FROM books_versions v JOIN client_closes c ON c.id=v.close_id WHERE v.source='files' AND c.organization_id=$1 AND 'files:'||client_identity(c.organization_id,c.entity)=$4 AND v.currency=$5 ORDER BY v.close_id,v.id DESC) newest
+ SELECT (v.as_of+1)::timestamp AT TIME ZONE 'UTC'-interval '1 second',(SELECT COALESCE(sum((v.balances->>k)::numeric),0) FROM jsonb_object_keys(v.accounts) k WHERE v.accounts->k->>'type'='Bank')
+  FROM books_versions v JOIN client_closes c ON c.id=v.close_id WHERE c.organization_id=$1 AND 'files:'||client_identity(c.organization_id,c.entity)=$4 AND v.currency=$5 AND v.id::text=`+currentFilesVersion("c")+`
  ) x WHERE at>$2 AND at<$3 ORDER BY at LIMIT 30`, org, v.asOf, start.AddDate(0, 0, 13*7), v.company, v.Currency)
 			} else {
 				later, e = db.QueryContext(r.Context(), `SELECT s.captured_at,COALESCE(s.payload->'accounts','[]'::jsonb) FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id
