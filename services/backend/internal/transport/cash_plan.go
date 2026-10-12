@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -184,6 +185,35 @@ func visibleScenario(executive, who string) string {
 	return `(NOT ` + executive + `::bool OR created_by=` + who + `)`
 }
 
+// filesCash is the book cash of a month whose books are its files (docs/books-sources.md, Open items and cash dates;
+// delivery step 11): its accepted file's accounts, as a capture's directory, of which those the account map types Bank
+// are its cash; as of the date its books are as of; in the books' currency; the books named as its open items' are.
+// ok is false for a month whose books are not its files, and books nil while it has none.
+func filesCash(ctx context.Context, db *sql.DB, closeID string) (ok bool, b *books, month *fileMonth, accounts []byte, company string, err error) {
+	source, err := closeBooksSource(ctx, db, closeID)
+	if err == sql.ErrNoRows || (err == nil && source != "files") {
+		return false, nil, nil, nil, "", nil
+	}
+	if err == nil {
+		err = db.QueryRowContext(ctx, `SELECT 'files:'||client_identity(organization_id,entity) FROM client_closes WHERE id::text=$1`, closeID).Scan(&company)
+	}
+	if err == nil {
+		b, month, err = fileMonthBooks(ctx, db, closeID)
+	}
+	if err != nil || b == nil {
+		return true, nil, nil, nil, company, err
+	}
+	directory := []map[string]any{}
+	for key, a := range b.Accounts {
+		if balance := b.Balances[key]; balance != nil {
+			directory = append(directory, map[string]any{"Id": key, "Name": a.Name, "AccountType": a.Type, "CurrentBalance": json.Number(balance.FloatString(2))})
+		}
+	}
+	slices.SortFunc(directory, func(x, y map[string]any) int { return strings.Compare(x["Id"].(string), y["Id"].(string)) })
+	accounts, _ = json.Marshal(directory)
+	return true, b, month, accounts, company, nil
+}
+
 // bookCash is a capture's book cash: its home-currency bank accounts' balances at the capture; accounts in another
 // currency, and home-currency ones whose balance cannot be read, are named apart. Not ok when the accounts or the home
 // currency cannot be read.
@@ -328,13 +358,25 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		if err != nil {
 			return nil, tieRefusal{404, "Close not found."}
 		}
-		// Opening book cash: the ledger's bank accounts in the close's newest QuickBooks capture, as of that capture.
+		// Opening book cash: the ledger's bank accounts in the close's newest QuickBooks capture, as of that capture; or, for
+		// a month whose books are its files, its accepted file's, as of the date they are as of (its end of day).
 		var snapshotID, home, company string
 		var asOf time.Time
 		var stale bool
 		var accounts []byte
-		err = db.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',COALESCE(s.payload->'accounts','[]'::jsonb),COALESCE(x.home_currency,''),'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id
+		files, b, month, filesAccounts, filesCompany, err := filesCash(ctx, db, r.PathValue("id"))
+		switch {
+		case err != nil:
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
+		case files && b == nil:
+			return wait("This month's books are its files: accept the month's file first; the plan opens from its bank balances.")
+		case files:
+			on, _ := time.Parse("2006-01-02", month.AsOf)
+			snapshotID, asOf, stale, accounts, home, company = fileCapture+month.Version, on.Add(24*time.Hour-time.Second), len(month.Holds) > 0, filesAccounts, b.Currency, filesCompany
+		default:
+			err = db.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',COALESCE(s.payload->'accounts','[]'::jsonb),COALESCE(x.home_currency,''),'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id
  LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "quickbooks")+` AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &asOf, &stale, &accounts, &home, &company)
+		}
 		if err == sql.ErrNoRows {
 			return wait("Capture this client's QuickBooks books first: the plan opens from the ledger's bank balances. A Xero client's cash plan is not built yet.")
 		}
@@ -364,6 +406,11 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		}
 		asOf = asOf.UTC()
 		start := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
+		// A file's book cash is the day's closing balance, that day's receipts and payments in it: the plan starts the day
+		// after.
+		if files {
+			start = start.AddDate(0, 0, 1)
+		}
 		day := func(on time.Time) int { return int(on.Sub(start) / (24 * time.Hour)) }
 		end := start.AddDate(0, 0, 13*7)
 		// How bills relate to the schedules' dates is what people decided, never a vendor and a week alone.
@@ -560,7 +607,17 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		if apart.Abs() > 24*time.Hour {
 			source("The bank balances and the open items were read "+strconv.Itoa(int(apart.Abs().Hours()))+" hours apart.", "")
 		}
-		if first > meta["month_end"].(string) {
+		// Files are true at their dates: a month's book cash and its open items must share one, or a collection between
+		// the two would be in neither.
+		if observed, ok := meta["observed"].(map[string]string); files && ok {
+			for _, kind := range []string{"Invoice", "Bill"} {
+				if at := observed[kind]; at != "" && at != asOf.Format(time.RFC3339) {
+					source("The bank balances are as of "+asOf.Format("2006-01-02")+" but the open "+map[string]string{"Invoice": "receivables", "Bill": "payables"}[kind]+" are as of "+at[:10]+": send them as of the same date.", "")
+				}
+			}
+		}
+		// Files' open items are complete to their date, the plan starting the day after it: none is dated later.
+		if !files && first > meta["month_end"].(string) {
 			source("Invoices and bills dated after "+meta["month_end"].(string)+" are not captured here.", "")
 		}
 		// An item that needs an agreed date, or is left out by design (another currency), is an assumption a reviewer
@@ -635,7 +692,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			"horizon":   map[string]any{"start": start.Format("2006-01-02"), "end": last.Format("2006-01-02"), "weeks": 13},
 			"readiness": cashReadiness(gaps), "matches": matched, "questions": questions, "lapsed": lapsed,
 			"opening":    map[string]any{"amount": opening.FloatString(2), "as_of": asOf, "snapshot_id": snapshotID, "stale": stale, "accounts": banks, "left_out": foreignBanks},
-			"open_items": map[string]any{"captured_at": meta["captured_at"], "capture_id": meta["capture_id"], "complete": meta["complete"], "hours_apart": int(apart.Abs().Hours()), "through": meta["month_end"], "missing_later": first > meta["month_end"].(string)},
+			"open_items": map[string]any{"captured_at": meta["captured_at"], "capture_id": meta["capture_id"], "complete": meta["complete"], "hours_apart": int(apart.Abs().Hours()), "through": meta["month_end"], "missing_later": !files && first > meta["month_end"].(string)},
 			"weeks":      weeks, "lowest": map[string]string{"amount": lowest.Lowest, "on": lowest.LowestOn},
 			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "pending_obligations": draftSchedules, "scenario": scenario,
 			"note": "Book cash is the ledger's bank balances at the capture, not bank-available cash. Receipts and payments are expectations from due dates, promises, bill-pay handoffs and approved schedules; nothing is paid, collected or written to the ledger. Sales not yet invoiced are not in the plan unless an approved receipt schedule adds them, so later weeks show only what is already known."}
@@ -917,9 +974,15 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			raw, _ := json.Marshal(in.Changes)
-			// The scenario is kept with the books and home currency it was made for.
+			// The scenario is kept with the books and home currency it was made for: a files month's are its files'.
 			var company, home string
-			if err = db.QueryRowContext(r.Context(), `SELECT 'quickbooks:'||x.environment||':'||x.realm,COALESCE(x.home_currency,'') FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("$1::bigint"), r.PathValue("id")).Scan(&company, &home); err != nil && err != sql.ErrNoRows {
+			files, b, _, _, filesCompany, err := filesCash(r.Context(), db, r.PathValue("id"))
+			if files && b != nil {
+				company, home = filesCompany, b.Currency
+			} else if err == nil && !files {
+				err = db.QueryRowContext(r.Context(), `SELECT 'quickbooks:'||x.environment||':'||x.realm,COALESCE(x.home_currency,'') FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("$1::bigint"), r.PathValue("id")).Scan(&company, &home)
+			}
+			if err != nil && err != sql.ErrNoRows {
 				problem(w, 503, "The scenario could not be saved.")
 				return
 			}
@@ -1006,7 +1069,13 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			}
 			// A schedule is in the client's home currency when it is added, kept with it so a later change of books cannot reread it.
 			var home string
-			if err = db.QueryRowContext(r.Context(), `SELECT COALESCE(x.home_currency,'') FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("$1::bigint"), r.PathValue("id")).Scan(&home); err != nil && err != sql.ErrNoRows {
+			files, b, _, _, _, err := filesCash(r.Context(), db, r.PathValue("id"))
+			if files && b != nil {
+				home = b.Currency
+			} else if err == nil && !files {
+				err = db.QueryRowContext(r.Context(), `SELECT COALESCE(x.home_currency,'') FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("$1::bigint"), r.PathValue("id")).Scan(&home)
+			}
+			if err != nil && err != sql.ErrNoRows {
 				problem(w, 503, "The obligation could not be saved.")
 				return
 			}
