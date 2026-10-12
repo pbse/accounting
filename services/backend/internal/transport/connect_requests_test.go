@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"close.local/backend/internal/preparation"
 )
 
 // A client asked to connect its books signs in to QuickBooks from the request's link; the sign-in is finished where
@@ -81,17 +83,34 @@ func TestAClientConnectsItsBooksThroughARequest(t *testing.T) {
 		json.Unmarshal(w.Body.Bytes(), &out)
 		return w, out
 	}
-	_, asked := call("POST", "/v1/closes/client/connect-requests?name="+url.QueryEscape(entity), token, map[string]any{"provider": "quickbooks", "environment": "sandbox", "recipient": "owner@example.com", "confirmed": true}, 201)
-	if !strings.Contains(asked["body"].(string), "Connect QuickBooks button") {
-		t.Fatalf("the request asks the client to connect QuickBooks: %v", asked)
+	ask := func() (map[string]any, string, string) {
+		t.Helper()
+		_, asked := call("POST", "/v1/closes/client/connect-requests?name="+url.QueryEscape(entity), token, map[string]any{"provider": "quickbooks", "environment": "sandbox", "recipient": "owner@example.com", "confirmed": true}, 201)
+		if !strings.Contains(asked["body"].(string), "Connect QuickBooks button") {
+			t.Fatalf("the request asks the client to connect QuickBooks: %v", asked)
+		}
+		link := asked["link_token"].(string)
+		_, started := call("POST", "/v1/client-request/connect", link, nil, 200)
+		u, err := url.Parse(started["url"].(string))
+		must(err)
+		return asked, link, u.Query().Get("state")
 	}
-	link := asked["link_token"].(string)
-	_, started := call("POST", "/v1/client-request/connect", link, nil, 200)
-	u, err := url.Parse(started["url"].(string))
+	// A sign-in whose link was replaced meanwhile (by an approved email, say) finishes nothing, though the request has a
+	// live link again.
+	replaced, revoked, abandoned := ask()
+	_, err = db.Exec(`UPDATE client_request_links SET revoked_at=now() WHERE digest=$1`, preparation.Digest([]byte(revoked)))
 	must(err)
-	state := u.Query().Get("state")
+	tx, err := db.Begin()
+	must(err)
+	_, err = issueLink(t.Context(), tx, replaced["id"].(string), "fixture", rand.Text())
+	must(err)
+	must(tx.Commit())
+	if w, _ := call("GET", "/v1/quickbooks/callback?state="+url.QueryEscape(abandoned)+"&code=synthetic-code&realmId=123", "", nil, 303); w.Header().Get("Location") != "https://app.example.test/request?connected=failed" || exchanges != 0 {
+		t.Fatalf("a revoked link's sign-in is refused: %s %d", w.Header().Get("Location"), exchanges)
+	}
+	asked, link, state := ask()
 	var request, attempt string
-	must(db.QueryRow(`SELECT COALESCE(request_id::text,''),state FROM quickbooks_connections WHERE client_entity=$1`, entity).Scan(&request, &attempt))
+	must(db.QueryRow(`SELECT COALESCE(request_id::text,''),state FROM quickbooks_connections WHERE client_entity=$1 AND state<>'disconnected'`, entity).Scan(&request, &attempt))
 	if request != asked["id"] || attempt != "authorizing" {
 		t.Fatalf("the sign-in is bound to the request: %s %s", request, attempt)
 	}
@@ -103,12 +122,13 @@ func TestAClientConnectsItsBooksThroughARequest(t *testing.T) {
 	}
 	var company string
 	var used bool
-	must(db.QueryRow(`SELECT x.state,x.company_name,l.used_at IS NOT NULL FROM quickbooks_connections x JOIN client_request_links l ON l.request_id=x.request_id WHERE x.client_entity=$1`, entity).Scan(&attempt, &company, &used))
+	must(db.QueryRow(`SELECT x.state,x.company_name,l.used_at IS NOT NULL FROM quickbooks_connections x JOIN client_request_links l ON l.digest=x.request_link WHERE x.client_entity=$1 AND x.state<>'disconnected'`, entity).Scan(&attempt, &company, &used))
 	if attempt != "pending_confirmation" || company != "Synthetic company" || !used || exchanges != 1 {
 		t.Fatalf("the connection waits for a member to confirm the company, and the request is answered: %s %s %v %d", attempt, company, used, exchanges)
 	}
-	// The same answer again finishes nothing.
+	// The same answer again finishes nothing, and the link starts no other sign-in.
 	call("GET", returned, "", nil, 410)
+	call("POST", "/v1/client-request/connect", link, nil, 409)
 	if exchanges != 1 {
 		t.Fatal("a sign-in's answer was replayed")
 	}

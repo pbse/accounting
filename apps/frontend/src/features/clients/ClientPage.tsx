@@ -235,7 +235,7 @@ export default function ClientPage() {
   const askable = [
     ...(client.connectable?.quickbooks !== false && client.quickbooks_setup?.production ? [["quickbooks:production", "QuickBooks Online"]] : []),
     ...(client.connectable?.quickbooks !== false && client.quickbooks_setup?.sandbox ? [["quickbooks:sandbox", "QuickBooks Online (sandbox)"]] : []),
-    ...(client.connectable?.xero !== false ? [["xero", "Xero"]] : []),
+    ...(client.connectable?.xero !== false && client.xero_configured ? [["xero", "Xero"]] : []),
   ];
   const keptName = kept?.entry?.name ?? (kept?.ledger === "other" ? kept.other_name : "");
   const keeps = !kept

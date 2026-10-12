@@ -247,7 +247,7 @@ export default function ClientRequest() {
                   </ul>
                 </section>
               )}
-              {request.connect && request.open !== false && (
+              {request.connect && request.status === "open" && (
                 <p>
                   <button type="button" className="primary" disabled={busy} onClick={() => void connect()}>
                     Connect {ledgerNames[request.connect]}
