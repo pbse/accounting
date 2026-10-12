@@ -107,51 +107,78 @@ func proposeOpenItems(f File, numbered bool) (l OpenItemsLayout, ok bool) {
 			if i >= 30 {
 				break
 			}
-			columns, amount := map[int]Role{}, -1
-			for _, c := range row.Cells {
-				role := roleOf(c.Value)
-				if role == "amount" {
-					if amount < 0 {
-						amount = c.Column
-					}
-					continue
-				}
-				if role != "" && !slices.Contains(mapValues(columns), role) {
-					columns[c.Column] = role
-				}
-			}
-			if !slices.Contains(mapValues(columns), RoleOpen) && amount >= 0 {
-				columns[amount] = RoleOpen
-			}
+			columns := headingRoles(row)
 			if !slices.Contains(mapValues(columns), RoleOpen) || !slices.Contains(mapValues(columns), RoleDocument) && (numbered || !slices.Contains(mapValues(columns), RoleParty)) {
 				continue
 			}
-			l = OpenItemsLayout{Table: t.Name, HeaderRow: row.Number, Columns: columns}
-			var dates, amounts []string
-			for _, r := range t.Rows {
-				if r.Number <= row.Number {
-					continue
-				}
-				for _, c := range r.Cells {
-					switch columns[c.Column] {
-					case RoleDate, RoleDue:
-						if c.Kind != Date {
-							dates = append(dates, c.Value)
-						}
-					case RoleOpen:
-						amounts = append(amounts, c.Value)
-					}
-				}
-			}
-			l.DateOrder = proposeDateOrder(dates)
-			l.Style, _ = GuessNumberStyle(amounts)
-			if l.Style.Scale == 0 {
-				l.Style.Scale = 1
-			}
-			return l, true
+			return layoutAt(t, row, columns), true
 		}
 	}
 	return l, false
+}
+
+// ProposeOpenItemsAt proposes how to read an export of open items whose headings a person said are row headerRow of
+// table: each column's role as its heading names it, and the dates' order and amounts' style below. ok is false when
+// the file has no such row.
+func ProposeOpenItemsAt(f File, table string, headerRow int) (OpenItemsLayout, bool) {
+	for _, t := range f.Tables {
+		for _, row := range t.Rows {
+			if t.Name == table && row.Number == headerRow {
+				return layoutAt(t, row, headingRoles(row)), true
+			}
+		}
+	}
+	return OpenItemsLayout{}, false
+}
+
+// headingRoles is the role each heading of row names, each role once; a document's whole amount is its open amount
+// when no heading names one.
+func headingRoles(row Row) map[int]Role {
+	columns, amount := map[int]Role{}, -1
+	for _, c := range row.Cells {
+		role := roleOf(c.Value)
+		if role == "amount" {
+			if amount < 0 {
+				amount = c.Column
+			}
+			continue
+		}
+		if role != "" && !slices.Contains(mapValues(columns), role) {
+			columns[c.Column] = role
+		}
+	}
+	if !slices.Contains(mapValues(columns), RoleOpen) && amount >= 0 {
+		columns[amount] = RoleOpen
+	}
+	return columns
+}
+
+// layoutAt is the layout of table t headed by row, with columns' roles: the order its dates are in and how its amounts
+// are written, as the rows below say.
+func layoutAt(t Table, row Row, columns map[int]Role) OpenItemsLayout {
+	l := OpenItemsLayout{Table: t.Name, HeaderRow: row.Number, Columns: columns}
+	var dates, amounts []string
+	for _, r := range t.Rows {
+		if r.Number <= row.Number {
+			continue
+		}
+		for _, c := range r.Cells {
+			switch columns[c.Column] {
+			case RoleDate, RoleDue:
+				if c.Kind != Date {
+					dates = append(dates, c.Value)
+				}
+			case RoleOpen:
+				amounts = append(amounts, c.Value)
+			}
+		}
+	}
+	l.DateOrder = proposeDateOrder(dates)
+	l.Style, _ = GuessNumberStyle(amounts)
+	if l.Style.Scale == 0 {
+		l.Style.Scale = 1
+	}
+	return l
 }
 
 // dateShaped is whether text begins as a date does, with a digit or a month's name, whether it reads or not: a row

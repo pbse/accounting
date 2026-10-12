@@ -19,6 +19,7 @@ type Reading = {
   preview: { row: number; party: string; document: string; date?: string; due?: string; open: string }[];
   problems: string[];
   usable: boolean;
+  rows: { table: string; number: number; text: string }[];
 };
 type Kept = { id: string; side: "receivable" | "payable"; as_of: string; name: string; documents: number; problems: string[]; actor: string; created_at: string };
 
@@ -33,12 +34,13 @@ export function OpenItemFiles({ closeId }: { closeId: string }) {
   const [reading, setReading] = useState<Reading>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  async function post(choice: { side: string; as_of: string; file: File }, layout?: Layout, confirmed = false) {
+  async function post(choice: { side: string; as_of: string; file: File }, layout?: Layout, confirmed = false, at?: { table: string; row: number }) {
     const form = new FormData();
     form.set("side", choice.side);
     form.set("as_of", choice.as_of);
     form.set("file", choice.file);
     if (layout) form.set("layout", JSON.stringify(layout));
+    if (at) (form.set("table", at.table), form.set("header_row", String(at.row)));
     if (confirmed) form.set("confirmed", "true");
     setBusy(true);
     setError("");
@@ -119,8 +121,27 @@ export function OpenItemFiles({ closeId }: { closeId: string }) {
       {can_send && reading && chosen && (
         <div className="stack">
           <p>
-            {reading.documents} open document{reading.documents === 1 ? "" : "s"}, {reading.total} in all, read from row {reading.layout.header_row}'s headings.
+            {reading.documents} open document{reading.documents === 1 ? "" : "s"}, {reading.total} in all.
           </p>
+          {/* The headings may be in another row, or another sheet: choosing it proposes its columns' roles afresh. */}
+          <label>
+            Headings are in
+            <select
+              value={`${reading.layout.table}\u0000${reading.layout.header_row}`}
+              disabled={busy}
+              onChange={(e) => {
+                const [table, row] = e.target.value.split("\u0000");
+                void post(chosen, undefined, false, { table, row: Number(row) });
+              }}
+            >
+              {reading.layout.header_row === 0 && <option value={`${reading.layout.table}\u00000`}>Choose the row of headings</option>}
+              {reading.rows.map((r) => (
+                <option key={`${r.table}-${r.number}`} value={`${r.table}\u0000${r.number}`}>
+                  {r.table} · row {r.number}: {r.text}
+                </option>
+              ))}
+            </select>
+          </label>
           {reading.headings.map((h) => (
             <label key={h.column}>
               {h.value || `Column ${h.column + 1}`}

@@ -65,6 +65,10 @@ func TestOpenItemsProposeTheDetailedHeadings(t *testing.T) {
 	if layout, ok := ProposeOpenItems(f); !ok || layout.HeaderRow != 4 {
 		t.Fatalf("the detailed headings: %v %v", layout, ok)
 	}
+	// A person may say the headings are elsewhere: their columns are proposed afresh.
+	if layout, ok := ProposeOpenItemsAt(f, f.Tables[0].Name, 1); !ok || layout.HeaderRow != 1 || layout.Columns[0] != RoleParty || layout.Columns[1] != RoleOpen {
+		t.Fatalf("the headings a person chose: %v %v", layout, ok)
+	}
 	f, _ = Read("unnamed.csv", []byte("Customer,Transaction ID,Open Balance\nAcme Co,T-1,500.00\n"))
 	if layout, ok := ProposeOpenItems(f); !ok || layout.HeaderRow != 1 {
 		t.Fatalf("headings naming no number: %v %v", layout, ok)

@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -185,24 +186,44 @@ func registerOpenItemFiles(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "The file cannot be read: "+err.Error()+".")
 			return
 		}
+		// Without a layout, one is proposed: at the headings a person chose (a table and its row), else where the headings
+		// name a number and an amount; a file with neither still opens, for a person to choose its headings.
 		var layout bookfiles.OpenItemsLayout
 		proposed := r.FormValue("layout") == ""
 		if proposed {
 			var ok bool
-			if layout, ok = bookfiles.ProposeOpenItems(read); !ok {
-				problem(w, 422, "No row of the file heads columns naming each document's number and an amount. Export the open items with their numbers and headings.")
-				return
+			if table, row := r.FormValue("table"), r.FormValue("header_row"); table != "" {
+				n, _ := strconv.Atoi(row)
+				layout, ok = bookfiles.ProposeOpenItemsAt(read, table, n)
+			} else {
+				layout, ok = bookfiles.ProposeOpenItems(read)
+			}
+			if !ok && len(read.Tables) > 0 {
+				layout = bookfiles.OpenItemsLayout{Table: read.Tables[0].Name, Columns: map[int]bookfiles.Role{}, Style: bookfiles.NumberStyle{Scale: 1}}
 			}
 		} else if err = json.Unmarshal([]byte(r.FormValue("layout")), &layout); err != nil || layout.Style.Scale == 0 {
 			problem(w, 422, "The layout cannot be read.")
 			return
 		}
 		items, problems := bookfiles.ReadOpenItems(read, layout)
+		// The headings read by, and each table's first rows, any of which a person may say holds the headings.
 		var headings []bookfiles.Cell
+		rows := []map[string]any{}
 		for _, t := range read.Tables {
-			for _, row := range t.Rows {
+			for i, row := range t.Rows {
 				if t.Name == layout.Table && row.Number == layout.HeaderRow {
 					headings = row.Cells
+				}
+				if i < 30 {
+					var texts []string
+					for _, c := range row.Cells {
+						if v := strings.TrimSpace(c.Value); v != "" {
+							texts = append(texts, v)
+						}
+					}
+					if text := strings.Join(texts, " · "); text != "" {
+						rows = append(rows, map[string]any{"table": t.Name, "number": row.Number, "text": text[:min(len(text), 120)]})
+					}
 				}
 			}
 		}
@@ -217,7 +238,7 @@ func registerOpenItemFiles(mux *http.ServeMux, db *sql.DB) {
 			preview = preview[:20]
 		}
 		// A layout the file cannot be read by gives no documents at all, which is not none open: it cannot be kept.
-		out := map[string]any{"layout": layout, "headings": headings, "roles": bookfiles.Roles, "documents": len(items), "total": total.FloatString(2), "preview": preview, "problems": problems, "usable": items != nil}
+		out := map[string]any{"layout": layout, "headings": headings, "roles": bookfiles.Roles, "documents": len(items), "total": total.FloatString(2), "preview": preview, "problems": problems, "usable": items != nil, "rows": rows}
 		if proposed || r.FormValue("confirmed") != "true" {
 			jsonReply(w, 200, out)
 			return
