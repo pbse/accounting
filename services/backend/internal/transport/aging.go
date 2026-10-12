@@ -110,7 +110,9 @@ func registerAging(mux *http.ServeMux, db *sql.DB) {
 			w.Header().Set("Content-Disposition", `attachment; filename="statement.csv"`)
 			out := csv.NewWriter(w)
 			basis := "Balances at capture " + meta["captured_at"].(string) + ", aged against month-end " + meta["month_end"].(string)
-			if !meta["complete"].(bool) {
+			if reason, _ := meta["completeness"].(string); !meta["complete"].(bool) && meta["source"] == "files" && reason != "" {
+				basis += ". Incomplete: " + strings.TrimSuffix(reason, ".")
+			} else if !meta["complete"].(bool) {
 				basis += ". Incomplete: some open items could not be read, so this statement may be missing documents"
 			}
 			out.Write([]string{"Statement for", csvText(party.Name), "from", csvText(entity)})

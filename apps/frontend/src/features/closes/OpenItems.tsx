@@ -23,7 +23,21 @@ type Item = {
 };
 type Items =
   | { state: "waiting"; reason: string }
-  | { state: "ready"; company: string; capture_id: string; captured_at: string; month_end: string; complete: boolean; receivables: Item[]; payables: Item[]; settled: Item[]; settled_total: number };
+  | {
+      state: "ready";
+      company: string;
+      capture_id: string;
+      captured_at: string;
+      month_end: string;
+      complete: boolean;
+      // Why the open items are incomplete (a file held by its control accounts, say), and, for books on a cash basis, that they are outside them.
+      completeness?: string;
+      outside?: string;
+      receivables: Item[];
+      payables: Item[];
+      settled: Item[];
+      settled_total: number;
+    };
 
 const statuses: Record<Item["kind"], Record<string, string>> = {
   Invoice: { open: "Open", following_up: "Following up", promised: "Promised to pay", disputed: "Disputed", on_hold: "On hold" },
@@ -156,7 +170,8 @@ export function OpenItems({ closeId, open }: { closeId: string; open?: boolean }
             </button>
           </p>
           {saved && <p role="status">{saved}</p>}
-          {!items.complete && <p role="status">Incomplete: some open items could not be read in this capture.</p>}
+          {items.outside && <p className="note">{items.outside}</p>}
+          {!items.complete && <p role="status">{items.completeness || "Incomplete: some open items could not be read in this capture."}</p>}
           {table("Receivables", items.receivables, items.capture_id, items.company)}
           <Collections closeId={closeId} refresh={read.dataUpdatedAt} invoices={items.receivables.filter((i) => i.kind === "Invoice" && i.balance)} />
           {table("Payables", items.payables, items.capture_id, items.company)}

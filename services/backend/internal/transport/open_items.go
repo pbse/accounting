@@ -141,6 +141,9 @@ func registerOpenItems(mux *http.ServeMux, db *sql.DB) {
 			switch {
 			case !complete:
 				item.Reason = "The latest capture did not read every open item, so it cannot say whether this one is paid."
+				if reason, _ := meta["completeness"].(string); meta["source"] == "files" && reason != "" {
+					item.Reason = reason + " So it cannot say whether this one is paid."
+				}
 			case !item.Action.CreatedAt.Before(at):
 				item.Reason = "Decided after the latest capture; the next capture will say whether it is still open."
 			case item.Date == "" || item.Date > meta["month_end"].(string):

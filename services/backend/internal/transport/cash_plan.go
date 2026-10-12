@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -587,6 +588,12 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		lowest := lowestWeek(weeks)
+		// Files' open items say why they are incomplete (a side held by its control accounts, say); a capture's own
+		// completeness text does not.
+		filesReason := ""
+		if meta["source"] == "files" {
+			filesReason, _ = meta["completeness"].(string)
+		}
 		openItemsAt, _ := time.Parse(time.RFC3339, meta["captured_at"].(string))
 		apart := asOf.Sub(openItemsAt)
 		// An executive sees approved schedules only; drafts (their amounts, vendors and notes) stay with the firm.
@@ -602,7 +609,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			source("The bank balances come from a capture that is no longer current.", "")
 		}
 		if meta["complete"] != true {
-			source("The latest capture did not read every open item.", "")
+			source(cmp.Or(filesReason, "The latest capture did not read every open item."), "")
 		}
 		if apart.Abs() > 24*time.Hour {
 			source("The bank balances and the open items were read "+strconv.Itoa(int(apart.Abs().Hours()))+" hours apart.", "")
@@ -692,7 +699,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			"horizon":   map[string]any{"start": start.Format("2006-01-02"), "end": last.Format("2006-01-02"), "weeks": 13},
 			"readiness": cashReadiness(gaps), "matches": matched, "questions": questions, "lapsed": lapsed,
 			"opening":    map[string]any{"amount": opening.FloatString(2), "as_of": asOf, "snapshot_id": snapshotID, "stale": stale, "accounts": banks, "left_out": foreignBanks},
-			"open_items": map[string]any{"captured_at": meta["captured_at"], "capture_id": meta["capture_id"], "complete": meta["complete"], "hours_apart": int(apart.Abs().Hours()), "through": meta["month_end"], "missing_later": !files && first > meta["month_end"].(string)},
+			"open_items": map[string]any{"captured_at": meta["captured_at"], "capture_id": meta["capture_id"], "complete": meta["complete"], "completeness": filesReason, "hours_apart": int(apart.Abs().Hours()), "through": meta["month_end"], "missing_later": !files && first > meta["month_end"].(string)},
 			"weeks":      weeks, "lowest": map[string]string{"amount": lowest.Lowest, "on": lowest.LowestOn},
 			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "pending_obligations": draftSchedules, "scenario": scenario,
 			"note": "Book cash is the ledger's bank balances at the capture, not bank-available cash. Receipts and payments are expectations from due dates, promises, bill-pay handoffs and approved schedules; nothing is paid, collected or written to the ledger. Sales not yet invoiced are not in the plan unless an approved receipt schedule adds them, so later weeks show only what is already known."}

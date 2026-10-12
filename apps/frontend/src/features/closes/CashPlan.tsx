@@ -35,7 +35,7 @@ export type Plan =
       currency: string;
       start: string;
       opening: { amount: string; as_of: string; stale: boolean; accounts: { name: string; balance: string }[]; left_out: string[] };
-      open_items: { captured_at: string; capture_id: string; complete: boolean; hours_apart: number; through: string; missing_later: boolean };
+      open_items: { captured_at: string; capture_id: string; complete: boolean; completeness?: string; hours_apart: number; through: string; missing_later: boolean };
       weeks: Week[];
       lowest: { amount: string; on: string };
       past_due: Item[];
@@ -196,7 +196,7 @@ export function CashPlan({ closeId, readOnly = false, scenario: opened = "", onS
       <p className="note">{plan.note}</p>
       {readOnly && !!plan.unapproved_schedules && <p className="note">{plan.unapproved_schedules} schedule{plan.unapproved_schedules === 1 ? " is" : "s are"} waiting for the firm's approval and not counted.</p>}
       {plan.opening.stale && <p role="alert">The bank balances come from a capture that is no longer current. Capture the books again before relying on the plan.</p>}
-      {!plan.open_items.complete && <p role="alert">The latest capture did not read every open item, so some receipts or payments are missing.</p>}
+      {!plan.open_items.complete && <p role="alert">{plan.open_items.completeness || "The latest capture did not read every open item, so some receipts or payments are missing."}</p>}
       {plan.open_items.missing_later && (
         <p role="alert">
           This close's capture holds invoices and bills dated up to {plan.open_items.through}; anything dated after that is missing here. The latest month's close has
