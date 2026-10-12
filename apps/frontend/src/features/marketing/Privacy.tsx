@@ -68,10 +68,10 @@ export function Privacy() {
         <section>
           <h2>The technology behind Krith</h2>
           <p>
-            Krith is built on established cloud and AI providers. Among them, Cloudflare and Amazon Web Services host the website, the application and its database, and AI models from OpenAI, Anthropic and Google read documents and help prepare the work. Others handle sign-in and send the emails a firm approves. Each processes data only to provide Krith’s service, and we don’t allow any of them to use firm or client data to train AI models.
+            Krith is built on established cloud and AI providers. Among them, Cloudflare and Amazon Web Services host the website, the application and its database, and AI models from OpenAI, Anthropic and Google read documents and help prepare the work. Others handle sign-in and send the emails a firm approves. Each processes data to provide Krith’s service and to keep its own service secure, for example by briefly holding requests to detect abuse, and we don’t allow any of them to use firm or client data to train AI models.
           </p>
           <p>
-            Everything is scoped to one firm. Each firm’s records are walled off from every other firm’s in our database, the work Krith does for a firm reads only that firm’s data, and one firm’s data is never used in another firm’s work.
+            Firm and client data is scoped to one firm. Each firm’s records are walled off from every other firm’s in our database, the work Krith does for a firm reads only that firm’s data, and one firm’s data is never used in another firm’s work.
           </p>
           <p>
             QuickBooks, Xero, Stripe and Google Drive are the firm’s own accounts. Krith reads from them only after a firm member connects them, and writes to a ledger only under a grant the firm approves, one approved entry at a time. A firm can ask us for the current list of providers that process its data, and we tell the firms that use Krith before adding one.
