@@ -49,10 +49,10 @@ type OpenItem struct {
 	Currency string `json:"currency,omitempty"`
 }
 
-// Key is a stable name for the document within its side: its party and number, so a decision about it carries over to
-// the next export; a document without a number is named by its dates and amount.
+// Key is a stable name for the document within its side: its party, number and whether it is a credit, so a decision
+// about it carries over to the next export; a document without a number is named by its dates and amount.
 func (i OpenItem) Key(side string) string {
-	name := side + "|" + strings.ToLower(strings.Join(strings.Fields(i.Party), " ")) + "|"
+	name := side + "|" + strings.ToLower(strings.Join(strings.Fields(i.Party), " ")) + "|" + map[bool]string{true: "credit", false: "document"}[strings.HasPrefix(i.Open, "-")] + "|"
 	if i.Document != "" {
 		name += strings.ToLower(strings.TrimSpace(i.Document))
 	} else {
@@ -223,6 +223,7 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 		party, document := text(RoleParty), text(RoleDocument)
 		item := OpenItem{Row: row.Number, Party: party, Document: document, Currency: text(RoleCurrency)}
 		var unread []string
+		dateLike := false
 		for _, d := range []struct {
 			role Role
 			to   *string
@@ -231,13 +232,15 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 			if !ok || strings.TrimSpace(cells[column].Value) == "" {
 				continue
 			}
+			dateLike = dateLike || cells[column].Kind == Date || strings.ContainsAny(cells[column].Value, "0123456789")
 			var err error
 			if *d.to, err = readDate(cells[column], l.DateOrder); err != nil {
 				unread = append(unread, fmt.Sprintf("Row %d: the %s %q cannot be read as a date.", row.Number, map[Role]string{RoleDate: "date", RoleDue: "due date"}[d.role], cells[column].Value))
 			}
 		}
-		// Neither a number nor a date that reads as one: a summary row (its label may sit in the date column).
-		if (document == "" && item.Date == "" && item.Due == "") || (party == "" && document == "" && heading == "") {
+		// Neither a number nor anything written as a date: a summary row (its label may sit in the date column). A date
+		// that cannot be read is the document's problem, not a summary's.
+		if (document == "" && !dateLike) || (party == "" && document == "" && heading == "") {
 			continue
 		}
 		if item.Party == "" {

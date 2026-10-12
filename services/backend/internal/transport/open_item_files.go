@@ -36,7 +36,7 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 	}
 	open := map[string][]json.RawMessage{}
 	var ids, sides []string
-	asOf, problems, observed := "", 0, map[string]string{}
+	asOf, problems, observed, sideProblems := "", 0, map[string]string{}, map[string]int{}
 	for rows.Next() {
 		var id, side, at string
 		var raw []byte
@@ -53,6 +53,7 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 			asOf = at
 		}
 		observed[map[string]string{"receivable": "Invoice", "payable": "Bill"}[side]] = at + "T23:59:59Z"
+		sideProblems[side] = n
 		for _, item := range items {
 			kind, credit := map[string][2]string{"receivable": {"Invoice", "CreditMemo"}, "payable": {"Bill", "VendorCredit"}}[side], false
 			balance, _ := new(big.Rat).SetString(item.Open)
@@ -99,6 +100,18 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 	month, _ := time.Parse("2006-01", period)
 	monthEnd := month.AddDate(0, 1, -1)
 	receivables, payables, unreadable := quickbooks.Aging(open, monthEnd, home)
+	// Each side is complete on its own: its file sent and every row and document of it read, so a document of that side
+	// missing from it is settled whatever the other side's file says.
+	completeBy := map[string]bool{}
+	for kind, parties := range map[string][]quickbooks.AgingParty{"Invoice": receivables, "Bill": payables} {
+		side := map[string]string{"Invoice": "receivable", "Bill": "payable"}[kind]
+		_, sent := observed[kind]
+		unresolved := 0
+		for _, p := range parties {
+			unresolved += p.Unresolved
+		}
+		completeBy[kind] = sent && sideProblems[side] == 0 && unresolved == 0
+	}
 	completeness := ""
 	if len(sides) < 2 {
 		completeness = "Only the open " + sides[0] + "s were sent for this month as a file."
@@ -108,7 +121,7 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 	}
 	// The files' open items were true at the end of their earliest as-of date, as a capture's are at its time.
 	return receivables, payables, map[string]any{"source": "files", "company": company, "capture_id": "files:" + strings.Join(ids, "+"), "captured_at": asOf + "T23:59:59Z", "month_end": monthEnd.Format("2006-01-02"),
-		"complete": unreadable == 0 && problems == 0 && len(sides) == 2, "completeness": completeness, "note": filesAgingNote, "buckets": quickbooks.AgingBuckets, "observed": observed}, nil
+		"complete": unreadable == 0 && problems == 0 && len(sides) == 2, "completeness": completeness, "note": filesAgingNote, "buckets": quickbooks.AgingBuckets, "observed": observed, "complete_by_kind": completeBy}, nil
 }
 
 const filesAgingNote = "Balances as of each file's as-of date, aged against the close's month-end. A document paid after month-end but before that date is not shown."

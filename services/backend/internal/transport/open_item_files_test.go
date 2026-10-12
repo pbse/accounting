@@ -129,7 +129,7 @@ func TestAFilesMonthsOpenItemsComeFromAnExport(t *testing.T) {
 	// is settled by it.
 	uploadAs(aging[:strings.Index(aging, ",01/15/2027")], "2027-02-05", string(layout), true, 201)
 	items = send("GET", "/v1/closes/"+cid+"/open-items", "", nil, 200)
-	if receivables, _ := items["receivables"].([]any); len(receivables) != 0 || items["settled_total"] != 1.0 {
+	if receivables, _ := items["receivables"].([]any); len(receivables) != 0 || items["settled_total"] != 1.0 || items["settled"].([]any)[0].(map[string]any)["settled"] != true {
 		t.Fatalf("an export with none open replaces the side: %v", items)
 	}
 }

@@ -33,3 +33,21 @@ func TestOpenItemsAreReadFromAnAgedExport(t *testing.T) {
 		}
 	}
 }
+
+// A credit is a document apart from an invoice of the same number, and a document whose date cannot be read is
+// reported, never taken for a summary.
+func TestOpenItemsKeepCreditsAndUnreadableDocuments(t *testing.T) {
+	invoice, credit := OpenItem{Party: "Acme Co", Document: "1001", Open: "100.00"}, OpenItem{Party: "Acme Co", Document: "1001", Open: "-100.00"}
+	if invoice.Key("receivable") == credit.Key("receivable") {
+		t.Fatal("an invoice and a credit of one number share a name")
+	}
+	f, err := Read("unnumbered.csv", []byte("Customer,Date,Open Balance\nAcme Co,01/02/2027,100.00\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, _ := ProposeOpenItems(f)
+	items, problems := ReadOpenItems(f, layout)
+	if len(items) != 1 || len(problems) != 1 {
+		t.Fatalf("an unnumbered document with an ambiguous date: %v %v", items, problems)
+	}
+}
