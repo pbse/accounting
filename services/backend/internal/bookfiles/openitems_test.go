@@ -84,10 +84,14 @@ func TestOpenItemsAmountsAreReadInTheirColumnsStyle(t *testing.T) {
 	}
 	layout, _ := ProposeOpenItemsAt(f, f.Tables[0].Name, 1)
 	layout.Columns = map[int]Role{0: RoleParty, 1: RoleDocument, 2: RoleOpen}
-	layout.Style.Scale = 1000
 	items, problems := ReadOpenItems(f, RestyleOpenItems(f, layout))
-	if len(items) != 2 || items[1].Open != "1000250.00" || len(problems) != 0 {
+	if len(items) != 2 || items[1].Open != "1000.25" || len(problems) != 0 {
 		t.Fatalf("amounts in the column's style: %v %v", items, problems)
+	}
+	// A scale given is kept when the style is read again.
+	layout.Style.Scale = 1000
+	if restyled := RestyleOpenItems(f, layout); restyled.Style.Scale != 1000 || !restyled.Style.DecimalComma {
+		t.Fatalf("a given scale is kept: %v", restyled.Style)
 	}
 	layout.Style = NumberStyle{Scale: 1}
 	if items, problems = ReadOpenItems(f, layout); items != nil || len(problems) == 0 {
@@ -118,14 +122,15 @@ func TestOpenItemsAddUpToTheExportsTotal(t *testing.T) {
 	}
 }
 
-// The check compares the documents' exact amounts: two of 1.005 add up to a total of 2.01.
-func TestOpenItemsAddUpExactly(t *testing.T) {
-	f, err := Read("cents.csv", []byte("Customer,Num,Open Balance\nAcme Co,1001,1.005\nAcme Co,1002,1.005\nTotal,,2.01\n"))
+// An amount is kept only exact to the cent: one with a fraction of a cent is left out and named, and the total then
+// shows the difference.
+func TestOpenItemsKeepAmountsToTheCent(t *testing.T) {
+	f, err := Read("cents.csv", []byte("Customer,Num,Open Balance\nAcme Co,1001,1.005\nAcme Co,1002,1.00\nTotal,,2.005\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	layout, _ := ProposeOpenItems(f)
-	if items, problems := ReadOpenItems(f, layout); len(items) != 2 || len(problems) != 0 {
-		t.Fatalf("exact amounts against the total: %v %v", items, problems)
+	if items, problems := ReadOpenItems(f, layout); len(items) != 1 || len(problems) != 2 || !strings.Contains(problems[0], "not exact to the cent") {
+		t.Fatalf("an amount with a fraction of a cent: %v %v", items, problems)
 	}
 }

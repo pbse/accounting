@@ -260,7 +260,7 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 		s = strings.Join(strings.Fields(strings.TrimRight(strings.ToLower(s), ": ")), " ")
 		return s == "total" || s == "totals" || s == "grand total"
 	}
-	// The export's own total, after its last document, which the documents read (exactly, before rounding) must add up to.
+	// The export's own total, after its last document, which the documents kept must add up to.
 	var reported *big.Rat
 	reportedRow, exact := 0, new(big.Rat)
 	for _, row := range table.Rows {
@@ -324,6 +324,11 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 		amount, err := cellAmount(openCell, l.Style)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("Row %d: the open amount %q cannot be read.", row.Number, openCell.Value))
+			continue
+		}
+		// An amount kept is exact to the cent, so what is kept, totalled and checked against the export is the same.
+		if !amount.Cents {
+			problems = append(problems, fmt.Sprintf("Row %d: the open amount %q is not exact to the cent, so it is left out.", row.Number, openCell.Value))
 			continue
 		}
 		item.Open = amount.Value.FloatString(2)
