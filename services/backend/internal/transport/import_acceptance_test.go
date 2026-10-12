@@ -627,6 +627,39 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if accounts := budget["accounts"].([]any); len(accounts) != 2 || budget["reason"] == "Capture this month's QuickBooks period snapshot or Xero Trial Balance first." {
 		t.Fatalf("January's budget from its file: %v", budget)
 	}
+	// The cash plan opens from the file's bank balances, as of the month's end, once its open items are sent as files.
+	if plan := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200); plan["state"] != "waiting" || !strings.Contains(plan["reason"].(string), "open receivables and payables") {
+		t.Fatalf("a files month's plan waits for its open items: %v", plan)
+	}
+	openItems := func(side, content string) {
+		t.Helper()
+		form := func(layout string) (string, []byte) {
+			var b bytes.Buffer
+			m := multipart.NewWriter(&b)
+			must(m.WriteField("side", side))
+			must(m.WriteField("as_of", "2027-01-31"))
+			if layout != "" {
+				must(m.WriteField("layout", layout))
+				must(m.WriteField("confirmed", "true"))
+			}
+			f, e := m.CreateFormFile("file", side+".csv")
+			must(e)
+			_, e = f.Write([]byte(content))
+			must(e)
+			must(m.Close())
+			return m.FormDataContentType(), b.Bytes()
+		}
+		kind, body := form("")
+		layout, _ := json.Marshal(send("user_a", partner, "POST", "/v1/closes/"+januaryClose+"/open-item-files", kind, body, 200)["layout"])
+		kind, body = form(string(layout))
+		send("user_a", partner, "POST", "/v1/closes/"+januaryClose+"/open-item-files", kind, body, 201)
+	}
+	openItems("receivable", "Customer,Num,Due Date,Open Balance\nBeta LLC,1001,02/14/2027,250.00\n")
+	openItems("payable", "Vendor,Num,Due Date,Open Balance\nLandlord,R-2,02/05/2027,100.00\n")
+	plan := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200)
+	if opening, _ := plan["opening"].(map[string]any); plan["state"] != "ready" || plan["start"] != "2027-01-31" || opening["amount"] != "1500.25" || plan["currency"] != "USD" {
+		t.Fatalf("a files month's plan opens from its file's bank balances: %v", plan)
+	}
 	// The tie-out compares the file's balance-sheet accounts with their support: the bank, to be reconciled.
 	tie := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200)
 	if rows := tie["rows"].([]any); tie["snapshot"].(map[string]any)["source"] != "files" || len(rows) != 1 || rows[0].(map[string]any)["account_id"] != "n:1000" || rows[0].(map[string]any)["hint"] != "Reconcile it to the bank statement." {
