@@ -113,6 +113,20 @@ Sign-off (`SignOffTab.tsx`):
 
 The header's Sign off opens the sign-off form directly (`#signoff-form`).
 
+Settings (`SettingsTab.tsx`):
+- **Lede:** what Krith remembers about the client. Under it: the basis, and its currency and fiscal year once the profile is settled (an unsettled profile is the chip below the lede).
+- **Left column:** the decisions on Settings, then every setting as one table, each with what it is now and its status:
+  - procedures: the client's overrides in force this month, or the firm's defaults;
+  - the ledger, from the brief;
+  - other names and standing approvals, from memory;
+  - the monthly hand-over, from the goal;
+  - retention, which only a firm administrator may read; anyone else sees why;
+  - the agent's last check against confirmed readings.
+
+  Each row opens where it is changed.
+- **Rail:** client procedure overrides, accounts approved before, standing approvals, and readings that replayed the same.
+- **More on Settings:** procedures (unfolded and read as it opens), what Krith remembers, the agent check, and retention and deletion (unfolded).
+
 A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
 
 Below 860px the sidebar is a sheet opened from the brand button, the composer spans the width, and the stage's positions become flow.

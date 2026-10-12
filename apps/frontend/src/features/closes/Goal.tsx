@@ -84,7 +84,7 @@ export function due(on: string, today: string, format: (value: string) => string
 
 
 // dueRule says how a monthly hand-over dates each month.
-function dueRule(days: number | null) {
+export function dueRule(days: number | null) {
   return days ? `due ${days} day${days === 1 ? "" : "s"} after each month ends` : "with no due date";
 }
 

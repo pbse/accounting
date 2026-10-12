@@ -4,10 +4,6 @@ import { monthName, useDates } from "../../data/time";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { CloseLede, signOffAvailable, useBrief } from "./Stands";
-import { RetentionControls } from "./Enterprise";
-import { Procedures } from "./Procedures";
-import { Memory } from "./Memory";
-import { Replay } from "./Replay";
 import { EffortTracker, type Activity } from "./Effort";
 import { Books, BooksLede } from "./Books";
 import { Workpapers, WorkpapersLede } from "./Workpapers";
@@ -16,6 +12,7 @@ import { RequestsLede, RequestsTab } from "./RequestsTab";
 import { ReportsLede, ReportsTab } from "./ReportsTab";
 import { CashLede, CashTab } from "./CashTab";
 import { SignOffLede, SignOffTab } from "./SignOffTab";
+import { SettingsLede, SettingsTab } from "./SettingsTab";
 import { AgentChip, CloseMenu, countsOf, needsFor, Overview, useDecisions, useGoalStatus } from "./Overview";
 import { useClose, type Profile } from "./WorkpaperView";
 
@@ -38,6 +35,14 @@ function profileLabel(p: Profile) {
 
 // Each tab's own actions and exception paths, at the top of the close's ⋯ menu.
 const tabMenus = (base: string): Partial<Record<Tab, { title: string; items: { label: string; to: string }[] }>> => ({
+  settings: {
+    title: "Settings",
+    items: [
+      { label: "Replay the confirmed readings", to: `${base}?tab=settings&view=replay` },
+      { label: "Learn a procedure from evidence", to: `${base}?tab=settings&view=procedures` },
+      { label: "Delete this close", to: `${base}?tab=settings&view=retention` },
+    ],
+  },
   signoff: {
     title: "Sign-off",
     items: [
@@ -169,7 +174,7 @@ export default function ClientClose() {
         </div>
       </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
-      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : tab === "requests" ? <RequestsLede closeId={close.id} /> : tab === "reports" ? <ReportsLede closeId={close.id} period={close.period} /> : tab === "cash" ? <CashLede closeId={close.id} base={base} /> : tab === "signoff" ? <SignOffLede close={close} /> : tab === "evidence" ? <DocumentsLede closeId={close.id} base={base} waiting={needs.filter((need) => need.tab === "evidence").reduce((n, need) => n + need.count, 0)} /> : <CloseLede close={close} counts={counts} />}
+      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : tab === "requests" ? <RequestsLede closeId={close.id} /> : tab === "reports" ? <ReportsLede closeId={close.id} period={close.period} /> : tab === "cash" ? <CashLede closeId={close.id} base={base} /> : tab === "signoff" ? <SignOffLede close={close} /> : tab === "settings" ? <SettingsLede close={close} /> : tab === "evidence" ? <DocumentsLede closeId={close.id} base={base} waiting={needs.filter((need) => need.tab === "evidence").reduce((n, need) => n + need.count, 0)} /> : <CloseLede close={close} counts={counts} />}
       {close.profile && (close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown") && (
         <p className="ks-lede-notes">
           <span className="chip warn" role={close.profile.state === "unknown" ? undefined : "alert"} title={close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>
@@ -199,14 +204,7 @@ export default function ClientClose() {
       {tab === "reports" && <ReportsTab close={close} papers={papers} needs={needs.filter((need) => need.tab === "reports")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
       {tab === "cash" && <CashTab close={close} papers={papers} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
       {tab === "signoff" && <SignOffTab close={close} papers={papers} needs={needs.filter((need) => need.tab === "signoff")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
-      {tab === "settings" && (
-        <div className="stack">
-          <Memory key={`memory-${close.id}`} closeId={close.id} />
-          <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} onApplied={() => void reload()} />
-          <Replay key={`replay-${close.id}`} closeId={close.id} />
-          <RetentionControls close={close} onDeleted={setDeleted} />
-        </div>
-      )}
+      {tab === "settings" && <SettingsTab close={close} papers={papers} needs={needs.filter((need) => need.tab === "settings")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} onApplied={() => void reload()} onDeleted={setDeleted} />}
     </>
   );
 }

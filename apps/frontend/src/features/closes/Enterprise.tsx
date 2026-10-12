@@ -415,7 +415,8 @@ export function MemberDecision() {
   );
 }
 
-export function RetentionControls({ close, onDeleted }: { close: { id: string; entity: string; period: string }; onDeleted: (receipt: string) => void }) {
+// open shows the retention decision and the deletion preview unfolded, read as they open.
+export function RetentionControls({ close, onDeleted, open = false }: { close: { id: string; entity: string; period: string }; onDeleted: (receipt: string) => void; open?: boolean }) {
   const [status, setStatus] = useState<Retention>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -450,7 +451,10 @@ export function RetentionControls({ close, onDeleted }: { close: { id: string; e
     } catch (error) { setMessage(error instanceof Error ? error.message : "Deletion was not confirmed. Refresh before retrying."); }
     finally { setBusy(false); }
   }
-  return <details onToggle={(event) => { if (event.currentTarget.open && !status && !busy) void load(); }}>
+  useEffect(() => {
+    if (open) void load();
+  }, []);
+  return <details open={open || undefined} onToggle={(event) => { if (event.currentTarget.open && !status && !busy) void load(); }}>
     <summary>Retention and deletion</summary>
     <p>Only a firm data administrator can set the approved date or legal hold. No date means no deletion. Backups follow the provider’s separately agreed expiry.</p>
     <button type="button" disabled={busy} onClick={() => void load()}>Refresh deletion preview</button>
