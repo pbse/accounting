@@ -296,7 +296,7 @@ export default function ClientRequest() {
                   {(request.questions ?? []).some((q) => q.state === "awaiting_document") && (
                     <p className="note">Sending a document you said would follow? Tick “I'm attaching the document with this reply” on its question and attach the file.</p>
                   )}
-                  <p>{request?.books ? "Your books as a CSV or Excel workbook (.xlsx), up to 5 MiB each." : "Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total."} Files stay quarantined until automated scanning and the firm's release.</p>
+                  <p>{request?.books ? "Your books as a CSV or Excel workbook (.xlsx), up to 50 MiB each." : "Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total."} Files stay quarantined until automated scanning and the firm's release.</p>
                   <label>
                     <input type="checkbox" name="confirmed" required /> This reply concerns {request.entity} for {request.period}. I understand it will be reviewed by the firm.
                   </label>

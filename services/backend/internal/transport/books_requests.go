@@ -24,7 +24,7 @@ func booksRequestBody(client, period, ledger string) string {
 	if t, err := time.Parse("2006-01", period); err == nil {
 		month = t.Format("January 2006")
 	}
-	body := "Please upload " + client + "'s books for " + month + ": the Trial Balance as of the month's last day, or the month's General Ledger, as a CSV or Excel workbook (.xlsx) of up to 5 MiB."
+	body := "Please upload " + client + "'s books for " + month + ": the Trial Balance as of the month's last day, or the month's General Ledger, as a CSV or Excel workbook (.xlsx) of up to 50 MiB."
 	if l, ok := ledgers.Find(ledger); ok && l.Exports.TrialBalance != "" {
 		body += "\n\nIn " + l.Name + ": " + l.Exports.TrialBalance
 		if l.Exports.GeneralLedger != "" {

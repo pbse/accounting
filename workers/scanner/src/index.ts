@@ -15,7 +15,8 @@ export default {
       return new Response("Unavailable", { status: 403 });
     }
     const size = Number(request.headers.get("Content-Length"));
-    if (!Number.isInteger(size) || size < 1 || size > (binary ? 5 * 1024 * 1024 : 512 * 1024)) return new Response("Invalid size", { status: 413 });
+    // A binary file may be a client's books workbook, up to 50 MiB.
+    if (!Number.isInteger(size) || size < 1 || size > (binary ? 50 * 1024 * 1024 : 512 * 1024)) return new Response("Invalid size", { status: 413 });
     return env.SCANNER.getByName("text-scanner-enam", { locationHint: "enam" }).fetch(request);
   },
 } satisfies ExportedHandler<Env>;
