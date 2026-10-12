@@ -5,9 +5,9 @@ import { Card } from "@close/ui/components/Card";
 import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, useDates } from "../../data/time";
-import { PasscodeNotice, SendRequestEmail } from "../closes/Email";
 import { workspaceRequest } from "../closes/workspace";
 import { AcceptFile } from "./AcceptFile";
+import { AskClient } from "./AskClient";
 import { AccountMap } from "./AccountMap";
 import { ImportScope } from "./ImportScope";
 
@@ -307,84 +307,26 @@ function SendForm({ client, imports, onSent, onCancel }: { client: string; impor
 }
 
 // AskForm asks the client for a month's books (docs/books-sources.md, Client-provided books): a request on the month's
-// close with a private link, whose email is approved here, apart from the request, as any request's is. The file the
-// client sends is released from the month's client requests, and then appears among the files here.
+// close. The file the client sends is released from the month's client attachments, and then appears among the files here.
 function AskForm({ client, onClose }: { client: string; onClose: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [asked, setAsked] = useState<{ id: string; close_id: string; body: string; link_token: string; passcode: string; recipient: string; period: string }>();
-  // Approving the email issues the request a new link, sent in it, and revokes the one shown before.
-  const [queued, setQueued] = useState<{ passcode: string }>();
-  async function ask(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const period = String(form.get("period")), recipient = String(form.get("recipient"));
-    setBusy(true);
-    setError("");
-    try {
-      const saved = await workspaceRequest(`/client/books-requests?name=${encodeURIComponent(client)}`, { period, recipient, confirmed: form.get("confirmed") === "on" });
-      setAsked({ ...saved, recipient, period });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "The request could not be saved.");
-    } finally {
-      setBusy(false);
-    }
-  }
-  if (asked) {
-    return (
-      <div className="stack">
-        <pre>{asked.body}</pre>
-        {queued ? (
-          <>
-            <p role="status">The email to {asked.recipient} is queued with a new private link; the link shown before no longer works.</p>
-            <PasscodeNotice passcode={queued.passcode} />
-          </>
-        ) : (
-          <>
-            <label>
-              Private link
-              <input readOnly value={`${window.location.origin}/request#${asked.link_token}`} onFocus={(e) => e.currentTarget.select()} />
-            </label>
-            <PasscodeNotice passcode={asked.passcode} />
-            <SendRequestEmail closeId={asked.close_id} requestId={asked.id} recipient={asked.recipient} onQueued={(passcode) => setQueued({ passcode })} />
-          </>
-        )}
-        <p className="note">
-          Once the client sends the file and it passes scanning, release it under Client attachments on{" "}
-          <Link to={`/dashboard/closes/${asked.close_id}`}>{monthName(asked.period)}</Link>'s Overview (The agent's plan, documents and accounts). It then appears among the files here.
-        </p>
-        <DialogActions>
-          <button type="button" onClick={onClose}>
-            Done
-          </button>
-        </DialogActions>
-      </div>
-    );
-  }
   return (
-    <form onSubmit={ask}>
-      <fieldset disabled={busy}>
+    <AskClient
+      path={`/client/books-requests?name=${encodeURIComponent(client)}`}
+      fields={
         <label>
           Month
           <input type="month" name="period" required />
         </label>
-        <label>
-          Client recipient
-          <input type="email" name="recipient" required maxLength={254} />
-        </label>
-        <label className="checkbox-label">
-          <input type="checkbox" name="confirmed" required /> I reviewed the month and the recipient
-        </label>
-        <p className="note">Creating the request does not send an email: that is approved next. Anyone with the link can send a file unless the firm requires a passcode.</p>
-        {error && <p role="alert">{error}</p>}
-        <DialogActions>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="primary">{busy ? "Asking…" : "Create the request"}</button>
-        </DialogActions>
-      </fieldset>
-    </form>
+      }
+      values={(form) => ({ period: String(form.get("period")) })}
+      after={(asked) => (
+        <p className="note">
+          Once the client sends the file and it passes scanning, release it under Client attachments on{" "}
+          <Link to={`/dashboard/closes/${asked.close_id}`}>{monthName(asked.values.period)}</Link>'s Overview (The agent's plan, documents and accounts). It then appears among the files here.
+        </p>
+      )}
+      onClose={onClose}
+    />
   );
 }
 

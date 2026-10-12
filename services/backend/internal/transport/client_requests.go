@@ -298,8 +298,9 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 		var closeID, jobID string
-		var books bool
-		err = tx.QueryRowContext(r.Context(), `SELECT d.close_id::text,COALESCE(q.job_id::text,''),COALESCE(q.coverage_scope ? 'books',false) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id JOIN organizations o ON o.id=c.organization_id WHERE l.digest=$1 AND o.enabled`, digest).Scan(&closeID, &jobID, &books)
+		var books, linkConnected bool
+		var connect string
+		err = tx.QueryRowContext(r.Context(), `SELECT d.close_id::text,COALESCE(q.job_id::text,''),COALESCE(q.coverage_scope ? 'books',false),COALESCE(q.coverage_scope->>'connect',''),l.connected_at IS NOT NULL FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id JOIN organizations o ON o.id=c.organization_id WHERE l.digest=$1 AND o.enabled`, digest).Scan(&closeID, &jobID, &books, &connect, &linkConnected)
 		if err != nil {
 			problem(w, 404, "Request link unavailable. Ask the firm for a new link.")
 			return
@@ -359,6 +360,11 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			out := map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed, "rescan": rescan, "books": books}
 			if books {
 				out["files"] = sentFiles
+			}
+			// A request to connect the client's books names the ledger its page offers to sign in to, and whether this
+			// link has already connected it.
+			if connect != "" {
+				out["connect"], out["connected"] = connect, linkConnected
 			}
 			jsonReply(w, 200, out)
 		}

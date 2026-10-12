@@ -237,6 +237,7 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 	registerFileLedger(mux, db)
 	registerJournals(mux, db)
 	registerBooksRequests(mux, db)
+	registerConnectRequests(mux, db)
 	registerImportScopes(mux, db)
 	registerImportAcceptance(mux, db)
 	registerClientProfiles(mux, db)

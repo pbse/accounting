@@ -11,6 +11,7 @@ import { ClientForm, LedgerPicker, type CatalogLedger, type LedgerChoice, type P
 import { PostingCard, QuickBooksAction, type ProductionGrant } from "./QuickBooksBooks";
 import { XeroAction, XeroPostingCard, type XeroGrant } from "./XeroBooks";
 import { FilesCard } from "./Files";
+import { AskClient } from "./AskClient";
 import { CompanyLinksCard } from "./CompanyLinks";
 import { workspaceRequest } from "../closes/workspace";
 
@@ -159,7 +160,7 @@ export default function ClientPage() {
   const client = read.data;
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "profile" | "ledger" | "source">("");
+  const [dialog, setDialog] = useState<"" | "another" | "schedule" | "profile" | "ledger" | "source" | "connect">("");
   const reread = () => void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   if (!client) {
     if (read.isPending) return <p role="status">Opening the client…</p>;
@@ -230,6 +231,12 @@ export default function ClientPage() {
   const kept = client.ledger;
   // Recorded under the client's own name, so only by a reader who sees the client whole.
   const canRecord = client.whole && (client.can_manage || client.can_connect);
+  // The ledgers a client can be asked to connect itself: those this server can connect and the firm has switched on.
+  const askable = [
+    ...(client.connectable?.quickbooks !== false && client.quickbooks_setup?.production ? [["quickbooks:production", "QuickBooks Online"]] : []),
+    ...(client.connectable?.quickbooks !== false && client.quickbooks_setup?.sandbox ? [["quickbooks:sandbox", "QuickBooks Online (sandbox)"]] : []),
+    ...(client.connectable?.xero !== false && client.xero_configured ? [["xero", "Xero"]] : []),
+  ];
   const keptName = kept?.entry?.name ?? (kept?.ledger === "other" ? kept.other_name : "");
   const keeps = !kept
     ? canRecord
@@ -354,6 +361,11 @@ export default function ClientPage() {
                   {client.can_connect && (
                     <button type="button" onClick={() => setDialog("source")}>
                       Source
+                    </button>
+                  )}
+                  {client.can_connect && askable.length > 0 && (
+                    <button type="button" onClick={() => setDialog("connect")}>
+                      Ask the client to connect
                     </button>
                   )}
                   {ledger.month && (
@@ -591,6 +603,36 @@ export default function ClientPage() {
           description="Every part of a month reads its books from one source: the newest capture, or QuickBooks or Xero alone. Choose it for the client, or for one month."
         >
           <SourceForm key={client.books_sources?.[0]?.id ?? "none"} client={name} chosen={client.books_sources ?? []} onSaved={() => (setDialog(""), reread())} onCancel={() => setDialog("")} />
+        </Dialog>
+      )}
+      {dialog === "connect" && (
+        <Dialog open onClose={() => setDialog("")} title={`Ask ${name} to connect its books`} description="A private link through which the client signs in to its ledger itself. The connection then waits here for you to confirm it.">
+          <AskClient
+            path={`/client/connect-requests?name=${encodeURIComponent(name)}`}
+            fields={
+              <label>
+                Ledger
+                <select name="ledger" required>
+                  {askable.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            }
+            values={(form) => {
+              const [provider, environment = ""] = String(form.get("ledger")).split(":");
+              return { provider, environment };
+            }}
+            after={() => (
+              <p className="note">
+                Once the client signs in, the connection waits on this card for you to confirm the QuickBooks company, or choose the Xero organisation, before
+                anything is read.
+              </p>
+            )}
+            onClose={() => (setDialog(""), reread())}
+          />
         </Dialog>
       )}
       {canRecord && (

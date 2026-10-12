@@ -32,9 +32,19 @@ func xeroReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	var entity, id string
-	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity,x.id::text FROM xero_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity, &id)
+	var org, request, link string
+	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity,x.id::text,x.organization_id,COALESCE(x.request_id::text,''),COALESCE(x.request_link,'') FROM xero_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity, &id, &org, &request, &link)
 	if err != nil {
 		problem(w, 410, "Connection attempt expired or unavailable. Start again from the client's page.")
+		return
+	}
+	// A client's own sign-in, through a request, is finished here, with no member's page to finish it.
+	if request != "" {
+		requestConnected(w, r, db, "xero", org, id, request, link, func(ctx context.Context, rec http.ResponseWriter, a *auth.Claims) {
+			if xeroAct(ctx, rec, db, a, entity, "", "", xeroIn{Action: "callback", ID: id, Code: q.Get("code"), State: q.Get("state")}) {
+				jsonReply(rec, 200, map[string]bool{"saved": true})
+			}
+		})
 		return
 	}
 	origin, err := url.Parse(os.Getenv("PUBLIC_APP_URL"))
