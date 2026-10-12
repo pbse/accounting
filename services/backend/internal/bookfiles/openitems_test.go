@@ -49,8 +49,8 @@ func TestOpenItemsKeepCreditsAndUnreadableDocuments(t *testing.T) {
 	layout, _ := ProposeOpenItems(f)
 	items, problems := ReadOpenItems(f, layout)
 	// The numbered document is read (its ambiguous date named); the unnumbered one is reported as left out, never
-	// counted; the summary is left aside, its total showing what is missing.
-	if len(items) != 1 || items[0].Document != "1001" || len(problems) != 3 || !strings.Contains(problems[1], "Row 3 has no document number") || !strings.Contains(problems[2], "the file's total in row 4 is 150.00") {
+	// counted; the summary is left aside.
+	if len(items) != 1 || items[0].Document != "1001" || len(problems) != 2 || !strings.Contains(problems[1], "Row 3 has no document number") {
 		t.Fatalf("an export's unnumbered rows: %v %v", items, problems)
 	}
 }
@@ -100,8 +100,13 @@ func TestOpenItemsAddUpToTheExportsTotal(t *testing.T) {
 	for _, c := range []struct {
 		total    string
 		problems int
-	}{{"600.00", 0}, {"700.00", 1}} {
-		f, err := Read("total.csv", []byte("Customer,Num,Open Balance\nAcme Co,1001,500.00\nTotal for Acme Co,,500.00\nBeta LLC,1002,100.00\nTOTAL,,"+c.total+"\n"))
+	}{{"600.00", 0}, {"700.00", 1}, {"", 0}} {
+		// A trailing group subtotal is not the report's total: without a report total there is nothing to compare.
+		last := "TOTAL,," + c.total
+		if c.total == "" {
+			last = "Total for Beta LLC,,100.00"
+		}
+		f, err := Read("total.csv", []byte("Customer,Num,Open Balance\nAcme Co,1001,500.00\nTotal for Acme Co,,500.00\nBeta LLC,1002,100.00\n"+last+"\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,5 +115,17 @@ func TestOpenItemsAddUpToTheExportsTotal(t *testing.T) {
 		if len(items) != 2 || len(problems) != c.problems {
 			t.Fatalf("total %s: %v %v", c.total, items, problems)
 		}
+	}
+}
+
+// The check compares the documents' exact amounts: two of 1.005 add up to a total of 2.01.
+func TestOpenItemsAddUpExactly(t *testing.T) {
+	f, err := Read("cents.csv", []byte("Customer,Num,Open Balance\nAcme Co,1001,1.005\nAcme Co,1002,1.005\nTotal,,2.01\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, _ := ProposeOpenItems(f)
+	if items, problems := ReadOpenItems(f, layout); len(items) != 2 || len(problems) != 0 {
+		t.Fatalf("exact amounts against the total: %v %v", items, problems)
 	}
 }
