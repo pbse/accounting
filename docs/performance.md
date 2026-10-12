@@ -57,6 +57,10 @@ in Paris. Each container application allows two instances so a new object can st
 sleeps. The context machine, off in production, keeps its object `context-machine`, because that object stores the
 machine's rotated sign-in; its container is constrained to `ENAM`.
 
+The placement does not hold. On 2026-10-11 the API's object was in Ashburn (`IAD`) and its container in Atlanta, and a
+database round trip took 33 ms instead of 1–2 ms in Columbus: a container may be constrained only to a region. The
+[infrastructure plan](infrastructure-plan.md) records the measurements and the future fix.
+
 ## In the browser
 
 Workspace pages are now rendered on the server with their data; [server rendering](server-rendering.md) describes how.
