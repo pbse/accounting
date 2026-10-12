@@ -330,6 +330,8 @@ A client can be sent "Connect your books" or "Upload this month's Trial Balance"
 - **Uploading.** Request links take TXT/CSV up to 512 KiB and PDF up to 5 MiB today ([coverage requests](coverage-requests.md)). Books files need Excel workbooks, scanned like other client files, and larger limits.
 - **What the client sees:** received, scanned, accepted, and any question still open, in the request.
 
+As built (delivery step 12, upload requests): on a client's page, a reviewer in a firm with file imports on asks the client for a month's books from the Files card, naming the month and the recipient. That opens a request on the month's close (it must exist), marked by the month it asks for, with the client's ledger's export steps in its wording and a private link; its email is approved apart, as any request's is, from the month's client requests. Through the link the client sends a CSV or Excel workbook of up to 5 MiB, scanned whole by the antivirus service's binary endpoint (`/v1/client-request/scan-file`); a request for books takes no other file, and no other request takes a workbook. Once a reviewer releases a clean file there, it is kept as one of the client's files for that month (`client_attachments.import_id`, migration 167), not as evidence, and is read and accepted on the Files card like one a member sent. Larger files, connecting through a request, and what the client sees after release follow.
+
 ### Provider terms that shape this
 
 From vendor pages and third-party reports gathered 2026-10-10 (sources below); each needs checking against the provider's own terms before it is relied on.

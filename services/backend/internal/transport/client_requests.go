@@ -298,7 +298,8 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 		var closeID, jobID string
-		err = tx.QueryRowContext(r.Context(), `SELECT d.close_id::text,COALESCE(q.job_id::text,'') FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id JOIN organizations o ON o.id=c.organization_id WHERE l.digest=$1 AND o.enabled`, digest).Scan(&closeID, &jobID)
+		var books bool
+		err = tx.QueryRowContext(r.Context(), `SELECT d.close_id::text,COALESCE(q.job_id::text,''),COALESCE(q.coverage_scope ? 'books',false) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id JOIN organizations o ON o.id=c.organization_id WHERE l.digest=$1 AND o.enabled`, digest).Scan(&closeID, &jobID, &books)
 		if err != nil {
 			problem(w, 404, "Request link unavailable. Ask the firm for a new link.")
 			return
@@ -340,7 +341,7 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		reply := func(status string) {
-			jsonReply(w, 200, map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed, "rescan": rescan})
+			jsonReply(w, 200, map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed, "rescan": rescan, "books": books})
 		}
 		if r.Method == "GET" {
 			switch {
@@ -360,6 +361,20 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		if !confirmed {
 			problem(w, 422, "Confirm that your reply is for this client and period.")
 			return
+		}
+		// A request for the month's books takes its books files, which answer it; any other request takes documents.
+		if books && len(files) > 0 && len(answers) == 0 {
+			answers = []clientAnswer{{1, "document", ""}}
+		}
+		for _, f := range files {
+			if books && !validBooksFile(f.Name, f.Body) {
+				problem(w, 422, "Attach the books as a CSV or Excel workbook (.xlsx) of up to 5 MiB.")
+				return
+			}
+			if !books && !validEvidenceFile(f.Name, f.Body) {
+				problem(w, 422, "Use distinct UTF-8 TXT/CSV up to 512 KiB or complete PDF up to 5 MiB; 20 MiB total.")
+				return
+			}
 		}
 		if plain && len(questions) != 1 {
 			problem(w, 422, "This request has numbered questions. Answer each one.")
