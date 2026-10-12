@@ -75,6 +75,15 @@ func validEvidenceFile(name string, body []byte) bool {
 	}
 	return true
 }
+
+// allowUpload gives a request carrying a file (up to a 50 MiB books file) time to arrive and then be answered: the
+// server's 15-second read and 30-second write timeouts guard every other request.
+func allowUpload(w http.ResponseWriter) {
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(5 * time.Minute))
+	_ = controller.SetWriteDeadline(time.Now().Add(6 * time.Minute))
+}
+
 func clientSubmission(w http.ResponseWriter, r *http.Request) (string, bool, []clientFile, bool) {
 	var in struct {
 		Body      string `json:"body"`
@@ -82,6 +91,7 @@ func clientSubmission(w http.ResponseWriter, r *http.Request) (string, bool, []c
 	}
 	files := []clientFile{}
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		allowUpload(w)
 		// A books file may be up to 50 MiB; a request for documents keeps to its 20 MiB, checked once it is known.
 		r.Body = http.MaxBytesReader(w, r.Body, bookfiles.MaxFile+1024*1024)
 		if r.ParseMultipartForm(512*1024) != nil {
@@ -343,6 +353,7 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 		} else if textScan {
 			nameHint, limit = "upload.txt", 512*1024
 		}
+		allowUpload(w)
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		body, err := io.ReadAll(r.Body)
 		// A books file is checked as what its name says once its attachment is found.
