@@ -674,6 +674,25 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if gaps := fmt.Sprint(call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200)["readiness"]); !strings.Contains(gaps, "the open payables are as of 2027-02-01: send them as of the same date") {
 		t.Fatalf("a files month's cash and open items at different dates: %s", gaps)
 	}
+	// A reviewer records cash on 1 February as the bank's balance with an uncleared check bridging it to book cash; with
+	// the open items as of that day too, the plan opens from it, the next day.
+	observe := func(asOf string, want int) map[string]any {
+		t.Helper()
+		return call("user_a", partner, "POST", "/v1/closes/"+januaryClose+"/cash-observations", map[string]any{"kind": "bank", "as_of": asOf,
+			"accounts": []map[string]string{{"name": "Business Checking", "balance": "1600.25"}},
+			"bridge":   []map[string]string{{"account": "Business Checking", "description": "Check 1043 to Landlord", "amount": "-100.00", "evidence": "February bank statement, check register"}},
+			"note":     "Bank balance read from online banking on 2 February", "confirmed": true}, want)
+	}
+	observe("2027-01-30", 422)
+	if kept := observe("2027-02-01", 201); kept["book_cash"] != "1500.25" {
+		t.Fatalf("the bank balance bridged to book cash: %v", kept)
+	}
+	openItems("receivable", "Customer,Num,Due Date,Open Balance\nBeta LLC,1001,02/14/2027,250.00\n")
+	plan = call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200)
+	if opening, _ := plan["opening"].(map[string]any); plan["start"] != "2027-02-02" || opening["amount"] != "1500.25" || !strings.HasPrefix(opening["snapshot_id"].(string), "cash:") ||
+		strings.Contains(fmt.Sprint(plan["readiness"]), "send them as of the same date") {
+		t.Fatalf("the plan opens from the observed cash: %v", plan)
+	}
 	// The tie-out compares the file's balance-sheet accounts with their support: the bank, to be reconciled.
 	tie := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200)
 	if rows := tie["rows"].([]any); tie["snapshot"].(map[string]any)["source"] != "files" || len(rows) != 1 || rows[0].(map[string]any)["account_id"] != "n:1000" || rows[0].(map[string]any)["hint"] != "Reconcile it to the bank statement." {

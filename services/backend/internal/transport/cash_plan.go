@@ -374,6 +374,15 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		case files:
 			on, _ := time.Parse("2006-01-02", month.AsOf)
 			snapshotID, asOf, stale, accounts, home, company = fileCapture+month.Version, on.Add(24*time.Hour-time.Second), len(month.Holds) > 0, filesAccounts, b.Currency, filesCompany
+			// A reviewer's later observation of cash opens the plan at its date instead.
+			observed, at, directory, e := cashObservation(ctx, db, r.PathValue("id"), month.AsOf)
+			if e != nil {
+				return nil, tieRefusal{503, "The cash plan is unavailable."}
+			}
+			if observed != "" {
+				on, _ = time.Parse("2006-01-02", at)
+				snapshotID, asOf, stale, accounts = "cash:"+observed, on.Add(24*time.Hour-time.Second), false, directory
+			}
 		default:
 			err = db.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',COALESCE(s.payload->'accounts','[]'::jsonb),COALESCE(x.home_currency,''),'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id
  LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "quickbooks")+` AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &asOf, &stale, &accounts, &home, &company)
