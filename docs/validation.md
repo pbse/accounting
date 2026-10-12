@@ -4636,3 +4636,13 @@ Tests and checks, on local PostgreSQL:
 - The layout check passes: 95 page views on a fresh migrated database, in Edge.
 - A screenshot of Requests with one request waiting three days and one approved, not sent.
 
+## 2026-10-11 — The demonstration seed runs again (payroll confirmations, line explanations)
+
+The seed (`cmd/seed`, `transport.SeedFirm`) stopped at the first payroll draft once payroll approval required its two confirmations (B04). It would also have failed to publish packs once material movements required explanations (#422). It now:
+- approves a payroll recording with both confirmations, as the demonstration's administrator;
+- publishes each pack with the agent's drafted line explanations.
+
+Nothing else changes; the routes keep refusing an approval or publication without them.
+
+Checks, on local PostgreSQL: a fresh migrated database seeded with `go run ./cmd/seed -organization local-development -subject local-development` ends `Done with 0 problems`. Before the fix, the same run stopped at Bluegrass Dental PLLC 2026-06 (draft 19, 409). With only the payroll fix, it reported three publish refusals (422, "Explain every material movement"). `go vet ./internal/transport/` passes.
+
