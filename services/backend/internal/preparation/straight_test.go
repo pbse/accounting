@@ -148,6 +148,18 @@ func straightThroughEngineChecks(t *testing.T, engine string) {
 	if _, reason = StraightThrough(proposal, invoice+"\nTax 100", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared an invoice with a bare tax figure and no total")
 	}
+	// A charge is a word of its own, singular or plural: a name holding its letters ("Coffee", "Taxi") beside a number
+	// names no fee or tax.
+	if _, reason = StraightThrough(proposal, invoice+"\nShip to: Coffee & Taxi Depot, 12 Main St", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+		t.Fatal("a name holding a charge word's letters held the invoice:", reason)
+	}
+	if _, reason = StraightThrough(proposal, invoice+"\nFees 100", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+		t.Fatal("prepared an invoice with a bare fee figure and no total")
+	}
+	// The base a tax is charged on is not what is payable.
+	if _, reason = StraightThrough(proposal, invoice+"\nTotal taxable USD 1,000.00\nAmount due USD 1,200.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+		t.Fatal("a taxable total was taken for the payable total:", reason)
+	}
 	if _, reason = StraightThrough(proposal, invoice+"\nTotal USD 1,200.00\nAmount due 2026-10-01 USD 1,100.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared against an amount-due line with a date and a lower figure")
 	}
