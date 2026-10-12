@@ -341,7 +341,20 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		reply := func(status string) {
-			jsonReply(w, 200, map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed, "rescan": rescan, "books": books})
+			out := map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed, "rescan": rescan, "books": books}
+			// A request for the month's books shows the client where each file they sent stands (docs/books-sources.md,
+			// Client-provided books): received, scanned, with the firm, accepted as the month's books, or refused or removed.
+			if books {
+				var files json.RawMessage
+				if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('name',a.name,'state',CASE WHEN a.state IN ('rejected','infected') THEN 'refused'
+ WHEN a.state='released' AND a.body IS NULL THEN 'removed' WHEN a.state='released' AND EXISTS(SELECT 1 FROM books_import_acceptances x WHERE x.import_id=a.import_id) THEN 'accepted'
+ WHEN a.state='released' THEN 'released' WHEN a.state='clean' THEN 'scanned' ELSE 'received' END) ORDER BY a.id),'[]') FROM client_attachments a WHERE a.request_id::text=$1`, requestID).Scan(&files); err != nil {
+					problem(w, 503, "Request unavailable.")
+					return
+				}
+				out["files"] = files
+			}
+			jsonReply(w, 200, out)
 		}
 		if r.Method == "GET" {
 			switch {

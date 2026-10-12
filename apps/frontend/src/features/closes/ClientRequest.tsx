@@ -16,6 +16,16 @@ type Request = {
   rescan?: boolean;
   // A request for the month's books takes its books files: a CSV or Excel workbook, scanned whole.
   books?: boolean;
+  // Where each books file sent stands.
+  files?: { name: string; state: keyof typeof fileStates }[];
+};
+const fileStates = {
+  received: "Received, waiting for its malware scan",
+  scanned: "Scanned, waiting for the firm to review it",
+  released: "With the firm, being read",
+  accepted: "Accepted as your books for the month",
+  refused: "Not accepted: the firm will ask for another file",
+  removed: "Removed by the firm",
 };
 const stateLabels: Record<string, string> = { answered: "Answered", awaiting_document: "Waiting for your document", "": "Not answered yet" };
 // Green only for what is done; a document still to come asks for attention, an open question stays neutral.
@@ -182,6 +192,18 @@ export default function ClientRequest() {
                     : "Your reply is saved, and this request takes no more answers. Contact the firm if something needs to change."}{" "}
                   Attachments stay quarantined until automated scanning and the firm's release.
                 </p>
+              )}
+              {request.books && (request.files?.length ?? 0) > 0 && (
+                <section aria-label="Your files">
+                  <h3>Your files</h3>
+                  <ul>
+                    {request.files!.map((f, i) => (
+                      <li key={i}>
+                        {f.name}: {fileStates[f.state]}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
               )}
               <details>
                 <summary>The request as sent</summary>
