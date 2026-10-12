@@ -158,7 +158,9 @@ func mapValues(m map[int]Role) []Role {
 
 // ReadOpenItems reads the documents an export holds open by its confirmed layout, with the problems found. A row
 // without an open amount is a heading: one holding only a name is the party of the documents below it that name none
-// (as an aged report grouped by contact is laid out). A row with any cell reading as a total is left aside.
+// (as an aged report grouped by contact is laid out). A document has a party and a number or a date: a row with an
+// amount and neither (a subtotal, a total, a grand total) is a summary, left aside. An export with none open is read as
+// none, which is what a side all paid gives.
 func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 	var table *Table
 	for i := range f.Tables {
@@ -183,6 +185,12 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 		if _, document := roles[RoleDocument]; !document {
 			return nil, []string{"Say which column names each document's customer or vendor, or its number."}
 		}
+	}
+	_, numbered := roles[RoleDocument]
+	_, dated := roles[RoleDate]
+	_, due := roles[RoleDue]
+	if !numbered && !dated && !due {
+		return nil, []string{"Say which column holds each document's number or date: a row with neither is a summary."}
 	}
 	items, problems, heading := []OpenItem{}, []string{}, ""
 	total := func(s string) bool { return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "total") }
@@ -213,18 +221,8 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 			continue
 		}
 		party, document := text(RoleParty), text(RoleDocument)
-		if slices.ContainsFunc(texts, total) || (party == "" && document == "" && heading == "") {
-			continue
-		}
-		if party == "" {
-			party = heading
-		}
-		amount, err := cellAmount(openCell, l.Style)
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("Row %d: the open amount %q cannot be read.", row.Number, openCell.Value))
-			continue
-		}
-		item := OpenItem{Row: row.Number, Party: party, Document: document, Open: amount.Value.FloatString(2), Currency: text(RoleCurrency)}
+		item := OpenItem{Row: row.Number, Party: party, Document: document, Currency: text(RoleCurrency)}
+		var unread []string
 		for _, d := range []struct {
 			role Role
 			to   *string
@@ -233,14 +231,26 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 			if !ok || strings.TrimSpace(cells[column].Value) == "" {
 				continue
 			}
+			var err error
 			if *d.to, err = readDate(cells[column], l.DateOrder); err != nil {
-				problems = append(problems, fmt.Sprintf("Row %d: the %s %q cannot be read as a date.", row.Number, map[Role]string{RoleDate: "date", RoleDue: "due date"}[d.role], cells[column].Value))
+				unread = append(unread, fmt.Sprintf("Row %d: the %s %q cannot be read as a date.", row.Number, map[Role]string{RoleDate: "date", RoleDue: "due date"}[d.role], cells[column].Value))
 			}
 		}
+		// Neither a number nor a date that reads as one: a summary row (its label may sit in the date column).
+		if (document == "" && item.Date == "" && item.Due == "") || (party == "" && document == "" && heading == "") {
+			continue
+		}
+		if item.Party == "" {
+			item.Party = heading
+		}
+		amount, err := cellAmount(openCell, l.Style)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Row %d: the open amount %q cannot be read.", row.Number, openCell.Value))
+			continue
+		}
+		item.Open = amount.Value.FloatString(2)
+		problems = append(problems, unread...)
 		items = append(items, item)
-	}
-	if len(items) == 0 {
-		problems = append(problems, "No open document was read from the file.")
 	}
 	return items, problems
 }

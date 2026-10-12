@@ -63,6 +63,10 @@ export function OpenItemFiles({ closeId }: { closeId: string }) {
     setChosen(choice);
     void post(choice);
   }
+  // The order dates written in numbers are in, chosen when the file does not say: the file is read again with it.
+  function order(dateOrder: string) {
+    if (chosen && reading) void post(chosen, { ...reading.layout, date_order: dateOrder || undefined });
+  }
   // A column's role changed: the file is read again with it.
   function assign(column: number, role: Role | "") {
     if (!chosen || !reading) return;
@@ -129,6 +133,15 @@ export function OpenItemFiles({ closeId }: { closeId: string }) {
               </select>
             </label>
           ))}
+          <label>
+            Dates written in numbers read
+            <select value={reading.layout.date_order ?? ""} disabled={busy} onChange={(e) => order(e.target.value)}>
+              <option value="">Only where they read one way</option>
+              <option value="mdy">Month first (01/31/2027)</option>
+              <option value="dmy">Day first (31/01/2027)</option>
+              <option value="ymd">Year first (2027-01-31)</option>
+            </select>
+          </label>
           {reading.problems.length > 0 && <p role="status">{reading.problems.join(" ")}</p>}
           <ul>
             {reading.preview.map((p) => (
@@ -138,8 +151,10 @@ export function OpenItemFiles({ closeId }: { closeId: string }) {
             ))}
           </ul>
           <p>
-            <button type="button" className="primary" disabled={busy || reading.documents === 0} onClick={() => void post(chosen, reading.layout, true)}>
-              Keep as the month's open {chosen.side === "receivable" ? "receivables" : "payables"}
+            <button type="button" className="primary" disabled={busy} onClick={() => void post(chosen, reading.layout, true)}>
+              {reading.documents === 0
+                ? `Keep: no ${chosen.side === "receivable" ? "receivable" : "payable"} is open`
+                : `Keep as the month's open ${chosen.side === "receivable" ? "receivables" : "payables"}`}
             </button>{" "}
             <button type="button" disabled={busy} onClick={() => (setChosen(undefined), setReading(undefined))}>
               Cancel

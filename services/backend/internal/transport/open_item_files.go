@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -35,7 +36,7 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 	}
 	open := map[string][]json.RawMessage{}
 	var ids, sides []string
-	asOf, problems := "", 0
+	asOf, problems, observed := "", 0, map[string]string{}
 	for rows.Next() {
 		var id, side, at string
 		var raw []byte
@@ -51,6 +52,7 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 		if asOf == "" || at < asOf {
 			asOf = at
 		}
+		observed[map[string]string{"receivable": "Invoice", "payable": "Bill"}[side]] = at + "T23:59:59Z"
 		for _, item := range items {
 			kind, credit := map[string][2]string{"receivable": {"Invoice", "CreditMemo"}, "payable": {"Bill", "VendorCredit"}}[side], false
 			balance, _ := new(big.Rat).SetString(item.Open)
@@ -106,7 +108,7 @@ func filesAging(ctx context.Context, db *sql.DB, closeID string) (receivables, p
 	}
 	// The files' open items were true at the end of their earliest as-of date, as a capture's are at its time.
 	return receivables, payables, map[string]any{"source": "files", "company": company, "capture_id": "files:" + strings.Join(ids, "+"), "captured_at": asOf + "T23:59:59Z", "month_end": monthEnd.Format("2006-01-02"),
-		"complete": unreadable == 0 && problems == 0 && len(sides) == 2, "completeness": completeness, "note": filesAgingNote, "buckets": quickbooks.AgingBuckets}, nil
+		"complete": unreadable == 0 && problems == 0 && len(sides) == 2, "completeness": completeness, "note": filesAgingNote, "buckets": quickbooks.AgingBuckets, "observed": observed}, nil
 }
 
 const filesAgingNote = "Balances as of each file's as-of date, aged against the close's month-end. A document paid after month-end but before that date is not shown."
@@ -206,9 +208,15 @@ func registerOpenItemFiles(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, out)
 			return
 		}
-		if len(items) == 0 {
-			problem(w, 422, "No open document was read from the file with this layout.")
-			return
+		// Each document is named by its party and number (or, unnumbered, its dates and amount): two the name cannot tell
+		// apart would share every decision, so the file is not kept until they are told apart.
+		seen := map[string]int{}
+		for _, item := range items {
+			if row, twice := seen[item.Key(side)]; twice {
+				problem(w, 422, fmt.Sprintf("Rows %d and %d are one document twice, or two documents nothing in the file tells apart: export the documents' numbers, or remove one.", row, item.Row))
+				return
+			}
+			seen[item.Key(side)] = item.Row
 		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {

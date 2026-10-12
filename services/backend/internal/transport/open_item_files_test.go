@@ -65,12 +65,12 @@ func TestAFilesMonthsOpenItemsComeFromAnExport(t *testing.T) {
 	}
 	aging := "A/R Aging Detail\nAs of January 31, 2027\n\n,Date,Transaction Type,Num,Customer,Due Date,Amount,Open Balance\n" +
 		",01/15/2027,Invoice,1001,Acme Co,02/14/2027,500.00,500.00\n,12/10/2026,Invoice,998,Acme Co,01/09/2027,300.00,300.00\nTOTAL,,,,,,800.00,800.00\n"
-	upload := func(layout string, confirmed bool, want int) map[string]any {
+	uploadAs := func(content, asOf, layout string, confirmed bool, want int) map[string]any {
 		t.Helper()
 		var b bytes.Buffer
 		m := multipart.NewWriter(&b)
 		must(m.WriteField("side", "receivable"))
-		must(m.WriteField("as_of", "2027-01-31"))
+		must(m.WriteField("as_of", asOf))
 		if layout != "" {
 			must(m.WriteField("layout", layout))
 		}
@@ -79,10 +79,14 @@ func TestAFilesMonthsOpenItemsComeFromAnExport(t *testing.T) {
 		}
 		f, e := m.CreateFormFile("file", "January receivables.csv")
 		must(e)
-		_, e = f.Write([]byte(aging))
+		_, e = f.Write([]byte(content))
 		must(e)
 		must(m.Close())
 		return send("POST", "/v1/closes/"+cid+"/open-item-files", m.FormDataContentType(), b.Bytes(), want)
+	}
+	upload := func(layout string, confirmed bool, want int) map[string]any {
+		t.Helper()
+		return uploadAs(aging, "2027-01-31", layout, confirmed, want)
 	}
 	// A month whose books are not its files takes none.
 	upload("", false, 200)
@@ -117,5 +121,15 @@ func TestAFilesMonthsOpenItemsComeFromAnExport(t *testing.T) {
 	must(db.QueryRow(`SELECT status FROM open_item_actions WHERE client_entity=$1 AND source='files' AND item_id=$2`, entity, overdue["id"]).Scan(&status))
 	if status != "promised" {
 		t.Fatalf("the decision about the document: %s", status)
+	}
+	// One document twice is not kept: decisions would fall on both.
+	twice := aging[:strings.Index(aging, "TOTAL")] + ",12/10/2026,Invoice,998,Acme Co,01/09/2027,300.00,300.00\n"
+	uploadAs(twice, "2027-02-05", string(layout), true, 422)
+	// Paid since, the side's next export holds none open: it is the month's open receivables, and the decided document
+	// is settled by it.
+	uploadAs(aging[:strings.Index(aging, ",01/15/2027")], "2027-02-05", string(layout), true, 201)
+	items = send("GET", "/v1/closes/"+cid+"/open-items", "", nil, 200)
+	if receivables, _ := items["receivables"].([]any); len(receivables) != 0 || items["settled_total"] != 1.0 {
+		t.Fatalf("an export with none open replaces the side: %v", items)
 	}
 }

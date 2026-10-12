@@ -132,10 +132,15 @@ func registerOpenItems(mux *http.ServeMux, db *sql.DB) {
 		captured, _ := time.Parse(time.RFC3339, meta["captured_at"].(string))
 		settled := []openItem{}
 		for _, item := range decided {
+			// Files of open items are true each at its own date: a document's is its side's.
+			at := captured
+			if observed, ok := meta["observed"].(map[string]string); ok && observed[item.Kind] != "" {
+				at, _ = time.Parse(time.RFC3339, observed[item.Kind])
+			}
 			switch {
 			case !meta["complete"].(bool):
 				item.Reason = "The latest capture did not read every open item, so it cannot say whether this one is paid."
-			case !item.Action.CreatedAt.Before(captured):
+			case !item.Action.CreatedAt.Before(at):
 				item.Reason = "Decided after the latest capture; the next capture will say whether it is still open."
 			case item.Date == "" || item.Date > meta["month_end"].(string):
 				item.Reason = "Dated after this close's month-end, which the capture covers; open a later close to see it."
