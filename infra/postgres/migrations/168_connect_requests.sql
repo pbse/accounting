@@ -5,4 +5,6 @@ BEGIN;
 -- confirmation like any other.
 ALTER TABLE quickbooks_connections ADD COLUMN request_id bigint REFERENCES work_requests(id) ON DELETE SET NULL, ADD COLUMN request_link text;
 ALTER TABLE xero_connections ADD COLUMN request_id bigint REFERENCES work_requests(id) ON DELETE SET NULL, ADD COLUMN request_link text;
+-- A link connects once: connected_at is when a sign-in started from it finished.
+ALTER TABLE client_request_links ADD COLUMN connected_at timestamptz;
 COMMIT;

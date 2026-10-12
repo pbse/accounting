@@ -122,7 +122,7 @@ func TestAClientConnectsItsBooksThroughARequest(t *testing.T) {
 	}
 	var company string
 	var used bool
-	must(db.QueryRow(`SELECT x.state,x.company_name,l.used_at IS NOT NULL FROM quickbooks_connections x JOIN client_request_links l ON l.digest=x.request_link WHERE x.client_entity=$1 AND x.state<>'disconnected'`, entity).Scan(&attempt, &company, &used))
+	must(db.QueryRow(`SELECT x.state,x.company_name,l.used_at IS NOT NULL AND l.connected_at IS NOT NULL FROM quickbooks_connections x JOIN client_request_links l ON l.digest=x.request_link WHERE x.client_entity=$1 AND x.state<>'disconnected'`, entity).Scan(&attempt, &company, &used))
 	if attempt != "pending_confirmation" || company != "Synthetic company" || !used || exchanges != 1 {
 		t.Fatalf("the connection waits for a member to confirm the company, and the request is answered: %s %s %v %d", attempt, company, used, exchanges)
 	}

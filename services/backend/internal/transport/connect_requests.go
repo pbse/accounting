@@ -198,16 +198,16 @@ func clientRequestConnect(db *sql.DB) http.HandlerFunc {
 		defer cancel()
 		var rid, org, entity, provider, environment string
 		var expires time.Time
-		var used bool
+		var connected bool
 		link := preparation.Digest([]byte(token))
-		if err := db.QueryRowContext(ctx, `SELECT q.id::text,c.organization_id,c.entity,q.coverage_scope->>'connect',COALESCE(q.coverage_scope->>'environment',''),l.expires_at,l.used_at IS NOT NULL
+		if err := db.QueryRowContext(ctx, `SELECT q.id::text,c.organization_id,c.entity,q.coverage_scope->>'connect',COALESCE(q.coverage_scope->>'environment',''),l.expires_at,l.connected_at IS NOT NULL
  FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id JOIN organizations o ON o.id=c.organization_id
- WHERE l.digest=$1 AND l.revoked_at IS NULL AND l.expires_at>now() AND o.enabled AND q.coverage_scope ? 'connect'`, link).Scan(&rid, &org, &entity, &provider, &environment, &expires, &used); err != nil {
+ WHERE l.digest=$1 AND l.revoked_at IS NULL AND l.expires_at>now() AND o.enabled AND q.coverage_scope ? 'connect'`, link).Scan(&rid, &org, &entity, &provider, &environment, &expires, &connected); err != nil {
 			problem(w, 404, "This link does not ask you to connect your books, or it has expired. Ask the firm for a new link.")
 			return
 		}
-		// A link is used once: one that finished a sign-in starts no other.
-		if used {
+		// A link connects once: one that finished a sign-in starts no other.
+		if connected {
 			problem(w, 409, "Your books were already connected through this link. Contact the firm if they need connecting again.")
 			return
 		}
@@ -257,7 +257,7 @@ func clientRequestConnect(db *sql.DB) http.HandlerFunc {
 // requestConnected finishes, where the provider returned, a sign-in a client made through request (the attempt id, in
 // org): only while the link it was started from is live, by the member's own finishing
 // step under the request as actor, which leaves the connection for a member to confirm. A sign-in finished marks the
-// link used, so the request counts as answered. The client is sent back to the request page, told how it went.
+// link connected, which it is once, and used, so the request counts as answered. The client is sent back to the request page, told how it went.
 func requestConnected(w http.ResponseWriter, r *http.Request, db *sql.DB, provider, org, id, request, link string, finish func(context.Context, http.ResponseWriter, *auth.Claims)) {
 	origin, err := url.Parse(os.Getenv("PUBLIC_APP_URL"))
 	if err != nil || origin.Scheme != "https" || origin.Host == "" {
@@ -267,7 +267,7 @@ func requestConnected(w http.ResponseWriter, r *http.Request, db *sql.DB, provid
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	var live, on bool
-	err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM client_request_links WHERE digest=$1 AND request_id::text=$2 AND revoked_at IS NULL AND expires_at>now() AND used_at IS NULL)`, link, request).Scan(&live)
+	err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM client_request_links WHERE digest=$1 AND request_id::text=$2 AND revoked_at IS NULL AND expires_at>now() AND connected_at IS NULL)`, link, request).Scan(&live)
 	if err == nil {
 		on, err = connectorOn(ctx, db, org, provider)
 	}
@@ -277,7 +277,7 @@ func requestConnected(w http.ResponseWriter, r *http.Request, db *sql.DB, provid
 		finish(ctx, rec, requestActor(org, request))
 		if rec.status == 200 {
 			outcome = provider
-			db.ExecContext(ctx, `UPDATE client_request_links SET used_at=COALESCE(used_at,now()) WHERE digest=$1`, link)
+			db.ExecContext(ctx, `UPDATE client_request_links SET connected_at=now(),used_at=COALESCE(used_at,now()) WHERE digest=$1`, link)
 		}
 	} else if err == nil {
 		// A request withdrawn, or a switch turned off, since the sign-in began: its attempt ends here.

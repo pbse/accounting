@@ -18,8 +18,9 @@ type Request = {
   books?: boolean;
   // Where each books file sent stands.
   files?: { name: string; state: keyof typeof fileStates }[];
-  // The ledger a request to connect the client's books asks it to sign in to.
+  // The ledger a request to connect the client's books asks it to sign in to, and whether this link connected it.
   connect?: "quickbooks" | "xero";
+  connected?: boolean;
 };
 const ledgerNames = { quickbooks: "QuickBooks", xero: "Xero" };
 const fileStates = {
@@ -247,7 +248,7 @@ export default function ClientRequest() {
                   </ul>
                 </section>
               )}
-              {request.connect && request.status === "open" && (
+              {request.connect && !request.connected && request.open !== false && (
                 <p>
                   <button type="button" className="primary" disabled={busy} onClick={() => void connect()}>
                     Connect {ledgerNames[request.connect]}
