@@ -4736,3 +4736,31 @@ Tests and checks, on local PostgreSQL:
   - a signed-off month with every check passing;
   - a month with no capture.
 
+## 2026-10-11 — Close page Settings from the canvas (B02–B10)
+
+Settings is the ninth and last tab, board 9. Before this, the tab stacked memory, procedures, the agent check and retention on one page, two of them folded.
+- **No API change.** The tab reads memory, the agent's last replay, the firm's procedure versions and retention (`/procedures` and `/retention` are now also read by the page's loader). The ledger comes from the brief and the hand-over from the goal, which the page already reads.
+- **Header:**
+  - The lede: what Krith remembers about the client, with its basis, currency and fiscal year.
+  - The ⋯ menu: replay the confirmed readings, learn a procedure from evidence, delete this close.
+- **Body:**
+  - The decisions on Settings.
+  - Every setting as one table: procedures (client overrides in force this month), the ledger, other names, standing approvals, the monthly hand-over, retention and the agent check. Each has what it is now and its status, and opens where it is changed.
+  - A read that fails says so in its row. Retention, which only a firm administrator may read, shows the server's reason to anyone else.
+  - A firm with no approved procedure says so rather than "the firm's defaults".
+  - A replay reading that could not be read again is counted apart from one that differs.
+  - The ledger's waiting state shows as waiting.
+  - The rail: overrides, accounts approved before, standing approvals, and readings the same on replay.
+- **Views:** procedures and retention open unfolded and read as they open (each takes an `open` prop); memory and the agent check are unchanged.
+- **Not shown:**
+  - The canvas's "client since": it is on the client's roster, which the close does not read.
+  - A procedure version number: versions carry a firm-wide id, not a per-client count.
+  - The QuickBooks posting limit: grants are read only in a hosted session, so the ledger row is the brief's.
+  - A firm default for retention: none exists; a close has a date or none.
+
+Tests and checks, on local PostgreSQL:
+- `tsc` passes.
+- The layout check passes: 95 page views on a fresh migrated database, in Edge.
+- Screenshots on the demonstration data (`cmd/seed`): two clients' Settings (desktop and phone) and the procedures view.
+- On phone, close tables stack each row into one column, as they already did. Settings keeps each setting's current value in its stacked row.
+

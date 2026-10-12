@@ -124,7 +124,7 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
     requests: ({ draft: [`/${id}/requests`, `/${id}/requests/proposed`], replies: [`/${id}/email-replies`] } as Record<string, string[]>)[url.searchParams.get("view") ?? ""] ?? [`/${id}/requests/approved`, `/${id}/requests/proposed`],
     reports: [`/${id}/management-pack`, `/${id}/management-pack/publications`, `/${id}/budget`],
     signoff: [`/${id}/takeover-setup`, `/${id}/opening-baseline`, `/${id}/readiness`, `/${id}/effort`],
-    settings: [`/${id}/memory`, `/${id}/replay`],
+    settings: [`/${id}/memory`, `/${id}/replay`, `/procedures`, `/${id}/retention`],
   };
   // The cash plan's three reads are one view (data/cashPlan.ts). The brief, the page's sentence and its one action,
   // is Overview's to wait for; another tab starts it without waiting, and the sentence names the close until it comes.

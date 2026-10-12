@@ -1,5 +1,5 @@
 import { useDates } from "../../data/time";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
 import { ProcedureLearning } from "./ProcedureLearning";
 
@@ -25,12 +25,15 @@ type Impact = {
 };
 type Suggestion = { draft_instructions: string; changed_fields: string[]; source_draft_ids: string[] };
 type PublishImpact = { kind: string; client_entity: string; previous_id: string; impact_digest: string; total_closes: number; has_more: boolean; closes: { close_id: string; entity: string; period: string; pinned_source_id: string; draft_count: number }[] };
+// open shows the procedures unfolded, read as they open.
 export function Procedures({
   closeId,
   entity,
   period,
   onApplied,
+  open = false,
 }: {
+  open?: boolean;
   closeId: string;
   entity: string;
   period: string;
@@ -106,6 +109,9 @@ export function Procedures({
       setBusy(false);
     }
   }
+  useEffect(() => {
+    if (open) void load();
+  }, []);
   const matches = (v: Version, client: string, k: string) =>
     v.kind === k && v.client_entity.toLowerCase() === client.toLowerCase();
   const previous = versions.find((v) =>
@@ -202,6 +208,7 @@ export function Procedures({
   }
   return (
     <details
+      open={open || undefined}
       onToggle={(event) => {
         if (event.currentTarget.open && !loaded && !busy) void load();
       }}

@@ -1253,6 +1253,10 @@ body {
 .ks-weeks .ks-tr.ks-low {
   background: var(--att-tint);
 }
+/* Settings: each setting and what it is now. */
+.ks-settings .ks-tr {
+  --ks-columns: minmax(0, 1fr) minmax(0, 2.6fr) minmax(0, 0.9fr) 24px;
+}
 /* Sign-off: each check, what it found and whether it passes. */
 .ks-checks .ks-tr {
   --ks-columns: minmax(0, 1.2fr) minmax(0, 2.4fr) minmax(0, 0.9fr) 24px;
