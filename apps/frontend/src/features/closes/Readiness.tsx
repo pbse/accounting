@@ -341,6 +341,7 @@ export function Readiness({
           )}
           {!editing && (
             <form
+              id="signoff-form"
               onSubmit={(event) => {
                 event.preventDefault();
                 void save(status.state === "open" ? "sign" : "reopen");
