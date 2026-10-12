@@ -21,7 +21,7 @@ type Version = {
 };
 type Figure = { actual: string; budget: string; variance: string; percent: string | null; favorable: boolean; material: boolean };
 type Row = { account_id: string; name: string; class: "Revenue" | "Expense"; month: Figure; ytd: Figure; prior_month: string | null; unbudgeted: boolean };
-type Report = {
+export type Report = {
   state: "no_budget" | "waiting" | "ready";
   reason?: string;
   period: string;
@@ -43,8 +43,9 @@ type Report = {
 };
 
 // Budget against actual for the close month and the fiscal year to date, from an approved baseline the firm imported.
-// readOnly is an executive's view: the comparison alone, without budget versions to import or approve.
-export function Budget({ closeId, readOnly = false }: { closeId: string; readOnly?: boolean }) {
+// readOnly is an executive's view: the comparison alone, without budget versions to import or approve. open shows the
+// versions and the import unfolded.
+export function Budget({ closeId, readOnly = false, open = false }: { closeId: string; readOnly?: boolean; open?: boolean }) {
   // The approved budget to compare with; "" is the newest approved one.
   const [chosen, setChosen] = useState("");
   const read = useQuery(workspaceQuery<Report>(`/${closeId}/budget${chosen ? `?baseline=${encodeURIComponent(chosen)}` : ""}`));
@@ -175,7 +176,7 @@ export function Budget({ closeId, readOnly = false }: { closeId: string; readOnl
           </table>
         </>
       )}
-      {!readOnly && <details open={report.state === "no_budget"}>
+      {!readOnly && <details open={open || report.state === "no_budget"}>
         <summary>Budget versions</summary>
         <p className="note">
           Every import or remapping is a new version; approving one makes it the baseline, and an approved version never changes, so the original plan stays

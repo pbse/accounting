@@ -6,8 +6,8 @@ import { LedgerSelection } from "./Coverage";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
-type Line = { account_id?: string; name: string; amount: string; prior: string | null; change: string | null };
-type Section = { name: string; lines: Line[]; total: Line };
+export type Line = { account_id?: string; name: string; amount: string; prior: string | null; change: string | null };
+export type Section = { name: string; lines: Line[]; total: Line };
 export type Pack =
   | { state: "waiting"; reason: string }
   | {
@@ -50,8 +50,8 @@ const statusLabels = {
 } as const;
 
 // The month's management accounts from the close's captured reports. Every figure links to its ledger rows when the
-// capture holds them; a reviewer publishes a signed-off pack as a frozen version.
-export function Reports({ closeId }: { closeId: string }) {
+// capture holds them; a reviewer publishes a signed-off pack as a frozen version. account opens one figure's rows.
+export function Reports({ closeId, account = "" }: { closeId: string; account?: string }) {
   const queryClient = useQueryClient();
   const read = useQuery(workspaceQuery<Pack>(`/${closeId}/management-pack`));
   const pack = read.data;
@@ -66,14 +66,14 @@ export function Reports({ closeId }: { closeId: string }) {
         <Publication closeId={closeId} pack={pack} />
       </>
     );
-  return <PackView closeId={closeId} pack={pack} staff onPack={setPack} />;
+  return <PackView closeId={closeId} pack={pack} staff onPack={setPack} account={account} />;
 }
 
 // A pack's statements, live or as published. Staff can ask the agent, open each figure's ledger rows and publish;
 // an executive reads the figures alone.
-export function PackView({ closeId, pack, staff = false, onPack }: { closeId: string; pack: Extract<Pack, { state: "ready" }>; staff?: boolean; onPack?: (pack: Pack) => void }) {
+export function PackView({ closeId, pack, staff = false, onPack, account: opened = "" }: { closeId: string; pack: Extract<Pack, { state: "ready" }>; staff?: boolean; onPack?: (pack: Pack) => void; account?: string }) {
   const dates = useDates();
-  const [account, setAccount] = useState("");
+  const [account, setAccount] = useState(opened);
   const show = (value: string | null) => (value === null ? "–" : amount(value, pack.currency));
   const compared = !!pack.prior;
   // Xero captures have no ledger-row reader yet, so their figures are not drillable.
@@ -287,7 +287,7 @@ function ImportCashFlow({ closeId, pack, onPack }: { closeId: string; pack: Extr
 
 // An explanation of one line that moved, drafted from the ledger and then reviewed; published with the pack.
 type Explanation = { account_id: string; name: string; change: string; material: boolean; text: string };
-type Published = {
+export type Published = {
   id: string;
   version: number;
   commentary: string;
@@ -306,6 +306,17 @@ const publishedStates = {
   signoff_lapsed: ["status warn", "Sign-off no longer stands: review before relying on it"],
   unverified: ["status warn", "Live figures unavailable: cannot confirm it is current"],
 } as const;
+
+// A published version's PDF or CSV, saved as a file; it fails with the reason the export is unavailable.
+export async function downloadPublication(closeId: string, p: Published, format: "csv" | "pdf") {
+  const blob = await workspaceRequest(`/${closeId}/management-pack/publications/${p.id}/export?format=${format}`, undefined, true);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `management pack v${p.version}.${format}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 // Publishing freezes this pack with the reviewer's commentary; exports come from the frozen version, never the live figures.
 export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?: Pack; onOpen?: (id: string) => void }) {
@@ -334,13 +345,7 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
   }
   async function download(p: Published, format: "csv" | "pdf") {
     try {
-      const blob = await workspaceRequest(`/${closeId}/management-pack/publications/${p.id}/export?format=${format}`, undefined, true);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `management pack v${p.version}.${format}`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadPublication(closeId, p, format);
     } catch (e) {
       setError(e instanceof Error ? e.message : "The export is unavailable.");
     }
@@ -363,7 +368,16 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
   return (
     <>
       <SectionHeader title="Publication" />
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <p role="alert">
+          {error}{" "}
+          {read.error && (
+            <button type="button" onClick={() => void read.refetch()}>
+              Try again
+            </button>
+          )}
+        </p>
+      )}
       {saved && <p role="status">{saved}</p>}
       {!list ? null : list.length === 0 ? <p className="empty">Not published yet.</p> : (
         <ul>
@@ -384,7 +398,8 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
           ))}
         </ul>
       )}
-      {!pack ? null : !publishable ? (
+      {/* Publishing waits until the versions are read: an unread list is never taken for none. */}
+      {!pack || !list ? null : !publishable ? (
         <p className="note">Publish once the capture is current, the pack is complete and the sign-off of every month shown stands.</p>
       ) : (
         <details open={!latest || latest.state !== "current"}>

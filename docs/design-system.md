@@ -93,6 +93,12 @@ Requests (`RequestsTab.tsx`):
 
 `#client-request` opens the draft view. The canvas's contact name and role, the client's usual reply time and stopping reminders are not shown: no contact or reply-time record exists, and reminders are sent only when a person approves each one.
 
+Reports (`ReportsTab.tsx`):
+- **Lede:** where the month's management pack stands. Either it is published (with its version), or the books changed after a version was published, or a version's sign-off no longer stands, or it is ready to publish. Otherwise the lede says what keeps it provisional, in the server's own order: a current capture, readable activity, a balancing balance sheet, every account classified, a cash-flow statement that ties, the sign-off of every month shown. Under it: the pack's basis, what it is compared with and its latest version.
+- **Left column:** the decisions on Reports, then one statement at a time. A switch chooses profit and loss, balance sheet or cash flow against last month (the change is the server's), or the month against its approved budget. Each statement keeps its sections, as quiet group rows, and its totals, in bold. A figure whose ledger rows can be read (QuickBooks or a month's files) opens them in the full pack. The header row has the latest published version's PDF and Publish. Publish is disabled with its reason until the pack can be published, and absent while the latest version is current.
+- **Rail:** revenue and its change, net income (provisional until signed off), book cash at month end, and net income against the budget, each only when the pack holds it.
+- **More on Reports:** the full pack (every statement, the ledger rows behind a figure, the firm's cash-flow import), published packs (versions, PDF and CSV, publishing a version or a correction), and the budget against actual (its versions and import).
+
 A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
 
 Below 860px the sidebar is a sheet opened from the brand button, the composer spans the width, and the stage's positions become flow.
