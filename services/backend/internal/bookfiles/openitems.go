@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"slices"
 	"strings"
 )
@@ -253,6 +254,15 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 	}
 	items, problems, heading := []OpenItem{}, []string{}, ""
 	total := func(s string) bool { return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "total") }
+	// The export's own total is labelled for the whole report ("Total", "Grand total"); "Total for Beta" or "Total Acme
+	// Co" names a group's subtotal.
+	grand := func(s string) bool {
+		s = strings.Join(strings.Fields(strings.TrimRight(strings.ToLower(s), ": ")), " ")
+		return s == "total" || s == "totals" || s == "grand total"
+	}
+	// The export's own total, after its last document, which the documents kept must add up to.
+	var reported *big.Rat
+	reportedRow, exact := 0, new(big.Rat)
 	for _, row := range table.Rows {
 		if row.Number <= l.HeaderRow {
 			continue
@@ -300,9 +310,14 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 		if document == "" {
 			if dateLike {
 				problems = append(problems, fmt.Sprintf("Row %d has no document number, so it is left out.", row.Number))
+			} else if slices.ContainsFunc(texts, grand) {
+				if v, err := cellAmount(openCell, l.Style); err == nil {
+					reported, reportedRow = v.Value, row.Number
+				}
 			}
 			continue
 		}
+		reported = nil
 		if item.Party == "" {
 			item.Party = heading
 		}
@@ -311,9 +326,19 @@ func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 			problems = append(problems, fmt.Sprintf("Row %d: the open amount %q cannot be read.", row.Number, openCell.Value))
 			continue
 		}
+		// An amount kept is exact to the cent, so what is kept, totalled and checked against the export is the same.
+		if !amount.Cents {
+			problems = append(problems, fmt.Sprintf("Row %d: the open amount %q is not exact to the cent, so it is left out.", row.Number, openCell.Value))
+			continue
+		}
 		item.Open = amount.Value.FloatString(2)
+		exact.Add(exact, amount.Value)
 		problems = append(problems, unread...)
 		items = append(items, item)
+	}
+	// Checked on its own terms: the documents read add up to the export's total, when it gives one.
+	if reported != nil && exact.Cmp(reported) != 0 {
+		problems = append(problems, fmt.Sprintf("The documents read total %s, but the file's total in row %d is %s: some are missing or unread.", exact.FloatString(2), reportedRow, reported.FloatString(2)))
 	}
 	// Rows read as documents but none of them kept (their amounts unreadable, say) is not an export with none open.
 	if len(items) == 0 && len(problems) > 0 {
