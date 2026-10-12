@@ -4636,6 +4636,39 @@ Tests and checks, on local PostgreSQL:
 - The layout check passes: 95 page views on a fresh migrated database, in Edge.
 - A screenshot of Requests with one request waiting three days and one approved, not sent.
 
+## 2026-10-11 — Close page Reports from the canvas (B02–B10)
+
+Reports is the sixth tab, board 6. Before this, the tab stacked the whole management pack, its publication and the budget comparison on one page.
+- **No API change.** The tab reads the pack, its publications and the budget as the page already did.
+- **Header:**
+  - The tab's lede: published (version N), the books changed after a version, a version's sign-off no longer stands, ready to publish, or what keeps it provisional, in the server's own conditions.
+  - A fact line with the basis, the comparison month and the latest version.
+  - The ⋯ menu: publish, download a published version, import a budget, the full pack.
+- **Body:**
+  - The decisions on Reports.
+  - One statement at a time: profit and loss, balance sheet or cash flow against last month, or the month against its budget, with sections and totals.
+  - Figures open their ledger rows in the full pack.
+  - The latest version's PDF and Publish are on the header row; Publish is disabled with its reason until the pack can be published.
+  - The rail: revenue and its change, net income, book cash, against budget.
+- **Read rules:**
+  - The cash flow shows as the month's alone, since the pack gives it no comparison.
+  - A QuickBooks month without a cash-flow statement waits on the ledger's, not on an import QuickBooks months do not offer.
+  - Published versions or a budget that could not be read are said so; neither is taken for none, and nothing is offered to publish before the versions are read.
+- **Views:** the full pack (unchanged, now opening a figure's rows from a link), published packs (unchanged), and the budget against actual (its versions unfolded).
+- **Shared:** a section header's controls now sit side by side with a gap and are no longer cut off at the edge. This affects every tab's table header.
+- **Not shown:**
+  - The canvas's comparison with the same month last year: the pack compares with last month only.
+  - Downloading the live pack's PDF or CSV: exports exist only for a published version, so the PDF is the latest version's.
+  - Importing the firm's cash-flow statement from the menu: it is offered where it applies, from Cash flow and in the full pack.
+
+Tests and checks, on local PostgreSQL:
+- `tsc` passes.
+- The layout check passes: 95 page views on a fresh migrated database, in Edge.
+- Screenshots on the demonstration data (`cmd/seed`):
+  - a published month (Summit Peak Fitness, September: profit and loss, cash flow, budget);
+  - an open month ("provisional until the month is signed off", desktop and phone);
+  - a month with no capture ("waits on the month's books").
+
 ## 2026-10-11 — The demonstration seed runs again (payroll confirmations, line explanations)
 
 The seed (`cmd/seed`, `transport.SeedFirm`) stopped at the first payroll draft once payroll approval required its two confirmations (B04). It would also have failed to publish packs once material movements required explanations (#422). It now:

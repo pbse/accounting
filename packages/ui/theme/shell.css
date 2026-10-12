@@ -1191,11 +1191,17 @@ body {
   font-size: 12px;
   color: var(--ink-3);
 }
+/* A section's own controls, side by side; it scrolls when narrow, and the padding keeps its edge buttons' rings from
+   being cut off. */
 .ks-sec .ks-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
   margin-left: auto;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
+  padding: 2px;
 }
 .ks-work .ks-tr {
   --ks-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 0.9fr) 24px;
@@ -1225,6 +1231,20 @@ body {
 /* Requests: each request, its recipient, when it reached the client, and where it stands. */
 .ks-requests .ks-tr {
   --ks-columns: minmax(0, 2.2fr) minmax(0, 1.2fr) minmax(0, 0.7fr) minmax(0, 1.6fr) 24px;
+}
+/* Reports: a statement's lines against last month or the budget, its sections as quiet group rows and totals in bold. */
+.ks-statement .ks-tr {
+  --ks-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 24px;
+}
+.ks-statement .ks-tr.ks-group {
+  min-height: 32px;
+  font-size: 12px;
+  color: var(--ink-3);
+  background: var(--surface-side);
+}
+.ks-statement .ks-tr.ks-total .ks-who,
+.ks-statement .ks-tr.ks-total .r {
+  font-weight: 600;
 }
 .ks-tr .r {
   justify-self: end;
@@ -1671,6 +1691,12 @@ body {
   }
   .ks-requests .ks-tr > :nth-child(2),
   .ks-requests .ks-tr > :nth-child(3) {
+    display: none;
+  }
+  .ks-statement .ks-tr {
+    --ks-columns: minmax(0, 1fr) auto auto 24px;
+  }
+  .ks-statement .ks-tr > :nth-child(3) {
     display: none;
   }
 }
