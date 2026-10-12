@@ -16,6 +16,16 @@ type Request = {
   rescan?: boolean;
   // A request for the month's books takes its books files: a CSV or Excel workbook, scanned whole.
   books?: boolean;
+  // Where each books file sent stands.
+  files?: { name: string; state: keyof typeof fileStates }[];
+};
+const fileStates = {
+  received: "Received, not yet cleared by the malware scan",
+  scanned: "Scanned, waiting for the firm to review it",
+  released: "With the firm, being read",
+  accepted: "Accepted as your books for the month",
+  refused: "Not accepted: the firm will ask for another file",
+  removed: "Removed by the firm",
 };
 const stateLabels: Record<string, string> = { answered: "Answered", awaiting_document: "Waiting for your document", "": "Not answered yet" };
 // Green only for what is done; a document still to come asks for attention, an open question stays neutral.
@@ -32,9 +42,13 @@ export default function ClientRequest() {
   const [passcode, setPasscode] = useState("");
   const [needsPasscode, setNeedsPasscode] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, { answer: string; later: boolean; attached?: boolean }>>({});
+  // The request read again after a books file's scan (its files' states and whether a scan still needs retrying), kept
+  // apart from the request so unsent answers stay as typed.
+  const [fresh, setFresh] = useState<Request>();
   useEffect(() => {
     // A document answer's recorded text names the files; it is not the client's note, so it is not offered back as one.
     setDrafts(Object.fromEntries((request?.questions ?? []).map((q) => [q.position, { answer: q.answer.startsWith("Document attached with this reply:") ? "" : q.answer, later: q.state === "awaiting_document" }])));
+    setFresh(undefined);
   }, [request]);
   async function call(body?: object | FormData): Promise<Request> {
     const response = await fetch(`${apiBaseUrl}/v1/client-request`, {
@@ -95,6 +109,14 @@ export default function ClientRequest() {
       if (!response.ok) throw new Error("Your reply is saved, but an attachment could not pass malware scanning. It remains quarantined. Retry with the same original files or contact the firm; do not change the file extension.");
     }
     setScanStatus(files.length ? "malware scanning completed. The firm must review and release your documents." : "");
+    // A books request lists each file's state, which the scan just moved on: read it again.
+    if (files.length && request?.books) {
+      try {
+        setFresh(await call());
+      } catch {
+        // The scan stands; the list catches up on the next read.
+      }
+    }
   }
   async function retryScans(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -183,6 +205,18 @@ export default function ClientRequest() {
                   Attachments stay quarantined until automated scanning and the firm's release.
                 </p>
               )}
+              {request.books && ((fresh ?? request).files?.length ?? 0) > 0 && (
+                <section aria-label="Your files">
+                  <h3>Your files</h3>
+                  <ul>
+                    {(fresh ?? request).files!.map((f, i) => (
+                      <li key={i}>
+                        {f.name}: {fileStates[f.state]}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
               <details>
                 <summary>The request as sent</summary>
                 <pre>{request.body}</pre>
@@ -230,7 +264,7 @@ export default function ClientRequest() {
                   <button>{busy ? "Saving your reply…" : request.status === "received" ? "Send the update to the firm" : "Send to the firm"}</button>
                 </fieldset>
               </form>
-              {request.status === "received" && request.rescan && (
+              {request.status === "received" && (fresh ?? request).rescan && (
                 <details>
                   <summary>Retry attachment scanning</summary>
                   <p>Select the same original files if scanning was interrupted or the firm needs a fresh scan. This cannot add new documents or change your reply.</p>
