@@ -148,12 +148,18 @@ func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
 	return l, false
 }
 
-// dateShaped is whether text is written as a date is (in numbers, or with a month's name), read or not: a label such as
-// "Total 2027" is not.
+// dateShaped is whether text begins as a date does, with a digit or a month's name, whether it reads or not (a
+// mistyped date is a document's problem): a label such as "Total 2027" does not.
 func dateShaped(text string) bool {
-	text = strings.TrimSpace(text)
-	fields := strings.Fields(text)
-	return len(fields) > 0 && (numericDate.MatchString(fields[0]) || dayMonthYear.MatchString(text) || monthDayYear.MatchString(text))
+	fields := strings.Fields(strings.ToLower(text))
+	if len(fields) == 0 {
+		return false
+	}
+	if fields[0][0] >= '0' && fields[0][0] <= '9' {
+		return true
+	}
+	_, month := monthsByName[fields[0][:min(3, len(fields[0]))]]
+	return month && len(fields[0]) >= 3
 }
 
 func mapValues(m map[int]Role) []Role {

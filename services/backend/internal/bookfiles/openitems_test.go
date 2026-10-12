@@ -41,13 +41,13 @@ func TestOpenItemsKeepCreditsAndUnreadableDocuments(t *testing.T) {
 	if invoice.Key("receivable") == credit.Key("receivable") {
 		t.Fatal("an invoice and a credit of one number share a name")
 	}
-	f, err := Read("unnumbered.csv", []byte("Customer,Date,Open Balance\nAcme Co,01/02/2027,100.00\nTotal 2027,,100.00\n"))
+	f, err := Read("unnumbered.csv", []byte("Customer,Date,Open Balance\nAcme Co,01/02/2027,100.00\nBeta LLC,03/04/2027?,50.00\nAcme Co,Total 2027,150.00\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	layout, _ := ProposeOpenItems(f)
 	items, problems := ReadOpenItems(f, layout)
-	if len(items) != 1 || len(problems) != 1 {
+	if len(items) != 2 || len(problems) != 2 {
 		t.Fatalf("an unnumbered document with an ambiguous date: %v %v", items, problems)
 	}
 }
