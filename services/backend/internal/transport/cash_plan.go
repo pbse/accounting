@@ -406,6 +406,11 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		}
 		asOf = asOf.UTC()
 		start := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
+		// A file's book cash is the day's closing balance, that day's receipts and payments in it: the plan starts the day
+		// after.
+		if files {
+			start = start.AddDate(0, 0, 1)
+		}
 		day := func(on time.Time) int { return int(on.Sub(start) / (24 * time.Hour)) }
 		end := start.AddDate(0, 0, 13*7)
 		// How bills relate to the schedules' dates is what people decided, never a vendor and a week alone.
@@ -601,6 +606,15 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		}
 		if apart.Abs() > 24*time.Hour {
 			source("The bank balances and the open items were read "+strconv.Itoa(int(apart.Abs().Hours()))+" hours apart.", "")
+		}
+		// Files are true at their dates: a month's book cash and its open items must share one, or a collection between
+		// the two would be in neither.
+		if observed, ok := meta["observed"].(map[string]string); files && ok {
+			for _, kind := range []string{"Invoice", "Bill"} {
+				if at := observed[kind]; at != "" && at != asOf.Format(time.RFC3339) {
+					source("The bank balances are as of "+asOf.Format("2006-01-02")+" but the open "+map[string]string{"Invoice": "receivables", "Bill": "payables"}[kind]+" are as of "+at[:10]+": send them as of the same date.", "")
+				}
+			}
 		}
 		if first > meta["month_end"].(string) {
 			source("Invoices and bills dated after "+meta["month_end"].(string)+" are not captured here.", "")

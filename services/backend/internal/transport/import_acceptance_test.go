@@ -631,13 +631,14 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	if plan := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200); plan["state"] != "waiting" || !strings.Contains(plan["reason"].(string), "open receivables and payables") {
 		t.Fatalf("a files month's plan waits for its open items: %v", plan)
 	}
+	openItemsAsOf := "2027-01-31"
 	openItems := func(side, content string) {
 		t.Helper()
 		form := func(layout string) (string, []byte) {
 			var b bytes.Buffer
 			m := multipart.NewWriter(&b)
 			must(m.WriteField("side", side))
-			must(m.WriteField("as_of", "2027-01-31"))
+			must(m.WriteField("as_of", openItemsAsOf))
 			if layout != "" {
 				must(m.WriteField("layout", layout))
 				must(m.WriteField("confirmed", "true"))
@@ -657,8 +658,14 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	openItems("receivable", "Customer,Num,Due Date,Open Balance\nBeta LLC,1001,02/14/2027,250.00\n")
 	openItems("payable", "Vendor,Num,Due Date,Open Balance\nLandlord,R-2,02/05/2027,100.00\n")
 	plan := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200)
-	if opening, _ := plan["opening"].(map[string]any); plan["state"] != "ready" || plan["start"] != "2027-01-31" || opening["amount"] != "1500.25" || plan["currency"] != "USD" {
+	if opening, _ := plan["opening"].(map[string]any); plan["state"] != "ready" || plan["start"] != "2027-02-01" || opening["amount"] != "1500.25" || plan["currency"] != "USD" {
 		t.Fatalf("a files month's plan opens from its file's bank balances: %v", plan)
+	}
+	// Open payables as of another date than the bank balances leave the plan a gap: a payment between them is in neither.
+	openItemsAsOf = "2027-02-01"
+	openItems("payable", "Vendor,Num,Due Date,Open Balance\nLandlord,R-2,02/05/2027,100.00\n")
+	if gaps := fmt.Sprint(call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/cash-plan", nil, 200)["readiness"]); !strings.Contains(gaps, "the open payables are as of 2027-02-01: send them as of the same date") {
+		t.Fatalf("a files month's cash and open items at different dates: %s", gaps)
 	}
 	// The tie-out compares the file's balance-sheet accounts with their support: the bank, to be reconciled.
 	tie := call("user_a", partner, "GET", "/v1/closes/"+januaryClose+"/tie-out", nil, 200)
