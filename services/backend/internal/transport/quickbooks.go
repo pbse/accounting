@@ -32,10 +32,17 @@ func quickbooksReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 422, "QuickBooks authorization was cancelled or invalid. Return to the client's page and connect again.")
 		return
 	}
-	var entity, environment, id string
-	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity,x.environment,x.id::text FROM quickbooks_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity, &environment, &id)
+	var entity, environment, id, org, request string
+	err := db.QueryRowContext(r.Context(), `SELECT x.client_entity,x.environment,x.id::text,x.organization_id,COALESCE(x.request_id::text,'') FROM quickbooks_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&entity, &environment, &id, &org, &request)
 	if err != nil {
 		problem(w, 410, "Connection attempt expired or unavailable. Start again from the client's page.")
+		return
+	}
+	// A client's own sign-in, through a request, is finished here, with no member's page to finish it.
+	if request != "" {
+		requestConnected(w, r, db, "quickbooks", org, id, request, func(ctx context.Context, rec http.ResponseWriter, a *auth.Claims) {
+			quickbooksAct(ctx, rec, db, a, entity, "", "", quickbooksIn{Action: "callback", ID: id, Code: q.Get("code"), State: q.Get("state"), Realm: q.Get("realmId")})
+		})
 		return
 	}
 	origin, err := url.Parse(os.Getenv("PUBLIC_APP_URL"))

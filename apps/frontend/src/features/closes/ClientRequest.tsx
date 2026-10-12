@@ -18,7 +18,10 @@ type Request = {
   books?: boolean;
   // Where each books file sent stands.
   files?: { name: string; state: keyof typeof fileStates }[];
+  // The ledger a request to connect the client's books asks it to sign in to.
+  connect?: "quickbooks" | "xero";
 };
+const ledgerNames = { quickbooks: "QuickBooks", xero: "Xero" };
 const fileStates = {
   received: "Received, not yet cleared by the malware scan",
   scanned: "Scanned, waiting for the firm to review it",
@@ -34,6 +37,8 @@ const statePills: Record<string, string> = { answered: "pill", awaiting_document
 export default function ClientRequest() {
   useShellThemeColor();
   const [token] = useState(() => window.location.hash.slice(1));
+  // The ledger's sign-in, started from a request to connect, returns here saying how it went.
+  const [connected] = useState(() => new URLSearchParams(window.location.search).get("connected") ?? "");
   const [request, setRequest] = useState<Request>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -73,6 +78,7 @@ export default function ClientRequest() {
   }
   useEffect(() => {
     window.history.replaceState(null, "", "/request");
+    if (connected) return;
     if (!/^[A-Z2-7]{26,128}$/.test(token)) {
       setError(
         "Open the complete private link from your accounting firm. It may have expired or been replaced.",
@@ -116,6 +122,23 @@ export default function ClientRequest() {
       } catch {
         // The scan stands; the list catches up on the next read.
       }
+    }
+  }
+  // A request to connect the client's books starts its ledger's sign-in, from which the ledger returns to this page.
+  async function connect() {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/client-request/connect`, {
+        method: "POST", credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
+        headers: { Authorization: `Bearer ${token}`, ...(passcode ? { "X-Request-Passcode": passcode } : {}) },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.url) throw new Error(result.message || "The sign-in could not be started. Contact the firm.");
+      window.location.assign(result.url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The sign-in could not be started. Contact the firm.");
+      setBusy(false);
     }
   }
   async function retryScans(event: FormEvent<HTMLFormElement>) {
@@ -164,7 +187,14 @@ export default function ClientRequest() {
         <section>
           {error && <p role="alert">{error}</p>}
           {scanStatus && <p role="status">{scanStatus}</p>}
-          {!request && !error && <p role="status">Opening your request…</p>}
+          {connected && (
+            <p role="status">
+              {connected === "failed"
+                ? "The sign-in did not finish. Open your private link again to retry, or contact your accounting firm."
+                : `${ledgerNames[connected as keyof typeof ledgerNames] ?? "Your ledger"} is connected. Your accounting firm confirms it is yours before reading any of your books. You can close this page.`}
+            </p>
+          )}
+          {!connected && !request && !error && <p role="status">Opening your request…</p>}
           {!request && needsPasscode && (
             <form
               onSubmit={(e) => {
@@ -216,6 +246,14 @@ export default function ClientRequest() {
                     ))}
                   </ul>
                 </section>
+              )}
+              {request.connect && request.open !== false && (
+                <p>
+                  <button type="button" className="primary" disabled={busy} onClick={() => void connect()}>
+                    Connect {ledgerNames[request.connect]}
+                  </button>{" "}
+                  You sign in to {ledgerNames[request.connect]} yourself; your password is never shared with the firm.
+                </p>
               )}
               <details>
                 <summary>The request as sent</summary>
