@@ -1253,6 +1253,10 @@ body {
 .ks-weeks .ks-tr.ks-low {
   background: var(--att-tint);
 }
+/* Sign-off: each check, what it found and whether it passes. */
+.ks-checks .ks-tr {
+  --ks-columns: minmax(0, 1.2fr) minmax(0, 2.4fr) minmax(0, 0.9fr) 24px;
+}
 .ks-tr .r {
   justify-self: end;
   text-align: right;
@@ -1712,6 +1716,12 @@ body {
   .ks-weeks .ks-tr > :nth-child(2),
   .ks-weeks .ks-tr > :nth-child(3),
   .ks-weeks .ks-tr > :nth-child(6) {
+    display: none;
+  }
+  .ks-checks .ks-tr {
+    --ks-columns: minmax(0, 1fr) auto 24px;
+  }
+  .ks-checks .ks-tr > :nth-child(2) {
     display: none;
   }
 }

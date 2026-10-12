@@ -5,23 +5,19 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { CloseLede, signOffAvailable, useBrief } from "./Stands";
 import { RetentionControls } from "./Enterprise";
-import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
 import { Memory } from "./Memory";
-import { Readiness } from "./Readiness";
-import { OpeningBaseline } from "./OpeningBaseline";
-import { TakeoverSetup } from "./TakeoverSetup";
 import { Replay } from "./Replay";
-import { EffortCard, EffortTracker, type Activity } from "./Effort";
+import { EffortTracker, type Activity } from "./Effort";
 import { Books, BooksLede } from "./Books";
 import { Workpapers, WorkpapersLede } from "./Workpapers";
 import { Documents, DocumentsLede } from "./Documents";
 import { RequestsLede, RequestsTab } from "./RequestsTab";
 import { ReportsLede, ReportsTab } from "./ReportsTab";
 import { CashLede, CashTab } from "./CashTab";
+import { SignOffLede, SignOffTab } from "./SignOffTab";
 import { AgentChip, CloseMenu, countsOf, needsFor, Overview, useDecisions, useGoalStatus } from "./Overview";
-import { workspaceRequest } from "./workspace";
-import { useClose, type Close, type Profile } from "./WorkpaperView";
+import { useClose, type Profile } from "./WorkpaperView";
 
 // Overview holds what needs a person; Books holds what the ledger shows; the rest is where each kind of work lives.
 const tabs = closeTabs;
@@ -40,56 +36,17 @@ function profileLabel(p: Profile) {
   return `${p.currency} · fiscal year starts ${new Date(2000, p.fiscal_year_start - 1).toLocaleString("en-US", { month: "long" })}`;
 }
 
-function Package({ close }: { close: Close }) {
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState("");
-  async function download(kind: "export" | "binder" | "year-end") {
-    setBusy(true);
-    setStatus("");
-    try {
-      const blob = await workspaceRequest(`/${close.id}/${kind}`, undefined, true);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      const year = close.period.slice(0, 4);
-      link.download = kind === "year-end" ? `year-end-handoff-${close.id}-${year}.zip` : `${kind === "binder" ? "accountant-binder" : "close-review"}-${close.id}-${close.period}.zip`;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus(
-        kind === "year-end"
-          ? `Year-end handoff ready for January through ${close.period}. Open handoff.html for the summary and open-questions.csv for what still needs an answer.`
-          : "Package ready. Open review.html for the summary and checksums.sha256 to verify its files.",
-      );
-    } catch (e) {
-      setStatus(e instanceof Error ? e.message : "Export failed. Saved work has not changed.");
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <section>
-      <h2>Take the close into review</h2>
-      <p>Download every saved version, CSV tables, source references, unresolved items and stored sandbox receipts. The package records the supported scope and sign-off history; unlisted work is not certified.</p>
-      <div className="title-actions">
-        <button disabled={busy} onClick={() => void download("export")}>
-          {busy ? "Preparing package…" : "Download close review package"}
-        </button>
-        <button disabled={busy} onClick={() => void download("binder")}>
-          Download signed accountant binder
-        </button>
-        <button disabled={busy} onClick={() => void download("year-end")}>
-          Download year-end handoff
-        </button>
-      </div>
-      <p>The binder is available only while the current supported scope remains signed off with no blockers. A new source or unresolved action requires fresh review.</p>
-      <p>The year-end handoff collects this client's approved schedules, roll-forwards, reconciled balances, adjustments, posting records and open questions from January through this month, for the firm's tax and audit work.</p>
-      <p role="status">{status}</p>
-    </section>
-  );
-}
-
 // Each tab's own actions and exception paths, at the top of the close's ⋯ menu.
 const tabMenus = (base: string): Partial<Record<Tab, { title: string; items: { label: string; to: string }[] }>> => ({
+  signoff: {
+    title: "Sign-off",
+    items: [
+      { label: "Download the review package", to: `${base}?tab=signoff&view=package` },
+      { label: "Change the scope", to: `${base}?tab=signoff&view=readiness` },
+      { label: "Record time off-screen", to: `${base}?tab=signoff&view=effort` },
+      { label: "Rehearse the ledger", to: `${base}?tab=signoff&view=rehearsal` },
+    ],
+  },
   cash: {
     title: "Cash plan",
     items: [
@@ -204,7 +161,7 @@ export default function ClientClose() {
               Sign off
             </button>
           ) : (
-            <Link className={signOffFirst ? "button primary" : "button"} to={`${base}?tab=signoff`}>
+            <Link className={signOffFirst ? "button primary" : "button"} to={`${base}?tab=signoff&view=readiness#signoff-form`}>
               Sign off
             </Link>
           )}
@@ -212,7 +169,7 @@ export default function ClientClose() {
         </div>
       </div>
       {refreshError && <p role="alert">{refreshError} Showing the last read.</p>}
-      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : tab === "requests" ? <RequestsLede closeId={close.id} /> : tab === "reports" ? <ReportsLede closeId={close.id} period={close.period} /> : tab === "cash" ? <CashLede closeId={close.id} base={base} /> : tab === "evidence" ? <DocumentsLede closeId={close.id} base={base} waiting={needs.filter((need) => need.tab === "evidence").reduce((n, need) => n + need.count, 0)} /> : <CloseLede close={close} counts={counts} />}
+      {tab === "books" ? <BooksLede close={close} base={base} /> : tab === "workpapers" ? <WorkpapersLede papers={papers} more={more} /> : tab === "requests" ? <RequestsLede closeId={close.id} /> : tab === "reports" ? <ReportsLede closeId={close.id} period={close.period} /> : tab === "cash" ? <CashLede closeId={close.id} base={base} /> : tab === "signoff" ? <SignOffLede close={close} /> : tab === "evidence" ? <DocumentsLede closeId={close.id} base={base} waiting={needs.filter((need) => need.tab === "evidence").reduce((n, need) => n + need.count, 0)} /> : <CloseLede close={close} counts={counts} />}
       {close.profile && (close.profile.state === "conflict" || close.profile.state === "differs" || close.profile.state === "unknown") && (
         <p className="ks-lede-notes">
           <span className="chip warn" role={close.profile.state === "unknown" ? undefined : "alert"} title={close.profile.state === "differs" ? "The client's confirmed profile" : "Read from the connected ledger"}>
@@ -241,16 +198,7 @@ export default function ClientClose() {
       {tab === "requests" && <RequestsTab close={close} papers={papers} needs={needs.filter((need) => need.tab === "requests")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} onChange={() => void reload()} />}
       {tab === "reports" && <ReportsTab close={close} papers={papers} needs={needs.filter((need) => need.tab === "reports")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
       {tab === "cash" && <CashTab close={close} papers={papers} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
-      {tab === "signoff" && (
-        <div className="stack">
-          <TakeoverSetup key={`setup-${close.id}`} closeId={close.id} />
-          <OpeningBaseline key={`opening-${close.id}`} closeId={close.id} />
-          <Readiness key={`readiness-${close.id}`} closeId={close.id} papers={papers} />
-          <ProposedStatePreview closeId={close.id} />
-          <EffortCard closeId={close.id} />
-          <Package close={close} />
-        </div>
-      )}
+      {tab === "signoff" && <SignOffTab close={close} papers={papers} needs={needs.filter((need) => need.tab === "signoff")} brief={brief} briefRead={briefRead} decisionsError={decisionsError} status={goalRead.data} base={base} />}
       {tab === "settings" && (
         <div className="stack">
           <Memory key={`memory-${close.id}`} closeId={close.id} />
