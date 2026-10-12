@@ -135,6 +135,8 @@ async function closeLoader({ context, request, params }: LoaderFunctionArgs) {
   await Promise.all([
     prefetch(context, `/${encodeURIComponent(id)}`, `/${id}/decisions`, `/${id}/goal`, ...(reads[tab] ?? [])),
     tab === "cash" ? queryClient.prefetchQuery(cashPlanQuery(id, "", false, read)) : null,
+    // A what-if in the address is the table's; the plan as it stands is still the sentence's.
+    tab === "cash" && url.searchParams.get("scenario") ? queryClient.prefetchQuery(cashPlanQuery(id, url.searchParams.get("scenario")!, false, read)) : null,
   ]);
   return null;
 }

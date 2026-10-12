@@ -4679,3 +4679,32 @@ Nothing else changes; the routes keep refusing an approval or publication withou
 
 Checks, on local PostgreSQL: a fresh migrated database seeded with `go run ./cmd/seed -organization local-development -subject local-development` ends `Done with 0 problems`. Before the fix, the same run stopped at Bluegrass Dental PLLC 2026-06 (draft 19, 409). With only the payroll fix, it reported three publish refusals (422, "Explain every material movement"). `go vet ./internal/transport/` passes.
 
+## 2026-10-11 — Close page Cash plan from the canvas (B02–B10)
+
+Cash plan is the seventh tab, board 7. Before this, the tab was the whole plan on one page: its readiness, questions, what-ifs, reviews, every week, matches and schedules.
+- **No API change.** The tab reads the plan, schedules and what-ifs through the query the full plan already uses, so each read serves both.
+- **Header:**
+  - The tab's lede: the plan's decisions, reviewed or as a draft, changed after its review, ready for review or not, with the forecast's completeness, its lowest point and its review.
+  - The ⋯ menu: add a schedule, try a what-if, review this plan.
+- **Body:**
+  - The plan's own decisions, each opening where it is made: bills against a schedule's payment, a bill to confirm paid, a decision that no longer applies, a schedule to approve, and open items with no agreed date.
+  - The weeks as one table, the lowest week marked and always shown, the first eight unfolded, with a what-if switch and Review this plan. Review this plan is disabled with its reason until the plan can be reviewed.
+  - The rail: the lowest point, opening cash, open items in no week, and what is left before it is complete.
+- **Read rules:**
+  - The what-if shown is in the address (`&scenario=`), so the table, its week links, Review this plan and the full plan show and review the same figures. The page's loader reads it too.
+  - A what-if's figures only show once read, never the plan as it stands under its name.
+  - A plan that could not be read again is said so, with the time of the last read, in the lede and above the table.
+  - Each bill in a question about a schedule's payment counts as its own decision.
+- **Views:** the full plan, unchanged except that it opens on the what-if in the address, now with anchors on its sections and weeks.
+- **Not shown:**
+  - A badge on the tab: the plan's decisions are computed by the plan read, not held as attention events, so neither Overview nor the tab bar counts them.
+  - The canvas's "amount assumed, not confirmed" decision: the plan has no assumed or confirmed flag.
+  - "Reopened by N changes since": only whether the inputs changed is known, not how many.
+
+Tests and checks, on local PostgreSQL:
+- `tsc` passes.
+- The layout check passes: 95 page views on a fresh migrated database, in Edge.
+- Screenshots on the demonstration data (`cmd/seed`):
+  - a plan reviewed as a draft with a what-if, whose lowest point (Dec 30, negative) falls in a later week, which shows marked below the first eight;
+  - a plan with one open item without a date ("needs one decision"), desktop and phone.
+
