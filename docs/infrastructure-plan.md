@@ -58,8 +58,8 @@ Stays on Cloudflare: upload scanner, context machine, queues, Email Routing, con
   nearest the visitor.
 - **What the API needs from Cloudflare.** Only the context machine, which the container now reaches through
   `outboundByHost` (`context-machine.internal`) and a service binding. Its Worker has no public route
-  (`workers_dev: false`), so the move adds one: a route on our zone that only a Cloudflare Access service token (or
-  the context machine's own token) may call. The scanner, email and model providers are already ordinary URLs.
+  (`workers_dev: false`), so the move adds one: a route on our zone behind a Cloudflare Access service token, with
+  the bearer token the context machine already requires on every request. The scanner, email and model providers are already ordinary URLs.
 - **Deploys and secrets.** Deploy production builds the image, pushes it to ECR and updates the service; migrations
   run as now. The owner sets the API's secrets in AWS with a script run in their own terminal, as for Cloudflare.
 
@@ -101,8 +101,9 @@ $20 a month at a 0.25 CU floor, $0.106 per CU-hour) and lifts the 1 GB storage l
 ## Independent of hosting
 
 Reads recheck signed-off closes through `closeReadiness` (about 24 round trips a close), and the owner keeps that
-recheck exact: Home every signed-off close up to this month (`outstanding` in `morning.go`), the Clients list and the
-roster the last three months, Measure twelve. Home's cost grows with every month signed off even at 1 ms a trip, so the rechecks should run in parallel on one shared snapshot (`pg_export_snapshot`), and `closeReadiness`
+recheck exact: Home every signed-off close owed up to this month or due within a week (`outstanding` in
+`morning.go`), the Clients list and the roster those from two months ago onward, Measure the twelve months up to the
+month shown. Home's cost grows with every month signed off even at 1 ms a trip, so the rechecks should run in parallel on one shared snapshot (`pg_export_snapshot`), and `closeReadiness`
 should fold its independent reads into fewer statements.
 
 ## Measuring
