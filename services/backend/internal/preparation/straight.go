@@ -491,7 +491,7 @@ func totalDisagrees(invoice string, cents int64) string {
 		// figure or calls itself an amount or balance ("Amount due 1300").
 		dueAmount := (strings.Contains(normal, " due") || strings.HasPrefix(normal, "due")) && !strings.Contains(normal, "date") && (moneyFigures(line) > 0 || ((strings.Contains(normal, "amount") || strings.Contains(normal, "balance")) && !printsDate(line)))
 		// "Total tax" or "Total fees" is that charge's total, not what is payable.
-		charge := mentionsAny(line, chargeWords)
+		charge := mentionsCharge(line)
 		payable := !charge && ((strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total")) || dueAmount || strings.Contains(normal, "payable"))
 		if !payable {
 			continue
@@ -543,7 +543,7 @@ func distinctFigures(invoice string) map[int64]bool {
 func totalLineShows(invoice string, cents int64) bool {
 	for _, line := range strings.Split(invoice, "\n") {
 		normal := documents.NormalizeEntity(line)
-		if !mentionsAny(line, chargeWords) && (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total") || (strings.Contains(normal, " due") && !strings.Contains(normal, "date")) || strings.Contains(normal, "payable")) && distinctFigures(line)[cents] {
+		if !mentionsCharge(line) && (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total") || (strings.Contains(normal, " due") && !strings.Contains(normal, "date")) || strings.Contains(normal, "payable")) && distinctFigures(line)[cents] {
 			return true
 		}
 	}
@@ -598,14 +598,21 @@ func billToNames(invoice string) map[string]bool {
 	return names
 }
 
-// chargeWords name a tax, fee or similar charge on an invoice line.
-var chargeWords = []string{"tax", "vat", "gst", "hst", "fee", "surcharge", "levy", "shipping", "freight", "handling", "duty"}
+// chargeWord names a tax, fee or similar charge on an invoice line as a word of its own, singular or plural ("Sales
+// tax", "Fees"), or the base a tax is charged on ("Total taxable"); the same letters inside another word ("Coffee",
+// "Taxi") name no charge.
+var chargeWord = regexp.MustCompile(`\b(tax|taxes|taxable|vat|gst|hst|fees?|surcharges?|levy|levies|shipping|freight|handling|duty|duties)\b`)
+
+// mentionsCharge reports whether a line names a charge.
+func mentionsCharge(line string) bool {
+	return chargeWord.MatchString(documents.NormalizeEntity(line))
+}
 
 // chargeLine reports whether the invoice prints a tax, fee or similar charge with a number on its line, cents or not.
 func chargeLine(invoice string) bool {
 	for _, line := range strings.Split(invoice, "\n") {
 		normal := documents.NormalizeEntity(line)
-		if regexp.MustCompile(`\d`).MatchString(normal) && mentionsAny(line, chargeWords) {
+		if regexp.MustCompile(`\d`).MatchString(normal) && mentionsCharge(line) {
 			return true
 		}
 	}

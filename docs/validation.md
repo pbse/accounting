@@ -4736,6 +4736,21 @@ Tests and checks, on local PostgreSQL:
   - a signed-off month with every check passing;
   - a month with no capture.
 
+## 2026-10-11 — A charge is a whole word on an invoice (B03/B04)
+
+Straight-through preparation (`internal/preparation/straight.go`) looked for a tax, fee or similar charge by its letters anywhere on a line. So "Coffee" read as a fee and "Taxi" as a tax. An invoice to or from such a name, with a number on the same line (an address, a PO), was held for a person. A "Total due" line holding those letters was also not taken as the payable total.
+
+The flake that exposed it: `TestUnrelatedInvoicesInOneCloseArePreparedStraightThrough` bills each invoice to "Mixed " plus a random name. About one run in two hundred, the name held "TAX", "FEE", "VAT", "GST" or "DUTY", and the test failed (PR #457, CI run 38192338972).
+
+The fix: the three checks that use charge words (a charge line, the payable-total line and the total line that prints the amount) now share one matcher. It matches a charge as a word of its own, singular or plural: tax, taxes, VAT, GST, HST, fee(s), surcharge(s), levy, levies, shipping, freight, handling, duty, duties. It also matches "taxable", so a "Total taxable" line is still never taken for the payable total.
+
+Tests, on local PostgreSQL:
+- `go test ./internal/preparation/` passes.
+- The new case, an invoice with "Ship to: Coffee & Taxi Depot, 12 Main St", failed before the fix with the same reason CI gave and passes after it.
+- A bare "Fees 100" is still held.
+- A "Total taxable" line beside "Amount due" is not taken for the payable total.
+- `TestUnrelatedInvoicesInOneCloseArePreparedStraightThrough` passes three times on a fresh migrated database.
+
 ## 2026-10-11 — Close page Settings from the canvas (B02–B10)
 
 Settings is the ninth and last tab, board 9. Before this, the tab stacked memory, procedures, the agent check and retention on one page, two of them folded.
