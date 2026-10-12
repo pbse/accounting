@@ -196,6 +196,8 @@ B09 and B10 need invoice- and bill-level facts, dated receipts and payments, and
 
 Refreshing is a re-upload; promised dates and follow-up notes carry over by document. Payment and collection actions keep their existing approvals and hand-offs. Month-end versions are kept independently of later observations.
 
+As built (delivery step 11, open items by file): for a month whose books are its files, in a firm with file imports on, a reviewer sends the client's open receivables or payables from the month's open items (Books, Open invoices and bills) as a CSV or Excel export, saying the date it was true at. Its columns' roles (customer or vendor, document number, date, due date, open amount, currency) are proposed from its headings and can be changed before it is kept; headings, subtotals and totals are left aside, and a party given as a heading above its documents (as an aged report grouped by contact lays it out) is theirs (`bookfiles` open items; `open_item_files`, migration 170). The newest file of each side is the month's open items, given to the aging as a ledger's capture would give them: aging, open items, collections and decisions follow, a document keyed by its party and number so a decision carries over to the next export, and the files' as-of date standing for the capture's time. The cash plan waits for the month's book cash, and open items are not yet reconciled to the control accounts: both follow.
+
 ### History and takeover
 
 The opening baseline reviews the takeover month's month-end tie-out; it does not create a missing opening balance or earlier months' activity. History is therefore its own status:

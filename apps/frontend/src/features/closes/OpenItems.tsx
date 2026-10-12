@@ -4,6 +4,7 @@ import { useDates } from "../../data/time";
 import { type FormEvent, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
 import { Collections } from "./Collections";
+import { OpenItemFiles } from "./OpenItemFiles";
 
 type Action = { id: string; owner: string; mine: boolean; status: string; expected_on: string; note: string; actor: string; created_at: string };
 type Item = {
@@ -141,6 +142,7 @@ export function OpenItems({ closeId, open }: { closeId: string; open?: boolean }
     <details open={open}>
       <summary>Follow up open invoices and bills</summary>
       {error && <p role="alert">{error}</p>}
+      <OpenItemFiles closeId={closeId} />
       {items.state === "waiting" ? (
         <p className="empty">{items.reason}</p>
       ) : (
