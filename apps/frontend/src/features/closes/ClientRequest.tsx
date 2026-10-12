@@ -20,7 +20,7 @@ type Request = {
   files?: { name: string; state: keyof typeof fileStates }[];
 };
 const fileStates = {
-  received: "Received, waiting for its malware scan",
+  received: "Received, not yet cleared by the malware scan",
   scanned: "Scanned, waiting for the firm to review it",
   released: "With the firm, being read",
   accepted: "Accepted as your books for the month",
@@ -105,6 +105,8 @@ export default function ClientRequest() {
       if (!response.ok) throw new Error("Your reply is saved, but an attachment could not pass malware scanning. It remains quarantined. Retry with the same original files or contact the firm; do not change the file extension.");
     }
     setScanStatus(files.length ? "malware scanning completed. The firm must review and release your documents." : "");
+    // A books request lists each file's state, which the scan just moved on: read it again.
+    if (files.length && request?.books) setRefresh((n) => n + 1);
   }
   async function retryScans(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

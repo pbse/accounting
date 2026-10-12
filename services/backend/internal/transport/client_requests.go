@@ -340,23 +340,33 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Request unavailable.")
 			return
 		}
+		// A request for the month's books shows the client where each file they sent stands (docs/books-sources.md,
+		// Client-provided books): received but not yet cleared by its scan, scanned, with the firm, accepted as the month's
+		// books (a current acceptance of the file it was kept as), or refused or removed. Read in this transaction, before
+		// it commits, each time the reply is made.
+		var sentFiles json.RawMessage
+		readFiles := func() error {
+			if !books {
+				return nil
+			}
+			return tx.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('name',a.name,'state',CASE WHEN a.state IN ('rejected','infected') THEN 'refused'
+ WHEN a.state='released' AND a.body IS NULL THEN 'removed'
+ WHEN a.state='released' AND EXISTS(SELECT 1 FROM books_import_acceptances x WHERE x.import_id=a.import_id AND x.layout_id=(SELECT max(l.id) FROM books_layouts l WHERE l.import_id=x.import_id)
+  AND x.scope_id=(SELECT max(s.id) FROM books_import_scopes s WHERE s.import_id=x.import_id)) THEN 'accepted'
+ WHEN a.state='released' THEN 'released' WHEN a.state='clean' THEN 'scanned' ELSE 'received' END) ORDER BY a.id),'[]') FROM client_attachments a WHERE a.request_id::text=$1`, requestID).Scan(&sentFiles)
+		}
 		reply := func(status string) {
 			out := map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed, "rescan": rescan, "books": books}
-			// A request for the month's books shows the client where each file they sent stands (docs/books-sources.md,
-			// Client-provided books): received, scanned, with the firm, accepted as the month's books, or refused or removed.
 			if books {
-				var files json.RawMessage
-				if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('name',a.name,'state',CASE WHEN a.state IN ('rejected','infected') THEN 'refused'
- WHEN a.state='released' AND a.body IS NULL THEN 'removed' WHEN a.state='released' AND EXISTS(SELECT 1 FROM books_import_acceptances x WHERE x.import_id=a.import_id) THEN 'accepted'
- WHEN a.state='released' THEN 'released' WHEN a.state='clean' THEN 'scanned' ELSE 'received' END) ORDER BY a.id),'[]') FROM client_attachments a WHERE a.request_id::text=$1`, requestID).Scan(&files); err != nil {
-					problem(w, 503, "Request unavailable.")
-					return
-				}
-				out["files"] = files
+				out["files"] = sentFiles
 			}
 			jsonReply(w, 200, out)
 		}
 		if r.Method == "GET" {
+			if err = readFiles(); err != nil {
+				problem(w, 503, "Request unavailable.")
+				return
+			}
 			switch {
 			case used:
 				reply("received")
@@ -450,6 +460,10 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		if repeat {
+			if err = readFiles(); err != nil {
+				problem(w, 503, "Request unavailable.")
+				return
+			}
 			reply("received")
 			return
 		}
@@ -555,6 +569,9 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		}
 		if err == nil {
 			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET used_at=COALESCE(used_at,now()),reply_digest=$2 WHERE digest=$1`, digest, receipt)
+		}
+		if err == nil {
+			err = readFiles()
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Reply could not be confirmed. Retry the same reply.")
