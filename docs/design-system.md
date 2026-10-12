@@ -105,6 +105,14 @@ Cash plan (`CashTab.tsx`):
 - **Rail:** the lowest end-of-day balance and its date, opening book cash, open items in no week, and what is left before the forecast is complete.
 - **More on Cash plan:** the full plan, and its sections by anchor: schedules, what-ifs and reviewed versions.
 
+Sign-off (`SignOffTab.tsx`):
+- **Lede:** signed off, changed since sign-off, ready (for the reader, or for a reviewer), or what sign-off waits on: the scope, drafts, accounts that differ or lack coverage, external steps, work, the takeover setup and anything else readiness holds. Under it: who signed off, when the scope was set, what it covers, and whether the reader may sign off.
+- **Left column:** the decisions on Sign-off, then what sign-off checks as one table. The rows are: scope defined, drafts approved, the balance sheet ties, accounts covered, external steps, work finished, the takeover setup, client attachments, the client profile, books from files, ledger capture, and other checks. Each row opens where it is settled: a later month's inherited cleanup on the client's page (which lists its first close), attachments in coverage, the profile and files on the client's page, journals still to record and captures in Books. Each row is built from the readiness blockers that name it, and a blocker no check names stays under "Other checks", so none is dropped. Each row opens where it is settled. The header row changes the scope (or reopens), and offers Sign off once nothing blocks it and the reader may sign off.
+- **Rail:** checks passing, required drafts approved, time on the close, and the due date.
+- **More on Sign-off:** readiness with the scope and the sign-off form, the takeover setup (on a client's first close), the ledger rehearsal, time on the close, and the review package and binder.
+
+The header's Sign off opens the sign-off form directly (`#signoff-form`).
+
 A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
 
 Below 860px the sidebar is a sheet opened from the brand button, the composer spans the width, and the stage's positions become flow.

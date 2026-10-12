@@ -4708,3 +4708,31 @@ Tests and checks, on local PostgreSQL:
   - a plan reviewed as a draft with a what-if, whose lowest point (Dec 30, negative) falls in a later week, which shows marked below the first eight;
   - a plan with one open item without a date ("needs one decision"), desktop and phone.
 
+## 2026-10-11 — Close page Sign-off from the canvas (B02–B10)
+
+Sign-off is the eighth tab, board 8. Before this, the tab stacked the takeover setup, opening baseline, readiness, ledger rehearsal, effort and the review package on one page.
+- **No API change.** The tab reads readiness, the takeover setup and effort as the page already did.
+- **Header:**
+  - The tab's lede: signed off, changed since, ready, or what sign-off waits on, in readiness's own terms. A fact line names who signed off, the scope's date and coverage, and whether the reader may sign off.
+  - The ⋯ menu: the review package, change the scope, record time off-screen, rehearse the ledger.
+  - The header's Sign off now opens the sign-off form directly (`#signoff-form`).
+- **Body:**
+  - The decisions on Sign-off.
+  - What sign-off checks as one table, built from the readiness blockers by the check each names. A blocker no check names stays under "Other checks", so nothing readiness holds is dropped.
+  - Each row opens where it is settled: a later month's inherited cleanup on the client's page (the blocker names the first close's month, not its id), client attachments in coverage, the client profile and a month's files (a newer ledger export among them) on the client's page, journals still to record and stale captures in Books.
+  - The header row changes the scope or reopens, and offers Sign off when nothing blocks it.
+  - The rail: checks passing, drafts approved, time on the close, due date.
+- **Views:** readiness (unchanged: scope, sign-off, reopen, history), the takeover setup with the opening baseline (shown when it applies), the ledger rehearsal, time on the close, and the review package, which moved from ClientClose.tsx unchanged.
+- **Not shown:**
+  - The canvas's "scope revision N": scopes have no revision number, so the scope's date is shown.
+  - "Your time": effort is the close's total, not the reader's.
+  - The ledger rehearsal as a check: it is a separate read in a hosted session, not part of readiness.
+
+Tests and checks, on local PostgreSQL:
+- `tsc` passes.
+- The layout check passes: 95 page views on a fresh migrated database, in Edge.
+- Screenshots on the demonstration data (`cmd/seed`):
+  - an open month waiting on a scope and one account's coverage (desktop, phone, and the readiness view);
+  - a signed-off month with every check passing;
+  - a month with no capture.
+
