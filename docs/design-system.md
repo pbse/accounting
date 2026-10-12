@@ -99,6 +99,12 @@ Reports (`ReportsTab.tsx`):
 - **Rail:** revenue and its change, net income (provisional until signed off), book cash at month end, and net income against the budget, each only when the pack holds it.
 - **More on Reports:** the full pack (every statement, the ledger rows behind a figure, the firm's cash-flow import), published packs (versions, PDF and CSV, publishing a version or a correction), and the budget against actual (its versions and import).
 
+Cash plan (`CashTab.tsx`):
+- **Lede:** where the 13-week outlook stands: the plan's decisions, whether it is reviewed (or as a draft), whether it changed after its review, or whether it can be reviewed and what stops it. Under it: how complete the forecast is, its weeks, its lowest point and its review.
+- **Left column:** the plan's decisions, then its weeks as one table. The decisions are prepared from the plan, not from attention events, and each opens where it is made: bills a schedule's payment may already cover, a bill to confirm paid, a decision that no longer applies, a schedule waiting for approval, and open items with no agreed date (Books' open items). The table has receipts, payments, closing, the lowest day and what moves cash (the three largest items). The lowest week is marked and always shown. The first eight weeks show and the rest fold behind a line. A switch shows the plan as it stands or under a what-if. Review this plan is on the header row, disabled with its reason until the plan can be reviewed.
+- **Rail:** the lowest end-of-day balance and its date, opening book cash, open items in no week, and what is left before the forecast is complete.
+- **More on Cash plan:** the full plan, and its sections by anchor: schedules, what-ifs and reviewed versions.
+
 A records page (Clients, Returns) opens with its title row (title, context, search, one primary action), a filter segment and the table, whose rows open their record: a row on Clients opens the client's page. A client's page (`/dashboard/clients/<client>`) opens like a close: the breadcrumb row with its one action (the month in hand, else the month it owes), the lede on where the client stands, its cards (books, monthly close, currency and year, people), then its months as a table whose rows open each month. Every page has the composer at its foot, scoped to the page.
 
 Below 860px the sidebar is a sheet opened from the brand button, the composer spans the width, and the stage's positions become flow.

@@ -1246,6 +1246,13 @@ body {
 .ks-statement .ks-tr.ks-total .r {
   font-weight: 600;
 }
+/* Cash plan: the weeks, the week of the lowest point marked. */
+.ks-weeks .ks-tr {
+  --ks-columns: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) 24px;
+}
+.ks-weeks .ks-tr.ks-low {
+  background: var(--att-tint);
+}
 .ks-tr .r {
   justify-self: end;
   text-align: right;
@@ -1697,6 +1704,14 @@ body {
     --ks-columns: minmax(0, 1fr) auto auto 24px;
   }
   .ks-statement .ks-tr > :nth-child(3) {
+    display: none;
+  }
+  .ks-weeks .ks-tr {
+    --ks-columns: minmax(0, 1fr) auto auto 24px;
+  }
+  .ks-weeks .ks-tr > :nth-child(2),
+  .ks-weeks .ks-tr > :nth-child(3),
+  .ks-weeks .ks-tr > :nth-child(6) {
     display: none;
   }
 }
