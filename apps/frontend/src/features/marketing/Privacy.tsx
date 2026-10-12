@@ -3,17 +3,7 @@ import { MAILBOX } from "./Contact";
 
 // The privacy notice. Each statement follows what the service does today; when the code changes, change the page and
 // its date (docs/marketing-site.md).
-const updated = "10 October 2026";
-
-const PROVIDERS = [
-  { name: "Cloudflare", does: "Hosts the website and runs the application; scans client files for malware; receives clients’ email replies to a firm’s requests; delivers contact notes to our inbox." },
-  { name: "Neon, on Amazon Web Services", does: "The database, in the United States (Ohio)." },
-  { name: "WorkOS", does: "Sign-in, roles and invitations." },
-  { name: "OpenAI or Anthropic", does: "AI reading of authorized document text, and whole PDF page images without text redaction when that image route is enabled. OpenAI API image reading needs a separate operator opt-in. The private context machine can use Codex or Claude; personal subscriptions serve only their configured owner, with data handling governed by that provider account’s settings. Model improvement must be disabled before personal subscription activation. Your firm’s workspace names its active text and image routes." },
-  { name: "Google (Gemini API)", does: "When configured for API-mode image reading, reads the text of the PDFs a firm adds, sent as an image of the page. On the paid service we use, Google does not use them to improve its products and keeps them only briefly, to detect abuse. Settings in the workspace show whether it is in use." },
-  { name: "Resend", does: "Sends emails a person at the firm has approved, from our sender in the firm’s name unless the firm connects its own, and our own emails to firm members: the invitations a firm sends, and a note when someone sets up or joins a firm." },
-  { name: "Google (Workspace and Gmail)", does: "Our team’s email, which receives mail sent to our addresses and the notes sent through our contact page." },
-];
+const updated = "11 October 2026";
 
 export function Privacy() {
   return (
@@ -35,13 +25,13 @@ export function Privacy() {
           <h2>What we collect</h2>
           <ul>
             <li>
-              <strong>On this website:</strong> what your browser sends to load a page, and a check of whether you are signed in to the workspace, which contacts our sign-in service (WorkOS, or Krith itself) and sends any sign-in cookie you have. We use no analytics, advertising or tracking, and load no outside fonts or scripts. Our hosting provider, Cloudflare, processes each request, including your IP address, to deliver the site and protect it from abuse.
+              <strong>On this website:</strong> what your browser sends to load a page, and a check of whether you are signed in to the workspace, which contacts our sign-in service and sends any sign-in cookie you have. We use no analytics, advertising or tracking, and load no outside fonts or scripts. Our hosting provider, Cloudflare, processes each request, including your IP address, to deliver the site and protect it from abuse.
             </li>
             <li>
               <strong>People who write to us:</strong> the name, email address, firm and note you send through our contact page or to {MAILBOX}. We keep it to reply to you, and forward it to our team’s inbox. To limit repeated notes, we also keep a one-way digest of the network address a note came from, never the address itself, and clear it after an hour.
             </li>
             <li>
-              <strong>Firm members:</strong> name, email address and roles, which our sign-in provider WorkOS holds for us; which clients each person may work on; and a record of what each person does in Krith, such as confirming facts, approving drafts and signing off a close. When a firm invites someone, we email them the invitation from Krith. When someone sets up or joins a firm by signing in, we email them once, from Krith. We keep a record of each of these emails for 30 days.
+              <strong>Firm members:</strong> name, email address and roles, which our sign-in provider holds for us; which clients each person may work on; and a record of what each person does in Krith, such as confirming facts, approving drafts and signing off a close. When a firm invites someone, we email them the invitation from Krith. When someone sets up or joins a firm by signing in, we email them once, from Krith. We keep a record of each of these emails for 30 days.
             </li>
             <li>
               <strong>Client data a firm provides:</strong> documents the firm uploads, forwards or imports from Google Drive; replies and files a client sends through a private request link; ledger data read from QuickBooks or Xero and payout reports from Stripe, when the firm connects them; and the workpapers, questions, reviews and assistant conversations built from them.
@@ -60,7 +50,7 @@ export function Privacy() {
         <section>
           <h2>Who else sees it</h2>
           <ul>
-            <li>The service providers listed under “Who processes data for us”, each for its stated purpose.</li>
+            <li>The technology providers that run Krith for us, described below, only to provide the service.</li>
             <li>The ledgers, Google Drive and email sender a firm connects, which receive only what the firm authorizes.</li>
             <li>
               Our own staff see operational metadata (states, counts, errors and IDs) by default. Seeing client content requires a separate permission and a stated reason, and every such access is written to an audit log that cannot be edited.
@@ -72,31 +62,19 @@ export function Privacy() {
         <section>
           <h2>Where it is stored</h2>
           <p>
-            Our database runs on Neon, hosted by Amazon Web Services in the United States (Ohio). The application runs on Cloudflare’s network. Service providers may process information in the United States and other countries where they operate.
+            Krith’s database is hosted in the United States. Our technology providers may process information in the United States and other countries where they operate.
           </p>
         </section>
         <section>
-          <h2>Who processes data for us</h2>
-          <div className="k-tablewrap" role="region" aria-label="Service providers" tabIndex={0}>
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Provider</th>
-                  <th scope="col">What it does for Krith</th>
-                </tr>
-              </thead>
-              <tbody>
-                {PROVIDERS.map((p) => (
-                  <tr key={p.name}>
-                    <th scope="row">{p.name}</th>
-                    <td>{p.does}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <h2>The technology behind Krith</h2>
           <p>
-            QuickBooks, Xero, Stripe and Google Drive are the firm’s own accounts. Krith reads from them only after a firm member connects them, and writes to a ledger only under a grant the firm approves, one approved entry at a time. We update this list before adding a provider, and tell the firms that use Krith first.
+            Krith is built on established cloud and AI providers. Among them, Cloudflare and Amazon Web Services host the website, the application and its database, and AI models from OpenAI, Anthropic and Google read documents and help prepare the work. Others handle sign-in and send the emails a firm approves. Each processes data only to provide Krith’s service, and we don’t allow any of them to use firm or client data to train AI models.
+          </p>
+          <p>
+            Everything is scoped to one firm. Each firm’s records are walled off from every other firm’s in our database, the work Krith does for a firm reads only that firm’s data, and one firm’s data is never used in another firm’s work.
+          </p>
+          <p>
+            QuickBooks, Xero, Stripe and Google Drive are the firm’s own accounts. Krith reads from them only after a firm member connects them, and writes to a ledger only under a grant the firm approves, one approved entry at a time. A firm can ask us for the current list of providers that process its data, and we tell the firms that use Krith before adding one.
           </p>
         </section>
         <section>
@@ -108,7 +86,7 @@ export function Privacy() {
         <section>
           <h2>Cookies and browser storage</h2>
           <p>
-            We set no advertising or analytics cookies. Signing in uses cookies from WorkOS or from Krith itself to keep you signed in; they are not used for anything else. The workspace also stores, in your browser, the page to return to after signing in and whether you left the assistant panel open.
+            We set no advertising or analytics cookies. Signing in uses cookies from our sign-in provider or from Krith itself to keep you signed in; they are not used for anything else. The workspace also stores, in your browser, the page to return to after signing in and whether you left the assistant panel open.
           </p>
         </section>
         <section>
