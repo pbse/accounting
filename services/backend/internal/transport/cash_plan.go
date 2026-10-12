@@ -375,7 +375,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			on, _ := time.Parse("2006-01-02", month.AsOf)
 			snapshotID, asOf, stale, accounts, home, company = fileCapture+month.Version, on.Add(24*time.Hour-time.Second), len(month.Holds) > 0, filesAccounts, b.Currency, filesCompany
 			// A reviewer's later observation of cash opens the plan at its date instead.
-			observed, at, directory, e := cashObservation(ctx, db, r.PathValue("id"), month.AsOf)
+			observed, at, directory, e := cashObservation(ctx, db, r.PathValue("id"), month.Version, month.AsOf)
 			if e != nil {
 				return nil, tieRefusal{503, "The cash plan is unavailable."}
 			}

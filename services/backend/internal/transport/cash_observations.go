@@ -29,12 +29,12 @@ type cashBridgeItem struct {
 	Evidence    string `json:"evidence"`
 }
 
-// cashObservation is close id's newest observation of cash as of from or later: its id, date, and its accounts as a
-// capture's directory of bank accounts at their book balances (a bank balance with its bridge's items added); nil
-// without one.
-func cashObservation(ctx context.Context, db *sql.DB, closeID, from string) (id, asOf string, directory []byte, err error) {
+// cashObservation is close id's newest observation of cash recorded against its books version and as of from or later:
+// its id, date, and its accounts as a capture's directory of bank accounts at their book balances (a bank balance with
+// its bridge's items added); none without one.
+func cashObservation(ctx context.Context, db *sql.DB, closeID, version, from string) (id, asOf string, directory []byte, err error) {
 	var accountsRaw, bridgeRaw []byte
-	switch err = db.QueryRowContext(ctx, `SELECT id::text,as_of::text,accounts,bridge FROM cash_observations WHERE close_id::text=$1 AND as_of>=$2::date ORDER BY id DESC LIMIT 1`, closeID, from).Scan(&id, &asOf, &accountsRaw, &bridgeRaw); {
+	switch err = db.QueryRowContext(ctx, `SELECT id::text,as_of::text,accounts,bridge FROM cash_observations WHERE close_id::text=$1 AND books_version=$2 AND as_of>=$3::date ORDER BY id DESC LIMIT 1`, closeID, version, from).Scan(&id, &asOf, &accountsRaw, &bridgeRaw); {
 	case err == sql.ErrNoRows:
 		return "", "", nil, nil
 	case err != nil:
@@ -69,7 +69,11 @@ func registerCashObservations(mux *http.ServeMux, db *sql.DB) {
 		files, b, month, _, _, err := filesCash(r.Context(), db, r.PathValue("id"))
 		var list json.RawMessage
 		if err == nil {
-			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'as_of',as_of,'kind',kind,'accounts',accounts,'bridge',bridge,'book_cash',book_cash::text,'note',note,'actor',actor,'created_at',created_at) ORDER BY id DESC),'[]') FROM cash_observations WHERE close_id::text=$1`, r.PathValue("id")).Scan(&list)
+			version := ""
+			if month != nil {
+				version = month.Version
+			}
+			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'as_of',as_of,'kind',kind,'accounts',accounts,'bridge',bridge,'book_cash',book_cash::text,'note',note,'actor',actor,'created_at',created_at,'current',books_version=$2) ORDER BY id DESC),'[]') FROM cash_observations WHERE close_id::text=$1`, r.PathValue("id"), version).Scan(&list)
 		}
 		if err != nil {
 			problem(w, 503, "The cash observations are unavailable.")
@@ -113,19 +117,24 @@ func registerCashObservations(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Give the date the balances are as of, as YYYY-MM-DD.")
 			return
 		}
+		// Amounts are whole cents, so the cash recorded and the plan's agree to the cent.
+		cents := func(text string) (*big.Rat, bool) {
+			v, ok := new(big.Rat).SetString(strings.TrimSpace(text))
+			return v, ok && new(big.Rat).Mul(v, big.NewRat(100, 1)).IsInt()
+		}
 		total, seen := new(big.Rat), map[string]bool{}
 		for _, a := range in.Accounts {
-			v, ok := new(big.Rat).SetString(strings.TrimSpace(a.Balance))
+			v, ok := cents(a.Balance)
 			name := strings.ToLower(strings.TrimSpace(a.Name))
 			if !ok || name == "" || seen[name] {
-				problem(w, 422, "Give each account once, by name, with its balance as a decimal number.")
+				problem(w, 422, "Give each account once, by name, with its balance in currency units to the cent.")
 				return
 			}
 			seen[name] = true
 			total.Add(total, v)
 		}
 		for _, item := range in.Bridge {
-			v, ok := new(big.Rat).SetString(strings.TrimSpace(item.Amount))
+			v, ok := cents(item.Amount)
 			if !ok || !seen[strings.ToLower(strings.TrimSpace(item.Account))] || strings.TrimSpace(item.Description) == "" || strings.TrimSpace(item.Evidence) == "" {
 				problem(w, 422, "Give each outstanding item one of the accounts, a description, its amount (a deposit in transit positive, an uncleared check negative) and its evidence.")
 				return
@@ -145,11 +154,18 @@ func registerCashObservations(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "The balances are older than the month's books, which are as of "+month.AsOf+".")
 			return
 		}
+		// Every bank account of the month's books is observed, or the plan's opening would leave one out.
+		for key, a := range b.Accounts {
+			if a.Type == "Bank" && b.Balances[key] != nil && !seen[strings.ToLower(strings.TrimSpace(a.Name))] {
+				problem(w, 422, "Give a balance for each of the books' bank accounts: "+a.Name+" has none.")
+				return
+			}
+		}
 		accounts, _ := json.Marshal(in.Accounts)
 		bridge, _ := json.Marshal(append([]cashBridgeItem{}, in.Bridge...))
 		var id string
-		if err = db.QueryRowContext(r.Context(), `INSERT INTO cash_observations(close_id,as_of,kind,accounts,bridge,book_cash,note,actor) VALUES($1::bigint,$2::date,$3,$4,$5,$6::numeric,$7,$8) RETURNING id::text`,
-			r.PathValue("id"), in.AsOf, in.Kind, string(accounts), string(bridge), total.FloatString(2), in.Note, reviewerName(r)).Scan(&id); err != nil {
+		if err = db.QueryRowContext(r.Context(), `INSERT INTO cash_observations(close_id,books_version,as_of,kind,accounts,bridge,book_cash,note,actor) VALUES($1::bigint,$2,$3::date,$4,$5,$6,$7::numeric,$8,$9) RETURNING id::text`,
+			r.PathValue("id"), month.Version, in.AsOf, in.Kind, string(accounts), string(bridge), total.FloatString(2), in.Note, reviewerName(r)).Scan(&id); err != nil {
 			problem(w, 503, "The cash observation could not be kept.")
 			return
 		}

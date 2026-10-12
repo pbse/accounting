@@ -9,7 +9,7 @@ import { workspaceRequest } from "./workspace";
 // newest opens the cash plan from its date, the open items then wanted as of the same date.
 
 type Item = { account: string; description: string; amount: string; evidence: string };
-type Observation = { id: string; as_of: string; kind: "book" | "bank"; accounts: { name: string; balance: string }[]; bridge: Item[]; book_cash: string; note: string; actor: string; created_at: string };
+type Observation = { id: string; current: boolean; as_of: string; kind: "book" | "bank"; accounts: { name: string; balance: string }[]; bridge: Item[]; book_cash: string; note: string; actor: string; created_at: string };
 type Read = { on: boolean; observations: Observation[]; banks: string[]; from: string; can_record: boolean };
 
 export function CashObservations({ closeId }: { closeId: string }) {
@@ -61,6 +61,7 @@ export function CashObservations({ closeId }: { closeId: string }) {
             <li key={o.id}>
               {o.kind === "bank" ? "Bank balances" : "Book balances"} as of {dates.calendarDate(o.as_of)}: book cash {o.book_cash}
               {o.bridge.length > 0 && `, bridged by ${o.bridge.length} outstanding item${o.bridge.length === 1 ? "" : "s"}`}, recorded by {o.actor}. <small>{o.note}</small>
+              {!o.current && <small> Recorded against books since replaced: record the cash again.</small>}
             </li>
           ))}
         </ul>
@@ -83,7 +84,7 @@ export function CashObservations({ closeId }: { closeId: string }) {
             {banks.map((name, i) => (
               <label key={name}>
                 {name}
-                <input name={`balance-${i}`} inputMode="decimal" placeholder="Balance" />
+                <input name={`balance-${i}`} inputMode="decimal" placeholder="Balance" required />
               </label>
             ))}
             {kind === "bank" && (

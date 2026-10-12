@@ -7,6 +7,8 @@ BEGIN;
 CREATE TABLE cash_observations (
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
  close_id bigint NOT NULL REFERENCES client_closes(id) ON DELETE CASCADE,
+ -- books_version is the month's books it was recorded against: replaced, they leave it behind.
+ books_version text NOT NULL,
  as_of date NOT NULL,
  kind text NOT NULL CHECK (kind IN ('book','bank')),
  accounts jsonb NOT NULL CHECK (jsonb_typeof(accounts)='array' AND jsonb_array_length(accounts) BETWEEN 1 AND 50),
