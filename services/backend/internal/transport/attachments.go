@@ -43,9 +43,9 @@ func validFileName(name string) bool {
 }
 
 // validBooksFile is a client's books file (docs/books-sources.md, Client-provided books): a CSV in whatever encoding its
-// ledger wrote, or an Excel workbook, up to the scanner's 5 MiB.
+// ledger wrote, or an Excel workbook, up to the 50 MiB a books file may be.
 func validBooksFile(name string, body []byte) bool {
-	if !validFileName(name) || len(body) == 0 || len(body) > 5*1024*1024 {
+	if !validFileName(name) || len(body) == 0 || len(body) > bookfiles.MaxFile {
 		return false
 	}
 	switch strings.ToLower(filepath.Ext(name)) {
@@ -75,6 +75,15 @@ func validEvidenceFile(name string, body []byte) bool {
 	}
 	return true
 }
+
+// allowUpload gives a request carrying a file (up to a 50 MiB books file) time to arrive and then be answered: the
+// server's 15-second read and 30-second write timeouts guard every other request.
+func allowUpload(w http.ResponseWriter) {
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(5 * time.Minute))
+	_ = controller.SetWriteDeadline(time.Now().Add(6 * time.Minute))
+}
+
 func clientSubmission(w http.ResponseWriter, r *http.Request) (string, bool, []clientFile, bool) {
 	var in struct {
 		Body      string `json:"body"`
@@ -82,9 +91,11 @@ func clientSubmission(w http.ResponseWriter, r *http.Request) (string, bool, []c
 	}
 	files := []clientFile{}
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-		r.Body = http.MaxBytesReader(w, r.Body, 21*1024*1024)
+		allowUpload(w)
+		// A books file may be up to 50 MiB; a request for documents keeps to its 20 MiB, checked once it is known.
+		r.Body = http.MaxBytesReader(w, r.Body, bookfiles.MaxFile+1024*1024)
 		if r.ParseMultipartForm(512*1024) != nil {
-			problem(w, 413, "Submit up to five files, 20 MiB total, plus a reply.")
+			problem(w, 413, "Submit up to five files, 20 MiB total (one books file up to 50 MiB), plus a reply.")
 			return "", false, nil, false
 		}
 		defer r.MultipartForm.RemoveAll()
@@ -114,13 +125,13 @@ func clientSubmission(w http.ResponseWriter, r *http.Request) (string, bool, []c
 				problem(w, 422, "Attachment unavailable.")
 				return "", false, nil, false
 			}
-			body, e := io.ReadAll(io.LimitReader(f, 5*1024*1024+1))
+			body, e := io.ReadAll(io.LimitReader(f, bookfiles.MaxFile+1))
 			f.Close()
 			total += len(body)
 			digest := preparation.Digest(body)
 			// Which a request takes is checked once its request is known: books files for a request for the month's books.
-			if e != nil || !(validEvidenceFile(h.Filename, body) || validBooksFile(h.Filename, body)) || total > 20*1024*1024 || seen[digest] {
-				problem(w, 422, "Use distinct UTF-8 TXT/CSV up to 512 KiB or complete PDF up to 5 MiB (for a request for books, CSV or Excel up to 5 MiB); 20 MiB total.")
+			if e != nil || !(validEvidenceFile(h.Filename, body) || validBooksFile(h.Filename, body)) || total > bookfiles.MaxFile || seen[digest] {
+				problem(w, 422, "Use distinct UTF-8 TXT/CSV up to 512 KiB or complete PDF up to 5 MiB, 20 MiB total (for a request for books, CSV or Excel up to 50 MiB).")
 				return "", false, nil, false
 			}
 			seen[digest] = true
@@ -337,9 +348,12 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		nameHint, limit := "upload.pdf", int64(5*1024*1024)
-		if textScan && !fileScan {
+		if fileScan {
+			limit = bookfiles.MaxFile
+		} else if textScan {
 			nameHint, limit = "upload.txt", 512*1024
 		}
+		allowUpload(w)
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		body, err := io.ReadAll(r.Body)
 		// A books file is checked as what its name says once its attachment is found.
@@ -384,8 +398,13 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 				u.Path = "/scan-file"
 				url = u.String()
 			}
-			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(4 * time.Minute))
-			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+			// A books file may wait for the scanner's signature update and then its longer binary scan.
+			wait := 3 * time.Minute
+			if fileScan {
+				wait = 5 * time.Minute
+			}
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + time.Minute))
+			ctx, cancel := context.WithTimeout(r.Context(), wait)
 			defer cancel()
 			scanRequest, e := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 			if e != nil {

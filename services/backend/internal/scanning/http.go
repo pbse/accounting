@@ -33,9 +33,10 @@ func Handler(key, database string) http.Handler {
 			http.Error(w, "Unavailable", 403)
 			return
 		}
+		// A binary file is a client's books (a workbook, up to the 50 MiB a books file may be) or a document.
 		limit := int64(512 * 1024)
 		if binary {
-			limit = 5 * 1024 * 1024
+			limit = 50 * 1024 * 1024
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		body, err := io.ReadAll(r.Body)
@@ -56,7 +57,8 @@ func Handler(key, database string) http.Handler {
 			return
 		}
 		defer lock.Unlock()
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+		// Room for a signature update (two minutes at most) and then a binary scan (150 seconds).
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 		defer cancel()
 		if time.Since(updated) > 6*time.Hour {
 			if os.MkdirAll(database, 0700) != nil || strings.ContainsAny(database, "\r\n") {
@@ -76,7 +78,7 @@ func Handler(key, database string) http.Handler {
 			}
 			// Scan still enforces signature freshness if the update service is unavailable.
 		}
-		state, version := scan(ctx, database, body)
+		state, version := scan(ctx, database, body, binary)
 		if state != "clean" {
 			status := 503
 			if state == "infected" {
@@ -90,8 +92,15 @@ func Handler(key, database string) http.Handler {
 	})
 }
 
-func scan(ctx context.Context, database string, body []byte) (string, string) {
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+// scan checks body with ClamAV. A text file is small; a binary one may be a workbook, a zip whose sheets unpack to many
+// times its size, so it is scanned whole within larger limits and given longer. Anything past the limits is an alert,
+// never a pass.
+func scan(ctx context.Context, database string, body []byte, binary bool) (string, string) {
+	timeout, limits := 90*time.Second, []string{"--max-filesize=6M", "--max-scansize=50M", "--max-files=100"}
+	if binary {
+		timeout, limits = 150*time.Second, []string{"--max-filesize=256M", "--max-scansize=1024M", "--max-files=1000"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	dir, err := os.MkdirTemp("", "close-text-scan-")
 	if err != nil {
@@ -106,7 +115,7 @@ func scan(ctx context.Context, database string, body []byte) (string, string) {
 	if err != nil || len(version) > 500 {
 		return "failed", ""
 	}
-	err = exec.CommandContext(ctx, "clamscan", "--database="+database, "--official-db-only=yes", "--fail-if-cvd-older-than=2", "--alert-encrypted=yes", "--alert-exceeds-max=yes", "--max-filesize=6M", "--max-scansize=50M", "--max-files=100", "--no-summary", path).Run()
+	err = exec.CommandContext(ctx, "clamscan", append(append([]string{"--database=" + database, "--official-db-only=yes", "--fail-if-cvd-older-than=2", "--alert-encrypted=yes", "--alert-exceeds-max=yes"}, limits...), "--no-summary", path)...).Run()
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 1 {

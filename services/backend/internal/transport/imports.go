@@ -594,7 +594,8 @@ func registerImports(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
-		// The file's 50 MiB, and a mebibyte for the form around it.
+		// The file's 50 MiB, and a mebibyte for the form around it, given time to arrive.
+		allowUpload(w)
 		r.Body = http.MaxBytesReader(w, r.Body, bookfiles.MaxFile+(1<<20))
 		if err := r.ParseMultipartForm(8 << 20); err != nil {
 			problem(w, 413, "Send one file of 50 MiB or less, with its month.")

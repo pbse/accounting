@@ -21,6 +21,6 @@ func main() {
 	if address == "" {
 		address = ":8080"
 	}
-	server := http.Server{Addr: address, Handler: scanning.Handler(key, database), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 4 * time.Minute, IdleTimeout: 60 * time.Second}
+	server := http.Server{Addr: address, Handler: scanning.Handler(key, database), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: time.Minute, WriteTimeout: 6 * time.Minute, IdleTimeout: 60 * time.Second}
 	log.Fatal(server.ListenAndServe())
 }

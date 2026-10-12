@@ -201,7 +201,7 @@ export function FilesCard({ client }: { client: string }) {
         )}
       </Card>
       {asking && (
-        <Dialog open onClose={() => setAsking(false)} title="Ask the client for a month's books" description="A private link through which the client sends the month's Trial Balance or General Ledger, as a CSV or Excel workbook of up to 5 MiB.">
+        <Dialog open onClose={() => setAsking(false)} title="Ask the client for a month's books" description="A private link through which the client sends the month's Trial Balance or General Ledger, as a CSV or Excel workbook of up to 50 MiB.">
           <AskForm client={client} onClose={() => setAsking(false)} />
         </Dialog>
       )}

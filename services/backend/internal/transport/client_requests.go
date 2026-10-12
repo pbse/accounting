@@ -395,12 +395,14 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		if books && len(files) > 0 && len(answers) == 0 {
 			answers = []clientAnswer{{1, "document", ""}}
 		}
+		attachedSize := 0
 		for _, f := range files {
+			attachedSize += len(f.Body)
 			if books && !validBooksFile(f.Name, f.Body) {
-				problem(w, 422, "Attach the books as a CSV or Excel workbook (.xlsx) of up to 5 MiB.")
+				problem(w, 422, "Attach the books as a CSV or Excel workbook (.xlsx) of up to 50 MiB.")
 				return
 			}
-			if !books && !validEvidenceFile(f.Name, f.Body) {
+			if !books && (!validEvidenceFile(f.Name, f.Body) || attachedSize > 20*1024*1024) {
 				problem(w, 422, "Use distinct UTF-8 TXT/CSV up to 512 KiB or complete PDF up to 5 MiB; 20 MiB total.")
 				return
 			}
@@ -509,8 +511,11 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 				return
 			}
 		}
-		var pendingCount, pendingSize int
-		if err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(octet_length(body)),0) FROM client_attachments WHERE close_id=$1`, closeID).Scan(&pendingCount, &pendingSize); err != nil {
+		// A close holds up to 20 MiB of client documents, and apart from them up to 250 MiB of books files (five at the
+		// largest), as books files are kept to be read, not as evidence.
+		var pendingCount, pendingSize, booksSize int
+		if err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(octet_length(a.body)) FILTER (WHERE NOT COALESCE(q.coverage_scope ? 'books',false)),0),
+ COALESCE(sum(octet_length(a.body)) FILTER (WHERE COALESCE(q.coverage_scope ? 'books',false)),0) FROM client_attachments a JOIN work_requests q ON q.id=a.request_id WHERE a.close_id=$1`, closeID).Scan(&pendingCount, &pendingSize, &booksSize); err != nil {
 			problem(w, 503, "Attachment capacity unavailable.")
 			return
 		}
@@ -518,7 +523,7 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		for _, file := range files {
 			size += len(file.Body)
 		}
-		if pendingCount+len(files) > 100 || pendingSize+size > 20*1024*1024 {
+		if pendingCount+len(files) > 100 || (!books && pendingSize+size > 20*1024*1024) || (books && booksSize+size > 250*1024*1024) {
 			problem(w, 413, "Client attachment capacity reached. Contact the firm.")
 			return
 		}

@@ -673,10 +673,12 @@ func idempotent(db *sql.DB, next http.Handler) http.Handler {
 			problem(w, 422, "Use an Idempotency-Key of 1–255 visible ASCII characters.")
 			return
 		}
-		// A client's books file may be up to 50 MiB, with its form around it; other requests are far smaller.
+		// A client's books file may be up to 50 MiB, with its form around it, given time to arrive; other requests are far
+		// smaller.
 		limit := int64(32 << 20)
 		if strings.HasSuffix(r.URL.Path, "/client/imports") {
 			limit = bookfiles.MaxFile + (1 << 20)
+			allowUpload(w)
 		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 		if err != nil {

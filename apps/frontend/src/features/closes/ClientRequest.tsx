@@ -292,11 +292,11 @@ export default function ClientRequest() {
                       );
                     })}
                   </ol>
-                  <label>Supporting documents<input name="files" type="file" accept={request?.books ? ".csv,.xlsx" : ".pdf,.txt,.csv"} multiple /></label>
+                  <label>{request?.books ? "Your books" : "Supporting documents"}<input name="files" type="file" accept={request?.books ? ".csv,.xlsx" : ".pdf,.txt,.csv"} multiple={!request?.books} /></label>
                   {(request.questions ?? []).some((q) => q.state === "awaiting_document") && (
                     <p className="note">Sending a document you said would follow? Tick “I'm attaching the document with this reply” on its question and attach the file.</p>
                   )}
-                  <p>{request?.books ? "Your books as a CSV or Excel workbook (.xlsx), up to 5 MiB each." : "Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total."} Files stay quarantined until automated scanning and the firm's release.</p>
+                  <p>{request?.books ? "Your books as one CSV or Excel workbook (.xlsx) of up to 50 MiB per reply; send another file in a further reply." : "Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total."} Files stay quarantined until automated scanning and the firm's release.</p>
                   <label>
                     <input type="checkbox" name="confirmed" required /> This reply concerns {request.entity} for {request.period}. I understand it will be reviewed by the firm.
                   </label>
@@ -309,7 +309,7 @@ export default function ClientRequest() {
                   <p>Select the same original files if scanning was interrupted or the firm needs a fresh scan. This cannot add new documents or change your reply.</p>
                   <form onSubmit={retryScans}>
                     <fieldset disabled={busy}>
-                      <label>Original documents<input type="file" name="files" accept={request?.books ? ".csv,.xlsx" : ".pdf,.txt,.csv"} multiple required /></label>
+                      <label>Original documents<input type="file" name="files" accept={request?.books ? ".csv,.xlsx" : ".pdf,.txt,.csv"} multiple={!request?.books} required /></label>
                       <button>Retry malware scanning</button>
                     </fieldset>
                   </form>

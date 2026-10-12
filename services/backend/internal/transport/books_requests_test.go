@@ -144,4 +144,8 @@ func TestAClientSendsTheMonthsBooksThroughARequest(t *testing.T) {
 	if state := fileState(); state != "removed" {
 		t.Fatalf("a deleted file is removed, to the client: %s", state)
 	}
+	// A books file may be as large as one a member sends: one over the documents' 5 MiB is taken and scanned.
+	large := "Account,Debit,Credit\n" + strings.Repeat("Business Checking,1.00,\nOwner's Equity,,1.00\n", 160000)
+	reply("April general ledger.csv", large, 200)
+	send("POST", "/v1/client-request/scan-file", link, "application/octet-stream", []byte(large), 200)
 }
