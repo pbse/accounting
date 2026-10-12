@@ -42,9 +42,12 @@ export default function ClientRequest() {
   const [passcode, setPasscode] = useState("");
   const [needsPasscode, setNeedsPasscode] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, { answer: string; later: boolean; attached?: boolean }>>({});
+  // A books file's state read again after its scan, kept apart from the request so unsent answers stay as typed.
+  const [sent, setSent] = useState<Request["files"]>();
   useEffect(() => {
     // A document answer's recorded text names the files; it is not the client's note, so it is not offered back as one.
     setDrafts(Object.fromEntries((request?.questions ?? []).map((q) => [q.position, { answer: q.answer.startsWith("Document attached with this reply:") ? "" : q.answer, later: q.state === "awaiting_document" }])));
+    setSent(undefined);
   }, [request]);
   async function call(body?: object | FormData): Promise<Request> {
     const response = await fetch(`${apiBaseUrl}/v1/client-request`, {
@@ -106,7 +109,7 @@ export default function ClientRequest() {
     }
     setScanStatus(files.length ? "malware scanning completed. The firm must review and release your documents." : "");
     // A books request lists each file's state, which the scan just moved on: read it again.
-    if (files.length && request?.books) setRefresh((n) => n + 1);
+    if (files.length && request?.books) setSent((await call()).files);
   }
   async function retryScans(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -195,11 +198,11 @@ export default function ClientRequest() {
                   Attachments stay quarantined until automated scanning and the firm's release.
                 </p>
               )}
-              {request.books && (request.files?.length ?? 0) > 0 && (
+              {request.books && ((sent ?? request.files)?.length ?? 0) > 0 && (
                 <section aria-label="Your files">
                   <h3>Your files</h3>
                   <ul>
-                    {request.files!.map((f, i) => (
+                    {(sent ?? request.files)!.map((f, i) => (
                       <li key={i}>
                         {f.name}: {fileStates[f.state]}
                       </li>
