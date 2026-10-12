@@ -216,9 +216,14 @@ func registerOpenItemFiles(mux *http.ServeMux, db *sql.DB) {
 		if len(preview) > 20 {
 			preview = preview[:20]
 		}
-		out := map[string]any{"layout": layout, "headings": headings, "roles": bookfiles.Roles, "documents": len(items), "total": total.FloatString(2), "preview": preview, "problems": problems}
+		// A layout the file cannot be read by gives no documents at all, which is not none open: it cannot be kept.
+		out := map[string]any{"layout": layout, "headings": headings, "roles": bookfiles.Roles, "documents": len(items), "total": total.FloatString(2), "preview": preview, "problems": problems, "usable": items != nil}
 		if proposed || r.FormValue("confirmed") != "true" {
 			jsonReply(w, 200, out)
+			return
+		}
+		if items == nil {
+			problem(w, 422, strings.Join(problems, " "))
 			return
 		}
 		// Each document is named by its party and number (or, unnumbered, its dates and amount): two the name cannot tell

@@ -18,6 +18,7 @@ type Reading = {
   total: string;
   preview: { row: number; party: string; document: string; date?: string; due?: string; open: string }[];
   problems: string[];
+  usable: boolean;
 };
 type Kept = { id: string; side: "receivable" | "payable"; as_of: string; name: string; documents: number; problems: string[]; actor: string; created_at: string };
 
@@ -151,7 +152,7 @@ export function OpenItemFiles({ closeId }: { closeId: string }) {
             ))}
           </ul>
           <p>
-            <button type="button" className="primary" disabled={busy} onClick={() => void post(chosen, reading.layout, true)}>
+            <button type="button" className="primary" disabled={busy || !reading.usable} onClick={() => void post(chosen, reading.layout, true)}>
               {reading.documents === 0
                 ? `Keep: no ${chosen.side === "receivable" ? "receivable" : "payable"} is open`
                 : `Keep as the month's open ${chosen.side === "receivable" ? "receivables" : "payables"}`}

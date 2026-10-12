@@ -122,6 +122,17 @@ func TestAFilesMonthsOpenItemsComeFromAnExport(t *testing.T) {
 	if status != "promised" {
 		t.Fatalf("the decision about the document: %s", status)
 	}
+	// A layout without the number column reads no list at all, which is not none open: it is not kept.
+	var unnumbered map[string]any
+	json.Unmarshal(layout, &unnumbered)
+	columns := unnumbered["columns"].(map[string]any)
+	for column, role := range columns {
+		if role == "document" {
+			delete(columns, column)
+		}
+	}
+	withoutNumbers, _ := json.Marshal(unnumbered)
+	uploadAs(aging, "2027-02-05", string(withoutNumbers), true, 422)
 	// One document twice is not kept: decisions would fall on both.
 	twice := aging[:strings.Index(aging, "TOTAL")] + ",12/10/2026,Invoice,998,Acme Co,01/09/2027,300.00,300.00\n"
 	uploadAs(twice, "2027-02-05", string(layout), true, 422)

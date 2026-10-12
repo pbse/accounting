@@ -88,7 +88,7 @@ func roleOf(heading string) Role {
 }
 
 // ProposeOpenItems proposes how to read an export of open items: the first row, among each table's first 30, whose
-// headings name a document number and an amount, its columns' roles, its dates' order and its amounts' style. ok is false when no
+// headings name an amount and a document number or a party (whose number column a person then names), its columns' roles, its dates' order and its amounts' style. ok is false when no
 // row does.
 func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
 	for _, t := range f.Tables {
@@ -112,7 +112,7 @@ func ProposeOpenItems(f File) (l OpenItemsLayout, ok bool) {
 			if !slices.Contains(mapValues(columns), RoleOpen) && amount >= 0 {
 				columns[amount] = RoleOpen
 			}
-			if !slices.Contains(mapValues(columns), RoleOpen) || !slices.Contains(mapValues(columns), RoleDocument) {
+			if !slices.Contains(mapValues(columns), RoleOpen) || (!slices.Contains(mapValues(columns), RoleDocument) && !slices.Contains(mapValues(columns), RoleParty)) {
 				continue
 			}
 			l = OpenItemsLayout{Table: t.Name, HeaderRow: row.Number, Columns: columns}
@@ -169,7 +169,8 @@ func mapValues(m map[int]Role) []Role {
 // without an open amount is a heading: one holding only a name is the party of the documents below it that name none
 // (as an aged report grouped by contact is laid out). An open item is followed up by its number, so a row without one
 // is never counted: one with anything written as a date is a document left out, named as a problem; any other is a
-// summary (a subtotal, a total), left aside. An export with none open is read as none, which a side all paid gives.
+// summary (a subtotal, a total), left aside. An export with none open is read as none, which a side all paid gives; a
+// layout that cannot be read by (no table, a role given twice, no amount or number column) gives no list at all.
 func ReadOpenItems(f File, l OpenItemsLayout) ([]OpenItem, []string) {
 	var table *Table
 	for i := range f.Tables {
