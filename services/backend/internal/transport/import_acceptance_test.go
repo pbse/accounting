@@ -679,13 +679,13 @@ func TestAFilesReadingIsCheckedAndAcceptedAsTheMonthsBooks(t *testing.T) {
 	observe := func(asOf string, want int) map[string]any {
 		t.Helper()
 		return call("user_a", partner, "POST", "/v1/closes/"+januaryClose+"/cash-observations", map[string]any{"kind": "bank", "as_of": asOf,
-			"accounts": []map[string]string{{"name": "Business Checking", "balance": "1600.25"}},
-			"bridge":   []map[string]string{{"account": "Business Checking", "description": "Check 1043 to Landlord", "amount": "-100.00", "evidence": "February bank statement, check register"}},
+			"accounts": []map[string]string{{"name": "1000 Business Checking", "balance": "1600.25"}},
+			"bridge":   []map[string]string{{"account": "1000 Business Checking", "description": "Check 1043 to Landlord", "amount": "-100.00", "evidence": "February bank statement, check register"}},
 			"note":     "Bank balance read from online banking on 2 February", "confirmed": true}, want)
 	}
 	observe("2027-01-30", 422)
 	call("user_a", partner, "POST", "/v1/closes/"+januaryClose+"/cash-observations", map[string]any{"kind": "book", "as_of": "2027-02-01",
-		"accounts": []map[string]string{{"name": "Business Checking", "balance": "1500.255"}}, "note": "A fraction of a cent", "confirmed": true}, 422)
+		"accounts": []map[string]string{{"name": "1000 Business Checking", "balance": "1500.255"}}, "note": "A fraction of a cent", "confirmed": true}, 422)
 	if kept := observe("2027-02-01", 201); kept["book_cash"] != "1500.25" {
 		t.Fatalf("the bank balance bridged to book cash: %v", kept)
 	}
