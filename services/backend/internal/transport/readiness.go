@@ -46,7 +46,13 @@ type readiness struct {
 // Read from the caller's consistent snapshot. Sign-off never relies on browser counts.
 func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, error) {
 	out := readiness{State: "open", Blockers: []string{}, Scope: closeScope{RequiredPapers: []string{}, ExternalSteps: []externalStep{}}}
-	var raw []byte
+	var raw, suggested, uncertainRaw []byte
+	var pending int
+	var source string
+	var recoded sql.NullInt64
+	var recapture bool
+	// The snapshot (the signed digest) is the first column; the reads after it are checked apart from it and never enter
+	// the digest, and come in the same round trip.
 	err := tx.QueryRowContext(ctx, `SELECT jsonb_build_object(
  'close',jsonb_build_object('id',c.id::text,'organization_id',c.organization_id,'entity',c.entity,'period',c.period),
  'scope',COALESCE((SELECT to_jsonb(s) FROM close_scopes s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'null'::jsonb),
@@ -61,7 +67,15 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
  'coverage',COALESCE((SELECT jsonb_agg((CASE WHEN b.xero_snapshot_id IS NULL THEN to_jsonb(b)-'xero_snapshot_id' ELSE to_jsonb(b) END)-(CASE WHEN b.file_version_id IS NULL THEN 'file_version_id' ELSE '' END) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=c.id),'[]'),
  'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'digest',a.digest,'state',a.state,'source_id',a.source_id,'scan_version',a.scan_version,'decision_note',a.decision_note) ORDER BY a.id) FROM client_attachments a WHERE a.close_id=c.id),'[]'),
  'requests',COALESCE((SELECT jsonb_agg(to_jsonb(q) ORDER BY q.id) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id),'[]')
- )||COALESCE((SELECT jsonb_build_object('xero_postings',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_postings p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('xero_corrections',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_corrections p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('export_label',to_jsonb(l)) FROM close_export_labels l WHERE l.close_id=c.id ORDER BY l.id DESC LIMIT 1),'{}')||COALESCE((SELECT jsonb_build_object('cash_flow_import',to_jsonb(i)) FROM cash_flow_imports i WHERE i.close_id=c.id ORDER BY i.id DESC LIMIT 1),'{}')||COALESCE((SELECT jsonb_build_object('file_journals',jsonb_agg(CASE WHEN j.state='withdrawn' THEN to_jsonb(j) ELSE to_jsonb(j)-'withdrawn_by'-'withdrawn_at'-'withdrawn_reason' END ORDER BY j.id)) FROM file_journals j WHERE j.close_id=c.id HAVING count(*)>0),'{}') FROM client_closes c WHERE c.id::text=$1`, id).Scan(&raw)
+ )||COALESCE((SELECT jsonb_build_object('xero_postings',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_postings p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('xero_corrections',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_corrections p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('export_label',to_jsonb(l)) FROM close_export_labels l WHERE l.close_id=c.id ORDER BY l.id DESC LIMIT 1),'{}')||COALESCE((SELECT jsonb_build_object('cash_flow_import',to_jsonb(i)) FROM cash_flow_imports i WHERE i.close_id=c.id ORDER BY i.id DESC LIMIT 1),'{}')||COALESCE((SELECT jsonb_build_object('file_journals',jsonb_agg(CASE WHEN j.state='withdrawn' THEN to_jsonb(j) ELSE to_jsonb(j)-'withdrawn_by'-'withdrawn_at'-'withdrawn_reason' END ORDER BY j.id)) FROM file_journals j WHERE j.close_id=c.id HAVING count(*)>0),'{}'),
+ (SELECT count(*) FROM client_attachments WHERE close_id=c.id AND state NOT IN ('released','rejected')),
+ books_source(c.organization_id,c.entity,c.period),
+ (SELECT COALESCE(jsonb_agg(w.id::text ORDER BY w.id),'[]'::jsonb) FROM workpapers w WHERE w.close_id=c.id AND NOT EXISTS (SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)),
+ (SELECT COALESCE(jsonb_agg(jsonb_build_object('kind',u.kind,'id',u.id) ORDER BY u.kind,u.id),'[]'::jsonb) FROM (SELECT 'Credit application' AS kind,id FROM credit_applications WHERE close_id=c.id AND state IN ('executing','unknown') UNION ALL SELECT 'Xero journal',id FROM xero_postings WHERE close_id=c.id AND state IN ('executing','unknown') UNION ALL SELECT 'Xero bill correction',id FROM xero_corrections WHERE close_id=c.id AND state IN ('executing','unknown')) u),
+ (SELECT max(xc.id) FROM xero_corrections xc WHERE xc.close_id=c.id AND xc.state='verified' AND xc.verified_at>COALESCE((SELECT max((s.payload->>'trial_balance_requested_at')::timestamptz) FROM xero_snapshots s WHERE s.close_id=xc.close_id),'-infinity')),
+ `+quickbooks.RefreshStopped("c.id")+` AND `+sourceAllows("c.id", "quickbooks")+`,
+ (SELECT COALESCE(jsonb_agg(jsonb_build_object('id',s.id::text,'decision',s.decision,'snapshot_digest',s.snapshot_digest,'profile',s.profile,'note',s.note,'actor',s.actor,'created_at',s.created_at) ORDER BY s.id DESC),'[]') FROM close_signoffs s WHERE s.close_id=c.id)
+ FROM client_closes c WHERE c.id::text=$1`, id).Scan(&raw, &pending, &source, &suggested, &uncertainRaw, &recoded, &recapture, &out.History)
 	if err != nil {
 		return out, err
 	}
@@ -76,10 +90,6 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 			coverageAt[len(out.Blockers)] = item.AccountID
 			out.Blockers = append(out.Blockers, "Coverage for "+item.Name+": "+strings.ReplaceAll(item.State, "_", " ")+".")
 		}
-	}
-	var pending int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM client_attachments WHERE close_id=$1 AND state NOT IN ('released','rejected')`, id).Scan(&pending); err != nil {
-		return out, err
 	}
 	if pending > 0 {
 		out.Blockers = append(out.Blockers, fmt.Sprintf("%d client attachments still require scanning or disposition.", pending))
@@ -112,9 +122,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	}
 	// A month whose books are its files is signed off over its accepted file's books, which coverage binds (its capture
 	// is the books version): it waits for them, and for the checks the file was accepted with that hold its statements.
-	if source, err := closeBooksSource(ctx, tx, id); err != nil {
-		return out, err
-	} else if source == "files" {
+	if source == "files" {
 		b, month, err := fileMonthBooks(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -177,10 +185,6 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	}
 	// Keep suggestions out of the signed digest: UI guidance cannot reopen a
 	// previously signed accounting snapshot on deployment.
-	var suggested []byte
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(w.id::text ORDER BY w.id),'[]'::jsonb) FROM workpapers w WHERE w.close_id::text=$1 AND NOT EXISTS (SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)`, id).Scan(&suggested); err != nil {
-		return out, err
-	}
 	if err = json.Unmarshal(suggested, &out.SuggestedPapers); err != nil {
 		return out, err
 	}
@@ -235,23 +239,15 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	}
 	// Credit applications and Xero journals are checked apart from the signed snapshot, so adding them left existing
 	// sign-offs intact.
-	uncertain, err := tx.QueryContext(ctx, `SELECT 'Credit application',id FROM credit_applications WHERE close_id::text=$1 AND state IN ('executing','unknown') UNION ALL SELECT 'Xero journal',id FROM xero_postings WHERE close_id::text=$1 AND state IN ('executing','unknown') UNION ALL SELECT 'Xero bill correction',id FROM xero_corrections WHERE close_id::text=$1 AND state IN ('executing','unknown') ORDER BY 1,2`, id)
-	if err != nil {
+	var uncertain []struct {
+		Kind string `json:"kind"`
+		ID   int64  `json:"id"`
+	}
+	if err = json.Unmarshal(uncertainRaw, &uncertain); err != nil {
 		return out, err
 	}
-	for uncertain.Next() {
-		var kind string
-		var attempt int64
-		if err = uncertain.Scan(&kind, &attempt); err != nil {
-			uncertain.Close()
-			return out, err
-		}
-		out.Blockers = append(out.Blockers, fmt.Sprintf("%s attempt #%d must be resolved.", kind, attempt))
-	}
-	uncertain.Close()
-	var recoded sql.NullInt64
-	if err = tx.QueryRowContext(ctx, `SELECT max(id) FROM xero_corrections c WHERE close_id::text=$1 AND state='verified' AND verified_at>COALESCE((SELECT max((s.payload->>'trial_balance_requested_at')::timestamptz) FROM xero_snapshots s WHERE s.close_id=c.close_id),'-infinity')`, id).Scan(&recoded); err != nil {
-		return out, err
+	for _, u := range uncertain {
+		out.Blockers = append(out.Blockers, fmt.Sprintf("%s attempt #%d must be resolved.", u.Kind, u.ID))
 	}
 	if recoded.Valid {
 		out.Blockers = append(out.Blockers, fmt.Sprintf("Capture Xero again: bill correction #%d changed the ledger after the latest capture.", recoded.Int64))
@@ -261,11 +257,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Production attempt #%d requires canonical readback or investigation.", p.ID))
 		}
 	}
-	var recapture bool
 	// Only a month that reads QuickBooks waits on its stopped refresh.
-	if err = tx.QueryRowContext(ctx, `SELECT `+quickbooks.RefreshStopped("$1::bigint")+` AND `+sourceAllows("$1::bigint", "quickbooks"), id).Scan(&recapture); err != nil {
-		return out, err
-	}
 	if recapture {
 		out.Blockers = append(out.Blockers, "Capture the QuickBooks month-end again: its scheduled refresh has stopped or failed, so later entries may be missing.")
 	}
@@ -295,10 +287,6 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		}
 	}
 	out.Blockers = append(out.Blockers, opening...)
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',s.id::text,'decision',s.decision,'snapshot_digest',s.snapshot_digest,'profile',s.profile,'note',s.note,'actor',s.actor,'created_at',s.created_at) ORDER BY s.id DESC),'[]') FROM close_signoffs s WHERE s.close_id::text=$1`, id).Scan(&out.History)
-	if err != nil {
-		return out, err
-	}
 	var history []struct {
 		ID       string               `json:"id"`
 		Decision string               `json:"decision"`
