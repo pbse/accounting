@@ -354,7 +354,7 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 			if a := auth.Actor(r.Context()); a != nil && a.ExpiresAt != nil && time.Now().After(a.ExpiresAt.Time) {
 				return false
 			}
-			if allowed, err := organizationAccess(db, r); err != nil || !allowed {
+			if allowed, _, err := organizationAccess(db, r, ""); err != nil || !allowed {
 				return false
 			}
 			if sessions != nil && r.Context().Value(signedInKey{}) != nil {
