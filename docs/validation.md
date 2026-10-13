@@ -4958,3 +4958,11 @@ Evidence, on local PostgreSQL with the demonstration data (main's API and this b
 - `/goal`: 21 → 16 round trips; `/goal?verify=1` (Overview): 67 → 62.
 - All 72 reads (`/goal` and `/goal?verify=1` for each of the 36 closes, two of them with goals) return the same documents.
 - The goal, coverage, hand-off, routine, takeover, readiness and plan transport tests pass (23).
+
+## 2026-10-13 — "Needs re-review" reads the drafts' review state once (page speed)
+
+The Closes page's **Needs re-review** list (`GET /v1/closes/dependencies`) flags approved drafts that a QuickBooks transaction updated after their approval may affect. It made 4 round trips, but one query took about 130 ms. The planner evaluated the `workpaper_review_state` view, with its recursive lineage, once per close (33 times on the demonstration firm), so the cost grew with closes × drafts. The firm's approved drafts are now read from the view once, in a materialized CTE, and joined from there.
+
+Evidence, on local PostgreSQL with the demonstration data:
+- The query: 130 ms → 7 ms (`EXPLAIN ANALYZE`). The endpoint: 138 ms → 25 ms, and 36 → 21 ms with a client filter. The response is the same as main's.
+- The demonstration data has no transaction updated after an approval, so equal responses there say little. `TestPredictedReviewFlagsDraftsALaterTransactionMayAffect` and `TestPredictedReviewSaysWhenTheAccountNoLongerTies` cover flagged rows, and `TestOrganizationIsolation` covers the list across firms. Those, with `TestRecurringAccrualFreshReviewAndPortfolioDependency`, pass.
