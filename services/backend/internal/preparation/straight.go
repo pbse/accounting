@@ -625,11 +625,13 @@ func sameName(a, b string) bool {
 	return documents.NormalizeEntity(a) != "" && documents.NormalizeEntity(a) == documents.NormalizeEntity(b)
 }
 
-// mentionsAny reports whether the quote, compared as text, contains any of the words.
+// mentionsAny reports whether the quote, compared as text, names any of the words, each starting a word of its own: a
+// stem names its forms ("cancel" names "cancellation", "prorat" names "prorated"), and letters inside another word name
+// nothing ("accredited" names no credit, "avoid" no void, "online" no line).
 func mentionsAny(quote string, words []string) bool {
-	normal := documents.NormalizeEntity(quote)
+	normal := " " + documents.NormalizeEntity(quote)
 	for _, word := range words {
-		if strings.Contains(normal, word) {
+		if strings.Contains(normal, " "+word) {
 			return true
 		}
 	}
