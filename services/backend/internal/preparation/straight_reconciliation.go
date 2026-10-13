@@ -241,10 +241,15 @@ func queueReconciliation(ctx context.Context, tx *sql.Tx, closeID, jobID string,
 	if drafted, err := ReconciliationDrafted(ctx, tx, closeID, plan); err != nil || drafted != "" {
 		return drafted, err
 	}
+	return "", queuePlan(ctx, tx, jobID, plan)
+}
+
+// queuePlan queues a straight-through plan as the job's, confirmed by the agent.
+func queuePlan(ctx context.Context, tx *sql.Tx, jobID string, plan Plan) error {
 	plans, _ := json.Marshal([]Plan{plan})
 	if _, err := tx.ExecContext(ctx, `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans)); err != nil {
-		return "", err
+		return err
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=now() WHERE job_id=$1`, jobID)
-	return "", err
+	return err
 }

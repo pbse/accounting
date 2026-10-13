@@ -929,6 +929,43 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			if reason == "" {
 				straight = "Prepared without confirmation: every statement and ledger row matched exactly once, the balances tie, every page was read, and reconciliation procedure v" + procedure.ID + " authorizes it."
 			}
+		} else if proposal.Kind == "payroll" && llm.IsModelEngine(proposal.Engine) && len(proposal.Lines) == 0 {
+			procedure, e := CurrentProcedure(persist, finish, closeID, "payroll")
+			if e != nil && e != sql.ErrNoRows {
+				return true, e
+			}
+			unread, e := OtherEvidence(persist, finish, closeID, id)
+			if e != nil {
+				return true, e
+			}
+			rule, e := ProcedureEvidence(persist, finish, closeID, procedure.ID)
+			if e != nil {
+				return true, e
+			}
+			home := ""
+			if profile.State == "detected" || profile.State == "confirmed" {
+				home = profile.Currency
+			}
+			// Evidence left unused holds the payroll unless it is a capture, chart or procedure copy, or another job's own
+			// document; no account names a payroll, so every reconciliation's cited documents are another matter.
+			other, e := ReconciliationOtherMatter(persist, finish, closeID, id, "")
+			if e != nil {
+				return true, e
+			}
+			provider := ""
+			for _, f := range proposal.Facts {
+				if f.Field == "provider" {
+					provider = f.Value
+				}
+			}
+			prior, e := LastApprovedPayroll(persist, finish, closeID, provider)
+			if e != nil {
+				return true, e
+			}
+			plan, reason = StraightPayroll(proposal, selected, procedure, rule, home, entity, period, unread, other, prior)
+			if reason == "" {
+				straight = "Prepared without confirmation: every figure is one candidate read from the provider's summary or the ledger page, the summary ties to its net pay and the ledger to its debits, payroll procedure v" + procedure.ID + " authorizes it, and the accounts are those of approved payroll #" + prior.ID + " (" + prior.Period + "). Approving it still needs both confirmations."
+			}
 		}
 		if reason == "" {
 			// The same policy check the preparation worker applies, so a draft the firm's basis or procedure refuses waits for a person instead of failing later.
@@ -956,6 +993,8 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			var lineage string
 			if plan.Kind == "reconciliation" {
 				lineage, err = queueReconciliation(persist, finish, closeID, id, plan)
+			} else if plan.Kind == "payroll" {
+				err = queuePlan(persist, finish, id, plan)
 			} else {
 				lineage, err = queueStraightThrough(persist, finish, closeID, id, primary, plan)
 			}
