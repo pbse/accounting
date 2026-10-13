@@ -203,7 +203,7 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 		}
 		// The decisions, their preferences and the daily findings are read in the same snapshot as the counts above, so
 		// every number on Home is as of one moment; no read takes a second connection while this one is held.
-		events, err := attentionEvents(ctx, tx, r)
+		events, err := attentionEvents(ctx, tx, r, "")
 		if err != nil {
 			problem(w, 503, "Home is unavailable.")
 			return
