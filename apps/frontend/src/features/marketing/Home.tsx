@@ -4,10 +4,12 @@ import { ILLUSTRATIVE_DECISIONS, startCity, type City } from "./city";
 import { startAgents } from "./agents";
 import { prefersReducedMotion } from "./noise";
 import { WORKPAPERS } from "./workpapers";
+import { JsonLd, organization, website } from "./schema";
 
 export function Home() {
   return (
     <main id="main">
+      <JsonLd data={{ "@graph": [website, organization] }} />
       <Hero />
       <AgentsAtWork />
       <section className="k-col k-start" id="start" aria-labelledby="start-title">

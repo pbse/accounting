@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { JsonLd } from "./schema";
 
 // The questions firms ask before they hand Krith a month, indexed the way a workpaper lists its accounts. Each answer
 // says what Security, Privacy and About say, in the same terms, and only what the service does today; change them
@@ -57,6 +58,10 @@ const TOPICS: Topic[] = [
 ];
 
 const total = TOPICS.reduce((n, t) => n + t.entries.length, 0);
+const questions = {
+  "@type": "FAQPage",
+  mainEntity: TOPICS.flatMap((t) => t.entries.map((e) => ({ "@type": "Question", name: e.q, acceptedAnswer: { "@type": "Answer", text: e.a } }))),
+};
 
 export function Faq() {
   return (
@@ -112,6 +117,7 @@ export function Faq() {
           </div>
         </section>
       ))}
+      <JsonLd data={questions} />
       <div className="k-faq-ask">
         <p>Didn’t find your question?</p>
         <Link className="k-pill" to="/contact">

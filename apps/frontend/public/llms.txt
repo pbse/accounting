@@ -1,0 +1,21 @@
+# Krith
+
+> Krith is a team of AI agents that prepares the work behind an accounting firm's engagements, starting with the month-end close. The agents do the preparation; the firm's people review it, decide and sign.
+
+Krith is for accounting firms and finance teams that close books every month. It was founded in 2026 in New York.
+
+- The agents gather statements and documents, match statement lines to the ledger, trace each difference to its source, draft entries and schedules, and draft questions for whatever is missing.
+- People decide: agents can't approve an entry, send anything to a client, write to a ledger or sign off a close. A person at the firm does each of those, with their own permissions.
+- Every figure keeps its source: a figure taken from a document must match the words it came from, or it becomes a question for a person.
+- The firm's ledger stays the book of record. Krith reads QuickBooks Online and Xero once a firm member connects them, and writes only an entry a person has approved; writing stays off until the firm turns it on.
+- Each firm's data is walled off from every other firm's and never used in another firm's work. Krith doesn't train AI models on client data. Client data is stored in the United States.
+- To see what the agents would prepare for one of a firm's clients, talk to Krith at https://getkrith.com/contact.
+
+## Pages
+
+- [Home](https://getkrith.com/): what Krith prepares, and the agents at work on a bank reconciliation
+- [About](https://getkrith.com/about): why Krith exists, its principles, how firms work with it, and the company
+- [FAQ](https://getkrith.com/faq): the product, working with the agents, your data, and getting started
+- [Security](https://getkrith.com/security): how Krith keeps client data, and the authority over it, where it belongs
+- [Privacy notice](https://getkrith.com/privacy): what Krith collects, who sees it, where it is stored, and your choices
+- [Talk to us](https://getkrith.com/contact): how to reach Krith and what happens next
