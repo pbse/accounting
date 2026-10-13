@@ -4902,3 +4902,19 @@ Evidence, on local PostgreSQL with the demonstration data:
 - total time across the 36 reads falls from 24,997 ms to 313 ms;
 - the attention, decision, Home, notice, inbox, hand-off and goal transport tests pass.
 
+
+## 2026-10-13 — Database reads without JIT compilation (page speed)
+
+The attention query behind Home, the inbox and the notice stream took about 700 ms locally on the demonstration firm. Of that, 668 ms was PostgreSQL compiling its plan with JIT (3,484 functions), and the read itself took about 30 ms. The planner estimates the query's cost at 186,000, past JIT's default threshold of 100,000, though it reads a few dozen rows. A connection that runs the same statement five times moves to a cached generic plan and skips JIT. So each new connection paid the cost on its first reads, as does any other read whose estimate passes the threshold. The same cause explains most of #476's gain: one close's estimate falls below the threshold.
+
+Every app connection (the API, its session pool and the worker; all open through `OpenTenantDB`) now sets `jit=off`. It goes in the same `set_config` that names the firm, so it adds no round trip. A rollback that undoes the firm setting undoes JIT's too, and both are set again together. It is a session setting, not a startup parameter, so it does not depend on how a proxy treats startup parameters.
+
+Evidence, on local PostgreSQL with the demonstration data (main's API and this branch's, side by side on one database, four reads each):
+- `GET /v1/closes/attention?order=priority`: 660–730 ms on main, 22–50 ms on the branch, with the same response;
+- `GET /v1/closes/home`: 1,370–1,500 ms on main, 720–850 ms on the branch;
+- `EXPLAIN ANALYZE` of the attention query: 699 ms of execution with JIT (668 ms of it JIT), 4–19 ms without;
+- `TestRowLevelSecurityIsolatesFirms`, `TestOpenTenantDBRefusesPooler` and `TestHomeCountsTheReadersOwnCohort` pass.
+
+Production's JIT setting was not checked here, since a production read was not authorized. If JIT is unavailable or off there, this change does nothing there.
+
+What remains of Home's time locally is about 750 sequential round trips. Most are each signed-off close's readiness recheck, about 25 trips per close. That is the next change.
