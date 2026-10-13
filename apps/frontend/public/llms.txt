@@ -9,7 +9,7 @@ Krith is for accounting firms and finance teams that close books every month. It
 - Every figure keeps its source: a figure taken from a document must match the words it came from, or it becomes a question for a person.
 - The firm's ledger stays the book of record. Krith reads QuickBooks Online and Xero once a firm member connects them, and writes only an entry a person has approved; writing stays off until the firm turns it on.
 - Each firm's data is walled off from every other firm's and never used in another firm's work. Krith doesn't train AI models on client data. Client data is stored in the United States.
-- To start, a firm on Google Workspace signs in with its company account at https://getkrith.com/login, and the first person sets up the firm's workspace; firms on Microsoft 365 talk to Krith first, for now. Any firm can ask to see what the agents would prepare for one of its clients at https://getkrith.com/contact.
+- To start, a firm's people sign in with their company account at https://getkrith.com/login, and the first person sets up the firm's workspace; a firm that can't sign in yet talks to Krith. Any firm can ask to see what the agents would prepare for one of its clients at https://getkrith.com/contact.
 
 ## Pages
 

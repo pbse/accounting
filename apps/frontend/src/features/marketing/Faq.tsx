@@ -51,7 +51,7 @@ const TOPICS: Topic[] = [
     mark: "ST",
     name: "Getting started",
     entries: [
-      { q: "How do we get started?", a: "If your firm uses Google Workspace, sign in with your company account: the first person from your firm sets up its workspace. Or talk to us: a person reads your note, replies and shows you what the agents would prepare and what stays with your people. Firms on Microsoft 365 start by talking to us for now." },
+      { q: "How do we get started?", a: "Sign in with your company account, and the first person from your firm sets up its workspace; if your firm can’t sign in yet, talk to us. Or talk to us first: a person reads your note, replies and shows you what the agents would prepare and what stays with your people." },
       { q: "What does it cost?", a: "It depends on the size of your firm and the work you hand over. We go through it when we talk." },
     ],
   },
