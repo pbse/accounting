@@ -315,15 +315,31 @@ func verifyStep(lines []briefLine, base string, books bool) planStep {
 	return s
 }
 
-// verified puts what the close's brief finds, read through mux as the member, in the plan's verify step.
-func verified(mux *http.ServeMux, r *http.Request, closeID string, plan []planStep) {
+// startBrief reads the close's brief through mux as the member, in the background, so it runs alongside the reads of
+// the progress it verifies rather than after them; verified waits for it.
+func startBrief(mux *http.ServeMux, r *http.Request, closeID string) <-chan *httptest.ResponseRecorder {
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		defer func() {
+			if recover() != nil {
+				rec.Code = 500
+			}
+			done <- rec
+		}()
+		mux.ServeHTTP(rec, httptest.NewRequestWithContext(r.Context(), "GET", "/v1/closes/"+url.PathEscape(closeID)+"/brief", nil))
+	}()
+	return done
+}
+
+// verified puts what the close's brief (startBrief) finds in the plan's verify step.
+func verified(brief <-chan *httptest.ResponseRecorder, closeID string, plan []planStep) {
 	var b struct {
 		Lines []briefLine `json:"lines"`
 	}
 	base := "/dashboard/closes/" + closeID
 	step := planStep{Key: "verify", Title: "Reconcile and verify", State: "unknown", Text: "The checks could not be read right now.", Link: base + "?tab=books"}
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequestWithContext(r.Context(), "GET", "/v1/closes/"+url.PathEscape(closeID)+"/brief", nil))
+	rec := <-brief
 	if rec.Code == 200 && json.Unmarshal(rec.Body.Bytes(), &b) == nil {
 		step = verifyStep(b.Lines, base, slices.ContainsFunc(plan, func(s planStep) bool { return s.Key == "books" && s.State == "done" }))
 	}

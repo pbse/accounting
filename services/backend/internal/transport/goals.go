@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
@@ -916,6 +917,13 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		if found {
 			goal = g
 		}
+		// The checks behind the close's brief are heavier than the rest, so the card asks for them about once a minute.
+		// They start once the read above has fixed this snapshot, so they never read books older than the goal shows,
+		// and run alongside the reads below.
+		var brief <-chan *httptest.ResponseRecorder
+		if err == nil && r.URL.Query().Get("verify") == "1" {
+			brief = startBrief(mux, r, closeID)
+		}
 		type activity struct {
 			At    time.Time `json:"at"`
 			Actor string    `json:"actor"`
@@ -978,9 +986,11 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 		}
-		// The checks behind the close's brief are heavier than the rest, so the card asks for them about once a minute.
-		if r.URL.Query().Get("verify") == "1" {
-			verified(mux, r, closeID, progress.Plan)
+		if brief != nil {
+			// Every read of this snapshot is done; its connection goes back before waiting on the brief's, which come
+			// from the same pool.
+			tx.Rollback()
+			verified(brief, closeID, progress.Plan)
 		}
 		jsonReply(w, 200, map[string]any{"goal": goal, "progress": progress, "activity": history, "activity_total": total, "signed_off": done, "routine": routine, "close": closeInfo, "handoffs": handoffs})
 	})
