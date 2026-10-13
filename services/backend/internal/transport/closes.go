@@ -357,17 +357,22 @@ func savedCloses(db *sql.DB, token string, sessionStore ...*sql.DB) http.Handler
 		// The recheck reads the whole close, so the list makes it for the last three months' closes only, as the roster
 		// does; an older recorded sign-off is returned as recorded (Rechecked false).
 		since := shiftMonth(time.Now().UTC().Format("2006-01"), -2)
+		recent := []string{}
+		for _, item := range items {
+			if item.SignedOff && item.Period >= since {
+				recent = append(recent, item.ID)
+			}
+		}
+		states, err := signOffStates(r.Context(), tx, recent)
+		if err != nil {
+			problem(w, 503, "Could not read saved closes.")
+			return
+		}
 		for i := range items {
-			if !items[i].SignedOff || items[i].Period < since {
-				continue
+			if state, ok := states[items[i].ID]; ok {
+				items[i].Rechecked = true
+				items[i].SignedOff, items[i].Unchecked = state == "signed_off", state == "unknown"
 			}
-			items[i].Rechecked = true
-			state, err := recheckSignOff(r.Context(), tx, items[i].ID)
-			if err != nil {
-				problem(w, 503, "Could not read saved closes.")
-				return
-			}
-			items[i].SignedOff, items[i].Unchecked = state == "signed_off", state == "unknown"
 		}
 		jsonReply(w, 200, map[string]any{"closes": items, "has_more": more})
 	})

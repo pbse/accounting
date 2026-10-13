@@ -4918,3 +4918,20 @@ Evidence, on local PostgreSQL with the demonstration data (main's API and this b
 Production's JIT setting was not checked here, since a production read was not authorized. If JIT is unavailable or off there, this change does nothing there.
 
 What remains of Home's time locally is about 750 sequential round trips. Most are each signed-off close's readiness recheck, about 25 trips per close. That is the next change.
+
+## 2026-10-13 — Sign-off standing kept by the worker (page speed)
+
+Home, the morning brief, Clients, the roster, the closes list and effort show whether each recorded sign-off still stands. Each one rechecked every signed-off close's readiness on every read: about 25 sequential round trips per close, the whole close read again. Home rechecks every owed month, all of a firm's history through this month. On the demonstration firm (29 signed-off closes) Home made 753 round trips. At production's last measured ~33 ms per trip that is an estimated 25 seconds, and it grows with every month signed. Chosen with the user: the worker keeps each sign-off's standing, and the lists read it.
+
+- `signoff_checks` (migration 174) holds one row per close: the sign-off checked, its state (signed off, reopen required or unknown) and when. Row-level security applies through the close.
+- The worker's new `signoff_checks` loop looks every 30 seconds for sign-offs with no check, or one older than five minutes, oldest first, 100 at a time. While batches come back full it goes again at once. It rechecks each with the same `recheckSignOff` (readiness engine), and the decision and its recheck read one snapshot.
+- Every list reads standings through one function, `signOffStates`: one query for the stored checks of each close's latest decision. A sign-off with no check yet, newly recorded or never checked, is rechecked on the read as before. So is one whose check is over 15 minutes old, which means the worker stopped or fell behind. No list shows a standing nobody checked, or one a stopped worker left behind. The close's own page (`GET /readiness`) still rechecks live, and sign-off itself is unchanged.
+- The cost: a sign-off that stops standing shows on the lists up to about five minutes late.
+
+Evidence, on local PostgreSQL with the demonstration data:
+- Home: 753 → 11 round trips and 1,370–1,500 ms → 53–122 ms (with JIT off, #477). The closes list: 278 → 4 round trips, 250–270 ms → 2–4 ms.
+- The worker's first pass checked all 29 sign-offs in 0.87 s and found one that no longer stands (the seeded Meridian payroll reissue).
+- With the stored checks, Home, the morning brief, the closes list and the roster return the same documents as the live recheck (only their timestamps differ).
+- `TestListsReadTheWorkersSignOffCheck` (new) covers four cases. A close changed after the worker checked it still shows its stored standing. A check younger than five minutes is not made again. A check between 5 and 15 minutes old is read, then made again by the worker, and then the change shows. A check over 15 minutes old is not trusted, and the read rechecks. With the stored read disabled it fails with "reopen_required"; without the 15-minute bound it fails with "a stale check is not trusted: signed_off".
+- The Home, morning, roster, Clients, client page, effort, daily, readiness, sign-off, reopen and row-level security transport tests pass (26).
+- Codex review found two issues, both fixed. A stopped worker left its last check trusted forever: hence the 15-minute bound. The worker paused 30 seconds even with a backlog: it now goes on at once, but only after a batch that was all checked, so failures wait. Codex's review of the fixes found no further issue. Follow-up: one worker checks every signed-off month serially, about 0.8 s per close at production's latency. Beyond roughly 350 signed-off months across all firms it falls behind five minutes, and beyond roughly 1,000 behind 15, when reads recheck live again (correct, but slow). Checking only the closes that changed since, or older months less often, would lift that.

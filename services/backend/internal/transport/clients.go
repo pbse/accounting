@@ -184,13 +184,20 @@ func registerClients(mux *http.ServeMux, db *sql.DB) {
 		}
 		// A recorded sign-off counts while it still stands, rechecked for the last three months as the roster does.
 		since := shiftMonth(time.Now().UTC().Format("2006-01"), -2)
-		for i := range months {
-			if err != nil || !months[i].SignedOff || months[i].Period < since {
-				continue
+		recent := []string{}
+		for _, m := range months {
+			if m.SignedOff && m.Period >= since {
+				recent = append(recent, m.ID)
 			}
-			var state string
-			if state, err = recheckSignOff(ctx, tx, months[i].ID); err == nil {
-				months[i].SignedOff, months[i].Rechecked, months[i].Unchecked = state == "signed_off", true, state == "unknown"
+		}
+		if err == nil {
+			var states map[string]string
+			if states, err = signOffStates(ctx, tx, recent); err == nil {
+				for i := range months {
+					if state, ok := states[months[i].ID]; ok {
+						months[i].SignedOff, months[i].Rechecked, months[i].Unchecked = state == "signed_off", true, state == "unknown"
+					}
+				}
 			}
 		}
 		// The months the client owes that nobody opened, through the month now running, as the roster lists them.

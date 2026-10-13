@@ -22,7 +22,7 @@ import (
 // count as captured only when its newest month-end capture, from either provider, is usable: of its own period, from
 // an active connection, its evidence standing (the test the changes-from-last-month read applies) and readable by the
 // same coverage and balances reads the close's tie-out uses; an older usable capture under a newer unusable one does
-// not count.
+// not count. A sign-off's standing is the worker's latest check of it (signOffStates), not a recheck in this snapshot.
 func registerHome(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/home", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -93,15 +93,23 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 		}
 		// A recorded sign-off counts only while it still stands, as the morning brief and the sign-off goal check it. The
 		// open closes overdue or due within the week are listed, soonest first, as the deadline card's own population.
+		recorded := []string{}
+		for _, m := range cohort {
+			if m.signed {
+				recorded = append(recorded, m.CloseID)
+			}
+		}
+		standing, err := signOffStates(ctx, tx, recorded)
+		if err != nil {
+			problem(w, 503, "Home is unavailable.")
+			return
+		}
 		signed, overdue, dueSoon, undated := 0, 0, 0, 0
 		due, owed := []obligation{}, []member{}
 		for _, m := range cohort {
 			m.State = "open"
 			if m.signed {
-				if m.State, err = recheckSignOff(ctx, tx, m.CloseID); err != nil {
-					problem(w, 503, "Home is unavailable.")
-					return
-				}
+				m.State = standing[m.CloseID]
 			}
 			owed = append(owed, m)
 			if m.State == "signed_off" {
@@ -301,7 +309,7 @@ func contains(list []string, want string) bool {
 }
 
 // reopenedCloses lists the reader's closes of this and last month whose recorded sign-off no longer stands (changed
-// since, or not recheckable), read in tx's snapshot, so a read that leaves out signed-off closes can keep them in.
+// since, or not recheckable) as signOffStates reads it, so a read that leaves out signed-off closes can keep them in.
 func reopenedCloses(ctx context.Context, tx *sql.Tx, r *http.Request, now time.Time) ([]string, error) {
 	states, err := reopenedBetween(ctx, tx, r, endedMonth(now), now.Format("2006-01"))
 	ids := make([]string, 0, len(states))
@@ -335,12 +343,12 @@ func reopenedBetween(ctx context.Context, tx *sql.Tx, r *http.Request, from, to 
 	if err != nil {
 		return nil, err
 	}
+	states, err := signOffStates(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
 	reopened := map[string]string{}
-	for _, id := range ids {
-		state, err := recheckSignOff(ctx, tx, id)
-		if err != nil {
-			return nil, err
-		}
+	for id, state := range states {
 		if state != "signed_off" {
 			reopened[id] = state
 		}
