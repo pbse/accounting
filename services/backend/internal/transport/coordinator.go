@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
@@ -90,39 +89,39 @@ func preparationInventory(ctx context.Context, tx *sql.Tx, closeID string) ([]by
 // otherwise collide) and is stale once its connection is no longer active, when it is of another month than the
 // close's, or when it cannot be read.
 func ledgerCoverage(ctx context.Context, tx *sql.Tx, closeID string) (json.RawMessage, error) {
-	// A month whose books are its files is covered account by account from its accepted file's books.
-	if source, err := closeBooksSource(ctx, tx, closeID); err != nil {
+	// The month's books source and its newest QuickBooks and Xero captures come in one read; a close that does not
+	// exist has no row.
+	var source string
+	var raw json.RawMessage
+	var quickbooksAt, xeroAt sql.NullTime
+	var xeroID, digest, period sql.NullString
+	var stale sql.NullBool
+	var payload []byte
+	err := tx.QueryRowContext(ctx, `SELECT k.source,COALESCE((SELECT jsonb_build_object('snapshot_id',s.id::text,'digest',s.digest,'source_id',s.payload->>'source_id','period',s.payload->>'period','captured_at',s.captured_at,'items',s.payload->'coverage','stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id=k.id AND s.payload ? 'period' AND `+quickbooksReading+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),'null'::jsonb),
+ (SELECT s.captured_at FROM quickbooks_snapshots s WHERE s.close_id=k.id AND s.payload ? 'period' AND `+quickbooksReading+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),
+ xs.id::text,xs.digest,xs.period,xs.captured_at,xs.stale,xs.payload
+ FROM (SELECT id,books_source(organization_id,entity,period) AS source FROM client_closes WHERE id::text=$1) k
+ LEFT JOIN LATERAL (SELECT s.id,s.digest,s.period,s.captured_at,x.state<>'active' OR s.period<>c.period AS stale,jsonb_build_object('accounts',s.payload->'accounts','trial_balance',s.payload->'trial_balance') AS payload
+  FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id WHERE s.close_id=k.id AND `+sourceAllows("s.close_id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) xs ON true`, closeID).Scan(&source, &raw, &quickbooksAt, &xeroID, &digest, &period, &xeroAt, &stale, &payload)
+	if err != nil {
 		return nil, err
-	} else if source == "files" {
+	}
+	// A month whose books are its files is covered account by account from its accepted file's books.
+	if source == "files" {
 		return fileCoverage(ctx, tx, closeID)
 	}
-	var raw json.RawMessage
-	var quickbooksAt sql.NullTime
-	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('snapshot_id',s.id::text,'digest',s.digest,'source_id',s.payload->>'source_id','period',s.payload->>'period','captured_at',s.captured_at,'items',s.payload->'coverage','stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),'null'::jsonb),
- (SELECT s.captured_at FROM quickbooks_snapshots s WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` AND `+sourceAllows("s.close_id", "quickbooks")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1)`, closeID).Scan(&raw, &quickbooksAt)
-	if err != nil {
-		return raw, err
-	}
-	var id, digest, period string
-	var at time.Time
-	var stale bool
-	var payload []byte
-	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.digest,s.period,s.captured_at,x.state<>'active' OR s.period<>c.period,jsonb_build_object('accounts',s.payload->'accounts','trial_balance',s.payload->'trial_balance')
- FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id WHERE s.close_id=$1 AND `+sourceAllows("s.close_id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&id, &digest, &period, &at, &stale, &payload)
-	if err == sql.ErrNoRows || (err == nil && quickbooksAt.Valid && !at.After(quickbooksAt.Time)) {
+	if !xeroID.Valid || (quickbooksAt.Valid && !xeroAt.Time.After(quickbooksAt.Time)) {
 		return raw, nil
 	}
-	if err != nil {
-		return nil, err
-	}
+	id, at := xeroID.String, xeroAt.Time
 	// A capture it cannot read proposes nothing it could be taken to cover: one item, stale, that only capturing the
 	// month again resolves.
 	items, err := xero.Coverage(payload)
 	if err != nil {
-		stale = true
+		stale.Bool = true
 		items = []quickbooks.CoverageItem{{Name: "the Xero capture", Kind: "accountant_review", Reason: "The Xero capture cannot be read: " + err.Error() + ".", Question: "Capture the month from Xero again."}}
 	}
-	return json.Marshal(map[string]any{"source": "xero", "snapshot_id": xeroCapture + id, "digest": digest, "source_id": "", "period": period, "captured_at": at.UTC(), "items": items, "stale": stale})
+	return json.Marshal(map[string]any{"source": "xero", "snapshot_id": xeroCapture + id, "digest": digest.String, "source_id": "", "period": period.String, "captured_at": at.UTC(), "items": items, "stale": stale.Bool})
 }
 
 // quickbooksReading is SQL limiting QuickBooks snapshot s to the connection the books are read from, as the tie-out does:

@@ -120,26 +120,33 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 	var started, capturedAt, xeroAt time.Time
 	var stale, xeroStale bool
 	var accounts, trialBalance, xeroPayload []byte
-	// The month's books come from its source: the newest capture, or only QuickBooks' or Xero's.
-	source, err := closeBooksSource(ctx, tx, id)
-	if err != nil && err != sql.ErrNoRows {
-		return tieOutcome{}, tieRefusal{503, "The month's books source is unavailable."}
-	}
-	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.started_at,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
- WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, id).Scan(&snapshotID, &realm, &started, &capturedAt, &stale, &accounts, &trialBalance)
-	if err != nil && err != sql.ErrNoRows {
+	// The month's books come from its source: the newest capture, or only QuickBooks' or Xero's. The source and both
+	// newest captures come in one read; a close that does not exist has no source and no capture.
+	var source, quickbooksID, quickbooksRealm, xeroCaptureID, xeroTenant sql.NullString
+	var quickbooksStarted, quickbooksAt, xeroCapturedAt sql.NullTime
+	var quickbooksStale, xeroCaptureStale sql.NullBool
+	err := tx.QueryRowContext(ctx, `SELECT (SELECT books_source(organization_id,entity,period) FROM client_closes WHERE id::text=$1),
+ q.id::text,q.realm,q.started_at,q.captured_at,q.stale,q.accounts,q.trial_balance,xs.id::text,xs.captured_at,xs.stale,xs.payload,xs.tenant_id
+ FROM (SELECT) one
+ LEFT JOIN LATERAL (SELECT s.id,s.realm,s.started_at,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active' AS stale,s.payload->'accounts' AS accounts,s.payload->'reports'->'TrialBalance' AS trial_balance FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
+  WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) q ON true
+ LEFT JOIN LATERAL (SELECT s.id,s.captured_at,x.state<>'active' AS stale,s.payload,s.tenant_id FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 AND `+sourceAllows("s.close_id", "xero")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) xs ON true`, id).Scan(&source, &quickbooksID, &quickbooksRealm, &quickbooksStarted, &quickbooksAt, &quickbooksStale, &accounts, &trialBalance, &xeroCaptureID, &xeroCapturedAt, &xeroCaptureStale, &xeroPayload, &xeroTenant)
+	if err != nil {
 		return tieOutcome{}, tieRefusal{503, "Period snapshot unavailable."}
 	}
-	if !readsQuickBooks(source) {
-		err = sql.ErrNoRows
+	err = sql.ErrNoRows
+	if quickbooksID.Valid {
+		snapshotID, realm, started, capturedAt, stale = quickbooksID.String, quickbooksRealm.String, quickbooksStarted.Time, quickbooksAt.Time, quickbooksStale.Bool
+		if readsQuickBooks(source.String) {
+			err = nil
+		}
 	}
 	var tenant string
 	xeroErr := sql.ErrNoRows
-	if readsXero(source) {
-		xeroErr = tx.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,x.state<>'active',s.payload,s.tenant_id FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, id).Scan(&xeroID, &xeroAt, &xeroStale, &xeroPayload, &tenant)
-	}
-	if xeroErr != nil && xeroErr != sql.ErrNoRows {
-		return tieOutcome{}, tieRefusal{503, "Xero snapshot unavailable."}
+	if readsXero(source.String) && xeroCaptureID.Valid {
+		xeroID, xeroAt, xeroStale, tenant, xeroErr = xeroCaptureID.String, xeroCapturedAt.Time, xeroCaptureStale.Bool, xeroTenant.String, nil
+	} else {
+		xeroPayload = nil
 	}
 	var snapshot map[string]any
 	var currency string
@@ -147,7 +154,7 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 	var readErr error
 	var filesMonth *fileMonth
 	switch {
-	case source == "files":
+	case source.String == "files":
 		// A month whose books are its files ties out its accepted file's balances; nothing is posted to a file, and a
 		// journal entered in the client's ledger is not in them until it is verified.
 		b, month, err := fileMonthBooks(ctx, tx, id)
