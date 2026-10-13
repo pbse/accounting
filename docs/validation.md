@@ -4868,6 +4868,12 @@ Tests, on local PostgreSQL:
 - The transport tests for agent preparation, cards, procedures, procedure learning, takeover, reconciliation, row-level security, mixed closes, intake, payroll and restores pass after migration 173.
 - `tsc` passes.
 
+## 2026-10-13 — A cash-match decision rechecks the books' source under the lock (B09/B10, #364)
+
+A decision on a bill against a cash schedule (`POST /v1/closes/{id}/cash-matches`) read the open items before its transaction. Under the close's lock, it then checked only that the newest QuickBooks capture was the one the person saw. If a newer Xero snapshot became the month's books in between, the decision was still accepted against QuickBooks. Under the lock, the decision now also makes the open items' own Xero choice (`latestXeroBooks`, which now accepts the transaction), and refuses with 409 ("The month's books are now read from Xero. Refresh before deciding."). A source switched to the month's files was already refused, since the locked capture query respects the books source.
+
+Tests, on local PostgreSQL: the cash, matching, Xero and obligation transport tests pass. The race sits between two reads within one request, so no deterministic test reproduces it; the fix applies the same selection the read already uses.
+
 ## 2026-10-13 — Decisions before notices that need none (B02, #371)
 
 In priority order (Home, and the decisions-and-notices list), events sorted by the reader's own work first, then by the close's urgency. So a close with only a notice that needs no decision could lead as "Do first", ahead of real decisions. That notice might be a complete client reply, or a goal reached. Many such notices could also push actionable work to a later page of the capped inbox. Within the reader's own work, decisions now come before those notices, ahead of the urgency ranking and the 200-item page boundary.

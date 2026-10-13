@@ -330,6 +330,15 @@ func registerCashMatches(mux *http.ServeMux, db *sql.DB, client func(*http.Reque
 			problem(w, 409, "The books were captured again since you looked. Refresh before deciding.")
 			return
 		}
+		// A newer Xero snapshot may have become the month's books since the open items were read: the same choice the
+		// open items make, checked under the lock.
+		if books, e := latestXeroBooks(r.Context(), tx, r.PathValue("id")); e != nil {
+			problem(w, 503, "The decision could not be saved.")
+			return
+		} else if books != nil {
+			problem(w, 409, "The month's books are now read from Xero. Refresh before deciding.")
+			return
+		}
 		company, _ := meta["company"].(string)
 		var bill *openItem
 		for i := range payables {

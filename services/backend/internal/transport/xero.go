@@ -463,7 +463,9 @@ type xeroBooks struct {
 
 // latestXeroBooks returns the close's newest Xero snapshot for its month, from the client's current connection, when it
 // is newer than the close's latest QuickBooks transaction capture; nil otherwise.
-func latestXeroBooks(ctx context.Context, db *sql.DB, closeID string) (*xeroBooks, error) {
+func latestXeroBooks(ctx context.Context, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID string) (*xeroBooks, error) {
 	var b xeroBooks
 	var captured time.Time
 	var payload []byte
