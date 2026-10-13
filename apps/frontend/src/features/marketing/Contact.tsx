@@ -43,7 +43,7 @@ export function Contact() {
       <div className="k-page-head">
         <p className="k-label">Contact</p>
         <h1>Talk to us.</h1>
-        <p className="k-lede">Tell us how your firm works and where month-end takes its time. A person reads every note and replies.</p>
+        <p className="k-lede">Tell us how your firm works and where its hours go. A person reads every note and replies.</p>
       </div>
       <div className="k-contact">
         <div>
@@ -73,7 +73,7 @@ export function Contact() {
                 <label htmlFor="contact-note">
                   What should we know? <small>Optional</small>
                 </label>
-                <textarea id="contact-note" name="note" rows={4} maxLength={4000} placeholder="For example: 40 clients on QuickBooks Online, and most closes take a week." />
+                <textarea id="contact-note" name="note" rows={4} maxLength={4000} placeholder="For example: 40 clients on QuickBooks Online, and what takes your team the longest." />
               </p>
               {/* Left empty by people; a form filled in by a script usually completes it. */}
               <p className="k-trap" aria-hidden="true">
@@ -106,7 +106,7 @@ export function Contact() {
             </li>
             <li>
               <span>
-                <b>We talk through</b> how your firm prepares and reviews its closes.
+                <b>We talk through</b> how your firm prepares and reviews its work.
               </span>
             </li>
             <li>

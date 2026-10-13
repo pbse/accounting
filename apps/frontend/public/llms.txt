@@ -1,8 +1,8 @@
 # Krith
 
-> Krith is a team of AI agents that prepares the work behind an accounting firm's engagements, starting with the month-end close. The agents do the preparation; the firm's people review it, decide and sign.
+> Krith is a team of AI agents that prepares the work behind an accounting firm's engagements. The agents do the preparation; the firm's people review it, decide and sign.
 
-Krith is for accounting firms and finance teams that close books every month. It was founded in 2026 in New York.
+Krith is for accounting firms and finance teams. It was founded in 2026 in New York.
 
 - The agents gather statements and documents, match statement lines to the ledger, trace each difference to its source, draft entries and schedules, and draft questions for whatever is missing.
 - People decide: agents can't approve an entry, send anything to a client, write to a ledger or sign off a close. A person at the firm does each of those, with their own permissions.

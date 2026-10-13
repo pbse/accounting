@@ -12,9 +12,9 @@ const TOPICS: Topic[] = [
     mark: "PR",
     name: "The product",
     entries: [
-      { q: "What is Krith?", a: "A team of AI agents that prepares the work behind an accounting firm’s engagements, starting with the month-end close. The agents do the preparation; your people review it, decide and sign." },
-      { q: "Who is it for?", a: "Accounting firms and finance teams that close books every month, for their clients or for their own company." },
-      { q: "What does Krith prepare?", a: "The work that comes before a signature: gathering statements and documents, matching statement lines to the ledger, tracing each difference to its source, drafting entries and schedules, and drafting questions for whatever is missing. A close arrives ready for review, with what needs a decision on top." },
+      { q: "What is Krith?", a: "A team of AI agents that prepares the work behind an accounting firm’s engagements. The agents do the preparation; your people review it, decide and sign." },
+      { q: "Who is it for?", a: "Accounting firms and finance teams that keep and review books, for their clients or for their own company." },
+      { q: "What does Krith prepare?", a: "The work that comes before a signature: gathering statements and documents, matching statement lines to the ledger, tracing each difference to its source, drafting entries and schedules, and drafting questions for whatever is missing. The work arrives ready for review, with what needs a decision on top." },
       { q: "Does it replace our accounting software?", a: "No. Your ledger stays the book of record. Krith reads it once a firm member connects it, and writes to it only an entry a person has approved, one at a time. Writing stays off until your firm turns it on." },
       { q: "Which ledgers does it connect to?", a: "QuickBooks Online and Xero, connected by a firm member for each client. If your clients keep their books somewhere else, talk to us." },
     ],
@@ -69,7 +69,7 @@ export function Faq() {
       <div className="k-page-head">
         <p className="k-label">Questions</p>
         <h1>Asked and answered.</h1>
-        <p className="k-lede">What firms ask before they hand Krith a month. If yours isn’t here, we’re glad to answer it.</p>
+        <p className="k-lede">What firms ask before they hand Krith their work. If yours isn’t here, we’re glad to answer it.</p>
       </div>
       <nav className="k-faq-index" aria-label="Questions by topic">
         <div className="k-lhead">

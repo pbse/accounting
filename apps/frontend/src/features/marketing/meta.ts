@@ -4,15 +4,15 @@ export type PageMeta = { title: string; description: string };
 
 const PAGES: Record<string, PageMeta> = {
   "/": {
-    title: "Krith · The work, prepared. AI agents for the month-end close",
-    description: "Krith’s AI agents prepare the work behind every engagement for accounting firms, starting with the month-end close. Your people review, decide and sign.",
+    title: "Krith · The work, prepared.",
+    description: "Krith’s AI agents prepare the work behind every engagement for accounting firms and finance teams. Your people review, decide and sign.",
   },
   "/about": {
-    title: "About Krith · Agents prepare the close, people sign",
-    description: "Krith means done. Its AI agents take on the preparation behind a month-end close, and every decision stays with the accounting firm that signs.",
+    title: "About Krith · Agents prepare, people sign",
+    description: "Krith means done. Its AI agents take on the preparation behind an accounting firm’s work, and every decision stays with the people who sign.",
   },
   "/faq": {
-    title: "Krith FAQ · AI close preparation for accounting firms",
+    title: "Krith FAQ · AI agents for accounting firms",
     description: "What accounting firms ask about Krith: what its AI agents prepare, who approves the work, where client data is stored, and how to start.",
   },
   "/security": {
@@ -24,8 +24,8 @@ const PAGES: Record<string, PageMeta> = {
     description: "How Krith handles information on its website and in the Krith workspace: what is collected, who sees it, where it is stored and your choices.",
   },
   "/contact": {
-    title: "Talk to us · See Krith prepare one of your closes",
-    description: "Tell us how your accounting firm works and where month-end takes its time. A person reads every note and replies, then shows you the work, prepared.",
+    title: "Talk to us · Krith",
+    description: "Tell us how your accounting firm works and where its hours go. A person reads every note and replies, then shows you the work, prepared.",
   },
   "/login": {
     title: "Log in · Krith",

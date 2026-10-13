@@ -3,7 +3,7 @@ import { MAILBOX } from "./Contact";
 
 // The privacy notice. Each statement follows what the service does today; when the code changes, change the page and
 // its date (docs/marketing-site.md).
-const updated = "11 October 2026";
+const updated = "12 October 2026";
 
 export function Privacy() {
   return (
@@ -11,7 +11,7 @@ export function Privacy() {
       <div className="k-page-head">
         <p className="k-label">Trust</p>
         <h1>Privacy notice</h1>
-        <p className="k-lede">How Krith handles information on this website and in the Krith workspace, where accounting firms prepare their clients’ closes.</p>
+        <p className="k-lede">How Krith handles information on this website and in the Krith workspace, where accounting firms prepare their clients’ work.</p>
       </div>
       <article className="k-doc">
         <p className="k-upd">Last updated {updated}</p>
