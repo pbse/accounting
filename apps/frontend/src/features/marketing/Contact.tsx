@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { apiBaseUrl } from "../../lib/api";
 
@@ -8,6 +8,10 @@ export const MAILBOX = "hello@getkrith.com";
 
 export function Contact() {
   const [state, setState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
+  // The page is also static HTML (prerender.tsx): until the app runs, Send stays off, so the form cannot post the
+  // visitor's details anywhere but through send().
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
   const [sender, setSender] = useState({ name: "", email: "" });
   // One key per note as written: if an answer is lost and the visitor sends the same note again, the API returns the note
   // it kept; an edited note is a new note with a new key.
@@ -50,7 +54,7 @@ export function Contact() {
               </p>
             </div>
           ) : (
-            <form className="k-form" onSubmit={send} noValidate>
+            <form className="k-form" method="post" onSubmit={send} noValidate>
               <div className="k-pair">
                 <p className="k-field">
                   <label htmlFor="contact-name">Name</label>
@@ -82,7 +86,7 @@ export function Contact() {
                 </p>
               )}
               <div className="k-send">
-                <button className="k-pill k-pill-lg" type="submit" disabled={state === "sending"}>
+                <button className="k-pill k-pill-lg" type="submit" disabled={!ready || state === "sending"}>
                   {state === "sending" ? "Sending…" : "Send"} <span aria-hidden="true">→</span>
                 </button>
                 <p className="k-fine">

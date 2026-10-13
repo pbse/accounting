@@ -1,19 +1,10 @@
 import { Link } from "react-router";
+import { JsonLd, organization } from "./schema";
 
 // Krith first: why it exists, the commitments the Security page states in full, how a firm works with it and where
-// it starts. It stays high level: what the product does today, and what comes next stated as intent. The company file comes last, with when
-// and where it was founded, and is repeated as structured data so search engines and anyone verifying the company
-// can read it (docs/marketing-site.md).
-const ORGANIZATION = {
-  "@context": "https://schema.org",
-  "@type": "Organization",
-  name: "Krith",
-  url: "https://getkrith.com",
-  description: "Krith is a team of AI agents that prepares accounting work for firms, starting with the month-end close. People review, decide and sign.",
-  foundingDate: "2026",
-  foundingLocation: { "@type": "Place", name: "New York, NY" },
-  address: { "@type": "PostalAddress", addressLocality: "New York", addressRegion: "NY", addressCountry: "US" },
-};
+// it starts. It stays high level: what the product does today, and what comes next stated as intent. The company file
+// comes last, with when and where it was founded, and is repeated as structured data (./schema.tsx) so search engines
+// and anyone verifying the company can read it (docs/marketing-site.md).
 
 // Each follows a control on the Security page; change both together.
 const PRINCIPLES = [
@@ -110,7 +101,7 @@ export function About() {
           </div>
         </dl>
       </figure>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(ORGANIZATION) }} />
+      <JsonLd data={organization} />
     </main>
   );
 }

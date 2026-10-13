@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { JsonLd } from "./schema";
 
 // The questions firms ask before they hand Krith a month, indexed the way a workpaper lists its accounts. Each answer
 // says what Security, Privacy and About say, in the same terms, and only what the service does today; change them
@@ -50,13 +51,17 @@ const TOPICS: Topic[] = [
     mark: "ST",
     name: "Getting started",
     entries: [
-      { q: "How do we get started?", a: "Talk to us. A person reads your note and replies; we talk through how your firm prepares and reviews its closes, then show you the work, prepared: what the agents do, and what stays with your people." },
+      { q: "How do we get started?", a: "Sign in with your company account, and the first person from your firm sets up its workspace; if your firm can’t sign in yet, talk to us. Or talk to us first: a person reads your note, replies and shows you what the agents would prepare and what stays with your people." },
       { q: "What does it cost?", a: "It depends on the size of your firm and the work you hand over. We go through it when we talk." },
     ],
   },
 ];
 
 const total = TOPICS.reduce((n, t) => n + t.entries.length, 0);
+const questions = {
+  "@type": "FAQPage",
+  mainEntity: TOPICS.flatMap((t) => t.entries.map((e) => ({ "@type": "Question", name: e.q, acceptedAnswer: { "@type": "Answer", text: e.a } }))),
+};
 
 export function Faq() {
   return (
@@ -112,6 +117,7 @@ export function Faq() {
           </div>
         </section>
       ))}
+      <JsonLd data={questions} />
       <div className="k-faq-ask">
         <p>Didn’t find your question?</p>
         <Link className="k-pill" to="/contact">
