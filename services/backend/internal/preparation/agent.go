@@ -925,9 +925,17 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return true, e
 			}
-			plan, reason = StraightReconciliation(proposal, selected, procedure, rule, home, entity, period, unread, other)
+			// The capture's chart says whether the account is a bank account or a card.
+			ledger, e := CloseLedger(persist, finish, closeID)
+			if e != nil {
+				return true, e
+			}
+			plan, reason = StraightReconciliation(proposal, selected, procedure, rule, home, entity, period, unread, other, ledger)
 			if reason == "" {
 				straight = "Prepared without confirmation: every statement and ledger row matched exactly once, the balances tie, every page was read, and reconciliation procedure v" + procedure.ID + " authorizes it."
+				if strings.Contains(string(plan.Input), `"account_type":"credit_card"`) {
+					straight = "Prepared without confirmation as a card liability: every statement and ledger row matched exactly once, the balances tie, every page was read, and reconciliation procedure v" + procedure.ID + " approves card accounts."
+				}
 			}
 		} else if proposal.Kind == "payroll" && llm.IsModelEngine(proposal.Engine) && len(proposal.Lines) == 0 {
 			procedure, e := CurrentProcedure(persist, finish, closeID, "payroll")

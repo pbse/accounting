@@ -187,7 +187,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, map[string]any{"kind": kind, "client_entity": client, "previous_id": previous, "impact_digest": digest, "total_closes": total, "has_more": total > len(items), "closes": items})
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text,COALESCE(effective_from,'') FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) AND ($4='' OR procedure_versions.client_entity='' OR lower(procedure_versions.client_entity)=lower($4)) ORDER BY procedure_versions.id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r), strings.TrimSpace(r.URL.Query().Get("client")))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text,COALESCE(effective_from,''),covers_cards FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) AND ($4='' OR procedure_versions.client_entity='' OR lower(procedure_versions.client_entity)=lower($4)) ORDER BY procedure_versions.id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r), strings.TrimSpace(r.URL.Query().Get("client")))
 		if err != nil {
 			problem(w, 503, "Firm procedures unavailable.")
 			return
@@ -196,7 +196,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		items := []preparation.Procedure{}
 		for rows.Next() {
 			var p preparation.Procedure
-			if err = rows.Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom); err != nil {
+			if err = rows.Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom, &p.CoversCards); err != nil {
 				problem(w, 503, "Could not read procedures.")
 				return
 			}
@@ -234,8 +234,8 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		}
 		if in.RestoreID != "" {
 			var earlier preparation.Procedure
-			err := db.QueryRowContext(r.Context(), `SELECT client_entity,kind,method,instructions,expense_account,prepaid_account,enabled FROM procedure_versions WHERE id::text=$1 AND organization_id=$2`, in.RestoreID, organization(r)).
-				Scan(&earlier.ClientEntity, &earlier.Kind, &earlier.Method, &earlier.Instructions, &earlier.ExpenseAccount, &earlier.PrepaidAccount, &earlier.Enabled)
+			err := db.QueryRowContext(r.Context(), `SELECT client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,covers_cards FROM procedure_versions WHERE id::text=$1 AND organization_id=$2`, in.RestoreID, organization(r)).
+				Scan(&earlier.ClientEntity, &earlier.Kind, &earlier.Method, &earlier.Instructions, &earlier.ExpenseAccount, &earlier.PrepaidAccount, &earlier.Enabled, &earlier.CoversCards)
 			if err != nil || earlier.Kind != in.Kind || !strings.EqualFold(earlier.ClientEntity, strings.TrimSpace(in.ClientEntity)) {
 				problem(w, 422, "Choose an earlier version of this procedure, for the same client or the firm, to restore.")
 				return
@@ -245,7 +245,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "A learned method rule is restored through procedure learning, which checks its approved examples again.")
 				return
 			}
-			in.Method, in.Instructions, in.ExpenseAccount, in.PrepaidAccount, in.Enabled = earlier.Method, earlier.Instructions, earlier.ExpenseAccount, earlier.PrepaidAccount, earlier.Enabled
+			in.Method, in.Instructions, in.ExpenseAccount, in.PrepaidAccount, in.Enabled, in.CoversCards = earlier.Method, earlier.Instructions, earlier.ExpenseAccount, earlier.PrepaidAccount, earlier.Enabled, earlier.CoversCards
 		}
 		in.ClientEntity = strings.TrimSpace(in.ClientEntity)
 		in.Instructions = strings.TrimSpace(in.Instructions)
@@ -259,6 +259,11 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		}
 		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis" && in.Kind != "owner" && in.Kind != "payroll") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) || !effectiveMonth(in.EffectiveFrom) {
 			problem(w, 422, "Confirm a supported procedure, bounded instructions, a reason and optional single-line prepaid account names.")
+			return
+		}
+		// Only a reconciliation procedure approves card accounts.
+		if in.CoversCards && in.Kind != "reconciliation" {
+			problem(w, 422, "Only a reconciliation procedure can approve card accounts.")
 			return
 		}
 		allowed, e := clientAccess(db, r, in.ClientEntity)
@@ -313,7 +318,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,method,effective_from) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,'')) RETURNING id::text`, org, in.ClientEntity, in.Kind, in.Instructions, in.ExpenseAccount, in.PrepaidAccount, in.Enabled, in.Reason, actor, in.Method, in.EffectiveFrom).Scan(&id)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,method,effective_from,covers_cards) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),$12) RETURNING id::text`, org, in.ClientEntity, in.Kind, in.Instructions, in.ExpenseAccount, in.PrepaidAccount, in.Enabled, in.Reason, actor, in.Method, in.EffectiveFrom, in.CoversCards).Scan(&id)
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Procedure save could not be confirmed. Reload history before retrying.")
 			return

@@ -22,10 +22,12 @@ type Procedure struct {
 	Instructions   string `json:"instructions"`
 	ExpenseAccount string `json:"expense_account"`
 	PrepaidAccount string `json:"prepaid_account"`
-	Enabled        bool   `json:"enabled"`
-	Reason         string `json:"reason"`
-	Actor          string `json:"actor"`
-	CreatedAt      string `json:"created_at"`
+	// CoversCards is a reconciliation procedure's approval of card accounts for preparation without confirmation.
+	CoversCards bool   `json:"covers_cards,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Reason      string `json:"reason"`
+	Actor       string `json:"actor"`
+	CreatedAt   string `json:"created_at"`
 	// EffectiveFrom is the first month (YYYY-MM) the version applies to; "" applies to every month.
 	EffectiveFrom string `json:"effective_from,omitempty"`
 }
@@ -34,7 +36,7 @@ type Procedure struct {
 // month counts.
 func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Procedure, error) {
 	var p Procedure
-	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text,COALESCE(p.effective_from,'') FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom)
+	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text,COALESCE(p.effective_from,''),p.covers_cards FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom, &p.CoversCards)
 	return p, err
 }
 

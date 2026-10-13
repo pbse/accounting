@@ -11,6 +11,8 @@ type Version = {
   instructions: string;
   expense_account: string;
   prepaid_account: string;
+  // covers_cards is a reconciliation procedure's approval of card accounts for preparation without confirmation.
+  covers_cards?: boolean;
   enabled: boolean;
   reason: string;
   actor: string;
@@ -137,6 +139,7 @@ export function Procedures({
         instructions: data.get("instructions"),
         expense_account: data.get("expense_account") ?? "",
         prepaid_account: data.get("prepaid_account") ?? "",
+        covers_cards: kind === "reconciliation" && data.get("covers_cards") === "on",
         enabled: kind === "basis" || data.get("enabled") === "on",
         reason: data.get("reason"),
         effective_from: effectiveFrom,
@@ -265,6 +268,9 @@ export function Procedures({
                     {v.prepaid_account && (
                       <p>Prepaid account: {v.prepaid_account}</p>
                     )}
+                    {k === "reconciliation" && (
+                      <p>Card accounts: {v.covers_cards ? "approved; a card that ties is reconciled as a card liability without confirmation" : "not approved; each card waits for a person"}</p>
+                    )}
                     <p>
                       Approval record: {v.reason} · {v.actor} ·{" "}
                       {dates.dateTime(v.created_at)}
@@ -365,6 +371,12 @@ export function Procedures({
                       />
                     </label>
                   </>
+                )}
+                {kind === "reconciliation" && (
+                  <label>
+                    <input type="checkbox" name="covers_cards" defaultChecked={previous?.covers_cards ?? false} />
+                    Card accounts too: a credit-card reconciliation is prepared without confirmation when the statement and the ledger tie, both read so that charges increase the liability and payments reduce it. An account counts as a card when the captured chart names it one.
+                  </label>
                 )}
                 {kind === "owner" && target === "client" && (
                   <label>

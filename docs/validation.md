@@ -4844,3 +4844,27 @@ Tests, on local PostgreSQL:
 - `go test ./internal/preparation/` passes.
 - The transport tests for agent preparation, payroll, reconciliation, intake, procedures, replacements, rescans, standing approvals, recurring work, carry-forward, reviews, sign-off, second months, comparisons and schedules pass, after migration 172.
 
+## 2026-10-12 — Card reconciliations straight through, approved on the procedure (B04)
+
+The handoff's per-method automatic eligibility names bank and card reconciliation candidates. Bank reconciliations went straight through (#401); cards had no path. Worse, the straight-through path set every reconciliation's account type to bank, so an account the capture's chart names a credit card that happened to tie was drafted as `exact_bank_month_v1` without a person. The new test reproduces this on main: "bank exact_bank_month_v1".
+
+The user decided (2026-10-12) that card accounts are approved on the client's reconciliation procedure, once, versioned like any procedure.
+
+The change:
+- **Approval:** migration `173_card_procedures.sql` adds `procedure_versions.covers_cards`, allowed on reconciliation procedures only. Procedures publish, list and restore it, and the form offers "Card accounts too" and shows each version's setting. The takeover digest names its procedure fields explicitly, so this column does not change it.
+- **Card detection:** `StraightReconciliation` reads the account's type from the capture's chart (`Ledger.Types`). An account the chart names a credit card is prepared only when the procedure approves cards, as a card liability (`card_liability_month_v1`). Its card rule reference is "Approved reconciliation procedure vN", as on a person's card reconciliation. Otherwise it waits, saying the procedure does not approve cards.
+- **Card signs:** a card's four balances must read as a positive liability. A negative one means the files are signed the other way, and the card waits; the rows must still roll forward to the printed balances.
+- **Ambiguity:** an account name the chart holds more than once waits for a person.
+- **Card-like statements:** a statement that reads like a card's (a credit limit, a minimum payment) for an account the chart does not call a card waits for a person. Wording alone never makes an account a card.
+- **Unchanged:** bank accounts, and accounts with no capture, are prepared as before.
+
+Tests, on local PostgreSQL:
+- `TestACardIsReconciledStraightThroughOnlyWhenTheProcedureApprovesCards` (new):
+  - with cards approved, "Amex Card" (Credit Card in the chart) is queued and drafted as `credit_card card_liability_month_v1`;
+  - without the approval it waits, saying why;
+  - with negative balances (files signed the other way) it waits;
+  - on main the first case drafts it as a bank account.
+- `go test ./internal/preparation/` passes.
+- The transport tests for agent preparation, cards, procedures, procedure learning, takeover, reconciliation, row-level security, mixed closes, intake, payroll and restores pass after migration 173.
+- `tsc` passes.
+
