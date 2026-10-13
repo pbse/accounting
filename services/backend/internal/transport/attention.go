@@ -39,7 +39,7 @@ const waitingCoverage = `(` + openCoverage + ` AND NOT EXISTS(SELECT 1 FROM requ
 // attentionQuery derives each event from current work, review and request state; a key changes when the situation does.
 const attentionQuery = `WITH scope AS (
  SELECT c.id,c.entity,c.period,COALESCE(c.due_on::text,'') AS due_on,c.priority,CASE WHEN c.owner='' THEN 'none' WHEN c.owner=$3 THEN 'mine' ELSE 'other' END AS owner
- FROM client_closes c WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
+ FROM client_closes c WHERE c.organization_id=$1 AND ($4='' OR c.id::text=$4) AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'
 ), drafts AS (
  SELECT x.id,x.close_id,x.kind,x.created_at,x.review_id,x.review_state,x.paper,
@@ -218,8 +218,9 @@ func eventYours(r *http.Request, kind string) bool {
 	return true
 }
 
-func attentionEvents(ctx context.Context, db reader, r *http.Request) ([]attentionEvent, error) {
-	rows, err := db.QueryContext(ctx, attentionQuery, organization(r), firmAccess(r), subject(r))
+// attentionEvents reads the reader's events in every close they can open, or in closeID's alone ("" for all).
+func attentionEvents(ctx context.Context, db reader, r *http.Request, closeID string) ([]attentionEvent, error) {
+	rows, err := db.QueryContext(ctx, attentionQuery, organization(r), firmAccess(r), subject(r), closeID)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +287,7 @@ var attentionStreamFor = 2 * time.Minute
 func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 	// One list per person of what needs them, grouped by close; marks and preferences are theirs alone.
 	mux.HandleFunc("GET /v1/closes/attention", func(w http.ResponseWriter, r *http.Request) {
-		events, err := attentionEvents(r.Context(), db, r)
+		events, err := attentionEvents(r.Context(), db, r, "")
 		if err != nil {
 			problem(w, 503, "Attention inbox unavailable.")
 			return
@@ -302,7 +303,8 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 	// One close's decisions, for its Overview and its tabs' counts: the inbox's events for this close alone, read or not
 	// and snoozed or not, since reading or snoozing a notice never takes the work behind it off the close (B02/B06).
 	mux.HandleFunc("GET /v1/closes/{id}/decisions", func(w http.ResponseWriter, r *http.Request) {
-		events, err := attentionEvents(r.Context(), db, r)
+		// The close's own events alone, not every close the reader can open, filtered afterwards.
+		events, err := attentionEvents(r.Context(), db, r, r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "This close's decisions are unavailable.")
 			return
@@ -378,7 +380,7 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 			if !first && !still() {
 				return
 			}
-			events, err := attentionEvents(r.Context(), db, r)
+			events, err := attentionEvents(r.Context(), db, r, "")
 			var kinds []string
 			var browser bool
 			if err == nil {
@@ -435,7 +437,7 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 			}
 			until = t
 		}
-		events, err := attentionEvents(r.Context(), db, r)
+		events, err := attentionEvents(r.Context(), db, r, "")
 		if err != nil {
 			problem(w, 503, "Attention inbox unavailable.")
 			return

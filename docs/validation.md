@@ -4893,3 +4893,12 @@ Tests, on local PostgreSQL:
 - `go test ./internal/preparation/` passes.
 - The transport tests for mixed closes, unrelated evidence, agent preparation, replacements, rescans, cards, payroll, credits, later evidence, amendments and statements pass.
 
+## 2026-10-13 — One close's decisions read that close alone (page speed)
+
+`GET /v1/closes/{id}/decisions` feeds every close page's sentence, badges and Overview list. It ran the whole attention query over every open close the reader could open, then kept one close's events. So each close page paid for the whole firm, about 700 ms locally on the demonstration firm (36 closes; 3 database round trips, all in that query), growing with each client. The query takes the close as a fourth parameter. The decisions read passes it; Home, the inbox and the stream pass "" and read every close as before. Every event joins the close's scope, so a close's events are the same either way.
+
+Evidence, on local PostgreSQL with the demonstration data:
+- main's API and this branch's, side by side on the same database, return identical decisions for all 36 closes (21 events);
+- total time across the 36 reads falls from 24,997 ms to 313 ms;
+- the attention, decision, Home, notice, inbox, hand-off and goal transport tests pass.
+
