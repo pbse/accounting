@@ -4967,6 +4967,15 @@ Evidence, on local PostgreSQL with the demonstration data:
 - The query: 130 ms → 7 ms (`EXPLAIN ANALYZE`). The endpoint: 138 ms → 25 ms, and 36 → 21 ms with a client filter. The response is the same as main's.
 - The demonstration data has no transaction updated after an approval, so equal responses there say little. `TestPredictedReviewFlagsDraftsALaterTransactionMayAffect` and `TestPredictedReviewSaysWhenTheAccountNoLongerTies` cover flagged rows, and `TestOrganizationIsolation` covers the list across firms. Those, with `TestRecurringAccrualFreshReviewAndPortfolioDependency`, pass.
 
+## 2026-10-13 — The management pack skips readiness for a month not signed off (page speed)
+
+The management pack (the Reports tab, and the pack's versions, explanations and publishing) gives each capture a status: signed off only while the close's sign-off stands over that capture. It ran the full readiness check for this month and again for last month's comparison, about 17 round trips each. It already read whether this month is signed off, just before. A month whose latest decision is not a sign-off cannot have one standing, so its capture is now provisional without the readiness check. This applies to the pack from a ledger and to the pack from files. Last month's comparison, usually signed off, keeps its full check, so a signed-off month costs what it did. One difference remains in an error case only: a month not signed off whose readiness could not be read was "unknown", and is now "provisional", which it is either way.
+
+Evidence, on local PostgreSQL with the demonstration data (main's API and this branch's on one database):
+- An open month: the pack 49 → 32 round trips, its versions 50 → 33, explanations 59 → 42. A signed-off month: unchanged (49).
+- All 144 reads (pack, versions, explanations and budget for the 36 closes: 7 open, 29 signed off) are byte-identical to main's.
+- The management, publication, publishing, pack, explanation, budget, files, report, executive and comparative transport tests pass (30). `TestPackagePreservesBothWorkpapersAndEscapesSources` cannot run on this machine (no `pdftotext`), and is left to CI.
+
 ## 2026-10-13 — One boundary read per close request (page speed)
 
 Every request under `/v1/closes/{id}` passed the organization boundary in two round trips: the firm's switch with the person's membership, then whether they can open the close (`closeAccess`). Both now come in one query. A path that names a close is parsed first, and its access is a column of the firm's read. The answers keep their order: a disabled firm or a non-member gets 403 first, then the executive route check, then 404 for a close the person cannot open or an ID that cannot be read. One case is still checked apart: an invitation accepted during the request may give the person clients, so the close is read again after it. The notice stream's recheck asks for no close.
