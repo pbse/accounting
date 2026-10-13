@@ -91,7 +91,10 @@ func (c *tenantConn) use(ctx context.Context) error {
 		return nil
 	}
 	defer roundTrip(ctx)()
-	if _, err := c.Conn.ExecContext(ctx, `SELECT set_config('app.organization',$1,false)`, []driver.NamedValue{{Ordinal: 1, Value: tenant}}); err != nil {
+	// JIT goes off in the same trip, and comes back with the firm whenever a rollback undoes it: the planner's cost for
+	// a read like the attention inbox passes JIT's threshold on a few dozen rows, and compiling its plan took 670 ms of
+	// a 700 ms read that runs in 30 ms without it.
+	if _, err := c.Conn.ExecContext(ctx, `SELECT set_config('app.organization',$1,false),set_config('jit','off',false)`, []driver.NamedValue{{Ordinal: 1, Value: tenant}}); err != nil {
 		c.tenant = "\x00"
 		return err
 	}
