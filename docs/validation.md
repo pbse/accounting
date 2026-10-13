@@ -4936,6 +4936,15 @@ Evidence, on local PostgreSQL with the demonstration data:
 - The Home, morning, roster, Clients, client page, effort, daily, readiness, sign-off, reopen and row-level security transport tests pass (26).
 - Codex review found two issues, both fixed. A stopped worker left its last check trusted forever: hence the 15-minute bound. The worker paused 30 seconds even with a backlog: it now goes on at once, but only after a batch that was all checked, so failures wait. Codex's review of the fixes found no further issue. Follow-up: one worker checks every signed-off month serially, about 0.8 s per close at production's latency. Beyond roughly 350 signed-off months across all firms it falls behind five minutes, and beyond roughly 1,000 behind 15, when reads recheck live again (correct, but slow). Checking only the closes that changed since, or older months less often, would lift that.
 
+## 2026-10-13 — The readiness check in fewer round trips (page speed)
+
+`closeReadiness` is the readiness check behind the Sign-off tab, Overview (the brief and the goal's checks), Reports (the management pack and its versions), the year-end package and the binder. It made 23 sequential reads. Seven were one-row reads, independent of the others, made later in the function: client files still unscanned, the month's books source, the drafts to suggest, uncertain credit applications and Xero attempts, a Xero bill correction verified after the latest capture, a stopped QuickBooks refresh, and the sign-off history. They are now extra columns of the first query, after the snapshot column. The snapshot alone is still the signed digest, so existing sign-offs stand, and the blockers come in the same order.
+
+Evidence, on local PostgreSQL with the demonstration data (main's API and this branch's on one database):
+- Round trips: readiness 26 → 19; the brief 48 → 41; `/goal?verify=1` 67 → 60; the management pack 63 → 49 and its versions 64 → 50; year-end 103 → 75; the binder 46 → 39.
+- For all 36 closes, readiness (digests included), the brief, the management pack, the binder and takeover setup return the same documents. The year-end packages hold the same files apart from their generation time.
+- 52 transport tests on readiness, sign-off, reopening, Xero, credits, refreshes, files, journals, year-end, the management pack, exports, goals, opening baselines, takeover and scope pass, on four runs. A first run showed one failure that the output did not keep, and it did not recur.
+
 ## 2026-10-13 — The goal read without repeated reads (page speed)
 
 Every close tab waits on `GET /v1/closes/{id}/goal`: the header's agent chip and every tab's agent panel come from it. It made 21 sequential round trips, and five of them repeated or could join another read:
