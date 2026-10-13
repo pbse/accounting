@@ -56,13 +56,20 @@ type coverageView struct {
 var errCoverageLimit = errors.New("Coverage supports up to 100 intake jobs per close")
 
 func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageView, error) {
-	out := coverageView{Items: []coverageRequirement{}, Jobs: []coverageJob{}}
 	raw, err := ledgerCoverage(ctx, tx, closeID)
 	if err != nil {
-		return out, err
+		return coverageView{Items: []coverageRequirement{}, Jobs: []coverageJob{}}, err
 	}
+	return coverageOf(ctx, tx, closeID, raw)
+}
+
+// coverageOf is currentCoverage from the ledger's coverage (ledgerCoverage) already read in tx, so a caller that read
+// it does not read the capture again.
+func coverageOf(ctx context.Context, tx *sql.Tx, closeID string, raw json.RawMessage) (coverageView, error) {
+	out := coverageView{Items: []coverageRequirement{}, Jobs: []coverageJob{}}
 	out.Ledger = raw
-	if err = json.Unmarshal(raw, &out); err != nil {
+	err := json.Unmarshal(raw, &out)
+	if err != nil {
 		return out, err
 	}
 	if out.SnapshotID == "" {

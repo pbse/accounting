@@ -54,9 +54,11 @@ type goalProgress struct {
 	Plan     []planStep    `json:"plan,omitempty"`
 	// accounts is the capture's coverage when it was read, for handing accounts to teammates.
 	accounts *coverageView
-	// approve counts documents whose drafts a sign-off goal needs approved; limited, a close past coverage's limit.
+	// approve counts documents whose drafts a sign-off goal needs approved; limited, a close past coverage's limit;
+	// signed, the close's latest decision is a sign-off.
 	approve int
 	limited bool
+	signed  bool
 }
 
 const coverageLimitNeed = "Account coverage and sign-off read at most 100 intake jobs, and this close has more, so it can't be signed off here."
@@ -341,6 +343,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	if err != nil {
 		return p, err
 	}
+	p.signed = signed
 	readSignoff := finish == "signoff" && (p.Ready || signed)
 	var ready readiness
 	var accounts coverageView
@@ -349,7 +352,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 		ready, err = closeReadiness(ctx, tx, closeID)
 		accounts = ready.coverage
 	case string(coverage) != "null":
-		accounts, err = currentCoverage(ctx, tx, closeID)
+		accounts, err = coverageOf(ctx, tx, closeID, coverage)
 	}
 	if errors.Is(err, errCoverageLimit) {
 		p.limited = true
@@ -902,12 +905,16 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		}
 		var goal *view
 		g := &view{}
-		err = tx.QueryRowContext(r.Context(), `SELECT id::text,author,COALESCE(due_on::text,''),state,created_at,reached_at,finished_at,finish,ready_at,events FROM close_goals WHERE close_id=$1 ORDER BY close_goals.id DESC LIMIT 1`, closeID).Scan(&g.ID, &g.Author, &g.DueOn, &g.State, &g.CreatedAt, &g.ReachedAt, &g.FinishedAt, &g.Finish, &g.ReadyAt, &g.Events)
-		switch err {
-		case nil:
+		var closeInfo struct {
+			Entity string `json:"entity"`
+			Period string `json:"period"`
+		}
+		// The close and its latest goal, if any, in one read.
+		var found bool
+		err = tx.QueryRowContext(r.Context(), `SELECT c.entity,c.period,g.id IS NOT NULL,COALESCE(g.id::text,''),COALESCE(g.author,''),COALESCE(g.due_on::text,''),COALESCE(g.state,''),COALESCE(g.created_at,'epoch'),g.reached_at,g.finished_at,COALESCE(g.finish,''),g.ready_at,COALESCE(g.events,'[]')
+ FROM client_closes c LEFT JOIN LATERAL (SELECT * FROM close_goals WHERE close_id=c.id ORDER BY close_goals.id DESC LIMIT 1) g ON true WHERE c.id=$1`, closeID).Scan(&closeInfo.Entity, &closeInfo.Period, &found, &g.ID, &g.Author, &g.DueOn, &g.State, &g.CreatedAt, &g.ReachedAt, &g.FinishedAt, &g.Finish, &g.ReadyAt, &g.Events)
+		if found {
 			goal = g
-		case sql.ErrNoRows:
-			err = nil
 		}
 		type activity struct {
 			At    time.Time `json:"at"`
@@ -939,15 +946,8 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		var progress goalProgress
 		var done bool
 		var routine *closeRoutine
-		var closeInfo struct {
-			Entity string `json:"entity"`
-			Period string `json:"period"`
-		}
 		if err == nil {
 			routine, err = readRoutine(r.Context(), tx, closeID)
-		}
-		if err == nil {
-			err = tx.QueryRowContext(r.Context(), `SELECT entity,period FROM client_closes WHERE id=$1`, closeID).Scan(&closeInfo.Entity, &closeInfo.Period)
 		}
 		if err == nil {
 			finish := "review"
@@ -961,9 +961,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			}
 			progress.Plan = goalPlan(progress, books, closeID, closeInfo.Entity, closeInfo.Period, finish)
 		}
-		if err == nil {
-			done, err = signedOff(r.Context(), tx, closeID)
-		}
+		done = progress.signed
 		handoffs := []goalHandoff{}
 		if err == nil && goal != nil {
 			handoffs, err = readHandoffs(r.Context(), tx, goal.ID, subject(r))

@@ -4935,3 +4935,17 @@ Evidence, on local PostgreSQL with the demonstration data:
 - `TestListsReadTheWorkersSignOffCheck` (new) covers four cases. A close changed after the worker checked it still shows its stored standing. A check younger than five minutes is not made again. A check between 5 and 15 minutes old is read, then made again by the worker, and then the change shows. A check over 15 minutes old is not trusted, and the read rechecks. With the stored read disabled it fails with "reopen_required"; without the 15-minute bound it fails with "a stale check is not trusted: signed_off".
 - The Home, morning, roster, Clients, client page, effort, daily, readiness, sign-off, reopen and row-level security transport tests pass (26).
 - Codex review found two issues, both fixed. A stopped worker left its last check trusted forever: hence the 15-minute bound. The worker paused 30 seconds even with a backlog: it now goes on at once, but only after a batch that was all checked, so failures wait. Codex's review of the fixes found no further issue. Follow-up: one worker checks every signed-off month serially, about 0.8 s per close at production's latency. Beyond roughly 350 signed-off months across all firms it falls behind five minutes, and beyond roughly 1,000 behind 15, when reads recheck live again (correct, but slow). Checking only the closes that changed since, or older months less often, would lift that.
+
+## 2026-10-13 — The goal read without repeated reads (page speed)
+
+Every close tab waits on `GET /v1/closes/{id}/goal`: the header's agent chip and every tab's agent panel come from it. It made 21 sequential round trips, and five of them repeated or could join another read:
+- The account-coverage step read the month's ledger capture again (books source, QuickBooks capture, Xero capture), right after the progress step had read it. `coverageOf` builds coverage from the capture already read, and `currentCoverage` is now `ledgerCoverage` plus `coverageOf` for its other callers.
+- The handler read whether the close is signed off after the progress step had read it.
+- The close's name and month came in their own read; they now come with the goal row.
+
+The tabs' rail panel uses most of the read (goal, progress, needs, activity, sign-off), so a lighter read only for the chip would not help. Production cost is about 33 ms per round trip.
+
+Evidence, on local PostgreSQL with the demonstration data (main's API and this branch's on one database):
+- `/goal`: 21 → 16 round trips; `/goal?verify=1` (Overview): 67 → 62.
+- All 72 reads (`/goal` and `/goal?verify=1` for each of the 36 closes, two of them with goals) return the same documents.
+- The goal, coverage, hand-off, routine, takeover, readiness and plan transport tests pass (23).
