@@ -69,7 +69,7 @@ export function Faq() {
       <div className="k-page-head">
         <p className="k-label">Questions</p>
         <h1>Asked and answered.</h1>
-        <p className="k-lede">What firms ask before they hand Krith a month. If yours isn’t here, we’re glad to answer it.</p>
+        <p className="k-lede">What firms ask before they hand Krith their work. If yours isn’t here, we’re glad to answer it.</p>
       </div>
       <nav className="k-faq-index" aria-label="Questions by topic">
         <div className="k-lhead">

@@ -145,7 +145,7 @@ function AgentsAtWork() {
         <span>Prepared to the cent.</span>
         <span className="k-yours">Signed by you.</span>
       </h2>
-      <p className="k-lede">On every engagement, a team of agents gathers the evidence, matches every line, traces each difference and drafts the entries. You review their work and sign.</p>
+      <p className="k-lede">A team of agents gathers the evidence, matches every line, traces each difference and drafts the entries. You review their work and sign.</p>
       <div className="k-stage">
         <figure className="k-ledger" aria-label="Illustrative bank reconciliation prepared by agents and signed by a reviewer">
           <div className="k-lhead">

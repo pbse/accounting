@@ -72,7 +72,7 @@ export function About() {
       <section className="k-why" aria-labelledby="next-title">
         <h2 id="next-title">More of the work, over time</h2>
         <div>
-          <p>Every engagement rests on the same preparation: gathering the records, matching them, tracing what doesn’t agree and drafting what a person will decide. That is the work Krith takes on.</p>
+          <p>Every engagement rests on the same preparation: gathering the records, matching them, tracing what doesn’t agree and drafting what a person will decide. That is the kind of work Krith takes on.</p>
           <p>We mean to take on more of it over time: the books day to day, the handoff at year end, the cash decisions that follow. Each joins only when the work before it holds up, under the same rules: agents prepare, every figure keeps its source, and a person decides.</p>
         </div>
       </section>
