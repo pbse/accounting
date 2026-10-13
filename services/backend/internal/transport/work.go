@@ -710,13 +710,16 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 var predictedAccounts = map[string][]string{"prepaid": {"prepaid_account"}, "accrual": {"liability_account"}, "payroll": {"clearing_account", "liability_account"}, "loan": {"loan_account", "accrued_interest_account", "current_portion_account"}, "owner": {"owner_account"}, "settlement": {"bank_account"}, "reconciliation": {"account"}}
 
 func predictedReviews(r *http.Request, db *sql.DB, search string) ([]map[string]any, bool, error) {
-	rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.paper->'input',v.created_at,t.kind,t.provider_id,t.provider_updated_at,t.record
- FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id JOIN workpaper_reviews v ON v.id::text=w.review_id
+	// The approved drafts are read from the review-state view once: joined directly, the planner evaluated the view, and
+	// its lineage, once per close.
+	rows, err := db.QueryContext(r.Context(), `WITH approved AS MATERIALIZED (SELECT id,close_id,kind,paper,review_id FROM workpaper_review_state WHERE review_state='approved' AND close_id IN (SELECT id FROM client_closes WHERE organization_id=$1))
+ SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.paper->'input',v.created_at,t.kind,t.provider_id,t.provider_updated_at,t.record
+ FROM approved w JOIN client_closes c ON c.id=w.close_id JOIN workpaper_reviews v ON v.id::text=w.review_id
  JOIN quickbooks_entity_syncs s ON s.close_id=c.id AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.state='completed' AND z.connection_id=`+quickbooks.ReadingConnection("c.id")+`)
  JOIN evidence e ON e.id=s.evidence_id AND e.close_id=c.id AND e.superseded_by IS NULL
  JOIN quickbooks_transaction_rows t ON t.sync_id=s.id AND t.provider_updated_at>v.created_at
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4)
- AND w.review_state='approved' AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY close_signoffs.id DESC LIMIT 1),'')<>'signed_off'
  ORDER BY w.id DESC,t.provider_updated_at DESC`, organization(r), firmAccess(r), subject(r), search)
 	if err != nil {
 		return nil, false, err
