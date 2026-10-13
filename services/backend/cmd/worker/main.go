@@ -54,6 +54,7 @@ func main() {
 		"platform_alerts": transport.RunPlatformAlerts,
 		"books_versions":  transport.RunBooksVersions,
 		"books_parity":    transport.RunBooksParity,
+		"signoff_checks":  transport.RunSignOffChecks,
 		"workflow_engine": wf.Run,
 		"heartbeat": func(ctx context.Context, db *sql.DB) {
 			transport.RunHeartbeat(ctx, db, "worker", map[string]any{"ocr": llm.OCRConfiguration(ctx)})

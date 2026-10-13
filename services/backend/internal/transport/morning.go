@@ -51,11 +51,16 @@ func outstanding(ctx context.Context, tx *sql.Tx, now time.Time, org string, fir
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
+	ids := make([]string, len(signed))
+	for i, o := range signed {
+		ids[i] = o.CloseID
+	}
+	states, err := signOffStates(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for _, o := range signed {
-		if o.State, err = recheckSignOff(ctx, tx, o.CloseID); err != nil {
-			return nil, err
-		}
-		if o.State != "signed_off" {
+		if o.State = states[o.CloseID]; o.State != "signed_off" {
 			open = append(open, o)
 		}
 	}

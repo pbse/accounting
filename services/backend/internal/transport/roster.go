@@ -341,14 +341,23 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		// made for the closes of the last three months (at most three a client), the ones still in play; an older one is
 		// shown as recorded, and Home, which rechecks every owed close, still counts it once it changes.
 		since := shiftMonth(time.Now().UTC().Format("2006-01"), -2)
-		for i := range clients {
-			for j := range clients[i].Closes {
-				if err != nil || !clients[i].Closes[j].SignedOff || clients[i].Closes[j].Period < since {
-					continue
+		recent := []string{}
+		for _, c := range clients {
+			for _, cl := range c.Closes {
+				if cl.SignedOff && cl.Period >= since {
+					recent = append(recent, cl.ID)
 				}
-				var state string
-				if state, err = recheckSignOff(r.Context(), tx, clients[i].Closes[j].ID); err == nil {
-					clients[i].Closes[j].SignedOff, clients[i].Closes[j].Rechecked, clients[i].Closes[j].Unchecked = state == "signed_off", true, state == "unknown"
+			}
+		}
+		if err == nil {
+			var states map[string]string
+			if states, err = signOffStates(r.Context(), tx, recent); err == nil {
+				for i := range clients {
+					for j := range clients[i].Closes {
+						if state, ok := states[clients[i].Closes[j].ID]; ok {
+							clients[i].Closes[j].SignedOff, clients[i].Closes[j].Rechecked, clients[i].Closes[j].Unchecked = state == "signed_off", true, state == "unknown"
+						}
+					}
 				}
 			}
 		}

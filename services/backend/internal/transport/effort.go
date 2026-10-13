@@ -192,16 +192,23 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 			fail()
 			return
 		}
+		recorded := []string{}
+		for _, c := range closes {
+			if c.signed {
+				recorded = append(recorded, c.id)
+			}
+		}
+		states, err := signOffStates(ctx, tx, recorded)
+		if err != nil {
+			fail()
+			return
+		}
 		signed, unchecked := map[string]bool{}, 0
 		for i, c := range closes {
 			if !c.signed {
 				continue
 			}
-			state, err := recheckSignOff(ctx, tx, c.id)
-			if err != nil {
-				fail()
-				return
-			}
+			state := states[c.id]
 			closes[i].signed = state == "signed_off"
 			signed[c.id] = closes[i].signed
 			if state == "unknown" && c.period == period {
