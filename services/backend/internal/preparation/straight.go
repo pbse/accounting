@@ -31,6 +31,7 @@ type Ledger struct {
 	ChartSource Source // that snapshot's evidence entry, cited by the draft so a new chart reopens its review
 	Rows        []LedgerRow
 	Accounts    map[string]string   // account ID → name
+	Types       map[string]string   // account ID → its QuickBooks account type ("Bank", "Credit Card")
 	IDs         map[string][]string // lower-cased name or fully qualified name → account IDs
 	Machine     map[string]bool     // every capture, period-snapshot and procedure-copy evidence entry of the close, current or older
 }
@@ -918,14 +919,14 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	if err := machine.Err(); err != nil {
 		return nil, err
 	}
-	var accounts []struct{ ID, Name, FullyQualifiedName string }
+	var accounts []struct{ ID, Name, FullyQualifiedName, AccountType string }
 	json.Unmarshal(catalog, &accounts)
-	l.Accounts, l.IDs = map[string]string{}, map[string][]string{}
+	l.Accounts, l.IDs, l.Types = map[string]string{}, map[string][]string{}, map[string]string{}
 	for _, a := range accounts {
 		if a.ID == "" {
 			continue
 		}
-		l.Accounts[a.ID] = a.Name
+		l.Accounts[a.ID], l.Types[a.ID] = a.Name, a.AccountType
 		for _, name := range []string{a.Name, a.FullyQualifiedName} {
 			if name != "" && !slices.Contains(l.IDs[strings.ToLower(name)], a.ID) {
 				l.IDs[strings.ToLower(name)] = append(l.IDs[strings.ToLower(name)], a.ID)

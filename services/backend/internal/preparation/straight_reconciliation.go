@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,7 +21,7 @@ import (
 // unmatched line or difference. Both roll-forwards and both bridges tying to zero is what proves the balances and rows
 // complete. Anything else (outstanding items, tolerances,
 // splits, transfers, a card) is a person's to review. It returns the plan, or the reason a person is needed.
-func StraightReconciliation(p Proposal, selected []IntakeSource, procedure Procedure, procedureSource Source, currency, entity, period string, unread bool, otherMatter map[string]bool) (Plan, string) {
+func StraightReconciliation(p Proposal, selected []IntakeSource, procedure Procedure, procedureSource Source, currency, entity, period string, unread bool, otherMatter map[string]bool, capture *Ledger) (Plan, string) {
 	switch {
 	case !llm.IsModelEngine(p.Engine) || p.Kind != "reconciliation":
 		return Plan{}, "only an agent-read reconciliation can be prepared without confirmation"
@@ -140,7 +141,40 @@ func StraightReconciliation(p Proposal, selected []IntakeSource, procedure Proce
 		}
 		return s.Name + " · all rows"
 	}
-	input := reconciliation.Input{Entity: entity, Account: facts["account"], AccountType: "bank", ClosePeriod: period, Currency: strings.ToUpper(facts["currency"]),
+	// A card is a card by the captured chart's type for the account. It is prepared without a person only as a card
+	// liability, and only when the client's reconciliation procedure approves card accounts. A statement that reads like a
+	// card's (a credit limit, a minimum payment) for an account the chart does not name a card is a person's to place.
+	accountType, cardRule := "bank", ""
+	if capture != nil {
+		ids := capture.IDs[strings.ToLower(facts["account"])]
+		if len(ids) > 1 {
+			return Plan{}, "the captured chart has more than one account named " + facts["account"] + "; a person confirms which this is"
+		}
+		if len(ids) == 1 && capture.Types[ids[0]] == "Credit Card" {
+			accountType = "credit_card"
+		}
+	}
+	if accountType == "bank" {
+		for _, s := range append([]IntakeSource{statement}, slices.Collect(maps.Values(supports))...) {
+			if mentionsAny(s.Content, []string{"credit limit", "minimum payment"}) {
+				return Plan{}, "the statement reads like a card's (a credit limit or a minimum payment), but the captured chart does not name " + facts["account"] + " a card; a person confirms which it is"
+			}
+		}
+	}
+	if accountType == "credit_card" {
+		if !procedure.CoversCards {
+			return Plan{}, "the account is a card, and the client's reconciliation procedure does not approve card accounts for preparation without confirmation"
+		}
+		cardRule = "Approved reconciliation procedure v" + procedure.ID
+		// The card method reads a balance owed as a positive liability that charges increase: the printed balances, which
+		// the rows must roll forward to, say the files are signed that way only when none is negative.
+		for _, field := range []string{"statement_opening", "statement_closing", "ledger_opening", "ledger_closing"} {
+			if strings.HasPrefix(strings.TrimSpace(facts[field]), "-") {
+				return Plan{}, "a card balance is read as negative (" + strings.ReplaceAll(field, "_", " ") + "); a person confirms how the card's files are signed"
+			}
+		}
+	}
+	input := reconciliation.Input{Entity: entity, Account: facts["account"], AccountType: accountType, CardRuleReference: cardRule, ClosePeriod: period, Currency: strings.ToUpper(facts["currency"]),
 		StatementReference: location(statement), LedgerReference: location(ledger), ExpectedPages: expected, Pages: pages,
 		StatementOpening: facts["statement_opening"], StatementClosing: facts["statement_closing"], LedgerOpening: facts["ledger_opening"], LedgerClosing: facts["ledger_closing"],
 		StatementCSV: statement.Content, LedgerCSV: ledger.Content, PolicyConfirmed: true}
