@@ -489,7 +489,8 @@ func registerAttention(mux *http.ServeMux, db, sessionDB *sql.DB) {
 
 // attentionInbox is the inbox response for events already read: the view's events (all, mine, unread or snoozed) in
 // pages of 200, grouped by close, with the keys that are new to the reader. With priority, the reader's own decisions
-// come first, then the most pressing close (overdue, then by due date, undated last) and within it the newest event,
+// come first, then decisions before notices that need none, then the most pressing close (overdue, then by due date,
+// undated last) and within it the newest event,
 // applied before the page boundary so page one holds what matters most; otherwise newest first. Home reads page one
 // of every event in the same snapshot as its counts, so the card and the list it opens agree.
 func attentionInbox(events []attentionEvent, kinds []string, browser bool, view string, page int, priority bool) map[string]any {
@@ -526,8 +527,18 @@ func attentionInbox(events []attentionEvent, kinds []string, browser bool, view 
 			}
 			return 1
 		}
+		// A notice that needs no decision (a complete reply, a goal reached) never leads ahead of one that does.
+		notice := func(e attentionEvent) int {
+			if e.Info {
+				return 1
+			}
+			return 0
+		}
 		slices.SortStableFunc(shown, func(a, b attentionEvent) int {
 			if c := own(a) - own(b); c != 0 {
+				return c
+			}
+			if c := notice(a) - notice(b); c != 0 {
 				return c
 			}
 			if c := rank(a.group) - rank(b.group); c != 0 {

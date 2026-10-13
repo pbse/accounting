@@ -4868,6 +4868,14 @@ Tests, on local PostgreSQL:
 - The transport tests for agent preparation, cards, procedures, procedure learning, takeover, reconciliation, row-level security, mixed closes, intake, payroll and restores pass after migration 173.
 - `tsc` passes.
 
+## 2026-10-13 — Decisions before notices that need none (B02, #371)
+
+In priority order (Home, and the decisions-and-notices list), events sorted by the reader's own work first, then by the close's urgency. So a close with only a notice that needs no decision could lead as "Do first", ahead of real decisions. That notice might be a complete client reply, or a goal reached. Many such notices could also push actionable work to a later page of the capped inbox. Within the reader's own work, decisions now come before those notices, ahead of the urgency ranking and the 200-item page boundary.
+
+Tests: `TestDecisionsComeBeforeNoticesThatNeedNone` (new) puts an info notice on an overdue close and a decision on an undated close, and the decision's close leads. It fails without the change. The attention, decision, Home, notice and inbox transport tests pass, on local PostgreSQL.
+
+The issue's two other notes (a chat card showing a draft's state only after a stale request is refused, and a unique index on approval_requests) stay open on #371.
+
 ## 2026-10-13 — Straight-through word checks match at the start of a word (B03/B04)
 
 Straight-through preparation's word lists all used one matcher, `mentionsAny`, which found a word's letters anywhere on a line. So "accredited" spoke of a credit and held an invoice. "Avoid" spoke of a void, so another document stopped counting as unrelated. On the amount's line, "online" was a "line" and "community" a "unit". This is the same class as the tax/fee bug (#465).

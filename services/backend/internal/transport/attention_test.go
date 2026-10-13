@@ -349,3 +349,19 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 		t.Fatalf("a removed member's marks and preferences go with their membership: %d", left)
 	}
 }
+
+// In priority order a notice that needs no decision, even on an overdue close, comes after a decision on an undated one.
+func TestDecisionsComeBeforeNoticesThatNeedNone(t *testing.T) {
+	now := time.Now()
+	overdue := attentionGroup{CloseID: "1", DueOn: "2000-01-01"}
+	undated := attentionGroup{CloseID: "2"}
+	events := []attentionEvent{
+		{Key: "reply:1", Kind: "answered", Yours: true, Info: true, At: now, group: overdue},
+		{Key: "changed:2", Kind: "changed", Yours: true, At: now.Add(-time.Hour), group: undated},
+	}
+	out := attentionInbox(events, []string{"answered", "changed"}, false, "all", 0, true)
+	groups := out["groups"].([]*attentionGroup)
+	if len(groups) != 2 || groups[0].CloseID != "2" {
+		t.Fatalf("the decision's close leads: %+v", groups)
+	}
+}
