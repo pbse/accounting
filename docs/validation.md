@@ -4868,3 +4868,14 @@ Tests, on local PostgreSQL:
 - The transport tests for agent preparation, cards, procedures, procedure learning, takeover, reconciliation, row-level security, mixed closes, intake, payroll and restores pass after migration 173.
 - `tsc` passes.
 
+## 2026-10-13 — Straight-through word checks match at the start of a word (B03/B04)
+
+Straight-through preparation's word lists all used one matcher, `mentionsAny`, which found a word's letters anywhere on a line. So "accredited" spoke of a credit and held an invoice. "Avoid" spoke of a void, so another document stopped counting as unrelated. On the amount's line, "online" was a "line" and "community" a "unit". This is the same class as the tax/fee bug (#465).
+
+The matcher now finds each word only where it starts a word of its own. The lists' stems still name their forms ("cancel" names cancellation, "prorat" prorated, "instal" instalment, "revers" reversal, "amend" amendment). Phrases ("sub total", "write off", "balance forward") still match, and real mentions still hold. Charges keep their own whole-word matcher (#465).
+
+Tests, on local PostgreSQL:
+- A new case in `TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed`: an invoice saying "Accredited carrier since 1998; please avoid paying by cheque" is prepared. It failed before the fix: "the invoice speaks of a credit, cancellation…".
+- `go test ./internal/preparation/` passes.
+- The transport tests for mixed closes, unrelated evidence, agent preparation, replacements, rescans, cards, payroll, credits, later evidence, amendments and statements pass.
+

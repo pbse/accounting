@@ -156,6 +156,10 @@ func straightThroughEngineChecks(t *testing.T, engine string) {
 	if _, reason = StraightThrough(proposal, invoice+"\nFees 100", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared an invoice with a bare fee figure and no total")
 	}
+	// A word names a credit or a cancellation only when it starts with one: "Accredited" is neither.
+	if _, reason = StraightThrough(proposal, invoice+"\nAccredited carrier since 1998; please avoid paying by cheque", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+		t.Fatal("letters of a credit word inside another word held the invoice:", reason)
+	}
 	// The base a tax is charged on is not what is payable.
 	if _, reason = StraightThrough(proposal, invoice+"\nTotal taxable USD 1,000.00\nAmount due USD 1,200.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("a taxable total was taken for the payable total:", reason)
