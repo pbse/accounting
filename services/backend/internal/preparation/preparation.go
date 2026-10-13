@@ -34,7 +34,9 @@ type Source struct {
 type Plan struct {
 	CarryForward     *CarryForward     `json:"carry_forward,omitempty"`
 	RecurringAccrual *RecurringAccrual `json:"recurring_accrual,omitempty"`
-	Revises          string            `json:"revises,omitempty"`
+	// PayrollPrecedent is the approved payroll whose accounts a straight-through payroll uses.
+	PayrollPrecedent *Precedent `json:"payroll_precedent,omitempty"`
+	Revises          string     `json:"revises,omitempty"`
 	// Unrelated is the other invoices in the close a straight-through plan left unused, proven again before its draft is saved.
 	Unrelated []string `json:"unrelated,omitempty"`
 	// Imported is one line of a prior accountant's schedule read on the client's opening month: prepared as a schedule
@@ -215,6 +217,9 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 	if p.RecurringAccrual != nil {
 		object["recurring_accrual"], _ = json.Marshal(p.RecurringAccrual)
 	}
+	if p.PayrollPrecedent != nil {
+		object["payroll_precedent"], _ = json.Marshal(p.PayrollPrecedent)
+	}
 	if p.Revises != "" {
 		object["revises"], _ = json.Marshal(p.Revises)
 	}
@@ -300,15 +305,16 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				break
 			}
 		}
-		// A straight-through reconciliation stands only while its procedure version is the client's current, enabled one and
-		// nothing arrived in the close for a person to weigh; its rows and balances are the plan's own, checked by digest below.
-		if p.Procedure != "" && p.Kind == "reconciliation" {
-			current, e := CurrentProcedure(ctx, tx, closeID, "reconciliation")
+		// A straight-through reconciliation or payroll stands only while its procedure version is the client's current,
+		// enabled one and nothing arrived in the close for a person to weigh; its figures are the plan's own, checked by
+		// digest below.
+		if p.Procedure != "" && (p.Kind == "reconciliation" || p.Kind == "payroll") {
+			current, e := CurrentProcedure(ctx, tx, closeID, p.Kind)
 			if e != nil && e != sql.ErrNoRows {
 				return false, e
 			}
 			if current.ID != p.Procedure || !current.Enabled {
-				failure = "The reconciliation procedure this draft was prepared under (v" + p.Procedure + ") is no longer the client's current enabled one; a person confirms the facts."
+				failure = "The " + p.Kind + " procedure this draft was prepared under (v" + p.Procedure + ") is no longer the client's current enabled one; a person confirms the facts."
 				break
 			}
 			if other, e := OtherEvidence(ctx, tx, closeID, id); e != nil {
@@ -328,16 +334,19 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 					return false, e
 				}
 				if slices.ContainsFunc(p.Unrelated, func(s string) bool { return !still[s] }) {
-					failure, changed = "Another document in the close may now bear on this account; reading the close again.", true
+					failure, changed = "Another document in the close may now bear on this draft; reading the close again.", true
 					break
 				}
 			}
-			// Another job may have drafted this account since this one was queued; the close is locked, so one wins.
-			if drafted, e := ReconciliationDrafted(ctx, tx, closeID, p); e != nil {
-				return false, e
-			} else if drafted != "" {
-				failure = strings.ToUpper(drafted[:1]) + drafted[1:] + "."
-				break
+			// Another job may have drafted this account since this one was queued; the close is locked, so one wins. A
+			// payroll's duplicates are its own checks' to find.
+			if p.Kind == "reconciliation" {
+				if drafted, e := ReconciliationDrafted(ctx, tx, closeID, p); e != nil {
+					return false, e
+				} else if drafted != "" {
+					failure = strings.ToUpper(drafted[:1]) + drafted[1:] + "."
+					break
+				}
 			}
 		} else if p.Procedure != "" {
 			current, e := CurrentProcedure(ctx, tx, closeID, p.Kind)
@@ -432,6 +441,29 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		if p.Kind == "payroll" {
 			if bodies[i], err = CheckPayroll(ctx, tx, closeID, period, p.Revises, bodies[i]); err != nil {
 				return false, err
+			}
+			// Prepared without a person, every check must pass: one the records cannot answer is a person's to confirm; and
+			// the payroll whose accounts it uses must still be approved as it was, unrevised.
+			if p.Procedure != "" && p.PayrollPrecedent != nil {
+				var stands bool
+				if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workpaper_review_state r WHERE r.id::text=$1 AND r.review_state='approved' AND r.digest=$2 AND COALESCE(r.review_id::text,'')=$3)
+ AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.paper->>'revises'=$1)`, p.PayrollPrecedent.PaperID, p.PayrollPrecedent.Digest, p.PayrollPrecedent.ReviewID).Scan(&stands); err != nil {
+					return false, err
+				}
+				if !stands {
+					failure = "The approved payroll #" + p.PayrollPrecedent.PaperID + " whose accounts this draft uses was revised or is no longer approved; a person confirms the accounts."
+					break
+				}
+			}
+			if p.Procedure != "" {
+				var checked struct {
+					Checks []PayrollCheck `json:"checks"`
+				}
+				json.Unmarshal(bodies[i], &checked)
+				if n := slices.IndexFunc(checked.Checks, func(c PayrollCheck) bool { return c.State != "passed" }); n >= 0 {
+					failure = checked.Checks[n].Detail
+					break
+				}
 			}
 		}
 		if err = CheckProcedureMethod(ctx, tx, closeID, p.Kind, bodies[i]); err != nil {

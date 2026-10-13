@@ -162,7 +162,7 @@ func RecognizeExport(sources []IntakeSource, period string, reconciliationCSV bo
 
 // StartIntake is in the upload transaction, so an accepted file cannot lose its job.
 func StartIntake(ctx context.Context, tx *sql.Tx, closeID, sourceID, actor string) (string, error) {
-	for _, kind := range []string{"prepaid", "reconciliation", "accrual"} {
+	for _, kind := range []string{"prepaid", "reconciliation", "accrual", "payroll"} {
 		p, err := CurrentProcedure(ctx, tx, closeID, kind)
 		if err == sql.ErrNoRows {
 			continue

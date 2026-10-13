@@ -4799,3 +4799,48 @@ Tests and checks, on local PostgreSQL:
 - The layout check passes: 96 page views on a fresh migrated database, in Edge.
 - A width check of Settings on the demonstration data at 1440, 1024, 980, 768 and 390px and at 200% zoom: no page overflow, no cell spilling into its neighbour, all nine tabs reachable, and the current tab fully in view at 980px.
 
+## 2026-10-12 — A repeat month's payroll is prepared straight through (B04)
+
+The handoff's per-method automatic eligibility (`docs/agent-first-implementation-handoff.md`, "B01/B03/B04/B11 — Preparation from mixed evidence") lists payroll-summary recording. Before this, only prepaid invoices and clean bank reconciliations were prepared without a person confirming the agent's reading; every payroll waited for one.
+
+`preparation.StraightPayroll` prepares a payroll without confirmation only when all of these hold:
+- the reading is the agent's, with no open questions and nothing in the close unread;
+- the client's enabled payroll procedure (`payroll_summary_v1`) is applied to the close;
+- the client's last approved, unrevised payroll from the same provider in an earlier month gives the wage, tax expense, benefits, clearing and liability accounts. The month is matched through `client_identity`, so a confirmed alias counts. The draft records it as `payroll_precedent`, and `workpaper_review_state` (migration `172_payroll_precedent.sql`) reopens the draft (`source_changed`) once that payroll is revised or its approval no longer stands as it was;
+- the provider's summary and the ledger page are each selected once;
+- all thirteen figures are one candidate each, quoted from their own document (the ledger's from the ledger page), and each quote prints what was read: the provider's name, and each amount as a whole figure on its line, grouped or not, with or without cents (digits inside a date, or with more decimals, are no figure);
+- the summary names no other currency:
+  - no other ISO 4217 code (`golang.org/x/text/currency`), in capitals, or in any case for the common currencies;
+  - no currency mark, whether a sign or a dollar with its country's letters (US$, C$), that the client's currency does not write (`bookfiles.MarkAgrees`);
+- any evidence left unused is another job's;
+- the payroll calculator finds no blocker: the summary ties to net pay, and the provider's debits cover net pay and equal the ledger's.
+
+Otherwise it says why it waits, the missing accounts first.
+
+How the rest of the flow is gated:
+- **The worker** saves the draft only if:
+  - the procedure version is still current and enabled;
+  - nothing arrived to weigh;
+  - each unused document is still another job's;
+  - the precedent payroll is still approved as it was and unrevised;
+  - every payroll check passes: no other draft, not already booked, and the clearing account's captured debits equal the provider's.
+
+  A check the records cannot answer, or a failed one, withdraws the agent's confirmation and returns the draft to a person.
+- **Uploads** now apply the payroll procedure to the close as they do the prepaid, reconciliation and accrual ones.
+- **Migration 172** redefines `workpaper_review_state` `WITH (security_invoker=true)`, as migration 155 did for its source view, so it keeps applying each firm's row-level security. CI's `TestRowLevelSecurityIsolatesFirms` caught a first version without it before merge.
+- **Approval** is unchanged: both confirmations, by a person.
+
+Tests, on local PostgreSQL:
+- `TestAPayrollSummaryIsRecordedStraightThroughWithLastMonthsAccounts` (new):
+  - with August's approved Gusto payroll and a September capture showing Gusto's debit, September's summary is queued by the agent and drafted with August's accounts, every check passed and no blocker;
+  - when August's approval is withdrawn, September's draft reads `source_changed`;
+  - a Paychex summary with no approved Paychex payroll waits for a person, saying the accounts are a person's to choose once.
+- `TestStraightPayrollReadsTheClientsCurrencyAndItsOwnFigures` (new):
+  - a Canadian client's summary in C$, with one figure without cents, is prepared;
+  - summaries printing US$, "eur", USD or € wait for a person;
+  - a date or a three-decimal figure does not vouch for an amount. This case failed on the earlier figure check, which read 2026-09-30 as 2026.00.
+
+  It fails on main, where every payroll waits for a person.
+- `go test ./internal/preparation/` passes.
+- The transport tests for agent preparation, payroll, reconciliation, intake, procedures, replacements, rescans, standing approvals, recurring work, carry-forward, reviews, sign-off, second months, comparisons and schedules pass, after migration 172.
+
