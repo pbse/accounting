@@ -27,13 +27,13 @@ export function About() {
         <p className="k-label">About Krith</p>
         <h1>Krith means done.</h1>
         <p className="k-lede">
-          From the Sanskrit <i>kṛta</i>: done, made, accomplished. Krith prepares the work behind every engagement, starting with the month-end close, so your people can review, decide and sign.
+          From the Sanskrit <i>kṛta</i>: done, made, accomplished. Krith prepares the work behind every engagement, so your people can review, decide and sign.
         </p>
       </div>
       <section className="k-why" aria-labelledby="why-title">
         <h2 id="why-title">Why Krith</h2>
         <div>
-          <p>Much of a month-end close is preparation: gathering statements, matching every line, tracing each difference and drafting the entries. The judgement that matters comes at the end, and it belongs to the people who sign.</p>
+          <p>Much of accounting work is preparation: gathering statements, matching every line, tracing each difference and drafting the entries. The judgement that matters comes at the end, and it belongs to the people who sign.</p>
           <p>Krith gives that preparation to a team of agents and keeps every decision with your firm. Each figure carries its source, so whoever signs can see why it is right.</p>
         </div>
       </section>
@@ -70,10 +70,10 @@ export function About() {
         </div>
       </section>
       <section className="k-why" aria-labelledby="next-title">
-        <h2 id="next-title">Starting with the close</h2>
+        <h2 id="next-title">More of the work, over time</h2>
         <div>
-          <p>The month-end close is the work every engagement leans on. It is where much of the preparation sits, and where a missed detail travels furthest. So that is where Krith begins.</p>
-          <p>Next, we mean to take on the books between closes, the handoff at year end and the cash decisions that follow. Each joins only when the work before it holds up, under the same rules: agents prepare, every figure keeps its source, and a person decides.</p>
+          <p>Every engagement rests on the same preparation: gathering the records, matching them, tracing what doesn’t agree and drafting what a person will decide. That is the work Krith takes on.</p>
+          <p>We mean to take on more of it over time: the books day to day, the handoff at year end, the cash decisions that follow. Each joins only when the work before it holds up, under the same rules: agents prepare, every figure keeps its source, and a person decides.</p>
         </div>
       </section>
       <div className="k-after">

@@ -8,7 +8,7 @@ export const organization = {
   name: "Krith",
   url: SITE,
   logo: `${SITE}/logo.png`,
-  description: "Krith is a team of AI agents that prepares accounting work for firms, starting with the month-end close. People review, decide and sign.",
+  description: "Krith is a team of AI agents that prepares the work behind accounting firms’ and finance teams’ engagements. People review, decide and sign.",
   foundingDate: "2026",
   foundingLocation: { "@type": "Place", name: "New York, NY" },
   address: { "@type": "PostalAddress", addressLocality: "New York", addressRegion: "NY", addressCountry: "US" },

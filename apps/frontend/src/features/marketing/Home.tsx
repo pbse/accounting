@@ -13,7 +13,7 @@ export function Home() {
       <Hero />
       <AgentsAtWork />
       <section className="k-col k-start" id="start" aria-labelledby="start-title">
-        <h2 id="start-title">See one of your closes, prepared.</h2>
+        <h2 id="start-title">See your own work, prepared.</h2>
         <p className="k-lede">Tell us how your firm works. We’ll show you what the agents prepare, and what they leave for you.</p>
         <div className="k-signhere">
           <span className="k-x" aria-hidden="true">
@@ -56,7 +56,7 @@ function Hero() {
       <div className="k-copy" ref={copy}>
         <p className="k-eyebrow">For accounting firms and finance teams</p>
         <h1 id="title">The work, prepared.</h1>
-        <p className="k-sub">Krith prepares the work behind every engagement, starting with the month-end close. Your people review, decide and sign.</p>
+        <p className="k-sub">Krith prepares the work behind every engagement. Your people review, decide and sign.</p>
         <span className="k-bracket">
           <Link className="k-pill k-pill-lg" to="/contact">
             Talk to us <span aria-hidden="true">→</span>
@@ -145,7 +145,7 @@ function AgentsAtWork() {
         <span>Prepared to the cent.</span>
         <span className="k-yours">Signed by you.</span>
       </h2>
-      <p className="k-lede">On every close, a team of agents gathers the evidence, matches every line, traces each difference and drafts the entries. You review their work and sign.</p>
+      <p className="k-lede">On every engagement, a team of agents gathers the evidence, matches every line, traces each difference and drafts the entries. You review their work and sign.</p>
       <div className="k-stage">
         <figure className="k-ledger" aria-label="Illustrative bank reconciliation prepared by agents and signed by a reviewer">
           <div className="k-lhead">
