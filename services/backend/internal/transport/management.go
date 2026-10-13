@@ -792,7 +792,11 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 		return nil, tieRefusal{503, "Close readiness unavailable."}
 	}
 	pack["open"] = !signed
-	status := captureStatus(ctx, tx, closeID, this)
+	// A month not signed off has no sign-off to stand over its capture: it is provisional without reading its readiness.
+	status := "provisional"
+	if signed {
+		status = captureStatus(ctx, tx, closeID, this)
+	}
 	pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, "Accrual"
 	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"] = this.Source, this.SnapshotID, this.CapturedAt, this.Stale, status
 	note := "Figures are the ledger as captured; approved drafts not yet posted are excluded."

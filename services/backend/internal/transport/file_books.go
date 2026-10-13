@@ -450,7 +450,11 @@ func closeFilesPack(ctx context.Context, tx *sql.Tx, closeID, org, entity, perio
 	if err != nil {
 		return nil, tieRefusal{503, "Close readiness unavailable."}
 	}
-	status := boundStatus(ctx, tx, closeID, fileCapture+this.Version)
+	// A month not signed off has no sign-off to stand over its books: it is provisional without reading its readiness.
+	status := "provisional"
+	if signed {
+		status = boundStatus(ctx, tx, closeID, fileCapture+this.Version)
+	}
 	pack["open"] = !signed
 	pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, basisTitle(this.Basis)
 	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"], pack["file"] = "files", this.Version, this.AsOf, false, status, this.File
