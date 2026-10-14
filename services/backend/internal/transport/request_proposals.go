@@ -10,6 +10,7 @@ import (
 	"net/mail"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"close.local/backend/internal/preparation"
 )
@@ -194,9 +195,12 @@ func registerRequestProposals(mux *http.ServeMux, db *sql.DB) {
 		if !ok {
 			return
 		}
+		// Questions, when sent, are the drafted questions as the person worded them: the same documents in the same order,
+		// each on one line.
 		var in struct {
-			Recipient string `json:"recipient"`
-			Confirmed bool   `json:"confirmed"`
+			Recipient string             `json:"recipient"`
+			Confirmed bool               `json:"confirmed"`
+			Questions []proposedQuestion `json:"questions"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -225,6 +229,32 @@ func registerRequestProposals(mux *http.ServeMux, db *sql.DB) {
 		if p == nil || p.ID != r.PathValue("draft") {
 			problem(w, 409, "This drafted request was approved, or its documents changed since it was drafted. Refresh to see the current one.")
 			return
+		}
+		if in.Questions != nil {
+			if len(in.Questions) != len(p.Questions) {
+				problem(w, 422, "Keep every drafted question; change only its wording.")
+				return
+			}
+			for i, q := range in.Questions {
+				q.Question = strings.Join(strings.Fields(q.Question), " ")
+				if q.Document != p.Questions[i].Document || q.Question == "" || utf8.RuneCountInString(q.Question) > 1000 {
+					problem(w, 422, "Each question needs its document and 1–1,000 characters of wording.")
+					return
+				}
+				in.Questions[i] = q
+			}
+			if !slices.Equal(in.Questions, p.Questions) {
+				// A request's text is stored up to 20,000 bytes.
+				body := requestBody(p.Entity, p.Period, in.Questions)
+				if len(body) > 20000 {
+					problem(w, 422, "The request is too long to send; shorten its questions.")
+					return
+				}
+				if _, err = tx.ExecContext(r.Context(), `UPDATE request_drafts SET body=$2 WHERE id::text=$1`, p.ID, body); err != nil {
+					problem(w, 503, "Request storage unavailable.")
+					return
+				}
+			}
 		}
 		ids := []string{}
 		for _, j := range p.jobs {

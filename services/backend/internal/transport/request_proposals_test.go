@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -91,12 +92,17 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 		t.Fatal("an unchanged set of questions is not drafted twice")
 	}
 	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test"}, 422)
+	// The person may reword a question before approving it, but not drop one or move it to another document.
+	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": []proposedQuestion{}}, 422)
+	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": []proposedQuestion{{"another.pdf", "Send it"}}}, 422)
 	var opened struct{ ID, Link_token string }
-	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true}, 200), &opened))
-	var state string
+	reworded := []proposedQuestion{{"insurance invoice.pdf", "Please send the signed\npolicy schedule  for this year."}}
+	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": reworded}, 200), &opened))
+	var state, body string
 	must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&state))
-	if state != "waiting_client" || opened.Link_token == "" {
-		t.Fatalf("approving opens the request with a private link and the document waits on the client: %s %+v", state, opened)
+	must(db.QueryRow(`SELECT d.body FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id::text=$1`, opened.ID).Scan(&body))
+	if state != "waiting_client" || opened.Link_token == "" || !slices.Equal(requestQuestions(body), []string{"insurance invoice.pdf: Please send the signed policy schedule for this year."}) {
+		t.Fatalf("approving opens the request as worded, with a private link, and the document waits on the client: %s %+v %q", state, opened, body)
 	}
 	// Without a ledger capture the request is still current: it binds no ledger account.
 	tx, err := db.BeginTx(context.Background(), nil)

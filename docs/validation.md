@@ -5017,6 +5017,12 @@ Evidence, on local PostgreSQL with the demonstration data (main's API, this bran
 
 Queuing a request's first email replaces its unused private link with the one the email carries, and returns that link's new passcode. The goal's drafted request (`ProposedRequest`) dropped that passcode and kept showing the replaced link and the old passcode, so a firm that requires passcodes would tell the client one that no longer works. It now shows the new passcode and stops showing the replaced link, as the flux and coverage requests already did. Found by a code read of the request journey; the change is to the panel's state only, and `tsc --noEmit` is left to CI.
 
+## 2026-10-13 — Approve and send a drafted request, worded as the person wants (B05)
+
+The goal's drafted client request was shown read-only, and approving it took two steps: approve the request, then open a separate email approval. Now the person may reword each question before approving. The same documents keep their questions, in order, each on one line, so the client's page numbers them as before. With a firm sender, one action, **Approve and send**, approves the request and queues its email. Its confirmation names the sender and the exact recipient, so both approvals are recorded as before: the request's `approved_by` and the email's `approved_by`. **Approve the request only** keeps them apart. When the email cannot be queued, the request stays approved and the panel says why, with the email approval and the private link beside it.
+
+Evidence: `TestTheGoalDraftsOneClientRequestAPersonApproves` (local PostgreSQL) now approves with a reworded question containing a line break and extra spaces. The client's request splits into that one question, as worded on one line. A list missing the question, or naming another document, is refused (422). `tsc --noEmit` passes for the firm app. Not checked in a browser: the demonstration data has no current drafted request.
+
 ## 2026-10-13 — Home says what needs you and what the agent is doing (B02)
 
 Home's line joined up to seven counts (decisions, snoozed, overdue, due this week, months without books, new exceptions, unchecked captures). It never said what the agent was doing, so "Nothing is waiting on you" could show while documents were still being prepared. Its This-week rows left out the month. Events with no draft, job or account (client replies, held email replies, scanned and forwarded files, unsent requests, goals) opened the general close. Nothing showed completed work.
