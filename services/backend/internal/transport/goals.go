@@ -124,12 +124,16 @@ const goalJobs = `SELECT j.id::text,e.name,j.state,j.error,e.extraction_state,CO
 // "signoff" it adds what sign-off needs.
 func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (goalProgress, error) {
 	p := goalProgress{Items: []goalItem{}, Needs: []string{}}
+	// agent is what the goal did with a returned draft's latest return: the revision it queued or the question it asks.
 	type draft struct {
 		state    string
 		blockers []string
+		agent    string
 	}
 	drafts, newer := map[string]draft{}, map[string]string{}
-	rows, err := tx.QueryContext(ctx, `SELECT w.id::text,COALESCE(w.paper->>'revises',''),w.review_state,CASE WHEN jsonb_typeof(w.paper->'blockers')='array' THEN w.paper->'blockers' ELSE '[]'::jsonb END FROM workpaper_review_state w WHERE w.close_id=$1 ORDER BY w.id`, closeID)
+	rows, err := tx.QueryContext(ctx, `SELECT w.id::text,COALESCE(w.paper->>'revises',''),w.review_state,CASE WHEN jsonb_typeof(w.paper->'blockers')='array' THEN w.paper->'blockers' ELSE '[]'::jsonb END,
+ CASE WHEN w.review_state='changes_requested' THEN COALESCE((SELECT ev->>'text' FROM close_goals cg CROSS JOIN jsonb_array_elements(cg.events) ev WHERE cg.close_id=w.close_id AND ev->>'revision'=w.review_id::text LIMIT 1),'') ELSE '' END
+ FROM workpaper_review_state w WHERE w.close_id=$1 ORDER BY w.id`, closeID)
 	if err != nil {
 		return p, err
 	}
@@ -137,7 +141,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 		var id, revises, state string
 		var raw []byte
 		var d draft
-		if err = rows.Scan(&id, &revises, &state, &raw); err == nil {
+		if err = rows.Scan(&id, &revises, &state, &raw, &d.agent); err == nil {
 			err = json.Unmarshal(raw, &d.blockers)
 		}
 		if err != nil {
@@ -255,6 +259,8 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 				switch {
 				case !ok:
 					item.Text = "Draft #" + id + " is no longer in this close. Check it in Work."
+				case d.state == "changes_requested" && d.agent != "":
+					item.Text = d.agent
 				case d.state == "changes_requested":
 					item.Text = "Changes were requested on draft #" + id + "."
 				case d.state == "source_changed":
