@@ -82,10 +82,11 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/effort", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		out := map[string]any{}
-		var tracked, recorded, answered int64
+		var tracked, recorded, assistance, answered int64
 		var open int
 		var since, oldest sql.NullTime
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT sum(seconds) FROM close_effort WHERE close_id::text=$1),0),(SELECT min(minute) FROM close_effort WHERE close_id::text=$1),COALESCE((SELECT sum(minutes) FROM close_effort_entries WHERE close_id::text=$1),0)`, id).Scan(&tracked, &since, &recorded)
+		// Recorded minutes include our team's help, as every effort total does; assistance names that part of them.
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT sum(seconds) FROM close_effort WHERE close_id::text=$1),0),(SELECT min(minute) FROM close_effort WHERE close_id::text=$1),COALESCE((SELECT sum(minutes) FROM close_effort_entries WHERE close_id::text=$1),0),COALESCE((SELECT sum(minutes) FROM close_effort_entries WHERE close_id::text=$1 AND activity='assistance'),0)`, id).Scan(&tracked, &since, &recorded, &assistance)
 		if err == nil {
 			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(sum(EXTRACT(EPOCH FROM first_reply-q.delivered_at)) FILTER (WHERE first_reply IS NOT NULL),0)::bigint,count(*) FILTER (WHERE first_reply IS NULL),min(q.delivered_at) FILTER (WHERE first_reply IS NULL) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id LEFT JOIN LATERAL (SELECT min(p.recorded_at) AS first_reply FROM work_replies p WHERE p.request_id=q.id AND p.recorded_at>=q.delivered_at) reply ON true WHERE d.close_id::text=$1 AND q.delivered_at IS NOT NULL`, id).Scan(&answered, &open, &oldest)
 		}
@@ -123,7 +124,7 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 				entries = append(entries, map[string]any{"activity": activity, "minutes": minutes, "note": note, "created_at": created, "mine": mine})
 			}
 		}
-		out["tracked_seconds"], out["tracked_by_activity"], out["recorded_minutes"], out["entries"] = tracked, byActivity, recorded, entries
+		out["tracked_seconds"], out["tracked_by_activity"], out["recorded_minutes"], out["assistance_minutes"], out["entries"] = tracked, byActivity, recorded, assistance, entries
 		out["answered_wait_seconds"], out["open_requests"] = answered, open
 		if since.Valid {
 			out["tracking_since"] = since.Time

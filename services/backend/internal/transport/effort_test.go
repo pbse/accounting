@@ -197,6 +197,14 @@ func TestEffortCapsCreditAndSeparatesWaiting(t *testing.T) {
 	// A sign-off over the close's current readiness moves its effort to the completed cohort and the trend; our team's
 	// help is part of the close's minutes and reported apart.
 	call("POST", "/v1/closes/"+measured+"/effort/entries", map[string]any{"activity": "assistance", "minutes": 10, "note": "Set up the client's procedures"}, 200)
+	var helped struct {
+		Recorded   int64 `json:"recorded_minutes"`
+		Assistance int64 `json:"assistance_minutes"`
+	}
+	json.Unmarshal(call("GET", "/v1/closes/"+measured+"/effort", nil, 200), &helped)
+	if helped.Recorded != 25 || helped.Assistance != 10 {
+		t.Fatalf("the close's recorded minutes include our team's help and name it: %+v", helped)
+	}
 	var current readiness
 	json.Unmarshal(call("GET", "/v1/closes/"+measured+"/readiness", nil, 200), &current)
 	call("POST", "/v1/closes/"+measured+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "reopen", "note": "Recheck", "confirmed": true}, 200)

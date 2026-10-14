@@ -928,7 +928,7 @@ function Rail({ close, status, papers, brief, base }: { close: Close; status: St
     ...(current.length ? ([[`${approved} of ${current.length}`, "drafts approved"]] as Figure[]) : []),
     ...(coverage ? ([[`${coverage.total - coverage.open} of ${coverage.total}`, "accounts covered", coverage.open ? "att" : ""]] as Figure[]) : []),
     ...(working ? ([[String(working), working === 1 ? "document the agent is preparing" : "documents the agent is preparing"]] as Figure[]) : []),
-    ...(effort.data && effort.data.tracked_seconds > 0 ? ([[`${Math.max(1, Math.round(effort.data.tracked_seconds / 60))} min`, "time spent on this close"]] as Figure[]) : []),
+    ...(effort.data && effort.data.tracked_seconds > 0 ? ([[`${Math.max(1, Math.round(effort.data.tracked_seconds / 60))} min`, "tracked workspace time"]] as Figure[]) : []),
   ];
   // The sign-off line's own words, without repeating the row's name.
   const signOff = brief?.lines.find((l) => l.area === "sign-off")?.text.replace(/^Sign-off\s+/i, "");
