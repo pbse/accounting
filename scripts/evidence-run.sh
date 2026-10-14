@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the release's evidence checks for the current revision and records them in a dated directory (see
 # docs/slice6-evidence.md): provider checks, the acceptance corpus with recorded answers and, when the reading models
-# are configured, with the live model, and the chat golden-set replay when the chat model is configured. Each harness
+# are configured, with the live model, returned drafts' notes read by the live model, and the chat golden-set replay when
+# the chat model is configured. Each harness
 # gets a fresh database on the given local PostgreSQL server; nothing hosted is written to. Evidence is kept outside
 # the repository by default (EVIDENCE_DIR), because a real corpus run holds client data. A check that cannot run here is
 # recorded with what it needs, never as a pass.
@@ -102,6 +103,23 @@ else
   status "acceptance (live model)" "FAILED or critical failures (see acceptance-live.md)"
 fi
 spend "$(calls_in "$live")"
+# Returned drafts' notes read as a close's goal reads them (cmd/revision-eval): a change only where a document or the
+# note shows it, one question otherwise. It needs no database; it counts its own calls.
+if [ "$(left)" -lt 1 ]; then
+  status "returned-draft revisions (live model)" "not run: ceiling reached for today ($ceiling model calls)"
+else
+  # go run reports any failing exit as 1, so the ceiling is read from what the command printed.
+  if go run ./cmd/revision-eval -max-model-calls "$(left)" "${identity[@]+"${identity[@]}"}" -report "$out/revisions.json" > "$out/revisions.md" 2>&1; then
+    status "returned-draft revisions (live model)" "no false acceptance or error (see revisions.md)"
+  elif grep -q "needs the preparation model" "$out/revisions.md"; then
+    status "returned-draft revisions (live model)" "dependency: the preparation model is not configured"
+  elif grep -q "Ceiling reached for today" "$out/revisions.md" && ! grep -qE "[1-9][0-9]* false acceptances|[1-9][0-9]* errors" "$out/revisions.md"; then
+    status "returned-draft revisions (live model)" "ceiling reached for today: notes left unrun (see revisions.md)"
+  else
+    status "returned-draft revisions (live model)" "FAILED: a false acceptance or a model error (see revisions.md)"
+  fi
+  spend "$(sed -n 's/.*Model calls made: \([0-9]*\).*/\1/p' "$out/revisions.md" | head -1 | grep . || echo 0)"
+fi
 replay=$(fresh replay)
 if [ "$(left)" -lt 1 ]; then
   status "chat golden set (live model)" "not run: ceiling reached for today ($ceiling model calls)"

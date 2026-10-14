@@ -39,6 +39,7 @@ It produces:
 | `acceptance-recorded.md`, `.json` | `cmd/acceptance` with recorded model answers: everything around the model, scored by work type. |
 | `acceptance-live.md`, `.json` | The same corpus read by the configured model; the release corpus is scored this way. |
 | `review-package.md` | The accounting-review package from the live run when the model is configured, otherwise from the recorded run. |
+| `revisions.md`, `revisions.json` | `cmd/revision-eval`: returned drafts' notes (`acceptance/revisions/cases.json`) read by the configured model as a close's goal reads them. Each outcome is scored against its case: the facts the note should change, or the one question it should lead to. The cases cover a start date from the order form, an ambiguous date, an unsupported method change, conflicting documents, a repeated return, a booked balance from the ledger, an account named in the note, an instruction planted in a document, and an accrual's actual invoice. A change where a question was due, a wrong value, or a value a case forbids is a false acceptance, and fails the run, as does a note the model did not read. A question where a change was due, and a correct change the calculation refuses (the goal would ask instead), are reported, not failed. |
 | `agent-eval.md`, `.json` | The chat golden set replayed against the configured chat model: ≥90% of questions, every off-scope refusal. |
 | `summary.txt` | One line per harness: passed, FAILED, the dependency it is waiting on, or the ceiling reached; then the day's model calls against the ceiling. |
 
