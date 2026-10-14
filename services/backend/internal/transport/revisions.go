@@ -157,15 +157,11 @@ func reviseReturned(ctx context.Context, db *sql.DB, goalID string, roles map[st
 	if revision.Question != "" {
 		return record(tx, "Before I revise it: "+revision.Question+" Return it again with the answer and I'll revise it.")
 	}
+	// A document the draft did not cite becomes a further support source, beside any it has (a ledger page, say).
 	sources := paper.Sources
 	if revision.Added != nil {
-		for _, s := range sources {
-			if s.Role == revision.Added.Role {
-				return record(tx, "Before I revise it: the change rests on "+revision.Added.Name+", which the draft does not cite, and it already cites a support document. Which should it use?")
-			}
-		}
 		sources = append(sources, *revision.Added)
-		sort.Slice(sources, func(i, j int) bool { return sources[i].Role < sources[j].Role })
+		sort.SliceStable(sources, func(i, j int) bool { return sources[i].Role < sources[j].Role })
 	}
 	words := []string{}
 	for _, c := range revision.Changes {

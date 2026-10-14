@@ -12,14 +12,30 @@ import type { PayrollInput } from "../../../../../packages/contracts/payroll";
 
 const roleLabels: Record<string, string> = { processor_report: "Stripe payout export", bank: "Bank CSV", activity_report: "Stripe activity report" };
 
+type Linked = { id: string; name?: string; role: string; location: string };
+
+// A revised draft's sources as the form takes them: the first of each role to choose again, and any further source of a
+// role (a prepaid's or accrual's second supporting document, such as the contract beside the ledger page), kept as it is.
+export function revisionSources(sources: Linked[]) {
+  const byRole: Record<string, Linked> = {};
+  const kept: Linked[] = [];
+  for (const s of sources) {
+    if (byRole[s.role]) kept.push(s);
+    else byRole[s.role] = s;
+  }
+  return { byRole, kept };
+}
+
 export function SaveDraft({
   kind,
   input,
   initialSources = {},
+  keptSources = [],
 }: {
   kind: "prepaid" | "reconciliation" | "accrual" | "settlement" | "loan" | "owner" | "payroll";
   input: PrepaidInput | ReconciliationInput | AccrualInput | SettlementInput | LoanInput | OwnerInput | PayrollInput;
   initialSources?: Record<string, { id: string; location: string }>;
+  keptSources?: Linked[];
 }) {
   const [params] = useSearchParams();
   const close = params.get("close");
@@ -31,6 +47,8 @@ export function SaveDraft({
   const [files, setFiles] = useState<EvidenceFile[]>([]);
   const [sources, setSources] =
     useState<Record<string, { id: string; location: string }>>(initialSources);
+  // A further source of a role is kept as it is, its citation editable: one replaced since comes with no location.
+  const [kept, setKept] = useState<Linked[]>(keptSources);
   useEffect(() => {
     if (close)
       workspaceRequest(`/${encodeURIComponent(close)}/evidence`)
@@ -81,6 +99,12 @@ export function SaveDraft({
         {busy ? "Saving…" : saved ? "Saved" : "Save draft to close"}
       </button>
       {(revises || work) && <p className="note">A revision or a job's draft is saved from linked evidence below, so its sources stay attached.</p>}
+      {kept.map((k, i) => (
+        <label key={`${k.role}-${k.id}`}>
+          Also kept from the draft: {k.name ?? `source #${k.id}`} ({k.role}), location cited
+          <input value={k.location} maxLength={200} required onChange={(e) => setKept(kept.map((other, j) => (j === i ? { ...other, location: e.target.value } : other)))} />
+        </label>
+      ))}
       </>}
       <h3>Prepare from linked evidence</h3>
       <p>
@@ -150,7 +174,8 @@ export function SaveDraft({
           busy ||
           roles.some(
             (role) => !sources[role]?.id || !sources[role]?.location.trim(),
-          )
+          ) ||
+          kept.some((k) => !k.location.trim())
         }
         onClick={async () => {
           setBusy(true);
@@ -168,7 +193,7 @@ export function SaveDraft({
                       work_revision: Number(params.get("revision")),
                     }
                   : {}),
-                sources: roles.map((role) => ({ ...sources[role], role })),
+                sources: [...roles.map((role) => ({ ...sources[role], role })), ...kept.map(({ id, role, location }) => ({ id, role, location }))],
               },
             );
             setStatus(

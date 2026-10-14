@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import { apiBaseUrl } from "../../lib/api";
 import { authenticationHeaders } from "../auth/Auth";
-import { SaveDraft } from "../closes/SaveDraft";
+import { revisionSources, SaveDraft } from "../closes/SaveDraft";
 import { money, useCurrency } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
@@ -59,6 +59,6 @@ export default function PrepareAccrual() {
   <form ref={form} onSubmit={e=>void prepare(e)} onChange={()=>setResult(undefined)}><fieldset disabled={busy||!revision.ready}><legend>Incurred service and ledger evidence</legend><button type="button" onClick={example}>Use synthetic accrual example</button>
    {[['entity','Client / entity'],['source_reference','Source document and location'],['close_period','Close month'],['service_start','Service starts'],['service_end','Service ends'],['amount',`Supported closing accrual (${currency}; leave blank for pro-rata)`],['booked_balance',`Booked liability credit balance (${currency}; enter zero explicitly)`],['booking_reference','Ledger balance and cutoff reference'],['estimation_basis','Evidence and approved estimate basis'],['expense_account','Expense account'],['liability_account','Accrued liability account']].map(([name,label])=><label key={name}>{label}<input name={name} required={name!=='amount'} maxLength={200} type={name==='close_period'?'month':name.startsWith('service_')?'date':'text'} defaultValue={name==='entity'?(params.get('entity')??''):name==='close_period'?(params.get('period')??''):''} /></label>)}
    <AccrualConfirmations /><button>{busy?'Preparing…':'Prepare accrual draft'}</button>
-  </fieldset></form>{error && <p role="alert">{error}</p>}{result && <><AccrualResult result={result} /><SaveDraft kind="accrual" input={result.input} initialSources={Object.fromEntries(revision.sources.map(s=>[s.role,s]))} /></>}
+  </fieldset></form>{error && <p role="alert">{error}</p>}{result && <><AccrualResult result={result} /><SaveDraft kind="accrual" input={result.input} initialSources={revisionSources(revision.sources).byRole} keptSources={revisionSources(revision.sources).kept} /></>}
  </>;
 }

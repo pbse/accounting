@@ -243,7 +243,10 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 		for i := range p.Sources {
 			s := &p.Sources[i]
 			s.Location = strings.TrimSpace(s.Location)
-			if s.Location == "" || len(s.Location) > 200 || content[s.Role] != "" || selectedIDs[s.ID] {
+			// A prepaid or accrual may cite several supporting documents (a ledger page and a contract, say); every other
+			// role, and every other kind's, is one source.
+			repeatable := s.Role == "support" && (p.Kind == "prepaid" || p.Kind == "accrual")
+			if s.Location == "" || len(s.Location) > 200 || content[s.Role] != "" && !repeatable || selectedIDs[s.ID] {
 				problem(w, 422, "Supply a unique source role and a location (lines or section) for each source.")
 				return
 			}
