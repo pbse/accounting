@@ -1167,6 +1167,10 @@ func lookAtGoal(ctx context.Context, db *sql.DB, goalID string, roles func(conte
 	if err == nil {
 		err = stepGoal(ctx, db, goalID, members)
 	}
+	// A draft returned with a note is revised from it, outside the step's transaction: the model is read unlocked.
+	if err == nil {
+		err = reviseReturned(ctx, db, goalID, members)
+	}
 	if err != nil {
 		return false, err
 	}
