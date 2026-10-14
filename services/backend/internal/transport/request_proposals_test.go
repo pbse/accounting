@@ -165,6 +165,7 @@ func TestTheGoalRoutesWhatWaitsOnInformation(t *testing.T) {
 			`DELETE FROM quickbooks_connections WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`UPDATE evidence SET superseded_by=NULL WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
@@ -192,6 +193,22 @@ func TestTheGoalRoutesWhatWaitsOnInformation(t *testing.T) {
 		_, err = db.Exec(q, job)
 		must(err)
 	}
+	// A document once matched to the prepaid account was replaced since: it no longer answers the account.
+	var old, replacement string
+	tx, err = db.BeginTx(ctx, nil)
+	must(err)
+	must(tx.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'old-policy.txt','route-old','Old policy','fixture') RETURNING id::text`, closeID).Scan(&old))
+	oldJob, err := preparation.StartIntake(ctx, tx, closeID, old, "fixture")
+	must(err)
+	must(tx.Commit())
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'new-policy.txt','route-new','New policy','fixture') RETURNING id::text`, closeID).Scan(&replacement))
+	for _, q := range []string{`UPDATE preparation_intakes SET proposal='{"kind":"prepaid","questions":[],"facts":[{"field":"prepaid_account","value":"Prepaid insurance"}]}' WHERE job_id::text=$1`,
+		`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`} {
+		_, err = db.Exec(q, oldJob)
+		must(err)
+	}
+	_, err = db.Exec(`UPDATE evidence SET superseded_by=$2::bigint WHERE id::text=$1`, old, replacement)
+	must(err)
 	var statement string
 	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'operating-september.pdf','route-statement','Statement page 1','fixture') RETURNING id::text`, closeID).Scan(&statement))
 	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'reconciliation','route-recon',$2) RETURNING id::text`, closeID,

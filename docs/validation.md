@@ -5117,3 +5117,7 @@ The correction loop (#489) was tested only with a stand-in model reply. `cmd/rev
 - an accrual's actual invoice.
 
 A change where a question was due, a wrong value, or a value a case forbids counts as a false acceptance and fails the run. A question where a change was due is reported. Each changed draft is recalculated as the worker would. `scripts/evidence-run.sh` runs it on the live model within the day's call ceiling and records `revisions.md` and `revisions.json`. `TestTheCasesAreDraftsTheGoalCouldRevise` checks offline that every case's draft calculates and that the verdicts score as described, and it passes. **Not run yet:** the live run needs the local context machine, which needs the user's Codex sign-in (`scripts/local-context-machine.sh`).
+
+## 2026-10-13 — A replaced document no longer answers an account (B05)
+
+The goal didn't ask for an account's records when the agent had matched a document to it, even after that document was replaced, because the old job stays on as the account's suggestion. Now only a matched document that is still current answers the account. `TestTheGoalRoutesWhatWaitsOnInformation` adds a document matched to the prepaid account and since replaced, and the prepaid's records are still asked for. Without the change the test fails.
