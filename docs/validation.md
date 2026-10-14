@@ -5058,3 +5058,18 @@ The close rail's figure "time spent on this close" is the person's tracked inter
 ## 2026-10-13 — A returned draft's line says what the agent did with the note (B06)
 
 After #489, the goal's question about a returned draft, or the revision it queued, appeared only in the goal's history. The document's line under Needs you still read "Changes were requested on draft #N". It now carries the goal's own words for that draft's latest return. They are read in the goal's existing draft query, so no round trip is added. `TestAReturnedDraftIsRevisedFromTheNote` now checks that the returned document's line asks the agent's question. That assertion fails without the change. The goal and revision transport tests pass on local PostgreSQL.
+
+## 2026-10-13 — An evaluation of revisions from returned drafts' notes (slice 6, B06)
+
+The correction loop (#489) was tested only with a stand-in model reply. `cmd/revision-eval` now reads realistic returned drafts' notes with the configured model, through the same `preparation.Revise` a close's goal uses. It scores each outcome against its case in `acceptance/revisions/cases.json`: 9 cases, 10 notes. They cover:
+- a start date from the order form;
+- an ambiguous date;
+- an unsupported method change;
+- an order form and its amendment that conflict;
+- a repeated return (a vague note, then one naming the renewal letter);
+- a booked balance from the ledger;
+- an account named in the note;
+- an instruction planted in a vendor's email;
+- an accrual's actual invoice.
+
+A change where a question was due, a wrong value, or a value a case forbids counts as a false acceptance and fails the run. A question where a change was due is reported. Each changed draft is recalculated as the worker would. `scripts/evidence-run.sh` runs it on the live model within the day's call ceiling and records `revisions.md` and `revisions.json`. `TestTheCasesAreDraftsTheGoalCouldRevise` checks offline that every case's draft calculates and that the verdicts score as described, and it passes. **Not run yet:** the live run needs the local context machine, which needs the user's Codex sign-in (`scripts/local-context-machine.sh`).
