@@ -217,13 +217,33 @@ func clientAsks(ctx context.Context, tx *sql.Tx, closeID string) (clientAsk, err
 	if err = rows.Err(); err != nil {
 		return ask, err
 	}
+	// A document the agent matched to an account answers it only while the document is current; one replaced since
+	// leaves the account to be asked for.
+	current := map[string]bool{}
+	rows, err = tx.QueryContext(ctx, `SELECT j.id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND e.superseded_by IS NULL`, closeID)
+	if err != nil {
+		return ask, err
+	}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return ask, err
+		}
+		current[id] = true
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return ask, err
+	}
+	matched := func(ids []string) bool { return slices.ContainsFunc(ids, func(id string) bool { return current[id] }) }
 	// A draft names its account by name: it vouches for an account only when no other in the capture shares the name.
 	named := map[string]int{}
 	for _, item := range view.Items {
 		named[strings.ToLower(item.Name)]++
 	}
 	for _, item := range view.Items {
-		if item.State != "missing_evidence" || len(item.JobIDs) > 0 || len(item.SuggestedJobIDs) > 0 || covered[item.AccountID] || item.Kind == "reconciliation" && reconciled[strings.ToLower(item.Name)] && named[strings.ToLower(item.Name)] == 1 {
+		if item.State != "missing_evidence" || len(item.JobIDs) > 0 || matched(item.SuggestedJobIDs) || covered[item.AccountID] || item.Kind == "reconciliation" && reconciled[strings.ToLower(item.Name)] && named[strings.ToLower(item.Name)] == 1 {
 			continue
 		}
 		var q proposedQuestion
