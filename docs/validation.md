@@ -5059,6 +5059,25 @@ The close rail's figure "time spent on this close" is the person's tracked inter
 
 After #489, the goal's question about a returned draft, or the revision it queued, appeared only in the goal's history. The document's line under Needs you still read "Changes were requested on draft #N". It now carries the goal's own words for that draft's latest return. They are read in the goal's existing draft query, so no round trip is added. `TestAReturnedDraftIsRevisedFromTheNote` now checks that the returned document's line asks the agent's question. That assertion fails without the change. The goal and revision transport tests pass on local PostgreSQL.
 
+## 2026-10-13 — The drafted request routes everything that waits on information (B05)
+
+The goal's drafted client request asked only questions from documents' readings. Missing bank statements, the records behind accounts with no evidence and missing statement pages were left for a person to notice and request. Now the goal routes three sources together:
+- documents' questions for the client;
+- a missing page from a current reconciliation draft;
+- each account of the current ledger capture with no evidence, bound work or matched document whose records the client holds: a bank or card account's complete monthly statement, a prepaid's invoices and agreements, or an accrual's unbilled services.
+
+Each is asked in the client's words, never a blocker's, and the firm sees what each answer unblocks. What needs the firm's judgment (an account to review or exclude, a draft's other blockers) is listed as kept with the firm and never sent. Anything a live request already asks about, answered in part or not, is left to it. Approval binds the accounts on their capture and records the drafts it asks pages for, so the existing currency checks apply. The draft records what it covers (migration `176_request_proposal_routing.sql`). The goal drafts again only when that changes and withdraws a draft with nothing left to ask. Approval asks the close again and refuses a draft that no longer matches.
+
+Evidence: `TestTheGoalRoutesWhatWaitsOnInformation` (local PostgreSQL) builds a capture with a prepaid account, a bank account and an account to review, a document waiting on a client question, and a reconciliation draft missing page 2 with an opening-bridge blocker.
+- **Questions:** the drafted request asks three questions: the document's, the missing page, and the prepaid's invoices. The bank account isn't asked for its complete statement because its reconciliation draft already reads one. Each question names what it unblocks, and none carries a blocker's or the firm's wording.
+- **Kept with the firm:** the bridge and the account to review.
+- **Approval:** binds account a on the capture and records the draft. The request is current.
+
+Codex review found three issues, now fixed: a draft whose statement was replaced could still have its missing page asked for; an account a reconciliation draft already reads could be asked for its complete statement; and a firm judgment found after drafting was missing from the preview. A source-changed draft is now left for preparation, an account with a current reconciliation draft that reads a statement isn't asked for one, and the kept list is refreshed on an unchanged draft.
+- **No repeat:** the next look asks nothing again.
+
+The request, goal, coverage and hand-off transport tests pass. The firm app's `tsc --noEmit` passes.
+
 ## 2026-10-13 — A client's cash buffer, agreed by a reviewer (B09)
 
 The cash plan and the executive briefing compared the lowest forecast balance with zero, because no agreed buffer existed. Now a firm reviewer agrees each client's minimum cash buffer in its home currency, with its basis (migration `175_cash_buffers.sql`). The agent may propose one but never sets one: its proposal is two weeks of the forecast's payments at their average week. Each agreement is a version naming who proposed it, who agreed it and when, and the newest is in force. The plan (under a what-if, without the proposal), the Cash tab's line and the executive briefing show the lowest balance's headroom over the buffer or the shortfall below it, or "No cash buffer agreed". The proposal is a decision on the Cash tab, agreed on the full plan; any other amount is set under Settings → Cash buffer. A review freezes the buffer it compared with.

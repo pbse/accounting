@@ -4,7 +4,8 @@ import { workspaceKey, workspaceQuery } from "../../data/queries";
 import { workspaceRequest } from "./workspace";
 import { PasscodeNotice, SendRequestEmail } from "./Email";
 
-type Proposal = { id: string; entity: string; period: string; recipient: string; questions: { document: string; question: string }[] };
+// Each question names what an answer lets the agent continue; kept is what the agent left with the firm, never sent.
+type Proposal = { id: string; entity: string; period: string; recipient: string; questions: { document: string; question: string; unblocks?: string }[]; kept?: string[] };
 
 // The client request the close's goal drafted, the same on the goal card, in chat and on the Requests tab: the client and
 // month, the exact questions (their wording editable before approval), the recipient and the firm's sender. With a
@@ -44,6 +45,7 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
   const to = recipient ?? proposal.recipient;
   const send = !!sender && !alone;
   const questions = proposal.questions.map((q, i) => ({ document: q.document, question: wording[i] ?? q.question }));
+  const kept = proposal.kept ?? [];
   async function approve(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!proposal) return;
@@ -76,7 +78,7 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
   return (
     <form aria-label="Drafted client request" onSubmit={(e) => void approve(e)}>
       <h3>Drafted client request · {proposal.entity} · {proposal.period}</h3>
-      <p>The agent drafted these questions from the month's documents. Nothing goes to the client until you approve.</p>
+      <p>The agent drafted these questions from the month's documents, its ledger accounts and its drafts. Nothing goes to the client until you approve.</p>
       <ol>
         {questions.map((q, i) => (
           <li key={i}>
@@ -86,9 +88,20 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
             ) : (
               q.question
             )}
+            {proposal.questions[i].unblocks && <small> · answering it unblocks {proposal.questions[i].unblocks}</small>}
           </li>
         ))}
       </ol>
+      {kept.length > 0 && (
+        <details>
+          <summary>Kept with the firm, not asked of the client · {kept.length}</summary>
+          <ul>
+            {kept.map((k) => (
+              <li key={k}>{k}</li>
+            ))}
+          </ul>
+        </details>
+      )}
       {!editing && (
         <button type="button" onClick={() => setEditing(true)}>
           Edit wording
