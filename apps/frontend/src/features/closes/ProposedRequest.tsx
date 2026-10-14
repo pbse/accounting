@@ -22,11 +22,12 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
   if (opened) {
     return (
       <section aria-label="Approved client request">
-        <p role="status">Request #{opened.id} is approved and its private link is ready. Nothing has been sent.</p>
-        <p>Private link, to share yourself if you do not send the email: <code>{opened.link}</code></p>
+        <p role="status">Request #{opened.id} is approved and its private link is ready.{opened.sent ? "" : " Nothing has been sent."}</p>
+        {opened.link && <p>Private link, to share yourself if you do not send the email: <code>{opened.link}</code></p>}
         <PasscodeNotice passcode={opened.passcode} />
         {opened.sent ? <p role="status">The email is queued to {opened.recipient}.</p> : (
-          <SendRequestEmail closeId={closeId} requestId={opened.id} recipient={opened.recipient} onQueued={() => setOpened({ ...opened, sent: true })} />
+          // Queuing the email replaces the unused link with the one the email carries, and its passcode with a new one.
+          <SendRequestEmail closeId={closeId} requestId={opened.id} recipient={opened.recipient} onQueued={(passcode) => setOpened({ ...opened, link: "", passcode, sent: true })} />
         )}
       </section>
     );
