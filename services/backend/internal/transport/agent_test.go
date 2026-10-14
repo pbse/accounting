@@ -351,12 +351,25 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 	if err = db.QueryRow("SELECT jsonb_array_length(paper->'matches') FROM workpapers WHERE close_id=$1 AND kind='reconciliation' AND paper->'input'->>'account'='Savings'", bank).Scan(&matches); err != nil || matches != 1 {
 		t.Fatal("the Savings reconciliation was drafted from its rows", matches, err)
 	}
-	// A second account in the same close is not held by the first one's documents; its unmatched row holds it.
-	if checkpoint := straight("Payroll account", "p1,2026-09-04,20.00\n", "q1,2026-09-05,20.00\n"); !strings.HasPrefix(checkpoint, "Waiting for a person") || strings.Contains(checkpoint, "was not used") {
-		t.Fatal("a reconciliation with an unmatched row waits for a person:", checkpoint)
+	// A second account in the same close is not held by the first one's documents. Its rows are complete (both balances
+	// roll forward) but one line on each side has no exact match: it is prepared with what matches, and its draft leaves
+	// only those lines for a person, as blockers that hold its approval.
+	if checkpoint := straight("Payroll account", "p1,2026-09-04,20.00\n", "q1,2026-09-05,20.00\n"); !strings.HasPrefix(checkpoint, "Prepared without confirmation except 1 statement and 1 ledger line(s) with no single exact match") || strings.Contains(checkpoint, "was not used") {
+		t.Fatal("a reconciliation with an unmatched row is prepared with those lines left for a person:", checkpoint)
+	}
+	if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
+		t.Fatal(e)
+	}
+	var blockers, unmatched int
+	if err = db.QueryRow("SELECT jsonb_array_length(paper->'blockers'),jsonb_array_length(paper->'unmatched_statement')+jsonb_array_length(paper->'unmatched_ledger') FROM workpapers WHERE close_id=$1 AND kind='reconciliation' AND paper->'input'->>'account'='Payroll account'", bank).Scan(&blockers, &unmatched); err != nil || blockers == 0 || unmatched != 2 {
+		t.Fatal("the partial reconciliation is drafted with its unmatched lines as blockers", blockers, unmatched, err)
+	}
+	// A line the statement and ledger do not roll forward to still holds the whole reconciliation for a person.
+	if checkpoint := straight("Reserve account", "r1,2026-09-04,20.00\n", "s1,2026-09-04,25.00\n"); !strings.HasPrefix(checkpoint, "Waiting for a person") {
+		t.Fatal("a reconciliation whose ledger rows do not roll forward waits for a person:", checkpoint)
 	}
 	if _, state = read(); state != "needs_confirmation" {
-		t.Fatal("the unmatched reconciliation waits", state)
+		t.Fatal("the reconciliation that does not roll forward waits", state)
 	}
 
 }

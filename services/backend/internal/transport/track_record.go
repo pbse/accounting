@@ -93,9 +93,10 @@ func compareProposal(p readProposal, plan confirmedPlan, expected []string) (boo
 }
 
 // straightDraft is SQL: draft alias was prepared straight through by the agent, by its own flag or its job's agent
-// confirmation.
+// confirmation, and complete: a reconciliation prepared with lines left for a person to classify is the agent's work,
+// not straight through.
 func straightDraft(alias string) string {
-	return `(COALESCE((` + alias + `.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=` + alias + `.close_id AND j.workpaper_ids @> jsonb_build_array(` + alias + `.id::text) AND i.confirmed_by='agent'))`
+	return `((COALESCE((` + alias + `.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=` + alias + `.close_id AND j.workpaper_ids @> jsonb_build_array(` + alias + `.id::text) AND i.confirmed_by='agent')) AND jsonb_array_length(COALESCE(NULLIF(` + alias + `.paper->'blockers','null'::jsonb),'[]'::jsonb))=0)`
 }
 
 // trackRecord compares the model's confirmed proposals with what people confirmed, and how their drafts were judged.
