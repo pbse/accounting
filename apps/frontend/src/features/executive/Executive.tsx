@@ -6,7 +6,7 @@ import { Link, useSearchParams } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { amount, workspaceRequest } from "../closes/workspace";
-import { CashPlan, type Item, type Obligation, type Plan, type Scenario } from "../closes/CashPlan";
+import { bufferWords, CashPlan, type Item, type Obligation, type Plan, type Scenario } from "../closes/CashPlan";
 import { cashPlanQuery } from "../../data/cashPlan";
 import { Budget } from "../closes/Budget";
 import { PackView, Publication, type Pack } from "../closes/Reports";
@@ -224,6 +224,7 @@ function Briefing({ close, published, newest }: { close: Close; published?: Publ
             {ready.readiness.state === "complete" ? "complete" : ready.readiness.state} forecast{ready.review?.state === "current" ? ", reviewed by your accountant" : ", not yet reviewed"}, from book cash as of {ready.opening.as_of}
             {ready.opening.stale ? " (not current)" : ""}.
           </p>
+          <p role={ready.headroom?.startsWith("-") ? "alert" : undefined}>{bufferWords(ready.buffer, ready.headroom, ready.currency)}</p>
           {collections.length > 0 && (
             <p>
               {collections.length} overdue {collections.length === 1 ? "invoice" : "invoices"} to collect with no new expected date: {items(collections)}

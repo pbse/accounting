@@ -5059,6 +5059,27 @@ The close rail's figure "time spent on this close" is the person's tracked inter
 
 After #489, the goal's question about a returned draft, or the revision it queued, appeared only in the goal's history. The document's line under Needs you still read "Changes were requested on draft #N". It now carries the goal's own words for that draft's latest return. They are read in the goal's existing draft query, so no round trip is added. `TestAReturnedDraftIsRevisedFromTheNote` now checks that the returned document's line asks the agent's question. That assertion fails without the change. The goal and revision transport tests pass on local PostgreSQL.
 
+## 2026-10-13 — A client's cash buffer, agreed by a reviewer (B09)
+
+The cash plan and the executive briefing compared the lowest forecast balance with zero, because no agreed buffer existed. Now a firm reviewer agrees each client's minimum cash buffer in its home currency, with its basis (migration `175_cash_buffers.sql`). The agent may propose one but never sets one: its proposal is two weeks of the forecast's payments at their average week. Each agreement is a version naming who proposed it, who agreed it and when, and the newest is in force. The plan (under a what-if, without the proposal), the Cash tab's line and the executive briefing show the lowest balance's headroom over the buffer or the shortfall below it, or "No cash buffer agreed". The proposal is a decision on the Cash tab, agreed on the full plan; any other amount is set under Settings → Cash buffer. A review freezes the buffer it compared with.
+
+Evidence:
+- **Test:** `TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations` (local PostgreSQL) checks each step:
+  - with no buffer, the plan proposes one with its basis and states no headroom;
+  - a changed proposal is refused (409), and an unconfirmed one is refused (422);
+  - agreeing the proposal makes it the buffer, with the exact headroom, and changes the plan's digest;
+  - a reviewer's own amount needs a basis (422 without one) and becomes the version in force;
+  - the history lists both, newest first;
+  - an executive sees the buffer but never the firm's proposal;
+  - the earlier review keeps the "no buffer" it was made with.
+- **Browser** (local copy of the demonstration data, Edge at 1440 px, Summit Peak Fitness September):
+  - the full plan says "No cash buffer agreed." and proposes $9,616.09 with its basis;
+  - agreeing it shows "$19,642.88 short of the agreed buffer of $9,616.09", against a lowest balance of −$10,026.79;
+  - a $60,000.00 buffer set in Settings becomes the one in force, with the earlier one listed;
+  - the tab's line reads "no cash buffer agreed" before agreement;
+  - no page errors.
+- **Regression caught in the browser:** putting the buffer (even as null) into the plan's digest made every existing review read "changed after it was reviewed". The buffer now joins the digest only when one is agreed, and the September plan's review still reads "reviewed as a draft".
+
 ## 2026-10-13 — A revision cites the contract beside the ledger page (B06)
 
 A review of the revision evaluation found a limit in #489. The goal refused to add a document to a returned draft that already cited a support document. Prepaid and accrual drafts the agent prepares usually cite the ledger page as support, so the motivating case ("Use the contract's July start date") came back as a question rather than a revision. Now the contract becomes a further support source beside the ledger page, still at most one new document per revision. The manual preparation route accepts several support documents for a prepaid or accrual. The prepaid and accrual forms keep a revised draft's further support documents as they are and show them as kept, so a person can revise such a draft by hand without losing one (Codex review found the forms kept one source per role). Every other role, and every other kind, keeps one source per role. `TestAReturnedDraftIsRevisedFromTheNote` now starts from a draft citing an invoice and a ledger page, and expects the revision to cite all three. Without the change it fails: no revision is queued.

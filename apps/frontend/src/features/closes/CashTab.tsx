@@ -5,7 +5,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { Segmented } from "@close/ui/components/Segmented";
 import { cashPlanQuery } from "../../data/cashPlan";
 import { useDates, utcDay } from "../../data/time";
-import { CashPlan, every, type Obligation, type Plan, type Scenario, type Week } from "./CashPlan";
+import { bufferWords, CashPlan, every, type Obligation, type Plan, type Scenario, type Week } from "./CashPlan";
 import type { Status } from "./Goal";
 import { AgentPanel, Glance, MoreLinks, NeedsYou, type Figure, type Need } from "./Overview";
 import type { Brief } from "./Stands";
@@ -41,6 +41,8 @@ function cashNeeds(plan: Ready, obligations: Obligation[], base: string): Need[]
     ...obligations
       .filter((o) => !o.approved_at && !o.retired_at)
       .map((o) => ({ key: `cash-schedule:${o.id}`, title: `Approve the ${o.name} schedule`, detail: `${o.direction === "out" ? "Pays" : "Receives"} ${amount(o.amount, o.currency)} ${every[o.every] ?? o.every} from ${utcDay(o.first_on)}; it counts only once approved.`, action: "Review the schedule", to: full("cash-schedules"), count: 1 })),
+    // With no buffer agreed, the agent's proposal is a reviewer's decision, made on the full plan.
+    ...(!plan.buffer && plan.buffer_proposal ? [{ key: "cash-buffer", title: "Agree the client's cash buffer", detail: `None is agreed. The agent proposes ${amount(plan.buffer_proposal.amount, plan.currency)}: ${plan.buffer_proposal.basis}`, action: "Review the proposal", to: full("cash-buffer"), count: 1 }] : []),
     ...(unplaced ? [{ key: "cash-unplaced", title: `${capital(w(unplaced))} open item${unplaced === 1 ? " has" : "s have"} no agreed date`, detail: "They are left out of the weeks until a promise or a bill-pay date on the open items places them.", action: "Open items", to: `${base}?tab=books&view=open-items`, count: unplaced }] : []),
   ];
 }
@@ -87,6 +89,7 @@ export function CashLede({ closeId, base }: { closeId: string; base: string }) {
     { complete: "Complete forecast", draft: "Draft forecast", incomplete: "Incomplete forecast" }[plan.readiness.state],
     `${plan.horizon.weeks} weeks from ${utcDay(plan.start)}`,
     `lowest ${amount(plan.lowest.amount, plan.currency)} on ${utcDay(plan.lowest.on)}`,
+    bufferWords(plan.buffer, plan.headroom, plan.currency).replace(/\.$/, "").replace(/^No/, "no"),
     plan.review ? `reviewed ${dates.date(plan.review.reviewed_at)} by ${plan.review.reviewed_by}` : blocked && blocked !== "reviewed" ? blocked.toLowerCase() : "not reviewed",
     stale,
   ].filter(Boolean);
