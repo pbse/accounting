@@ -60,11 +60,13 @@ func TestAReturnedDraftIsRevisedFromTheNote(t *testing.T) {
 	}
 	invoice := evidence("invoice.txt", "Alpha\nInvoice INV-7 from Northwind Software\nAnnual subscription 1,200.00\nService period June 1, 2026 to May 31, 2027")
 	contract := evidence("contract.txt", "Northwind Software order form for Alpha\nService begins July 1, 2026 and runs twelve months")
+	ledger := evidence("ledger.txt", "Prepaid expenses, September 2026: opening 1,200.00; balance 1,200.00")
 	invoice.Role, invoice.Location = "invoice", "line 3"
+	ledger.Role, ledger.Location = "support", "line 1"
 	draft := func() string {
 		input := prepaids.Input{Entity: "Alpha", SourceReference: "INV-7", Amount: "1200.00", ServiceStart: "2026-06-01", ServiceEnd: "2027-05-31", ClosePeriod: "2026-09", Currency: "USD", Basis: "accrual", ExpenseAccount: "Software", PrepaidAccount: "Prepaid expenses", BookedBalance: "1200.00", BookingReference: "September ledger", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true}
 		raw, _ := json.Marshal(input)
-		body, err := preparation.Calculate(preparation.Plan{Kind: "prepaid", Input: raw, Sources: []preparation.Source{invoice}}, "Alpha", "2026-09")
+		body, err := preparation.Calculate(preparation.Plan{Kind: "prepaid", Input: raw, Sources: []preparation.Source{invoice, ledger}}, "Alpha", "2026-09")
 		must(err)
 		var id string
 		must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text`, closeID, preparation.Digest(append(body, rand.Text()...)), body).Scan(&id))
@@ -106,8 +108,12 @@ func TestAReturnedDraftIsRevisedFromTheNote(t *testing.T) {
 	must(json.Unmarshal([]byte(plans), &queued))
 	var input prepaids.Input
 	json.Unmarshal(queued[0].Input, &input)
-	if queued[0].Revises != first || input.ServiceStart != "2026-07-01" || input.ServiceEnd != "2027-05-31" || len(queued[0].Sources) != 2 || queued[0].Sources[1].ID != contract.ID || queued[0].Sources[1].Role != "support" {
-		t.Fatalf("the revision changes the start from the contract and nothing else: %s", plans)
+	cites := map[string]string{}
+	for _, s := range queued[0].Sources {
+		cites[s.ID] = s.Role
+	}
+	if queued[0].Revises != first || input.ServiceStart != "2026-07-01" || input.ServiceEnd != "2027-05-31" || len(queued[0].Sources) != 3 || cites[contract.ID] != "support" || cites[ledger.ID] != "support" || cites[invoice.ID] != "invoice" {
+		t.Fatalf("the revision changes the start from the contract, cited beside the ledger page, and nothing else: %s", plans)
 	}
 	if !strings.Contains(events(), "service start from 2026-06-01 to 2026-07-01 (from contract.txt)") {
 		t.Fatalf("the goal says what changed and why: %s", events())

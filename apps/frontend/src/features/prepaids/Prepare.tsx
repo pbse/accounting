@@ -7,7 +7,7 @@ import type {
   PrepaidWorkpaper,
 } from "../../../../../packages/contracts/prepaid";
 import { useSearchParams } from "react-router";
-import { SaveDraft } from "../closes/SaveDraft";
+import { revisionSources, SaveDraft } from "../closes/SaveDraft";
 import { money, useCurrency } from "../closes/workspace";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
@@ -400,9 +400,8 @@ export default function Prepare() {
           <SaveDraft
             kind="prepaid"
             input={result.input}
-            initialSources={Object.fromEntries(
-              revision.sources.map((s) => [s.role, s]),
-            )}
+            initialSources={revisionSources(revision.sources).byRole}
+            keptSources={revisionSources(revision.sources).kept}
           />
           <div className="export-actions">
             <button
