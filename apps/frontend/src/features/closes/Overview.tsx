@@ -16,6 +16,7 @@ import { area, needsOf, type Brief, type Counts, type Line } from "./Stands";
 import { Work } from "./Work";
 import { amount, workspaceRequest } from "./workspace";
 import { paperLabel, type Close, type Paper } from "./WorkpaperView";
+import { scheduleTerms } from "../prepaids/MethodFields";
 
 // A close's Overview (docs/design-system.md, Close page): on the left what needs the person, at most three prepared
 // decisions with one action each, then the one table of the agent's work; on the right the same three panels, a few
@@ -322,6 +323,56 @@ export function entriesOf(p: Paper): Effect[] {
   return [];
 }
 
+type Since = { last_review: null | { workpaper_id: string; decision: string; note: string }; changes: { field: string; before: string; after: string }[] };
+type Result = { label: string; value: string; warn?: boolean };
+const methodNames: Record<string, string> = { equal_full_months_v1: "Equal months", actual_days_v1: "Actual days", declining_balance_v1: "Declining balance" };
+
+// What a draft concludes besides its entries, so it can be approved without opening its page: a reconciliation's two
+// balances, its candidate matches, what lies between them and the statement pages reported; a schedule's terms and where this month
+// leaves its balance; an accrual's basis; and any check that did not pass or could not run, marked.
+export function resultOf(p: Paper, currency: string): Result[] {
+  const money = (value: string) => amount(value, currency);
+  switch (p.kind) {
+    case "reconciliation": {
+      const r = p.paper;
+      const carried = (r.input.current_outstanding?.length ?? 0) + (r.input.prior_outstanding ?? []).filter((item) => !item.cleared_by).length;
+      const unmatched = r.unmatched_statement.length + r.unmatched_ledger.length;
+      const read = new Set(r.input.pages).size;
+      const native = r.input.native_status;
+      return [
+        { label: "Statement balance", value: money(r.input.statement_closing) },
+        { label: "Book balance", value: money(r.input.ledger_closing) },
+        { label: "Matched lines", value: `${r.matches.length} same-date, same-amount candidate${r.matches.length === 1 ? "" : "s"}${r.reviewed_matches?.length ? ` and ${r.reviewed_matches.length} reviewed group${r.reviewed_matches.length === 1 ? "" : "s"}` : ""}; approving accepts them` },
+        { label: "Outstanding items", value: carried ? `${carried}, each reviewed as timing or clearing` : "None" },
+        ...(unmatched ? [{ label: "Unmatched lines", value: String(unmatched), warn: true }] : []),
+        { label: "Unexplained difference", value: Number(r.closing_bridge_difference) === 0 ? "None" : money(r.closing_bridge_difference), warn: Number(r.closing_bridge_difference) !== 0 },
+        { label: "Statement pages, as reported", value: `${read} of ${r.input.expected_pages}`, warn: read < r.input.expected_pages },
+        { label: "Ledger's own reconciled status", value: native === "reconciled" || native === "unreconciled" ? `${native}, as the reviewer saw it` : "Not verified", warn: native !== "reconciled" },
+      ];
+    }
+    case "prepaid": {
+      const w = p.paper;
+      const terms = scheduleTerms[w.input.schedule ?? ""];
+      return [
+        { label: terms.amount, value: money(w.input.amount) },
+        { label: `${w.input.service_start} to ${w.input.service_end}`, value: methodNames[w.input.method] ?? w.input.method },
+        ...(w.input.booked_balance ? [{ label: `${terms.booked} before`, value: money(w.input.booked_balance) }] : []),
+        { label: `${terms.recognized} this month`, value: money(w.period_expense) },
+        { label: `${terms.remaining} after`, value: money(w.prepaid_balance) },
+      ];
+    }
+    case "accrual":
+      return [
+        { label: "Basis", value: p.paper.input.estimation_basis },
+        ...(p.paper.input.booked_balance ? [{ label: "Booked before", value: money(p.paper.input.booked_balance) }] : []),
+        ...(p.paper.estimate_variance ? [{ label: "Change from the estimate", value: money(p.paper.estimate_variance) }] : []),
+      ];
+    case "payroll":
+      return (p.paper.checks ?? []).filter((check) => check.state !== "passed").map((check) => ({ label: check.name, value: check.state === "failed" ? "Failed" : "Could not run", warn: true }));
+  }
+  return [];
+}
+
 // Where a balance this draft supports stands, as the tie-out reads it: from every draft that supports the account, not
 // from this one alone, and whether the entries must still post or the capture is provisional.
 function tieWords(row: TieRow, id: string, currency: string) {
@@ -353,6 +404,7 @@ function InPlaceReview({ closeId, base, listed, id, position, total, onDone }: {
   const review = useQuery(workspaceQuery<Review>(`/${closeId}/workpapers/${id}/reviews`));
   const work = useQuery(workspaceQuery<{ items: WorkItem[] }>(workPath(closeId, "all")));
   const tie = useQuery(workspaceQuery<{ rows: TieRow[]; currency?: string }>(`/${closeId}/tie-out`));
+  const since = useQuery(workspaceQuery<Since>(`/${closeId}/workpapers/${id}/since-review`));
   const [returning, setReturning] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -366,6 +418,14 @@ function InPlaceReview({ closeId, base, listed, id, position, total, onDone }: {
   const entries = paper ? entriesOf(paper) : [];
   const ties = (tie.data?.rows ?? []).filter((row) => row.supports.some((s) => s.paper_id === id) || row.entries.some((e) => e.paper_id === id)).map((row) => tieWords(row, id, currency)).filter(Boolean);
   const changed = review.data?.state === "source_changed";
+  const result = paper ? resultOf(paper, currency) : [];
+  // The version this reviewer last decided, when this draft revises it, and what is different now.
+  const earlier = since.data?.last_review?.workpaper_id !== id ? since.data?.last_review : null;
+  const unread = [
+    work.isError && "The agent's record of this work could not be read.",
+    tie.isError && "The tie-out could not be read, so whether the balance ties is not shown.",
+    since.isError && "What changed since your last review could not be read.",
+  ].filter((line): line is string => !!line);
   async function decide(decision: "approved" | "changes_requested") {
     if (!review.data) return;
     setBusy(true);
@@ -394,7 +454,40 @@ function InPlaceReview({ closeId, base, listed, id, position, total, onDone }: {
       <div className="ks-dec-body">
         <div>
           <h3 className="ks-label">What the agent did</h3>
-          <p>{did || (work.isPending ? "…" : "No document's work names this draft; its calculation and inputs are on its page.")}</p>
+          <p>{did || (work.isPending ? "…" : work.isError ? "" : "No document's work names this draft; its calculation and inputs are on its page.")}</p>
+          {result.length > 0 && (
+            <dl className="ks-dl">
+              {result.map((line) => (
+                <div key={line.label}>
+                  <dt>{line.label}</dt>
+                  <dd className={line.warn ? "warn" : undefined}>{line.value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {earlier && (
+            <>
+              <p>
+                Revised since you {earlier.decision === "approved" ? "approved" : "returned"} draft #{earlier.workpaper_id}
+                {earlier.note ? ` (“${earlier.note}”)` : ""}: {since.data!.changes.length} change{since.data!.changes.length === 1 ? "" : "s"}.
+              </p>
+              <dl className="ks-dl">
+                {since.data!.changes.slice(0, 4).map((c) => (
+                  <div key={c.field}>
+                    <dt>{c.field.replaceAll(".", " · ").replaceAll("_", " ")}</dt>
+                    <dd>
+                      {c.before || "—"} → {c.after || "—"}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </>
+          )}
+          {unread.map((line) => (
+            <p className="ks-unread" key={line}>
+              {line}
+            </p>
+          ))}
         </div>
         <div>
           <h3 className="ks-label">Effect on the books</h3>
@@ -419,7 +512,7 @@ function InPlaceReview({ closeId, base, listed, id, position, total, onDone }: {
               ))}
             </dl>
           ) : (
-            <p>{paper ? "No journal entry: this draft records its result only." : record.isError ? "The draft could not be read." : "…"}</p>
+            <p>{paper ? "No journal entry: approving records this result." : record.isError ? "The draft could not be read." : "…"}</p>
           )}
         </div>
         <div>
@@ -427,11 +520,14 @@ function InPlaceReview({ closeId, base, listed, id, position, total, onDone }: {
           <ul className="ks-cites">
             {(paper?.paper.sources ?? []).map((source) => (
               <li key={source.id}>
-                {source.name}
-                {source.location ? ` · ${source.location}` : ""}
+                <Link to={`${base}/workpapers/${id}?source=${encodeURIComponent(source.id)}`}>
+                  {source.name}
+                  {source.location ? ` · ${source.location}` : ""}
+                </Link>
               </li>
             ))}
           </ul>
+          {paper && !paper.paper.sources?.length && <p className="ks-unread">This draft names no source.</p>}
         </div>
       </div>
       {returning && (
