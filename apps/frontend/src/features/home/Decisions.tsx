@@ -5,7 +5,7 @@ import { Icon } from "@close/ui/components/Icon";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { Segmented } from "@close/ui/components/Segmented";
-import type { AttentionInbox } from "../closes/Attention";
+import { eventTarget, type AttentionInbox } from "../closes/Attention";
 import type { Obligation, Unopened } from "../closes/Morning";
 import { workspaceRequest } from "../closes/workspace";
 import { useDates } from "../../data/time";
@@ -21,6 +21,8 @@ export type HomeCounts = {
   signed_off: { done: number; total: number };
   decisions: { count: number; unread: number; team: number; snoozed: number };
   deadlines: { overdue: number; due_soon: number; no_due_date: number; not_opened_overdue: number; not_opened_upcoming: number };
+  // The past week's newest current drafts with their review state: prepared, not approved, unless the state says so.
+  recent: { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; schedule: string; state: string; at: string }[];
   prepared: { total: number; done: number; failed: number; waiting_person: number; running: number; waiting_client: number; cancelled: number; no_draft: number };
   // exported: ended closes whose books are a complete set of labeled historical exports rather than a capture.
   books: { captured: number; of: number; exceptions: number; unchecked: number; exported: number };
@@ -161,7 +163,7 @@ export function Decisions({ today, tick, snapshot, reopened, canReview, teamTota
             <ul>
               {g.events.map((e) => (
                 <li key={e.key}>
-                  <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : e.account_id || e.kind === "unanswered" ? "#coverage-work" : ""}`}>{e.text}</Link>
+                  <Link to={eventTarget(g.close_id, e)}>{e.text}</Link>
                   <small>
                     {!e.read && <span className="pill info">New</span>} {e.info && <span className="pill">Notice, no decision needed</span>} {dates.dayMonth(e.at)}
                     {e.snoozed_until && ` · snoozed until ${dates.dayMonth(e.snoozed_until)}`}

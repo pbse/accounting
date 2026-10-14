@@ -26,6 +26,22 @@ export const kindLabels: Record<string, string> = {
   handoff: "Work handed to you",
 };
 
+// Where an event's decision is, the same from Home, the decision list and the sidebar's notices: its draft, its job, its
+// coverage work, or the part of the close that holds it (a reply or request on Requests, a held email reply among the
+// email replies, a client's scanned file in coverage, a forwarded file among Documents' forwarded files, the goal in the agent's details).
+export function eventTarget(closeId: string, e: AttentionEvent) {
+  const base = `/dashboard/closes/${closeId}`;
+  const prefix = e.key.slice(0, e.key.indexOf(":"));
+  if (e.workpaper_id) return `${base}/workpapers/${e.workpaper_id}`;
+  if (e.job_id) return `${base}?job=${e.job_id}`;
+  if (e.account_id || e.kind === "unanswered" || prefix === "release") return `${base}#coverage-work`;
+  if (prefix === "held") return `${base}?tab=requests&view=replies`;
+  if (prefix === "forwarded") return `${base}?tab=evidence&view=add#forwarded-${e.key.slice(e.key.indexOf(":") + 1)}`;
+  if (e.kind === "answered" || e.kind === "send" || e.kind === "email") return `${base}?tab=requests`;
+  if (e.kind === "goal") return `${base}#agent-details`;
+  return base;
+}
+
 // The sidebar's unread count on Home. With the member's consent, newly seen items also raise a browser notification
 // that names no client.
 export function AttentionBadge() {

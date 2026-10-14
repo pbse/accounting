@@ -5,7 +5,7 @@ import { Icon, type IconName } from "@close/ui/components/Icon";
 import { SidebarCategory } from "@close/ui/components/Sidebar";
 import { workspaceQuery } from "../../data/queries";
 import { workspaceRequest } from "../closes/workspace";
-import { attentionPath, type AttentionInbox } from "../closes/Attention";
+import { attentionPath, eventTarget, type AttentionInbox } from "../closes/Attention";
 
 // Needs you: what the agent noticed, one line each, from the attention inbox the Home badge already reads. Taking one
 // marks it read, slides it out and opens its close; All notices opens Home's decisions, where read ones stay.
@@ -74,7 +74,7 @@ export function SideNotices() {
           kind: kinds[e.kind] ?? "doc",
           text: `${g.entity}: ${e.text}`,
           // The same target Home's decision list opens: the draft, the job, the coverage work, or the close.
-          to: e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : e.account_id || e.kind === "unanswered" ? "#coverage-work" : ""}`,
+          to: eventTarget(g.close_id, e),
         })),
     )
     .slice(0, 4);
