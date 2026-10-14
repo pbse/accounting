@@ -721,8 +721,24 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			"weeks":      weeks, "lowest": map[string]string{"amount": lowest.Lowest, "on": lowest.LowestOn},
 			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "pending_obligations": draftSchedules, "scenario": scenario,
 			"note": "Book cash is the ledger's bank balances at the capture, not bank-available cash. Receipts and payments are expectations from due dates, promises, bill-pay handoffs and approved schedules; nothing is paid, collected or written to the ledger. Sales not yet invoiced are not in the plan unless an approved receipt schedule adds them, so later weeks show only what is already known."}
-		// The digest binds the sources (the capture and the open items read) and the calculation, not only the totals.
-		figures, _ := json.Marshal([]any{cashPlanCalculation, entity, home, company, snapshotID, meta["capture_id"], out["start"], opening.FloatString(2), banks, weeks, before, after, unscheduled, matched, questions, otherCurrency, scenario, reviewed})
+		// The buffer in force is compared with the lowest balance; a review accepts it with the plan.
+		buffers, err := clientBuffers(ctx, db, org, entity, 1)
+		if err != nil {
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
+		}
+		var buffer *cashBuffer
+		if len(buffers) == 1 {
+			buffer = &buffers[0]
+		}
+		// The proposal is the base plan's: a what-if's payments are not the client's forecast.
+		bufferFigures(out, buffer, weeks, lowest.Lowest, home, !executive(r) && scenarioID == "")
+		// The digest binds the sources (the capture and the open items read) and the calculation, not only the totals; an
+		// agreed buffer joins it, so a plan without one keeps the digest its reviews were made with.
+		parts := []any{cashPlanCalculation, entity, home, company, snapshotID, meta["capture_id"], out["start"], opening.FloatString(2), banks, weeks, before, after, unscheduled, matched, questions, otherCurrency, scenario, reviewed}
+		if buffer != nil {
+			parts = append(parts, buffer)
+		}
+		figures, _ := json.Marshal(parts)
 		digest := preparation.Digest(figures)
 		out["company"], out["calculation"], out["digest"] = company, cashPlanCalculation, digest
 		// The newest review of this view, and whether the plan still is what it reviewed.
@@ -744,6 +760,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		return out, nil
 	}
 	registerCashMatches(mux, db, client)
+	registerCashBuffer(mux, db, client, plan)
 	mux.HandleFunc("GET /v1/closes/{id}/cash-plan", func(w http.ResponseWriter, r *http.Request) {
 		out, err := plan(r, r.URL.Query().Get("scenario"))
 		if refused, ok := err.(tieRefusal); ok {

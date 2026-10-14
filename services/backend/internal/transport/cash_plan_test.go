@@ -517,6 +517,60 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	if r := reviews.Reviews[0]; r.State != "inputs_changed" || len(r.Actuals) != 1 || r.Actuals[0]["on"] != "2026-10-08" || r.Actuals[0]["forecast"] != "-500.00" || r.Actuals[0]["actual"] != "5000.00" || r.Actuals[0]["difference"] != "5500.00" {
 		t.Fatalf("a changed plan leaves its review flagged, and later book cash is compared with the reviewed forecast: %+v", reviews)
 	}
+	// No buffer is agreed: the plan says so and carries the agent's proposal, with its basis, for a reviewer to approve.
+	type buffered struct {
+		Lowest   map[string]string
+		Headroom string
+		Buffer   *cashBuffer
+		Proposal *struct{ Amount, Basis string } `json:"buffer_proposal"`
+		Review   *struct{ State string }
+		Digest   string
+	}
+	var before buffered
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &before))
+	if before.Buffer != nil || before.Proposal == nil || !strings.HasPrefix(before.Proposal.Basis, "Two weeks of payments") || before.Headroom != "" {
+		t.Fatalf("with no buffer agreed, the plan proposes one with its basis and states no headroom: %+v", before)
+	}
+	call("POST", "/cash-buffer", map[string]any{"amount": "1.00", "agent": true, "confirmed": true}, 409)
+	call("POST", "/cash-buffer", map[string]any{"amount": before.Proposal.Amount, "agent": true}, 422)
+	call("POST", "/cash-buffer", map[string]any{"amount": before.Proposal.Amount, "agent": true, "confirmed": true}, 200)
+	var agreed buffered
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &agreed))
+	headroom := func(p buffered) string {
+		low, _ := new(big.Rat).SetString(p.Lowest["amount"])
+		floor, _ := new(big.Rat).SetString(p.Buffer.Amount)
+		return new(big.Rat).Sub(low, floor).FloatString(2)
+	}
+	if agreed.Buffer == nil || agreed.Buffer.Amount != before.Proposal.Amount || agreed.Buffer.ProposedBy != "agent" || agreed.Buffer.Basis != before.Proposal.Basis || agreed.Proposal != nil || agreed.Headroom != headroom(agreed) || agreed.Digest == before.Digest {
+		t.Fatalf("the approved proposal is the buffer, with the lowest balance's headroom over it, and it changes what a review accepted: %+v", agreed)
+	}
+	// A reviewer's own buffer is the next version; an executive sees it, but never the firm's proposal.
+	call("POST", "/cash-buffer", map[string]any{"amount": "5000.5", "basis": "x", "confirmed": true}, 422)
+	call("POST", "/cash-buffer", map[string]any{"amount": "250000.00", "basis": "One month's payroll and rent, per the owner", "confirmed": true}, 200)
+	var own buffered
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &own))
+	if own.Buffer == nil || own.Buffer.Amount != "250000.00" || own.Buffer.ProposedBy == "agent" || !strings.HasPrefix(own.Headroom, "-") || own.Headroom != headroom(own) {
+		t.Fatalf("the newest buffer is in force, and a lowest balance under it is a shortfall: %+v", own)
+	}
+	var history struct{ Buffers []cashBuffer }
+	must(json.Unmarshal(call("GET", "/cash-buffer", nil, 200), &history))
+	if len(history.Buffers) != 2 || history.Buffers[0].Amount != "250000.00" || history.Buffers[1].ProposedBy != "agent" {
+		t.Fatalf("each agreement is kept, newest first: %+v", history)
+	}
+	seen = httptest.NewRequest("GET", "/v1/closes/"+closeID+"/cash-plan", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: executive}, Organization: org, Permissions: []string{"executive:read"}}))
+	w = httptest.NewRecorder()
+	savedCloses(db, token).ServeHTTP(w, seen)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"amount":"250000.00"`) || strings.Contains(w.Body.String(), "buffer_proposal") {
+		t.Fatalf("an executive sees the agreed buffer and its headroom, not the firm's proposal: %d %s", w.Code, w.Body.String())
+	}
+	// A review freezes the buffer it compared with; a later agreement leaves that review as it was.
+	defer db.Exec(`DELETE FROM cash_buffers WHERE organization_id=$1`, org)
+	var frozen string
+	must(db.QueryRow(`SELECT COALESCE(plan->'buffer'->>'amount','') FROM cash_plan_reviews WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&frozen))
+	if frozen != "" {
+		t.Fatalf("the earlier review, made with no buffer agreed, still says so: %q", frozen)
+	}
+
 	// A capture whose home-currency bank balance cannot be read states no actual, rather than a zero.
 	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) SELECT close_id,connection_id,realm,'unreadable',jsonb_set(payload,'{accounts}','[{"Id":"1","Name":"Checking","AccountType":"Bank","CurrentBalance":null}]'),now(),captured_at+interval '1 day','fixture' FROM quickbooks_snapshots WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID)
 	must(err)

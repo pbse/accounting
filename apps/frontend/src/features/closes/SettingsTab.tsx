@@ -4,6 +4,8 @@ import { Icon } from "@close/ui/components/Icon";
 import { clientPage, clientPath } from "../../data/clients";
 import { workspaceQuery } from "../../data/queries";
 import { monthName, monthShort, useDates } from "../../data/time";
+import { CashBufferSettings } from "./CashBuffer";
+import type { CashBuffer } from "./CashPlan";
 import { RetentionControls } from "./Enterprise";
 import { dueRule, type Status } from "./Goal";
 import { Memory } from "./Memory";
@@ -60,7 +62,7 @@ export function SettingsLede({ close }: { close: Close }) {
 
 type Row = { key: string; label: string; now: string; scope: string; status: string; tone: string; to: string };
 
-const views: Record<string, string> = { procedures: "Procedures", memory: "What Krith remembers", replay: "Repeatability check", retention: "Retention and deletion" };
+const views: Record<string, string> = { procedures: "Procedures", memory: "What Krith remembers", buffer: "Cash buffer", replay: "Repeatability check", retention: "Retention and deletion" };
 
 // SettingsTab is the tab's body: on the left what needs the person here and every setting as one table, or one of the
 // tab's views; on the right the client's own methods and authority.
@@ -73,6 +75,8 @@ export function SettingsTab({ close, papers, needs, brief, briefRead, decisionsE
   const memory = memoryRead.data;
   const procedures = useQuery(workspaceQuery<{ versions: Version[] }>("/procedures"));
   const retention = useQuery(workspaceQuery<Retention>(`/${close.id}/retention`));
+  const buffers = useQuery(workspaceQuery<{ buffers: CashBuffer[] }>(`/${close.id}/cash-buffer`));
+  const buffer = buffers.data?.buffers[0];
   const clientRead = useQuery(workspaceQuery<Client>(clientPath(close.entity)));
   const client = clientRead.data;
   const to = (name: string) => `${base}?tab=settings&view=${name}`;
@@ -201,6 +205,15 @@ export function SettingsTab({ close, papers, needs, brief, briefRead, decisionsE
       to: `${base}#agent-details`,
     },
     {
+      key: "buffer",
+      label: "Cash buffer",
+      now: buffers.isError ? unread(buffers) : !buffers.data ? "Reading…" : buffer ? `${amount(buffer.amount, buffer.currency)} · ${buffer.basis}` : "No cash buffer agreed: the cash plan proposes one",
+      scope: "This client, every month",
+      status: !buffers.data ? "—" : buffer ? "Agreed" : "None",
+      tone: buffer ? "" : "neutral",
+      to: to("buffer"),
+    },
+    {
       key: "retention",
       label: "Retention",
       now: retention.isError ? unread(retention) : !retention.data ? "Reading…" : `${retention.data.retain_until ? `Kept until ${dates.calendarDate(retention.data.retain_until)}` : "No retention date recorded"}${retention.data.legal_hold ? " · legal hold" : " · no legal hold"}`,
@@ -230,6 +243,7 @@ export function SettingsTab({ close, papers, needs, brief, briefRead, decisionsE
             <div className="stack">
               {view === "procedures" && <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} period={close.period} onApplied={onApplied} open />}
               {view === "memory" && <Memory key={`memory-${close.id}`} closeId={close.id} />}
+              {view === "buffer" && <CashBufferSettings key={`buffer-${close.id}`} closeId={close.id} currency={currency} />}
               {view === "replay" && (
                 <>
                   <p className="note">Replaying confirmed readings shows whether the current agent reads them the same way again. It checks repeatability, not accuracy: a reading can repeat and still be wrong.</p>
@@ -291,6 +305,7 @@ export function SettingsTab({ close, papers, needs, brief, briefRead, decisionsE
             { label: views.procedures, note: overrides.length ? plural(overrides.length, "override") : undefined, to: to("procedures") },
             { label: views.memory, note: memory ? (names.length ? plural(names.length, "name") : plural(memory.accounts.length, "account")) : undefined, to: to("memory") },
             { label: views.replay, to: to("replay") },
+            { label: views.buffer, note: buffer ? amount(buffer.amount, buffer.currency) : undefined, to: to("buffer") },
             { label: views.retention, to: to("retention") },
             { label: "Connections and posting grants", to: clientPage(close.entity) },
           ]}

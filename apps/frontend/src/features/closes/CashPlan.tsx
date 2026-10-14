@@ -2,6 +2,7 @@ import { cashPlanQuery } from "../../data/cashPlan";
 import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
 import { type FormEvent, useEffect, useState } from "react";
+import { Link } from "react-router";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { CashObservations } from "./CashObservations";
@@ -28,6 +29,17 @@ export type Obligation = {
   retired_at: string | null;
   retire_reason: string;
 };
+export type CashBuffer = { id: string; amount: string; currency: string; basis: string; proposed_by: string; approved_by: string; approved_at: string };
+
+// How the lowest forecast balance stands against the agreed buffer, in words; with none agreed, it says so, since a
+// positive forecast alone does not mean comfortable cash.
+export function bufferWords(buffer: CashBuffer | null, headroom: string | undefined, currency: string) {
+  if (!buffer) return "No cash buffer agreed.";
+  const floor = amount(buffer.amount, buffer.currency);
+  if (headroom === undefined) return `The agreed buffer of ${floor} is in another currency than the plan.`;
+  return headroom.startsWith("-") ? `${amount(headroom.slice(1), currency)} short of the agreed buffer of ${floor}.` : `${amount(headroom, currency)} above the agreed buffer of ${floor}.`;
+}
+
 export type Plan =
   | { state: "waiting"; reason: string }
   | {
@@ -39,6 +51,11 @@ export type Plan =
       open_items: { captured_at: string; capture_id: string; complete: boolean; completeness?: string; hours_apart: number; through: string; missing_later: boolean };
       weeks: Week[];
       lowest: { amount: string; on: string };
+      // The client's agreed buffer in force, the lowest balance's headroom over it (negative, a shortfall), or, with none
+      // agreed, the agent's proposal for a firm reviewer (never an executive's).
+      buffer: CashBuffer | null;
+      headroom?: string;
+      buffer_proposal?: { amount: string; basis: string };
       past_due: Item[];
       after_horizon: Item[];
       unscheduled: { label: string; amount: string; reason: string }[];
@@ -148,6 +165,11 @@ export function CashPlan({ closeId, readOnly = false, scenario: opened = "", onS
         <strong>{show(plan.lowest.amount)}</strong> on {plan.lowest.on}, over {plan.horizon.weeks} weeks to {plan.horizon.end}.
         {plan.readiness.state !== "complete" && " It is not a conclusion until the items below are settled."}
       </p>
+      <p className={plan.headroom?.startsWith("-") ? undefined : "note"} role={plan.headroom?.startsWith("-") ? "alert" : undefined}>
+        {bufferWords(plan.buffer, plan.headroom, plan.currency)}
+        {plan.buffer && ` Agreed by ${plan.buffer.approved_by} ${dates.date(plan.buffer.approved_at)}: ${plan.buffer.basis}`}
+      </p>
+      {!readOnly && !plan.buffer && plan.buffer_proposal && <BufferProposal closeId={closeId} proposal={plan.buffer_proposal} currency={plan.currency} onAgreed={() => void view.refetch()} />}
       {plan.review && (
         <p className="note">
           {plan.review.state === "current" ? (
@@ -868,5 +890,35 @@ function Lapsed({ closeId, capture, lapsed, onCleared }: { closeId: string; capt
         ))}
       </ul>
     </>
+  );
+}
+
+// The agent's proposed buffer, approved here by a firm reviewer as it stands; another amount is set under Settings.
+function BufferProposal({ closeId, proposal, currency, onAgreed }: { closeId: string; proposal: { amount: string; basis: string }; currency: string; onAgreed: () => void }) {
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function agree(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/cash-buffer`, { amount: proposal.amount, agent: true, confirmed });
+      onAgreed();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The buffer could not be agreed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form id="cash-buffer" className="note" aria-label="Proposed cash buffer" onSubmit={(e) => void agree(e)}>
+      The agent proposes a buffer of <strong>{amount(proposal.amount, currency)}</strong>. {proposal.basis}{" "}
+      <label>
+        <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} required /> Agree this as the client's minimum cash buffer
+      </label>{" "}
+      <button disabled={busy || !confirmed}>{busy ? "Agreeing…" : "Agree buffer"}</button> · or set another under <Link to={`?tab=settings&view=buffer`}>Settings</Link>.
+      {error && <span role="alert"> {error}</span>}
+    </form>
   );
 }
