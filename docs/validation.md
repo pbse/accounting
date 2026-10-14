@@ -5016,3 +5016,7 @@ Evidence, on local PostgreSQL with the demonstration data (main's API, this bran
 ## 2026-10-13 — The drafted request shows the passcode its email carries (B05)
 
 Queuing a request's first email replaces its unused private link with the one the email carries, and returns that link's new passcode. The goal's drafted request (`ProposedRequest`) dropped that passcode and kept showing the replaced link and the old passcode, so a firm that requires passcodes would tell the client one that no longer works. It now shows the new passcode and stops showing the replaced link, as the flux and coverage requests already did. Found by a code read of the request journey; the change is to the panel's state only, and `tsc --noEmit` is left to CI.
+
+## 2026-10-13 — Effort figures say what they count (B02, B12)
+
+The close rail's figure "time spent on this close" is the person's tracked interactive workspace time only, so it now reads "tracked workspace time". The Sign-off rail's figure adds recorded minutes, so it reads "human time, tracked and recorded". The close's effort summary still counts our team's setup and support help in its recorded minutes, as the plan's effort totals require, but now names that part (`assistance_minutes`), and the effort card lists it apart from the firm's own off-screen time. `TestEffortCapsCreditAndSeparatesWaiting` now checks that a 10-minute assistance entry shows as 25 recorded minutes, 10 of them our team's help, and passes on local PostgreSQL.

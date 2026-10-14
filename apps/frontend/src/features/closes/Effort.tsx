@@ -44,6 +44,7 @@ type Summary = {
   tracked_seconds: number;
   tracked_by_activity: Partial<Record<Activity, number>>;
   recorded_minutes: number;
+  assistance_minutes?: number;
   entries: { activity: EntryActivity; minutes: number; note: string; created_at: string; mine: boolean }[];
   answered_wait_seconds: number;
   open_requests: number;
@@ -105,7 +106,13 @@ export function EffortCard({ closeId }: { closeId: string }) {
               .join(", ")}`}
         </dd>
         <dt>Recorded off-screen time</dt>
-        <dd>{minutes(summary.recorded_minutes)}</dd>
+        <dd>{summary.recorded_minutes - (summary.assistance_minutes ?? 0) > 0 ? minutes(summary.recorded_minutes - (summary.assistance_minutes ?? 0)) : "0 min"}</dd>
+        {!!summary.assistance_minutes && (
+          <>
+            <dt>Our team's setup and support help</dt>
+            <dd>{minutes(summary.assistance_minutes)}</dd>
+          </>
+        )}
         <dt>Waiting on clients (answered requests)</dt>
         <dd>{summary.answered_wait_seconds ? `${hours(summary.answered_wait_seconds)} from delivery to first reply` : "No answered requests yet"}</dd>
         <dt>Delivered requests without a reply</dt>

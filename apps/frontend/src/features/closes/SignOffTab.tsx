@@ -247,7 +247,7 @@ export function SignOffTab({ close, papers, needs, brief, briefRead, decisionsEr
   const figures: Figure[] = [
     ...(r ? ([[`${checks.filter((check) => !check.open).length} of ${checks.length}`, "checks pass"]] as Figure[]) : []),
     ...(required ? ([[`${required - draftsOpen} of ${required}`, "required drafts approved"]] as Figure[]) : []),
-    ...(minutes !== undefined ? ([[`${minutes} min`, "time on this close"]] as Figure[]) : []),
+    ...(minutes !== undefined ? ([[`${minutes} min`, "human time, tracked and recorded"]] as Figure[]) : []),
     ...(close.due_on && days !== undefined ? ([[utcDay(close.due_on), days < 0 ? `due, ${plural(-days, "day")} overdue` : days === 0 ? "due today" : `due, in ${plural(days, "day")}`, days < 0 ? "att" : undefined]] as Figure[]) : []),
   ];
   const to = (name: string) => `${base}?tab=signoff&view=${name}`;
