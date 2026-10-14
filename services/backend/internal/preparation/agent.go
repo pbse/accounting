@@ -930,12 +930,17 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return true, e
 			}
-			plan, reason = StraightReconciliation(proposal, selected, procedure, rule, home, entity, period, unread, other, ledger)
-			if reason == "" {
+			var ask string
+			plan, reason, ask = StraightReconciliation(proposal, selected, procedure, rule, home, entity, period, unread, other, ledger)
+			card := strings.Contains(string(plan.Input), `"account_type":"credit_card"`)
+			switch {
+			case reason != "":
+			case ask != "":
+				straight = "Prepared without confirmation except " + ask + ": every other row matched exactly once, both balances roll forward, every page was read, and reconciliation procedure v" + procedure.ID + " authorizes it. Classify those lines on the draft (outstanding, or what they are); nothing else of it waits."
+			case card:
+				straight = "Prepared without confirmation as a card liability: every statement and ledger row matched exactly once, the balances tie, every page was read, and reconciliation procedure v" + procedure.ID + " approves card accounts."
+			default:
 				straight = "Prepared without confirmation: every statement and ledger row matched exactly once, the balances tie, every page was read, and reconciliation procedure v" + procedure.ID + " authorizes it."
-				if strings.Contains(string(plan.Input), `"account_type":"credit_card"`) {
-					straight = "Prepared without confirmation as a card liability: every statement and ledger row matched exactly once, the balances tie, every page was read, and reconciliation procedure v" + procedure.ID + " approves card accounts."
-				}
 			}
 		} else if proposal.Kind == "payroll" && llm.IsModelEngine(proposal.Engine) && len(proposal.Lines) == 0 {
 			procedure, e := CurrentProcedure(persist, finish, closeID, "payroll")
