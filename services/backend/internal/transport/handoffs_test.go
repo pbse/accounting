@@ -404,6 +404,7 @@ func TestHandAnAccountToATeammate(t *testing.T) {
 	defer func() {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM quickbooks_connections WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
@@ -451,7 +452,8 @@ func TestHandAnAccountToATeammate(t *testing.T) {
 	last := func() string {
 		t.Helper()
 		var text string
-		must(db.QueryRow(`SELECT events->-1->>'text' FROM close_goals WHERE id::text=$1`, goal).Scan(&text))
+		// The goal's newest line about hand-offs; the client requests it drafts are its own lines.
+		must(db.QueryRow(`SELECT COALESCE((SELECT e->>'text' FROM close_goals g CROSS JOIN LATERAL jsonb_array_elements(g.events) WITH ORDINALITY x(e,n) WHERE g.id::text=$1 AND NOT starts_with(e->>'text','I drafted a client request') ORDER BY n DESC LIMIT 1),'')`, goal).Scan(&text))
 		return text
 	}
 	open := func() int {

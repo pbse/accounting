@@ -12,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
@@ -94,9 +96,9 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test"}, 422)
 	// The person may reword a question before approving it, but not drop one or move it to another document.
 	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": []proposedQuestion{}}, 422)
-	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": []proposedQuestion{{"another.pdf", "Send it"}}}, 422)
+	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": []proposedQuestion{{Document: "another.pdf", Question: "Send it"}}}, 422)
 	var opened struct{ ID, Link_token string }
-	reworded := []proposedQuestion{{"insurance invoice.pdf", "Please send the signed\npolicy schedule  for this year."}}
+	reworded := []proposedQuestion{{Document: "insurance invoice.pdf", Question: "Please send the signed\npolicy schedule  for this year."}}
 	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": reworded}, 200), &opened))
 	var state, body string
 	must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&state))
@@ -125,5 +127,145 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/requests/approved", nil, 200), &approved))
 	if len(approved) != 1 || approved[0].ID != opened.ID || approved[0].Recipient != "owner@example.test" || approved[0].SentAt != nil || approved[0].Email != "" || approved[0].Answer != "" || approved[0].Held || approved[0].Job != job {
 		t.Fatalf("an approved request is listed with where it stands: %+v", approved)
+	}
+}
+
+// The goal asks the client for what waits on the client (a document's question, the records behind accounts with no
+// evidence, a statement's missing page), each in the client's words with what it unblocks, and keeps what needs the
+// firm's judgment; approval binds the accounts and drafts as coverage requests do, and a live request is not asked again.
+func TestTheGoalRoutesWhatWaitsOnInformation(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	ctx := context.Background()
+	org := "org_Route" + rand.Text()
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Routing fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	defer func() {
+		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
+			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM coverage_bindings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_connections WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	// The capture lists a prepaid account and a bank account with no evidence, and one the firm must review.
+	var closeID, ledger, conn, snapshot, source, paper, goal string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&closeID))
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt','route-ledger','Synthetic ledger','fixture') RETURNING id::text`, closeID).Scan(&ledger))
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&conn))
+	payload, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{
+		{"account_id": "a", "name": "Prepaid insurance", "kind": "prepaid", "question": "Provide the policy invoice."},
+		{"account_id": "b", "name": "Operating bank", "kind": "reconciliation", "question": "Provide the statement."},
+		{"account_id": "c", "name": "Office supplies", "kind": "accountant_review", "question": "Review activity."}}})
+	must(db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123','route-snapshot',$3,now(),'fixture') RETURNING id::text`, closeID, conn, string(payload)).Scan(&snapshot))
+	// A document waits on a client question; a reconciliation draft lacks a page and has a bridge for the firm.
+	tx, err := db.BeginTx(ctx, nil)
+	must(err)
+	must(tx.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'invoice.txt','route-invoice','Invoice','fixture') RETURNING id::text`, closeID).Scan(&source))
+	job, err := preparation.StartIntake(ctx, tx, closeID, source, "fixture")
+	must(err)
+	must(tx.Commit())
+	for _, q := range []string{`UPDATE preparation_intakes SET proposal='{"kind":"prepaid","questions":["Which months does the policy cover?"],"facts":[]}' WHERE job_id::text=$1`,
+		`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`} {
+		_, err = db.Exec(q, job)
+		must(err)
+	}
+	var statement string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'operating-september.pdf','route-statement','Statement page 1','fixture') RETURNING id::text`, closeID).Scan(&statement))
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'reconciliation','route-recon',$2) RETURNING id::text`, closeID,
+		`{"input":{"account":"Operating bank"},"sources":[{"id":"`+statement+`","digest":"route-statement","name":"operating-september.pdf","role":"statement","location":"page 1"}],"blockers":["Statement page 2 is missing.","Opening bridge does not tie; inspect cited prior outstanding items."]}`).Scan(&paper))
+	must(db.QueryRow(`INSERT INTO close_goals(close_id,author) VALUES($1,'user_a') RETURNING id::text`, closeID).Scan(&goal))
+	draft := func() bool {
+		t.Helper()
+		tx, err := db.BeginTx(ctx, nil)
+		must(err)
+		defer tx.Rollback()
+		drafted, err := draftGoalRequest(ctx, tx, goalRow{id: goal, close: closeID, author: "user_a"})
+		must(err)
+		must(tx.Commit())
+		return drafted
+	}
+	if !draft() {
+		t.Fatal("the goal drafts a request")
+	}
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(method, path string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"workpapers:review", "clients:all"}}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	var proposed struct {
+		Proposal *struct {
+			ID        string
+			Questions []proposedQuestion
+			Kept      []string
+		}
+	}
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/requests/proposed", nil, 200), &proposed))
+	p := proposed.Proposal
+	about := map[string]proposedQuestion{}
+	for _, q := range p.Questions {
+		about[q.Document] = q
+	}
+	// The bank account's reconciliation already reads its statement, so only the missing page is asked for it.
+	if len(p.Questions) != 3 || about["invoice.txt"].Unblocks != "preparing invoice.txt" ||
+		about["operating-september.pdf"].Question != "Please send page 2 of this statement; it is missing from what we have." || about["operating-september.pdf"].Unblocks != "the Operating bank reconciliation" ||
+		about["Operating bank"].Question != "" || !strings.Contains(about["Prepaid insurance"].Question, "invoices or agreements behind Prepaid insurance") || about["Prepaid insurance"].Unblocks != "the Prepaid insurance schedule" {
+		t.Fatalf("the client is asked for the document's answer, the missing page and the records of the account no draft reads, each with what it unblocks: %+v", p.Questions)
+	}
+	for _, q := range p.Questions {
+		if strings.Contains(q.Question, "bridge") || strings.Contains(q.Question, "Provide") {
+			t.Fatalf("a blocker's or the firm's own wording never reaches the client: %+v", q)
+		}
+	}
+	if len(p.Kept) != 2 || !strings.HasPrefix(p.Kept[0], "Draft #"+paper+": Opening bridge") || !strings.HasPrefix(p.Kept[1], "Office supplies: review") {
+		t.Fatalf("the firm's judgment stays with the firm: %+v", p.Kept)
+	}
+	// Approval binds the accounts on their capture and the draft whose page it asks for, as coverage requests do.
+	var opened struct{ ID string }
+	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/"+p.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true}, 200), &opened))
+	var scope, papers string
+	must(db.QueryRow(`SELECT coverage_scope::text,approved_papers::text FROM work_requests WHERE id::text=$1`, opened.ID).Scan(&scope, &papers))
+	if !strings.Contains(scope, `"snapshot_id": "`+snapshot+`"`) || !strings.Contains(scope, `"account_id": "a"`) || strings.Contains(scope, `"account_id": "b"`) || strings.Contains(scope, `"account_id": "c"`) || !strings.Contains(papers, `"`+paper+`"`) {
+		t.Fatalf("the request binds the accounts it asks about, on their capture, and the draft it asks a page for: %s %s", scope, papers)
+	}
+	tx, err = db.BeginTx(ctx, nil)
+	must(err)
+	if e := preparation.FreshClientRequest(ctx, tx, closeID, opened.ID); e != nil {
+		t.Fatalf("the routed request is current: %v", e)
+	}
+	tx.Rollback()
+	// With everything asked by a live request, the goal asks nothing again.
+	if draft() {
+		t.Fatal("what a live request asks is not asked again")
 	}
 }
