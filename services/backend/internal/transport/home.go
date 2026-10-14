@@ -132,11 +132,17 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 		// and, apart, the cancelled jobs, which together are the Preparation page's "All" view the card opens. A prepared job whose
 		// source was since replaced is not done (the page marks it "Source replaced"). The closes count says whether the
 		// firm has any client work at all.
+		// Recent is the past week's newest current drafts, with their review state: what was prepared, apart from what was
+		// approved, read with the counts.
 		var closes, total, done, failed, waitingPerson, running, waitingClient, cancelled, noDraft int
+		var recent []byte
 		if err = tx.QueryRowContext(ctx, `WITH mine AS (SELECT c.id FROM client_closes c WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)))
- SELECT (SELECT count(*) FROM mine),count(*) FILTER (WHERE state<>'cancelled'),count(*) FILTER (WHERE state='completed' AND jsonb_array_length(COALESCE(workpaper_ids,'[]'::jsonb))>0 AND NOT EXISTS(SELECT 1 FROM preparation_intakes i JOIN evidence e ON e.id=i.source_id WHERE i.job_id=preparation_jobs.id AND e.superseded_by IS NOT NULL)),count(*) FILTER (WHERE state='failed'),
+ SELECT (SELECT COALESCE(jsonb_agg(r ORDER BY r.at DESC),'[]') FROM (SELECT w.id::text AS workpaper_id,c.id::text AS close_id,c.entity,c.period,w.kind,COALESCE(w.paper->'input'->>'schedule','') AS schedule,w.review_state AS state,w.created_at AS at
+  FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id WHERE w.close_id IN (SELECT id FROM mine) AND w.created_at>now()-interval '7 days'
+  AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text) ORDER BY w.created_at DESC LIMIT 5) r),
+ (SELECT count(*) FROM mine),count(*) FILTER (WHERE state<>'cancelled'),count(*) FILTER (WHERE state='completed' AND jsonb_array_length(COALESCE(workpaper_ids,'[]'::jsonb))>0 AND NOT EXISTS(SELECT 1 FROM preparation_intakes i JOIN evidence e ON e.id=i.source_id WHERE i.job_id=preparation_jobs.id AND e.superseded_by IS NOT NULL)),count(*) FILTER (WHERE state='failed'),
  count(*) FILTER (WHERE state='needs_confirmation'),count(*) FILTER (WHERE state IN ('queued','interpreting','waiting_evidence')),count(*) FILTER (WHERE state='waiting_client'),count(*) FILTER (WHERE state='cancelled'),count(*) FILTER (WHERE state='completed' AND jsonb_array_length(COALESCE(workpaper_ids,'[]'::jsonb))=0)
- FROM preparation_jobs WHERE close_id IN (SELECT id FROM mine)`, organization(r), firmAccess(r), subject(r)).Scan(&closes, &total, &done, &failed, &waitingPerson, &running, &waitingClient, &cancelled, &noDraft); err != nil {
+ FROM preparation_jobs WHERE close_id IN (SELECT id FROM mine)`, organization(r), firmAccess(r), subject(r)).Scan(&recent, &closes, &total, &done, &failed, &waitingPerson, &running, &waitingClient, &cancelled, &noDraft); err != nil {
 			problem(w, 503, "Home is unavailable.")
 			return
 		}
@@ -288,6 +294,7 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 			"decisions":      map[string]int{"count": decisions, "unread": unread, "team": team, "snoozed": snoozed},
 			"inbox":          attentionInbox(events, kinds, browser, "all", 0, true),
 			"deadlines":      map[string]int{"overdue": overdue, "due_soon": dueSoon, "no_due_date": undated, "not_opened_overdue": unopenedOverdue, "not_opened_upcoming": unopenedSoon},
+			"recent":         json.RawMessage(recent),
 			"prepared":       map[string]int{"total": total, "done": done, "failed": failed, "waiting_person": waitingPerson, "running": running, "waiting_client": waitingClient, "cancelled": cancelled, "no_draft": noDraft},
 			"books":          map[string]int{"captured": captured, "of": len(cohort), "exceptions": exceptions, "unchecked": unchecked, "exported": exported},
 			"due":            due,
