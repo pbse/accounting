@@ -5026,3 +5026,7 @@ Evidence, on local PostgreSQL: `TestAgentAnswersResumeAndInventoryFence` now exp
 ## 2026-10-13 — Effort figures say what they count (B02, B12)
 
 The close rail's figure "time spent on this close" is the person's tracked interactive workspace time only, so it now reads "tracked workspace time". The Sign-off rail's figure adds recorded minutes, so it reads "human time, tracked and recorded". The close's effort summary still counts our team's setup and support help in its recorded minutes, as the plan's effort totals require, but now names that part (`assistance_minutes`), and the effort card lists it apart from the firm's own off-screen time. `TestEffortCapsCreditAndSeparatesWaiting` now checks that a 10-minute assistance entry shows as 25 recorded minutes, 10 of them our team's help, and passes on local PostgreSQL.
+
+## 2026-10-13 — A returned draft's line says what the agent did with the note (B06)
+
+After #489, the goal's question about a returned draft, or the revision it queued, appeared only in the goal's history. The document's line under Needs you still read "Changes were requested on draft #N". It now carries the goal's own words for that draft's latest return. They are read in the goal's existing draft query, so no round trip is added. `TestAReturnedDraftIsRevisedFromTheNote` now checks that the returned document's line asks the agent's question. That assertion fails without the change. The goal and revision transport tests pass on local PostgreSQL.

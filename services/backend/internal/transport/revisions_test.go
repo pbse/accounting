@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -136,6 +137,23 @@ func TestAReturnedDraftIsRevisedFromTheNote(t *testing.T) {
 	must(db.QueryRow(`SELECT count(*) FROM preparation_jobs WHERE close_id::text=$1`, closeID).Scan(&jobs))
 	if jobs != 0 || !strings.Contains(events(), "Before I revise it: I read the note as changing service end to 2027-06-30") {
 		t.Fatalf("an unsupported value is a question, not a revision: %d jobs, %s", jobs, events())
+	}
+	// The question is what the goal says of that document, where the person sees what needs them.
+	tx, err := db.BeginTx(context.Background(), nil)
+	must(err)
+	defer tx.Rollback()
+	job, err := preparation.StartIntake(context.Background(), tx, closeID, invoice.ID, "fixture")
+	must(err)
+	_, err = tx.Exec(`UPDATE preparation_jobs SET state='completed',workpaper_ids=jsonb_build_array($2::text),finished_at=now() WHERE id::text=$1`, job, second)
+	must(err)
+	progress, err := readGoalProgress(context.Background(), tx, closeID, "review")
+	must(err)
+	asked := false
+	for _, item := range progress.Items {
+		asked = asked || slices.Contains(item.Drafts, second) && strings.Contains(item.Text, "Before I revise it:")
+	}
+	if !asked {
+		t.Fatalf("the returned document's line carries the agent's question: %+v", progress.Items)
 	}
 }
 
