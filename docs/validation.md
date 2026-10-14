@@ -5017,6 +5017,20 @@ Evidence, on local PostgreSQL with the demonstration data (main's API, this bran
 
 Queuing a request's first email replaces its unused private link with the one the email carries, and returns that link's new passcode. The goal's drafted request (`ProposedRequest`) dropped that passcode and kept showing the replaced link and the old passcode, so a firm that requires passcodes would tell the client one that no longer works. It now shows the new passcode and stops showing the replaced link, as the flux and coverage requests already did. Found by a code read of the request journey; the change is to the panel's state only, and `tsc --noEmit` is left to CI.
 
+## 2026-10-13 — The executive overview opens with a briefing (B07, B09, B10)
+
+The executive's Business overview listed each published pack's net income, book cash and working capital and whether it was acknowledged. Nothing said what had changed, where cash was heading or what was overdue. The overview now opens with a briefing for the selected client and month, built from reads executives already have, with no new calculation or route. It shows:
+- the reviewed results' net income and published version, with its standing;
+- the published version's reviewed explanations of material lines (up to three, up or down by how much) and the firm's commentary;
+- the 13-week plan's lowest forecast book cash and its date, marked when below zero, with the forecast's readiness, whether the firm reviewed it, and the date its book cash was read;
+- the overdue invoices to collect and bills to pay that the plan has no new expected date for (the first three named); one promised or scheduled later falls in its weeks instead.
+
+A month with nothing published yet links to the newest published results, and an older version shows its own current standing. Codex review found both, and the narrower overdue wording; the briefing keeps the month the rest of the executive's navigation opens.
+
+A failed read says so, and links open the report and the cash plan. The plan's query is the Cash plan page's own, so that page opens from the same read. Acknowledgment stays under My decisions as a receipt.
+
+Evidence: `tsc --noEmit` passes for the firm app. Not checked in a browser: the local workspace token is a firm member, not a client executive. Not built: a cash buffer, because no buffer setting exists, so the briefing compares with zero; and a recommendation field, because the firm's reviewed commentary is the accountant's note.
+
 ## 2026-10-13 — Approve and send a drafted request, worded as the person wants (B05)
 
 The goal's drafted client request was shown read-only, and approving it took two steps: approve the request, then open a separate email approval. Now the person may reword each question before approving. The same documents keep their questions, in order, each on one line, so the client's page numbers them as before. With a firm sender, one action, **Approve and send**, approves the request and queues its email. Its confirmation names the sender and the exact recipient, so both approvals are recorded as before: the request's `approved_by` and the email's `approved_by`. **Approve the request only** keeps them apart. When the email cannot be queued, the request stays approved and the panel says why, with the email approval and the private link beside it.

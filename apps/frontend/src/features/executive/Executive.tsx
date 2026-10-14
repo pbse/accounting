@@ -6,7 +6,8 @@ import { Link, useSearchParams } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { amount, workspaceRequest } from "../closes/workspace";
-import { CashPlan } from "../closes/CashPlan";
+import { CashPlan, type Item, type Obligation, type Plan, type Scenario } from "../closes/CashPlan";
+import { cashPlanQuery } from "../../data/cashPlan";
 import { Budget } from "../closes/Budget";
 import { PackView, Publication, type Pack } from "../closes/Reports";
 
@@ -35,7 +36,7 @@ type Overview = { executive: boolean; closes?: Close[]; published?: Published[] 
 type ExecutiveView = "overview" | "reports" | "cash" | "decisions";
 
 const pages: Record<ExecutiveView, [string, string]> = {
-  overview: ["Business overview", "Each client's newest published management pack. A published version is reviewed, signed off and never edited; if the books change afterwards, it is marked and the firm publishes a correction."],
+  overview: ["Business overview", "What changed in the newest reviewed results, where cash is heading and what is overdue, then each client's newest published management pack. A published version is reviewed, signed off and never edited; if the books change afterwards, it is marked and the firm publishes a correction."],
   reports: ["Reports", "Published versions of the month's management pack, with PDF and spreadsheet copies, and the current comparison with the approved budget."],
   cash: ["Cash plan", "The next 13 weeks of book cash, prepared from the books and approved schedules. It is a working forecast, not reviewed results."],
   decisions: ["My decisions", "Published reports waiting for your acknowledgment. Acknowledging records that you received a version; it approves nothing."],
@@ -94,6 +95,12 @@ export default function Executive({ view }: { view: ExecutiveView }) {
       {header}
       {error && <p role="alert">{error}</p>}
       {closes.length === 0 && <p className="empty">No client is assigned to you yet. Ask your accountant to give you access.</p>}
+      {view === "overview" && close && (
+        <>
+          {closes.length > 1 && picker}
+          <Briefing key={close.id} close={close} published={published.find((p) => p.close_id === close.id)} newest={published.find((p) => p.entity.toLowerCase() === close.entity.toLowerCase())} />
+        </>
+      )}
       {view === "overview" &&
         (published.length === 0 ? (
           closes.length > 0 && <p className="empty">Nothing is published yet. Your accountant publishes each month's pack once it is reviewed and signed off.</p>
@@ -152,6 +159,91 @@ export default function Executive({ view }: { view: ExecutiveView }) {
           </ul>
         ))}
     </>
+  );
+}
+
+type Explanation = { account_id: string; name: string; change: string; material: boolean; text: string };
+
+// The briefing for one client and month, from what the executive can already read: what materially changed in the newest
+// published pack (its reviewed explanations and the firm's commentary), the lowest book cash the 13-week plan forecasts
+// and when, and the overdue invoices and bills it has no new expected date for (one promised or scheduled later falls in
+// its weeks instead). Each says what it is: reviewed results, or a forecast with its
+// readiness and the date its book cash was read.
+function Briefing({ close, published, newest }: { close: Close; published?: Published; newest?: Published }) {
+  const dates = useDates();
+  const version = useQuery({ ...workspaceQuery<{ publication: { commentary: string; explanations?: Explanation[]; state?: Published["state"] } }>(`/${close.id}/management-pack/publications/${published?.publication_id}`), enabled: !!published });
+  const cash = useQuery(cashPlanQuery<Plan, Obligation, Scenario>(close.id, "", true));
+  const plan = cash.data?.plan;
+  const ready = plan?.state === "ready" ? plan : undefined;
+  const material = (version.data?.publication.explanations ?? []).filter((e) => e.material).slice(0, 3);
+  const overdue = (prefix: string) => (ready?.past_due ?? []).filter((i) => i.key?.startsWith(prefix));
+  const items = (list: Item[]) => list.slice(0, 3).map((i) => `${i.label} ${amount(i.amount.replace(/^-/, ""), ready!.currency)}, due ${i.on}`).join("; ");
+  const collections = overdue("invoice:");
+  const bills = overdue("bill:");
+  // The version's own standing, as its read gives it now: the overview's list carries it for recent months only.
+  const state = version.data?.publication.state ?? published?.state;
+  return (
+    <section aria-label={`Briefing for ${close.entity}, ${close.period}`}>
+      <SectionHeader title={`${close.entity} · ${close.period}`} />
+      {published ? (
+        <p>
+          Net income {published.net_income ? amount(published.net_income, published.currency) : "–"} in the reviewed results, version {published.version} published {dates.date(published.published_at)}
+          {state && standing[state] ? <> · <span className={standing[state][0]}>{standing[state][1]}</span></> : ""}.
+        </p>
+      ) : (
+        <p>
+          No results are published for this month yet; your accountant publishes them once reviewed and signed off.
+          {newest && (
+            <>
+              {" "}
+              The newest published results are <Link to={`?close=${newest.close_id}`}>{newest.entity} · {newest.period}</Link>.
+            </>
+          )}
+        </p>
+      )}
+      {version.error && <p role="alert">The published version could not be read, so what changed is not shown.</p>}
+      {material.length > 0 && (
+        <ul aria-label="What materially changed">
+          {material.map((e) => (
+            <li key={e.account_id}>
+              <strong>{e.name}</strong> {e.change.startsWith("-") ? "down" : "up"} {amount(e.change.replace(/^-/, ""), published!.currency)}: {e.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      {version.data?.publication.commentary && <p>From your accountant: {version.data.publication.commentary}</p>}
+      {cash.error ? (
+        <p role="alert">The cash plan could not be read.</p>
+      ) : plan?.state === "waiting" ? (
+        <p>Cash plan: {plan.reason}</p>
+      ) : ready ? (
+        <>
+          <p role={ready.lowest.amount.startsWith("-") ? "alert" : undefined}>
+            Lowest forecast book cash: <strong>{amount(ready.lowest.amount, ready.currency)}</strong> on {ready.lowest.on}
+            {ready.lowest.amount.startsWith("-") ? ", below zero" : ""}, over the next {ready.horizon.weeks} weeks. A{" "}
+            {ready.readiness.state === "complete" ? "complete" : ready.readiness.state} forecast{ready.review?.state === "current" ? ", reviewed by your accountant" : ", not yet reviewed"}, from book cash as of {ready.opening.as_of}
+            {ready.opening.stale ? " (not current)" : ""}.
+          </p>
+          {collections.length > 0 && (
+            <p>
+              {collections.length} overdue {collections.length === 1 ? "invoice" : "invoices"} to collect with no new expected date: {items(collections)}
+              {collections.length > 3 ? ", and more" : ""}.
+            </p>
+          )}
+          {bills.length > 0 && (
+            <p>
+              {bills.length} overdue {bills.length === 1 ? "bill" : "bills"} to pay with no new expected date: {items(bills)}
+              {bills.length > 3 ? ", and more" : ""}.
+            </p>
+          )}
+        </>
+      ) : (
+        <p role="status">Reading the cash plan…</p>
+      )}
+      <p>
+        <Link to={`/dashboard/executive/reports?close=${close.id}`}>Open the report</Link> · <Link to={`/dashboard/executive/cash?close=${close.id}`}>Open the cash plan</Link>
+      </p>
+    </section>
   );
 }
 
