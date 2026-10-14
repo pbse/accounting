@@ -2,7 +2,7 @@ import { useDates } from "../../data/time";
 import { workspaceKey, workspaceQuery } from "../../data/queries";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import type { AccrualWorkpaper } from "../../../../../packages/contracts/accrual";
 import type { PrepaidWorkpaper } from "../../../../../packages/contracts/prepaid";
 import type { ReconciliationWorkpaper } from "../../../../../packages/contracts/reconciliation";
@@ -108,8 +108,8 @@ export function useClose(id: string | undefined) {
   };
 }
 
-function EvidencePane({ closeId, sources, onPickLine }: { closeId: string; sources: Source[]; onPickLine: (line: PickedLine) => void }) {
-  const [active, setActive] = useState(0);
+function EvidencePane({ closeId, sources, initial, onPickLine }: { closeId: string; sources: Source[]; initial: number; onPickLine: (line: PickedLine) => void }) {
+  const [active, setActive] = useState(initial);
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [original, setOriginal] = useState("");
@@ -333,6 +333,8 @@ function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
 export default function WorkpaperView() {
   const dates = useDates();
   const { id, paperId } = useParams();
+  // A source link from an approval card opens that source at its cited lines.
+  const [search] = useSearchParams();
   const { close, papers, more, error, refreshError, loading, reload } = useClose(id);
   const [picked, setPicked] = useState<PickedLine & { paper: string }>();
   const queryClient = useQueryClient();
@@ -390,7 +392,7 @@ export default function WorkpaperView() {
       </PageHeader>
       {more && <p className="note">Review navigation covers the latest 100 drafts in this close.</p>}
       <div className="canvas">
-        <EvidencePane key={saved.id} closeId={close.id} sources={saved.paper.sources ?? []} onPickLine={(line) => setPicked({ ...line, paper: saved.id })} />
+        <EvidencePane key={saved.id} closeId={close.id} sources={saved.paper.sources ?? []} initial={Math.max(0, (saved.paper.sources ?? []).findIndex((source) => source.id === search.get("source")))} onPickLine={(line) => setPicked({ ...line, paper: saved.id })} />
         <div className="stack">
           {blockers.length > 0 && (
             <section role="status">

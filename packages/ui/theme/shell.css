@@ -1439,6 +1439,10 @@ body {
   font-size: 12px;
   color: var(--pos-text);
 }
+.app-shell .ks-dl dd.warn,
+.app-shell .ks-dec-body p.ks-unread {
+  color: var(--neg-text);
+}
 .app-shell .ks-cites {
   display: flex;
   flex-direction: column;
