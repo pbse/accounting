@@ -34,7 +34,7 @@ type Proposed = { proposal: { id: string; recipient: string; body: string; quest
 // Read on arriving at the tab and on returning from one of its views (a draft approved there is a request now), then
 // every half minute.
 export const useApproved = (closeId: string) => useQuery({ ...workspaceQuery<Approved[]>(`/${closeId}/requests/approved`), refetchOnMount: "always", refetchInterval: 30_000, refetchOnWindowFocus: true });
-const useProposed = (closeId: string) => useQuery(workspaceQuery<Proposed>(`/${closeId}/requests/proposed`));
+const useProposed = (closeId: string) => useQuery({ ...workspaceQuery<Proposed>(`/${closeId}/requests/proposed`), refetchInterval: 15_000, refetchOnWindowFocus: true });
 
 const words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 const capital = (text: string) => text[0].toUpperCase() + text.slice(1);

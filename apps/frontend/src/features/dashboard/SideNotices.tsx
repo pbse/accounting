@@ -10,7 +10,7 @@ import { attentionPath, eventTarget, type AttentionInbox } from "../closes/Atten
 // Needs you: what the agent noticed, one line each, from the attention inbox the Home badge already reads. Taking one
 // marks it read, slides it out and opens its close; All notices opens Home's decisions, where read ones stay.
 type Kind = "doc" | "reply" | "wait" | "done";
-const kinds: Record<string, Kind> = { answered: "reply", handoff: "reply", fix: "reply", approve: "done", goal: "done", changed: "doc", release: "doc", confirm: "wait", unanswered: "wait", send: "wait", email: "wait", failed: "wait" };
+const kinds: Record<string, Kind> = { answered: "reply", handoff: "reply", fix: "reply", request: "reply", approve: "done", goal: "done", changed: "doc", release: "doc", confirm: "wait", unanswered: "wait", send: "wait", email: "wait", failed: "wait" };
 const icons: Record<Kind, IconName> = { doc: "file", reply: "mail", wait: "waiting", done: "review" };
 
 export function SideNotices() {

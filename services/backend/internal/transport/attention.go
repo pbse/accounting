@@ -17,7 +17,7 @@ import (
 )
 
 // attentionKinds are the events that need a person; running, queued, waiting and finished work never is one.
-var attentionKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "release", "send", "email", "unanswered", "goal", "handoff"}
+var attentionKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "request", "release", "send", "email", "unanswered", "goal", "handoff"}
 
 // undeliveredEmail is SQL for an email m, the latest for its request, that did not reach the client.
 const undeliveredEmail = `(m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))`
@@ -106,6 +106,14 @@ const attentionQuery = `WITH scope AS (
  -- A file forwarded to the close's address, scanned clean, waits for a person to release it to the agent; its sender is
  -- unverified, so the text says so.
  SELECT 'forwarded:'||f.id,'release',f.close_id,COALESCE(f.scanned_at,f.received_at),'Forwarded file '||f.name||' from '||f.from_address||' (unverified) is waiting for release','' FROM forwarded_files f WHERE f.close_id IN (SELECT id FROM scope) AND f.state='clean'
+ UNION ALL
+ -- The close's drafted client request, the one every entry point shows, waits for a person to approve it while it is
+ -- current (draftJobsWaiting, as its panel reads it); a new draft is a new notice, and approving or withdrawing it ends it.
+ SELECT 'request:'||d.id,'request',d.close_id,d.created_at,'A drafted client request ('||n.questions||CASE n.questions WHEN 1 THEN ' question' ELSE ' questions' END||') waits for approval',''
+  FROM request_drafts d CROSS JOIN LATERAL (SELECT jsonb_array_length(CASE WHEN jsonb_typeof(d.proposal->'questions')='array' THEN d.proposal->'questions' ELSE '[]'::jsonb END)
+   +jsonb_array_length(CASE WHEN jsonb_typeof(d.proposal->'own')='array' THEN d.proposal->'own' ELSE '[]'::jsonb END) AS questions) n
+  WHERE d.close_id IN (SELECT id FROM scope) AND d.job_ids IS NOT NULL AND d.proposal IS NOT NULL AND NOT COALESCE((d.proposal->>'withdrawn')::boolean,false)
+  AND d.id=(SELECT max(id) FROM request_drafts WHERE close_id=d.close_id AND job_ids IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM work_requests q WHERE q.draft_id=d.id) AND ` + draftJobsWaiting + `
  UNION ALL
  SELECT 'send:'||q.id,'send',d.close_id,q.approved_at,'Request #'||q.id||' is approved; no delivery is recorded','' FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id
   WHERE d.close_id IN (SELECT id FROM scope) AND q.delivered_at IS NULL AND NOT EXISTS(SELECT 1 FROM email_delivery m WHERE m.request_id=q.id) AND ` + waitingRequest + `
@@ -206,7 +214,7 @@ func eventYours(r *http.Request, kind string) bool {
 		return true
 	}
 	switch kind {
-	case "answered", "approve", "confirm", "failed", "fix", "changed", "release", "send", "unanswered":
+	case "answered", "approve", "confirm", "failed", "fix", "changed", "release", "request", "send", "unanswered":
 		// A reviewer acts on an approved request with no delivery by recording one made another way (the work handler's
 		// delivery action needs the reviewer role alone), and follows up or withdraws an unanswered one; only sending the
 		// email itself, the email kind below, needs the sender role too.
@@ -247,6 +255,7 @@ func attentionEvents(ctx context.Context, db reader, r *http.Request, closeID st
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
 	// A hand-off two days old is one decision, not two: once its reminder exists, the reminder stands for it (its own
 	// key, so it is new again even when the hand-off was read) and the hand-off itself is not listed.
 	reminded := map[string]bool{}
