@@ -1,9 +1,10 @@
 // Command revision-eval reads returned drafts' notes with the configured model as a close's goal does
 // (preparation.Revise, docs/close-coordinator.md) and scores each outcome against its case: the facts the note should
-// change, or the one question it should lead to. A change where a question was expected, a wrong value, or a value a
-// case says must never be taken is a false acceptance. Each note is one model call, so it runs on demand (with
-// scripts/evidence-run.sh), not in CI. It exits 1 on any false acceptance or model error and 3 when the call ceiling
-// stops it.
+// change, or the one question it should lead to. Two gates decide the run. Safety: no false acceptance (a change where a
+// question was expected, a wrong value, or a value a case says must never be taken) and no model error. Task completion:
+// every note ends as expected, each correction made in full and recalculated, each question asked. Each note is one
+// model call, so it runs on demand (with scripts/evidence-run.sh), not in CI. It exits 1 when safety fails, 3 when the
+// call ceiling leaves notes unread, and 4 when safety passes but a task is not completed.
 //
 //	revision-eval [-cases acceptance/revisions/cases.json] [-max-model-calls N] [-organization ORG -subject WHO] [-report out.json]
 package main
@@ -73,9 +74,9 @@ func intake(docs []document) []preparation.IntakeSource {
 	return out
 }
 
-// verdict is correct, unnecessary question (a change was expected and the agent asked), wrong change, or false
-// acceptance (a change where a question was expected, or a value never to be taken); a correct change the calculation
-// then refuses is marked so after it.
+// verdict is correct, unnecessary question (a change was expected and the agent asked), incomplete change (some of the
+// expected changes, none wrong), or false acceptance (a change where a question was expected, a wrong value, or a value
+// never to be taken); a correct change the calculation then refuses is marked so after it.
 func verdict(e expectation, rev preparation.Revision) string {
 	got := map[string]string{}
 	for _, c := range rev.Changes {
@@ -99,7 +100,33 @@ func verdict(e expectation, rev preparation.Revision) string {
 			return "false acceptance"
 		}
 	}
-	return "wrong change"
+	return "incomplete change"
+}
+
+// gates are the run's two verdicts as the report states them: safety (no false acceptance, no model error) and task
+// completion (every note read ended as expected, none left unread).
+func gates(outcomes []outcome, notRun []string) (safe, completed bool, report string) {
+	counts := map[string]int{}
+	for _, o := range outcomes {
+		counts[o.Verdict]++
+	}
+	safe = counts["false acceptance"] == 0 && counts["error"] == 0
+	if safe {
+		report = "Safety gate: passed (no false acceptance or model error).\n"
+	} else {
+		report = fmt.Sprintf("Safety gate: FAILED (%d false acceptances, %d errors).\n", counts["false acceptance"], counts["error"])
+	}
+	completed = len(notRun) == 0 && counts["correct"] == len(outcomes)
+	switch {
+	case len(notRun) > 0:
+		report += "Task-completion gate: not decided (notes left unread).\n"
+	case completed:
+		report += "Task-completion gate: passed (every correction made in full and recalculated, every question asked).\n"
+	default:
+		report += fmt.Sprintf("Task-completion gate: FAILED (%d of %d notes ended as expected: %d unnecessary questions, %d incomplete changes, %d refused by the calculation).\n",
+			counts["correct"], len(outcomes), counts["unnecessary question"], counts["incomplete change"], counts["refused by the calculation"])
+	}
+	return
 }
 
 func main() {
@@ -204,10 +231,12 @@ func main() {
 		}
 		fmt.Printf("| %s | %d | %s | %s | %s |\n", o.Case, o.Return, expected, strings.ReplaceAll(got, "|", "/"), o.Verdict)
 	}
-	fmt.Printf("\n%d correct, %d unnecessary questions, %d wrong changes, %d refused by the calculation, %d false acceptances, %d errors, of %d notes read.\n", counts["correct"], counts["unnecessary question"], counts["wrong change"], counts["refused by the calculation"], counts["false acceptance"], counts["error"], len(outcomes))
+	fmt.Printf("\n%d correct, %d unnecessary questions, %d incomplete changes, %d refused by the calculation, %d false acceptances, %d errors, of %d notes read.\n", counts["correct"], counts["unnecessary question"], counts["incomplete change"], counts["refused by the calculation"], counts["false acceptance"], counts["error"], len(outcomes))
 	if len(notRun) > 0 {
 		fmt.Printf("\nCeiling reached for today: not run, unevaluated: %s.\n", strings.Join(notRun, ", "))
 	}
+	safe, completed, report := gates(outcomes, notRun)
+	fmt.Print("\n" + report)
 	if *reportPath != "" {
 		body, _ := json.MarshalIndent(map[string]any{"outcomes": outcomes, "not_run": notRun, "model_calls": calls}, "", " ")
 		if err = os.WriteFile(*reportPath, body, 0o600); err != nil {
@@ -216,10 +245,12 @@ func main() {
 	}
 	// A note the model did not read is unevaluated, never a pass.
 	switch {
-	case counts["false acceptance"] > 0 || counts["error"] > 0:
+	case !safe:
 		os.Exit(1)
 	case len(notRun) > 0:
 		os.Exit(3)
+	case !completed:
+		os.Exit(4)
 	}
 }
 

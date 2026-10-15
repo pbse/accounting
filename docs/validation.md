@@ -5153,3 +5153,13 @@ A review found that chat and agents still drafted client requests the older way:
 - The workpaper-selection editor, `GET /requests/candidates`, `POST /requests` and the question templates behind them (`paperQuestions`) are removed; `RequestContext` keeps only its digest. Saved drafts stay readable, and the Work inbox can still approve a single document's request in a saved draft's wording.
 
 Tests: `TestTheGoalDraftsOneClientRequestAPersonApproves` drafts on demand first (the goal then finds that draft and drafts no other; every entry point shows the same draft id), adds a question of the firm's own (asked after the drafted one, kept by the goal), and approves both as worded. `TestAssistantRequestCardDraftsTheClosesRequest`: the chat card drafts the close's request, the one Requests shows, never carries a reviewer's note to the client, finds the same draft when asked again, and says when the client has nothing to answer. `TestRequestDraftHistory` keeps the history's staleness and numeric order. The request, goal-routing, chat, agent, MCP, agent-access, client-request, email and Work tests passed on a local PostgreSQL; the frontend type-checks.
+
+## 2026-10-14 — The correction evaluation requires completed corrections (slice 6, B06)
+
+A review found `cmd/revision-eval` could exit successfully with unnecessary questions where corrections were expected, incomplete corrections (reported as "wrong change") and corrections the calculation refused: it failed only on a false acceptance or a model error.
+
+- The run has two gates, each printed: **safety** (no false acceptance, no model error; exit 1) and **task completion** (every note ends as expected, each correction made in full and recalculated, each question asked; exit 4 when safe but incomplete). Notes left unread by the ceiling leave completion undecided (exit 3), never passed.
+- An incomplete correction is now reported as one ("incomplete change"); a wrong value stays a false acceptance.
+- `scripts/evidence-run.sh` records which gate failed, or that both passed.
+
+Test: `TestSafetyAndTaskCompletionAreSeparateGates` (an incomplete change, a refused calculation and an unnecessary question are safe but not completed; a false acceptance fails safety; an unread note decides no completion; all correct passes both), with the existing case check. The live run with the context machine has not been made yet.
