@@ -61,9 +61,6 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 		must(tx.Commit())
 		return drafted
 	}
-	if !draft() {
-		t.Fatal("the goal drafts a request for the client's question")
-	}
 	token := strings.Repeat("r", 32)
 	handler := apiWithStore(db, token)
 	call := func(method, path string, body any, want int) []byte {
@@ -79,6 +76,22 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 		}
 		return w.Body.Bytes()
 	}
+	// Drafted on demand (chat, an agent or the Requests tab), the request is the one the goal would draft: the goal
+	// finds it and drafts no other.
+	var drafted struct {
+		Proposal *struct {
+			ID        string
+			Questions []proposedQuestion
+		}
+		Kept []string
+	}
+	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/proposed", map[string]any{}, 200), &drafted))
+	if drafted.Proposal == nil || len(drafted.Proposal.Questions) != 1 || drafted.Kept == nil {
+		t.Fatalf("drafting on demand drafts the client's question: %+v", drafted)
+	}
+	if draft() {
+		t.Fatal("the goal drafts no second request for the same questions")
+	}
 	var proposed struct {
 		Proposal *struct {
 			ID, Entity, Period string
@@ -89,21 +102,35 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 	if p := proposed.Proposal; p == nil || p.Entity != entity || p.Period != "2026-09" || len(p.Questions) != 1 || p.Questions[0].Document != "insurance invoice.pdf" || !strings.Contains(p.Questions[0].Question, "signed policy schedule") {
 		t.Fatalf("the proposal shows the client, month and the client's question only: %+v", proposed.Proposal)
 	}
-	// The goal drafts the same documents once, whatever it is asked again.
-	if draft() {
-		t.Fatal("an unchanged set of questions is not drafted twice")
+	if proposed.Proposal.ID != drafted.Proposal.ID {
+		t.Fatalf("every entry point shows the same draft: %s %s", proposed.Proposal.ID, drafted.Proposal.ID)
 	}
+	// A person adds a question of their own: it is asked after the drafted ones, and the goal keeps it.
+	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/proposed", map[string]any{"questions": []string{"Did the policy  change\n mid-year?"}}, 200), &drafted))
+	if p := drafted.Proposal; p == nil || len(p.Questions) != 2 || p.Questions[1] != (proposedQuestion{Question: "Did the policy change mid-year?"}) {
+		t.Fatalf("the firm's own question follows the drafted ones: %+v", drafted.Proposal)
+	}
+	if draft() {
+		t.Fatal("the goal keeps the firm's own question on the draft")
+	}
+	// A retried addition asks the question once.
+	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/proposed", map[string]any{"questions": []string{"did the policy change mid-year?"}}, 200), &drafted))
+	if len(drafted.Proposal.Questions) != 2 {
+		t.Fatalf("a retried question is not asked twice: %+v", drafted.Proposal.Questions)
+	}
+	call("POST", "/v1/closes/"+closeID+"/requests/proposed", map[string]any{"questions": []string{" "}}, 422)
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/requests/proposed", nil, 200), &proposed))
 	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test"}, 422)
 	// The person may reword a question before approving it, but not drop one or move it to another document.
 	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": []proposedQuestion{}}, 422)
 	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": []proposedQuestion{{Document: "another.pdf", Question: "Send it"}}}, 422)
 	var opened struct{ ID, Link_token string }
-	reworded := []proposedQuestion{{Document: "insurance invoice.pdf", Question: "Please send the signed\npolicy schedule  for this year."}}
+	reworded := []proposedQuestion{{Document: "insurance invoice.pdf", Question: "Please send the signed\npolicy schedule  for this year."}, {Question: "Did the policy change mid-year?"}}
 	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true, "questions": reworded}, 200), &opened))
 	var state, body string
 	must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&state))
 	must(db.QueryRow(`SELECT d.body FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id::text=$1`, opened.ID).Scan(&body))
-	if state != "waiting_client" || opened.Link_token == "" || !slices.Equal(requestQuestions(body), []string{"insurance invoice.pdf: Please send the signed policy schedule for this year."}) {
+	if state != "waiting_client" || opened.Link_token == "" || !slices.Equal(requestQuestions(body), []string{"insurance invoice.pdf: Please send the signed policy schedule for this year.", "Did the policy change mid-year?"}) {
 		t.Fatalf("approving opens the request as worded, with a private link, and the document waits on the client: %s %+v %q", state, opened, body)
 	}
 	// Without a ledger capture the request is still current: it binds no ledger account.

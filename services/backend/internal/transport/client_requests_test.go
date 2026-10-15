@@ -178,7 +178,7 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	tx, _ = db.Begin()
-	digest, _, err := preparation.RequestContext(context.Background(), tx, closeID, []string{paper})
+	digest, err := preparation.RequestContext(context.Background(), tx, closeID, []string{paper})
 	tx.Rollback()
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +236,7 @@ func TestLinkPasscodeGuardsTheRequest(t *testing.T) {
 	}()
 	tx, err := db.Begin()
 	must(err)
-	digest, _, err := preparation.RequestContext(context.Background(), tx, closeID, nil)
+	digest, err := preparation.RequestContext(context.Background(), tx, closeID, nil)
 	must(err)
 	must(tx.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the September statement.','[]',$2,'fixture') RETURNING id::text`, closeID, digest).Scan(&draft))
 	must(tx.QueryRow(`INSERT INTO work_requests(draft_id,revision,recipient,approved_by) VALUES($1,1,'client@example.test','fixture') RETURNING id::text`, draft).Scan(&request))
@@ -497,7 +497,7 @@ func TestUnknownOrRevokedLinkIsRefusedBeforeItsUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, _, err := preparation.RequestContext(context.Background(), tx, closeID, nil)
+	digest, err := preparation.RequestContext(context.Background(), tx, closeID, nil)
 	if err == nil {
 		err = tx.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the September statement.','[]',$2,'fixture') RETURNING id::text`, closeID, digest).Scan(&draft)
 	}

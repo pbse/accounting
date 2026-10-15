@@ -406,7 +406,7 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "An open request already covers a selected requirement. Withdraw it before approving a replacement.")
 				return
 			}
-			contextDigest, _, e := preparation.RequestContext(r.Context(), tx, closeID, nil)
+			contextDigest, e := preparation.RequestContext(r.Context(), tx, closeID, nil)
 			if e != nil {
 				problem(w, 503, "Request context unavailable.")
 				return

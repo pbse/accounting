@@ -295,7 +295,7 @@
    "scope": "close",
    "question": "Does any draft need information from the client?",
    "tools": [
-    "request_candidates"
+    "proposed_request"
    ],
    "facts": [
     "client"
@@ -517,10 +517,10 @@
    "question": "Does Harbor Fixture's September need a client request?",
    "tools": [
     "list_closes",
-    "request_candidates"
+    "proposed_request"
    ],
    "args": {
-    "request_candidates": {
+    "proposed_request": {
      "close_id": "$close"
     }
    },

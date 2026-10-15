@@ -92,7 +92,7 @@ var agentExtra = []mcpTool{
 	{name: "search_close", title: "Search this close", description: "Literal search of this close's documents, drafts, ledger transactions, procedures and review decisions: up to 8 of each kind, every word must match.", method: "GET", path: "/v1/closes/{close_id}/search", query: map[string]string{"words": "q"}, props: map[string]any{"close_id": mcpCloseID, "words": mcpText("One to six words of 3 to 100 characters.")}, required: []string{"close_id", "words"}, readOnly: true},
 	{name: "delegated_closes", title: "Closes handed to the agent", description: "The closes handed to the agent that you can open: each goal's finish line, due date, state, who handed it over and what the agent last found.", method: "GET", path: "/v1/closes/goals", props: map[string]any{}, readOnly: true, cap: toolCap{array: "goals", limit: 60}, lineage: "goals[].close_id|more"},
 	{name: "get_goal", title: "The agent's plan for a close", description: "The close's goal, if handed over, with the agent's plan and where each step stands; otherwise the plan it would follow.", method: "GET", path: "/v1/closes/{close_id}/goal?verify=1", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
-	{name: "request_candidates", title: "What a client request would ask", description: "The close's current drafts a consolidated client request would ask about, the exact wording it would save and the digest draft_client_request needs.", method: "GET", path: "/v1/closes/{close_id}/requests/candidates", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
+	{name: "proposed_request", title: "The drafted client request", description: "The close's drafted client request, if one is current: each question, what answering it unblocks, and what stays with the firm (never asked of the client). draft_client_request drafts it when none is.", method: "GET", path: "/v1/closes/{close_id}/requests/proposed", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
 	{name: "list_procedures", title: "Approved procedures", description: "The firm's procedure versions that apply to one client or to all clients: each one's kind, method, instructions, accounts and whether it is enabled. An approved treatment is cited from here, never inferred.", method: "GET", path: "/v1/closes/procedures", query: map[string]string{"client": "client"}, props: map[string]any{"client": mcpText("Optional client name; inside a close it is always this close's client.")}, readOnly: true, cap: toolCap{array: "versions", limit: 60}, lineage: lineageNone},
 	{name: "select_closes_preview", title: "Which closes a goal selects", description: "The closes a portfolio goal such as \"prepare my clients due Friday\" or \"hand over my clients waiting on statements\" would select, as Work lists them, without starting anything. Use before select_closes.", method: "POST", path: "/v1/closes/portfolio", body: []string{"text", "preview"}, props: map[string]any{"text": mcpText("The goal in the member's words, up to 300 characters.")}, required: []string{"text"}, readOnly: true, cap: toolCap{array: "items", limit: 100}, lineage: "items[].close_id|has_more"},
 	{name: "stop_work", title: "Stop unresolved work", description: "Propose stopping this close's unresolved preparation jobs, with the digest from preview_close_preparation's stop list and a reason. The person confirms the card; nothing stops before that.", method: "POST", path: "/v1/closes/{close_id}/prepare-close/cancel", props: map[string]any{"close_id": mcpCloseID, "digest": mcpText("stop.digest from preview_close_preparation."), "reason": mcpText("Why, 1 to 500 characters.")}, required: []string{"close_id", "digest", "reason"}},
@@ -247,7 +247,7 @@ func agentLink(t mcpTool, args map[string]any) chatCitation {
 	if id, ok := args["workpaper_id"].(string); ok {
 		return chatCitation{"Draft #" + id, base + "/workpapers/" + url.PathEscape(id)}
 	}
-	tabs := map[string]string{"list_evidence": "?tab=evidence", "get_readiness": "?tab=signoff", "request_candidates": "?tab=requests", "list_client_requests": "?tab=requests", "management_pack": "?tab=reports", "budget_comparison": "?tab=reports", "cash_plan": "?tab=cash", "open_items": "?tab=cash"}
+	tabs := map[string]string{"list_evidence": "?tab=evidence", "get_readiness": "?tab=signoff", "proposed_request": "?tab=requests", "list_client_requests": "?tab=requests", "management_pack": "?tab=reports", "budget_comparison": "?tab=reports", "cash_plan": "?tab=cash", "open_items": "?tab=cash"}
 	return chatCitation{t.title, base + tabs[t.name]}
 }
 
@@ -1486,14 +1486,9 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					}
 				}
 				if agentWrites[call.Name] == "request" {
-					// The request card drafts for every current candidate; the agent cannot narrow or word it.
-					for _, key := range []string{"workpaper_ids", "body", "context_digest", "expected_id"} {
-						if _, given := args[key]; given {
-							step.Status, output = "refused", "refused: the request card drafts for every current candidate with the saved wording; propose it without "+key
-							break
-						}
-					}
-					if step.Status != "" {
+					// The request card drafts what the close needs from the client; a person adds their own questions on it.
+					if _, given := args["questions"]; given {
+						step.Status, output = "refused", "refused: the request card drafts what the close needs from the client, and a person adds their own questions on the card; propose it without questions"
 						break
 					}
 				}

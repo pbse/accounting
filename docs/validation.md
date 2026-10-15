@@ -5121,3 +5121,14 @@ A change where a question was due, a wrong value, or a value a case forbids coun
 ## 2026-10-13 — A replaced document no longer answers an account (B05)
 
 The goal didn't ask for an account's records when the agent had matched a document to it, even after that document was replaced, because the old job stays on as the account's suggestion. Now only a matched document that is still current answers the account. `TestTheGoalRoutesWhatWaitsOnInformation` adds a document matched to the prepaid account and since replaced, and the prepaid's records are still asked for. Without the change the test fails.
+
+## 2026-10-14 — One client request from every entry point (B05)
+
+A review found that chat and agents still drafted client requests the older way: chat's request card and `draft_client_request` worded a request from selected workpapers (`/requests/candidates`, `POST /requests`), which turned a returned draft's reviewer note and other internal blockers into client questions and missed the accounts and pages the goal's routing asks for. The Requests tab offered the same editor beside the goal's draft.
+
+- `draftRequest` is the goal's drafting, now for every entry point: the goal calls it as it works, and `POST /v1/closes/{id}/requests/proposed` calls it on demand for chat's card, an agent (`draft_client_request`) and the Requests tab. A close holds one drafted request, found whoever drafted it.
+- A person can add questions of their own (`own` on the draft), asked after the drafted ones and carried when the agent drafts again; with nothing for the client, a question of their own starts a request. Approval, rewording and sending are unchanged.
+- Chat's card and the Requests tab show that draft in the same panel (`ProposedRequest`). The agent reads it with `proposed_request` (was `request_candidates`; the golden set and its recorded read follow).
+- The workpaper-selection editor, `GET /requests/candidates`, `POST /requests` and the question templates behind them (`paperQuestions`) are removed; `RequestContext` keeps only its digest. Saved drafts stay readable, and the Work inbox can still approve a single document's request in a saved draft's wording.
+
+Tests: `TestTheGoalDraftsOneClientRequestAPersonApproves` drafts on demand first (the goal then finds that draft and drafts no other; every entry point shows the same draft id), adds a question of the firm's own (asked after the drafted one, kept by the goal), and approves both as worded. `TestAssistantRequestCardDraftsTheClosesRequest`: the chat card drafts the close's request, the one Requests shows, never carries a reviewer's note to the client, finds the same draft when asked again, and says when the client has nothing to answer. `TestRequestDraftHistory` keeps the history's staleness and numeric order. The request, goal-routing, chat, agent, MCP, agent-access, client-request, email and Work tests passed on a local PostgreSQL; the frontend type-checks.

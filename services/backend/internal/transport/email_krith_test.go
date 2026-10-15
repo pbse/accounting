@@ -186,7 +186,7 @@ func TestKrithSendsAFirmsEmailUntilItConnectsItsOwn(t *testing.T) {
 		must(e)
 		tx.Exec(`UPDATE preparation_jobs SET state='waiting_client' WHERE id=$1`, job)
 		tx.Exec(`UPDATE preparation_intakes SET revision=1 WHERE job_id=$1`, job)
-		digest, _, e := preparation.RequestContext(ctx, tx, closeID, nil)
+		digest, e := preparation.RequestContext(ctx, tx, closeID, nil)
 		must(e)
 		var draft, request string
 		must(tx.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Synthetic approved request','[]',$2,'fixture') RETURNING id::text`, closeID, digest).Scan(&draft))

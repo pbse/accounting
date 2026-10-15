@@ -248,7 +248,7 @@ export function RequestsTab({ close, papers, needs, brief, briefRead, decisionsE
               <b>{views[view]}</b>
             </p>
             <div className="stack">
-              {view === "draft" && <Requests closeId={close.id} papers={papers} />}
+              {view === "draft" && <Requests closeId={close.id} />}
               {view === "replies" && <EmailReplies closeId={close.id} onReleased={onChange} open />}
             </div>
           </>

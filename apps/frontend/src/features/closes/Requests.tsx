@@ -1,210 +1,98 @@
-import { workspaceQuery } from "../../data/queries";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, type FormEvent } from "react";
+import { workspaceKey, workspaceQuery } from "../../data/queries";
 import { useDates } from "../../data/time";
-import { useRef, useState } from "react";
 import { workspaceRequest } from "./workspace";
 import { ProposedRequest } from "./ProposedRequest";
 
-type Draft = {
-  id: string;
-  body: string;
-  workpaper_ids: string[];
-  context_digest: string;
-  created_by: string;
-  created_at: string;
-  stale: boolean;
-};
-export function Requests({
-  closeId,
-  papers,
-}: {
-  closeId: string;
-  papers: { id: string; kind: string; review_state: string }[];
-}) {
+type Draft = { id: string; body: string; created_by: string; created_at: string; stale: boolean };
+
+// The close's client request: the one the agent drafts from everything the month needs from the client, the same on the
+// goal card, in chat and here, to reword, add to, approve and send. With none drafted, the agent drafts it now; when the
+// client has nothing to answer, a person can still ask a question of their own.
+export function Requests({ closeId }: { closeId: string }) {
   const dates = useDates();
-  // The saved revisions, newest first, read with the page; the editor shows the newest (keyed by it), and the selection
-  // starts from it each time a new revision arrives.
-  const read = useQuery(workspaceQuery<Draft[]>(`/${closeId}/requests`));
-  const history = read.data ?? [];
-  const loaded = read.data !== undefined;
-  const latest = history[0];
-  const [selected, setSelected] = useState<string[]>(latest?.workpaper_ids ?? []);
-  // The selection starts again for each close and each new revision.
-  const revision = `${closeId}:${latest?.id ?? ""}`;
-  const [selectedFor, setSelectedFor] = useState(revision);
-  if (revision !== selectedFor) {
-    setSelectedFor(revision);
-    setSelected(latest?.workpaper_ids ?? []);
-  }
-  const editor = useRef<HTMLTextAreaElement>(null);
+  const proposed = useQuery(workspaceQuery<{ proposal: { id: string } | null }>(`/${closeId}/requests/proposed`));
+  // Earlier wording stays inspectable: every saved draft, approved, replaced or withdrawn, newest first.
+  const history = useQuery(workspaceQuery<Draft[]>(`/${closeId}/requests`));
+  const queries = useQueryClient();
+  const [kept, setKept] = useState<string[]>();
+  const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
-  const [actionMessage, setMessage] = useState("");
-  const message = actionMessage || (read.error ? read.error.message : "");
-  // Reloading puts the saved wording back in the editor, even when no newer revision came (the editor is keyed by one).
-  const load = async () => {
-    const answer = await read.refetch();
-    if (answer.error) throw answer.error;
-    if (editor.current) editor.current.value = answer.data?.[0]?.body ?? "";
-  };
-  async function save(generate: boolean, body?: string) {
+  const [error, setError] = useState("");
+  async function draft(questions: string[]) {
     setBusy(true);
-    setMessage("");
+    setError("");
     try {
-      await workspaceRequest(`/${closeId}/requests`, {
-        expected_id: latest?.id ?? "",
-        workpaper_ids: selected,
-        ...(generate
-          ? {}
-          : { body, context_digest: latest?.context_digest ?? "" }),
-      });
-      await load();
-      setMessage("Draft saved. Nothing was sent to a client.");
+      const out: { kept: string[] } = await workspaceRequest(`/${closeId}/requests/proposed`, { questions });
+      setKept(out.kept);
+      setQuestion("");
+      await queries.invalidateQueries({ queryKey: workspaceKey(`/${closeId}/requests/proposed`) });
+      void queries.invalidateQueries({ queryKey: workspaceKey(`/${closeId}/requests`) });
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Could not save request.");
+      setError(e instanceof Error ? e.message : "The request could not be drafted.");
     } finally {
       setBusy(false);
     }
   }
-  const changedSelection =
-    JSON.stringify([...selected].sort()) !==
-    JSON.stringify([...(latest?.workpaper_ids ?? [])].sort());
+  const none = proposed.data && !proposed.data.proposal;
   return (
     <section id="client-request">
-      <h2>Consolidated client request</h2>
+      <h2>Client request</h2>
       <p>
-        Draft one request for this client and month. Start from selected
-        workpapers, then check the facts, remove internal notes and edit the
-        wording. To approve a recipient and connect replies, load the saved
-        draft from its Work inbox item. This editor never sends messages.
+        The agent drafts one request for everything this month needs from the client: each question says what answering it unblocks, and what needs the firm's own judgment is
+        never asked. Reword it or add your own questions; nothing goes to the client until you approve.
       </p>
-      <ProposedRequest closeId={closeId} onApproved={() => void read.refetch()} />
-      {!loaded && !message && <p role="status">Loading saved request…</p>}
-      <fieldset disabled={busy || !loaded}>
-        <legend>Work needing information · choose up to 20</legend>
-        {papers.length === 0 && (
-          <p>
-            No saved workpapers yet. Generate an empty draft to write a specific
-            evidence request.
-          </p>
-        )}
-        {papers.map((p) => (
-          <label key={p.id} className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={selected.includes(p.id)}
-              onChange={(e) =>
-                setSelected(
-                  e.target.checked
-                    ? [...selected, p.id]
-                    : selected.filter((id) => id !== p.id),
-                )
-              }
-            />
-            <span>
-              {p.kind} · draft #{p.id} · {p.review_state.replaceAll("_", " ")}
-            </span>
-          </label>
-        ))}
-        {selected.some((id) => !papers.some((p) => p.id === id)) && (
-          <p>
-            The saved request references earlier workpapers outside the current
-            list. Reloading preserves those references.
-          </p>
-        )}
-        <button disabled={selected.length > 20} onClick={() => void save(true)}>
-          {latest
-            ? "Generate new draft from current context"
-            : "Generate request draft"}
-        </button>
-        {latest && (
-          <p>
-            Generating saves a new revision and replaces the editor text.
-            Previous wording remains in history.
-          </p>
-        )}
-      </fieldset>
-      {latest && (
+      {proposed.isError && <p role="alert">The drafted request could not be read. {proposed.error.message}</p>}
+      <ProposedRequest closeId={closeId} />
+      {none && (
         <>
-          <p>
-            Draft #{latest.id} · {dates.dateTime(latest.created_at)}{" "}
-            · {latest.created_by} · draft revision; delivery history is in Work
-          </p>
-          {latest.stale && (
-            <p role="alert">
-              Evidence or review changed since this draft. Inspect the new
-              context and generate a fresh draft before editing. Earlier wording
-              is preserved below.
-            </p>
+          {kept === undefined ? (
+            <button type="button" className="primary" disabled={busy} onClick={() => void draft([])}>
+              {busy ? "Drafting…" : "Draft the request now"}
+            </button>
+          ) : (
+            <p role="status">The client has nothing to answer for this month now.</p>
           )}
-          {changedSelection && (
-            <p>
-              Selection changed. Generate a new draft before saving edited
-              wording.
-            </p>
+          {kept && kept.length > 0 && (
+            <details>
+              <summary>Kept with the firm, not asked of the client · {kept.length}</summary>
+              <ul>
+                {kept.map((k) => (
+                  <li key={k}>{k}</li>
+                ))}
+              </ul>
+            </details>
           )}
           <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void save(
-                false,
-                String(new FormData(event.currentTarget).get("body") ?? ""),
-              );
+            onSubmit={(e: FormEvent<HTMLFormElement>) => {
+              e.preventDefault();
+              void draft([question]);
             }}
           >
             <label>
-              Client request wording
-              <textarea
-                rows={14}
-                maxLength={20000}
-                name="body"
-                key={latest.id}
-                ref={editor}
-                defaultValue={latest.body}
-                required
-                disabled={busy}
-              />
+              Ask the client something yourself
+              <textarea rows={2} maxLength={1000} value={question} onChange={(e) => setQuestion(e.target.value)} />
             </label>
-            <button
-              disabled={busy || latest.stale || changedSelection}
-              type="submit"
-            >
-              Save edited draft
-            </button>
+            <button disabled={busy || !question.trim()}>Draft a request with it</button>
           </form>
-          <details>
-            <summary>Saved request history · latest 20 revisions</summary>
-            {history.map((d) => (
-              <article key={d.id}>
-                <h3>
-                  Draft #{d.id} · {dates.dateTime(d.created_at)}
-                </h3>
-                <p>
-                  {d.created_by} · workpapers{" "}
-                  {d.workpaper_ids.join(", ") || "none selected"}
-                </p>
-                <pre>{d.body}</pre>
-              </article>
-            ))}
-          </details>
         </>
       )}
-      <button
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            await load();
-            setMessage("Loaded the latest saved draft.");
-          } catch (e) {
-            setMessage(e instanceof Error ? e.message : "Reload failed.");
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        Reload saved request (discard unsaved edits)
-      </button>
-      <p role="status">{message}</p>
+      {error && <p role="alert">{error}</p>}
+      {history.isError && <p role="alert">The saved request drafts could not be read. {history.error.message}</p>}
+      {(history.data?.length ?? 0) > 0 && (
+        <details>
+          <summary>Saved request drafts · latest {history.data!.length}</summary>
+          {history.data!.map((d) => (
+            <article key={d.id}>
+              <h3>
+                Draft #{d.id} · {dates.dateTime(d.created_at)} · {d.created_by}
+              </h3>
+              <pre className="pre-line">{d.body}</pre>
+            </article>
+          ))}
+        </details>
+      )}
     </section>
   );
 }

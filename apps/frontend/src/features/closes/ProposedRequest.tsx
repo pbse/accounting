@@ -21,6 +21,7 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
   const [wording, setWording] = useState<Record<number, string>>({});
   const [editing, setEditing] = useState(false);
   const [alone, setAlone] = useState(false);
+  const [added, setAdded] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -46,6 +47,21 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
   const send = !!sender && !alone;
   const questions = proposal.questions.map((q, i) => ({ document: q.document, question: wording[i] ?? q.question }));
   const kept = proposal.kept ?? [];
+  // A question of the person's own joins the draft (a new draft, the drafted questions first), as every entry point shows it.
+  async function add() {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/requests/proposed`, { questions: [added] });
+      setAdded("");
+      await queries.invalidateQueries({ queryKey: workspaceKey(`/${closeId}/requests/proposed`) });
+      void queries.invalidateQueries({ queryKey: workspaceKey(`/${closeId}/requests`) });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The question could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function approve(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!proposal) return;
@@ -72,17 +88,22 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
     setOpened(done);
     // Every surface showing the drafted request (goal card, chat, Requests tab) reads it again.
     void queries.invalidateQueries({ queryKey: workspaceKey(`/${closeId}/requests/proposed`) });
+    void queries.invalidateQueries({ queryKey: workspaceKey(`/${closeId}/requests`) });
     onApproved?.();
     setBusy(false);
   }
   return (
     <form aria-label="Drafted client request" onSubmit={(e) => void approve(e)}>
       <h3>Drafted client request · {proposal.entity} · {proposal.period}</h3>
-      <p>The agent drafted these questions from the month's documents, its ledger accounts and its drafts. Nothing goes to the client until you approve.</p>
+      <p>The agent drafted these questions from the month's documents, its ledger accounts and its drafts; questions added by the firm follow them. Nothing goes to the client until you approve.</p>
       <ol>
         {questions.map((q, i) => (
           <li key={i}>
-            <strong>{q.document}</strong>:{" "}
+            {q.document && (
+              <>
+                <strong>{q.document}</strong>:{" "}
+              </>
+            )}
             {editing ? (
               <textarea aria-label={`Question ${i + 1}, about ${q.document}`} value={q.question} maxLength={1000} rows={2} onChange={(e) => setWording({ ...wording, [i]: e.target.value })} />
             ) : (
@@ -102,7 +123,18 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
           </ul>
         </details>
       )}
-      {!editing && (
+      {editing ? (
+        <p>
+          <label>
+            Add a question of your own
+            {/* A text area, so Enter never submits the approval around it. */}
+            <textarea rows={2} value={added} maxLength={1000} onChange={(e) => setAdded(e.target.value)} />
+          </label>{" "}
+          <button type="button" disabled={busy || !added.trim()} onClick={() => void add()}>
+            Add to the request
+          </button>
+        </p>
+      ) : (
         <button type="button" onClick={() => setEditing(true)}>
           Edit wording
         </button>

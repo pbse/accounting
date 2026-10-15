@@ -40,11 +40,11 @@
    "ok": true
   },
   {
-   "tool": "request_candidates",
+   "tool": "proposed_request",
    "method": "GET",
-   "path": "/v1/closes/5/requests/candidates",
+   "path": "/v1/closes/5/requests/proposed",
    "body": null,
-   "output": "{\"body\":\"Draft request — Harbor Fixture LLC · 2026-09\\n\\nPlease help us complete this month's preparation:\\n\\n[Add the specific missing fact or document and why it is needed. No request was inferred from the selected work.]\\n\\nThank you. Please use the firm's agreed secure channel for sensitive documents.\",\"context_digest\":\"f681a6c8d6c4039dbe5fdf58e66dfd772ef268b65c26fdceef5c16e1743a3a77\",\"digest\":\"c8ee5e15a47320c9077e1841c7a09ade44d7f8137a3c2d5f3988d0e940a51dd2\",\"latest_id\":\"\",\"more\":0,\"workpapers\":[]}\n",
+   "output": "{\"proposal\":null}\n",
    "ok": true
   },
   {
