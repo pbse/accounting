@@ -560,20 +560,19 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		if err == nil {
 			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_attachments WHERE request_id::text=$1 AND state IN ('queued','scanning','failed'))`, requestID).Scan(&rescan)
 		}
-		// Work resumes on its own only once every question is answered; a partial reply waits for the firm. An answer that is
-		// an attached document also waits until none of the request's documents still waits for its scan or release: the
-		// last release resumes the work.
+		// Each document's work resumes once the client answered every question about it; the rest keeps waiting on the
+		// client. An answer that is an attached document waits until none of the request's documents still waits for its
+		// scan or release: its release resumes the work. A request whose questions do not name their documents resumes
+		// only once every question is answered.
 		var pendingFiles bool
 		if err == nil {
 			err = tx.QueryRowContext(r.Context(), `SELECT `+documentAnswersPending+``, requestID).Scan(&pendingFiles)
 		}
-		if err == nil && complete && !pendingFiles {
-			if jobID != "" {
-				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_evidence',error='' WHERE id=$1 AND state='waiting_client'`, jobID)
-			}
-			if err == nil {
-				err = preparation.ResumeRequestJobs(r.Context(), tx, requestID)
-			}
+		if err == nil && complete && !pendingFiles && jobID != "" {
+			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_evidence',error='' WHERE id=$1 AND state='waiting_client'`, jobID)
+		}
+		if err == nil {
+			err = preparation.ResumeAnsweredJobs(r.Context(), tx, requestID, complete, pendingFiles)
 		}
 		if err == nil {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO request_submissions(request_id,receipt,source_id,complete) VALUES($1,$2,$3,$4)`, requestID, receipt, source, complete)

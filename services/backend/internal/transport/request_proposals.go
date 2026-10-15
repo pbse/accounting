@@ -29,6 +29,9 @@ type proposedQuestion struct {
 	Document string `json:"document"`
 	Question string `json:"question"`
 	Unblocks string `json:"unblocks,omitempty"`
+	// Job is the document's work an answer resumes (preparation.ResumeAnsweredJobs); none for an account's records or a
+	// statement's page, which arrive as documents of their own.
+	Job string `json:"job,omitempty"`
 }
 
 // proposedAccount is a ledger account a drafted request asks the client's records for, at the coverage binding it was
@@ -101,7 +104,7 @@ func openQuestions(ctx context.Context, q reader, closeID string) ([]proposedJob
 		own := []proposedQuestion{}
 		for _, text := range asked {
 			if clientQuestion(text) && !slices.ContainsFunc(own, func(p proposedQuestion) bool { return strings.EqualFold(p.Question, strings.TrimSpace(text)) }) {
-				own = append(own, proposedQuestion{name, strings.TrimSpace(text), "preparing " + name})
+				own = append(own, proposedQuestion{name, strings.TrimSpace(text), "preparing " + name, job.ID})
 			}
 		}
 		if len(own) == 0 || len(questions)+len(own) > 50 {
@@ -184,7 +187,7 @@ func clientAsks(ctx context.Context, tx *sql.Tx, closeID string) (clientAsk, err
 				if statement == "" {
 					statement = account + " statement"
 				}
-				ask.Questions = append(ask.Questions, proposedQuestion{statement, fmt.Sprintf("Please send page %s of this statement; it is missing from what we have.", page), "the " + account + " reconciliation"})
+				ask.Questions = append(ask.Questions, proposedQuestion{statement, fmt.Sprintf("Please send page %s of this statement; it is missing from what we have.", page), "the " + account + " reconciliation", ""})
 				if !slices.Contains(ask.Papers, id) {
 					ask.Papers = append(ask.Papers, id)
 				}
@@ -257,11 +260,11 @@ func clientAsks(ctx context.Context, tx *sql.Tx, closeID string) (clientAsk, err
 		var q proposedQuestion
 		switch item.Kind {
 		case "reconciliation":
-			q = proposedQuestion{item.Name, fmt.Sprintf("Please upload the complete %s statement for %s, every page.", when, item.Name), "the " + item.Name + " reconciliation"}
+			q = proposedQuestion{item.Name, fmt.Sprintf("Please upload the complete %s statement for %s, every page.", when, item.Name), "the " + item.Name + " reconciliation", ""}
 		case "prepaid":
-			q = proposedQuestion{item.Name, fmt.Sprintf("Please send the invoices or agreements behind %s (amounts paid in advance, such as annual software or insurance), showing the period each covers.", item.Name), "the " + item.Name + " schedule"}
+			q = proposedQuestion{item.Name, fmt.Sprintf("Please send the invoices or agreements behind %s (amounts paid in advance, such as annual software or insurance), showing the period each covers.", item.Name), "the " + item.Name + " schedule", ""}
 		case "accrual":
-			q = proposedQuestion{item.Name, fmt.Sprintf("Please send any bills for services received by the end of %s that were not yet billed or paid, for %s.", when, item.Name), "the " + item.Name + " balance at month end"}
+			q = proposedQuestion{item.Name, fmt.Sprintf("Please send any bills for services received by the end of %s that were not yet billed or paid, for %s.", when, item.Name), "the " + item.Name + " balance at month end", ""}
 		default:
 			if len(ask.Kept) < 10 {
 				ask.Kept = append(ask.Kept, item.Name+": review its activity and balance, or exclude it from the close")
@@ -574,7 +577,7 @@ func registerRequestProposals(mux *http.ServeMux, db *sql.DB) {
 					problem(w, 422, "Each question needs its document and 1–1,000 characters of wording.")
 					return
 				}
-				q.Unblocks = p.Questions[i].Unblocks
+				q.Unblocks, q.Job = p.Questions[i].Unblocks, p.Questions[i].Job
 				in.Questions[i] = q
 			}
 			if !slices.Equal(in.Questions, p.Questions) {

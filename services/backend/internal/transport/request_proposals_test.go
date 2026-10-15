@@ -313,3 +313,102 @@ func TestTheGoalRoutesWhatWaitsOnInformation(t *testing.T) {
 		t.Fatal("what a live request asks is not asked again")
 	}
 }
+
+// A partial reply to a drafted request resumes the work it answers: answering one of two documents' questions resumes
+// that document's work, the other keeps waiting on the client, and the request takes the rest even once the first
+// document's work is done.
+func TestAPartialReplyResumesTheWorkItAnswers(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	var closeID string
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Partial client "+rand.Text()).Scan(&closeID))
+	defer func() {
+		for _, q := range []string{`DELETE FROM client_request_links WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1)`,
+			`DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`, `DELETE FROM request_drafts WHERE close_id=$1`,
+			`DELETE FROM preparation_jobs WHERE close_id=$1`, `UPDATE evidence SET superseded_by=NULL WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+			db.Exec(q, closeID)
+		}
+	}()
+	jobs := []string{}
+	for _, name := range []string{"insurance invoice.pdf", "software order.pdf"} {
+		var source, job string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,'Document','fixture') RETURNING id::text`, closeID, name, rand.Text()).Scan(&source))
+		must(db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','needs_confirmation','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&job))
+		_, err = db.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal) VALUES($1,$2,'{"kind":"prepaid","questions":["Which months does it cover?"]}')`, job, source)
+		must(err)
+		jobs = append(jobs, job)
+	}
+	tx, err := db.BeginTx(context.Background(), nil)
+	must(err)
+	_, err = draftGoalRequest(context.Background(), tx, goalRow{id: "2147480001", close: closeID, author: "user_a"})
+	must(err)
+	must(tx.Commit())
+	token := strings.Repeat("r", 32)
+	handler := apiWithStore(db, token)
+	call := func(method, path, bearer string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+bearer)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	var proposed struct{ Proposal struct{ ID string } }
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/requests/proposed", token, nil, 200), &proposed))
+	var opened struct {
+		ID        string `json:"id"`
+		LinkToken string `json:"link_token"`
+	}
+	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", token, map[string]any{"recipient": "owner@example.test", "confirmed": true}, 200), &opened))
+	state := func(job string) (s string) {
+		t.Helper()
+		must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&s))
+		return
+	}
+	reply := func(answers []clientAnswer) {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{"answers": answers})
+		call("POST", "/v1/client-request", opened.LinkToken, map[string]any{"body": string(raw), "confirmed": true}, 200)
+	}
+	reply([]clientAnswer{{1, "answered", "September 2026 to August 2027"}})
+	if state(jobs[0]) != "waiting_evidence" || state(jobs[1]) != "waiting_client" {
+		t.Fatalf("the answered document's work resumes and the other waits: %s %s", state(jobs[0]), state(jobs[1]))
+	}
+	// The first document's work finishes; the request still takes the second answer.
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed' WHERE id=$1`, jobs[0])
+	must(err)
+	var page struct{ Open bool }
+	must(json.Unmarshal(call("GET", "/v1/client-request", opened.LinkToken, nil, 200), &page))
+	if !page.Open {
+		t.Fatal("the request stays open for the question still to answer")
+	}
+	reply([]clientAnswer{{2, "answered", "October 2026 to September 2027"}})
+	if state(jobs[0]) != "completed" || state(jobs[1]) != "waiting_evidence" {
+		t.Fatalf("the second answer resumes only the second document's work: %s %s", state(jobs[0]), state(jobs[1]))
+	}
+	// With all its work finished, the request takes no more answers.
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed' WHERE id=$1`, jobs[1])
+	must(err)
+	must(json.Unmarshal(call("GET", "/v1/client-request", opened.LinkToken, nil, 200), &page))
+	if page.Open {
+		t.Fatal("a request whose work is all finished is closed")
+	}
+}
