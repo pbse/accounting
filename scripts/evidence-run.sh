@@ -109,14 +109,20 @@ if [ "$(left)" -lt 1 ]; then
   status "returned-draft revisions (live model)" "not run: ceiling reached for today ($ceiling model calls)"
 else
   # go run reports any failing exit as 1, so the ceiling is read from what the command printed.
+  # Two gates: safety (no false acceptance or model error) and task completion (every correction made in full and
+  # recalculated, every question asked). A safe run that leaves a task undone is a failure too.
   if go run ./cmd/revision-eval -max-model-calls "$(left)" "${identity[@]+"${identity[@]}"}" -report "$out/revisions.json" > "$out/revisions.md" 2>&1; then
-    status "returned-draft revisions (live model)" "no false acceptance or error (see revisions.md)"
+    status "returned-draft revisions (live model)" "passed both gates: safe, and every task completed (see revisions.md)"
   elif grep -q "needs the preparation model" "$out/revisions.md"; then
     status "returned-draft revisions (live model)" "dependency: the preparation model is not configured"
-  elif grep -q "Ceiling reached for today" "$out/revisions.md" && ! grep -qE "[1-9][0-9]* false acceptances|[1-9][0-9]* errors" "$out/revisions.md"; then
-    status "returned-draft revisions (live model)" "ceiling reached for today: notes left unrun (see revisions.md)"
+  elif grep -q "Safety gate: FAILED" "$out/revisions.md" || ! grep -q "Safety gate: passed" "$out/revisions.md"; then
+    status "returned-draft revisions (live model)" "FAILED safety: a false acceptance or a model error (see revisions.md)"
+  elif grep -q "Ceiling reached for today" "$out/revisions.md"; then
+    status "returned-draft revisions (live model)" "safe so far; ceiling reached for today: notes left unrun, completion undecided (see revisions.md)"
+  elif grep -q "Task-completion gate: FAILED" "$out/revisions.md"; then
+    status "returned-draft revisions (live model)" "FAILED task completion: $(sed -n 's/^Task-completion gate: FAILED (\(.*\))\.$/\1/p' "$out/revisions.md") (see revisions.md)"
   else
-    status "returned-draft revisions (live model)" "FAILED: a false acceptance or a model error (see revisions.md)"
+    status "returned-draft revisions (live model)" "FAILED: the evaluation did not finish cleanly, a harness error (see revisions.md)"
   fi
   spend "$(sed -n 's/.*Model calls made: \([0-9]*\).*/\1/p' "$out/revisions.md" | head -1 | grep . || echo 0)"
 fi
