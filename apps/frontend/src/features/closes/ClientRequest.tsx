@@ -231,7 +231,7 @@ export default function ClientRequest() {
               {request.status === "received" && (
                 <p role="status">
                   {request.open
-                    ? "Your reply is saved. You can answer more questions, send documents or correct an answer until this link expires. Work continues once every question is answered, or when the firm decides to go ahead."
+                    ? "Your reply is saved. You can answer more questions, send documents or correct an answer until this link expires. Work on each document continues as soon as its questions are answered; the rest waits for your answers, or for the firm to go ahead."
                     : "Your reply is saved, and this request takes no more answers. Contact the firm if something needs to change."}{" "}
                   Attachments stay quarantined until automated scanning and the firm's release.
                 </p>

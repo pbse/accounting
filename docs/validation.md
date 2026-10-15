@@ -5122,6 +5122,16 @@ A change where a question was due, a wrong value, or a value a case forbids coun
 
 The goal didn't ask for an account's records when the agent had matched a document to it, even after that document was replaced, because the old job stays on as the account's suggestion. Now only a matched document that is still current answers the account. `TestTheGoalRoutesWhatWaitsOnInformation` adds a document matched to the prepaid account and since replaced, and the prepaid's records are still asked for. Without the change the test fails.
 
+## 2026-10-14 — A partial reply resumes the work it answers (B05)
+
+A review found that a consolidated request kept every document's work waiting until the client had answered every question and every attached document was released: answering the insurance question left the insurance schedule waiting on the bank statement.
+
+- Each question of a drafted request now records the document's work it unblocks (`job` on the proposal's questions; none for an account's records or a statement page, which arrive as documents of their own).
+- `preparation.ResumeAnsweredJobs` runs on each link reply and each attachment release: it resumes a job once every question about it is answered, unless one of those answers is an attached document still waiting for its scan or release; the rest keeps waiting on the client. A complete reply with nothing pending resumes whatever still waits. A request whose questions do not name their work (a single-job request, a coverage request, a draft from before this change) resumes all at once when complete, as before.
+- `RequestOpen` no longer closes a request because one document's work finished from the client's own answers, so the client can still answer the rest.
+
+Test: `TestAPartialReplyResumesTheWorkItAnswers` drafts a request about two documents, answers the first (its work resumes, the other waits on the client), finishes the first document's work, then answers the second (only the second resumes); seen to fail without the change (both stayed waiting). The request, reply, attachment, coverage, goal, attention, Work and email tests passed on a local PostgreSQL (two failures there predate this change: the export test needs `pdftotext`, and the retention test fails on main against the same shared database).
+
 ## 2026-10-14 — One client request from every entry point (B05)
 
 A review found that chat and agents still drafted client requests the older way: chat's request card and `draft_client_request` worded a request from selected workpapers (`/requests/candidates`, `POST /requests`), which turned a returned draft's reviewer note and other internal blockers into client questions and missed the accounts and pages the goal's routing asks for. The Requests tab offered the same editor beside the goal's draft.

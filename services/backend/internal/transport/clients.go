@@ -56,9 +56,10 @@ const aboutAccounts = `(q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FRO
 // unfinishedRequest is SQL for a request q of draft d that the client has not finished answering. Before any reply it is
 // waiting as attention counts it: work still waiting on it rather than on a newer request, or, about accounts alone,
 // coverage exactly as approved. After a reply short of complete it is open as its link counts it (requestOpen): no work
-// it was approved for is finished or taken over by a newer request, and its coverage has moved only by its own progress.
+// it was approved for is finished (other than from its own answers) or taken over by a newer request, and its coverage
+// has moved only by its own progress.
 var unfinishedRequest = `CASE WHEN ` + requestReplied("q.id") + ` THEN NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id AND complete)
-  AND NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND ((j.state IN ('completed','cancelled') AND NOT ` + preparation.RequestReleased + `)
+  AND NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND ((j.state IN ('completed','cancelled') AND NOT ` + preparation.RequestReleased + ` AND NOT ` + preparation.FinishedFromAnswers + `)
    OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))
   AND ` + preparation.RequestCoverageFollowsReply + `
  ELSE EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client'

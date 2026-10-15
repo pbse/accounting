@@ -258,7 +258,7 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 			}
 			// Work the request was approved for must still be waiting; work from its released documents may have moved on.
 			var valid bool
-			err = tx.QueryRowContext(r.Context(), `SELECT NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN work_requests q ON q.id=rj.request_id JOIN preparation_jobs j ON j.id=rj.job_id JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE rj.request_id=$1 AND ((j.state IN ('queued','completed','cancelled') AND NOT `+preparation.RequestReleased+`) OR e.superseded_by IS NOT NULL OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>rj.request_id)))`, rid).Scan(&valid)
+			err = tx.QueryRowContext(r.Context(), `SELECT NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN work_requests q ON q.id=rj.request_id JOIN preparation_jobs j ON j.id=rj.job_id JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE rj.request_id=$1 AND ((j.state IN ('queued','completed','cancelled') AND NOT `+preparation.RequestReleased+` AND NOT `+preparation.FinishedFromAnswers+`) OR e.superseded_by IS NOT NULL OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>rj.request_id)))`, rid).Scan(&valid)
 			if err != nil || !valid {
 				problem(w, 409, "Affected work or ledger changed. Create a fresh reviewed request before releasing this attachment.")
 				return
@@ -299,15 +299,14 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 					_, err = wf.EmitForClose(r.Context(), tx, closeID, "client_request.replied:"+rid, map[string]string{"request_id": rid, "close_id": closeID, "source_id": sid}, actor)
 				}
 			}
-			// Work waiting on a partial reply stays with the firm until the client completes it or the firm resumes it; a
-			// complete reply resumes with its last document's release, not before.
-			var partial bool
+			// A released document lets the work its answers resume (the rest waits on the client); a complete reply resumes
+			// everything with its last document's release, not before.
+			var complete, pending bool
 			if err == nil {
-				err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT NOT complete FROM request_submissions WHERE request_id=$1 ORDER BY id DESC LIMIT 1),false)
- OR `+documentAnswersPending, rid).Scan(&partial)
+				err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT complete FROM request_submissions WHERE request_id=$1 ORDER BY id DESC LIMIT 1),true),`+documentAnswersPending, rid).Scan(&complete, &pending)
 			}
-			if err == nil && !partial {
-				err = preparation.ResumeRequestJobs(r.Context(), tx, rid)
+			if err == nil {
+				err = preparation.ResumeAnsweredJobs(r.Context(), tx, rid, complete, pending)
 			}
 		default:
 			problem(w, 422, "Unknown attachment decision.")

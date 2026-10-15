@@ -116,12 +116,59 @@ func RequestCoverageCurrent(ctx context.Context, tx *sql.Tx, closeID, requestID 
 	return requestCoverage(ctx, tx, closeID, requestID, RequestCoverageIsCurrent)
 }
 
+// proposalQuestions are the questions request draft d drafted (its proposal), numbered as the request numbers them:
+// the firm's own questions follow them.
+const proposalQuestions = `jsonb_array_elements(CASE WHEN jsonb_typeof(d.proposal->'questions')='array' THEN d.proposal->'questions' ELSE '[]'::jsonb END) WITH ORDINALITY x(question,position)`
+
+// jobQuestions is the questions of request rj.request_id about job j's document.
+const jobQuestions = `work_requests aq JOIN request_drafts d ON d.id=aq.draft_id CROSS JOIN LATERAL ` + proposalQuestions + ` WHERE aq.id=rj.request_id AND x.question->>'job'=j.id::text`
+
+// JobAnswered is SQL for whether request rj.request_id has questions about job j's document and the client answered
+// each; false for work no question names, and for a request drafted before its questions named their documents.
+const JobAnswered = `(EXISTS(SELECT 1 FROM ` + jobQuestions + `) AND NOT EXISTS(SELECT 1 FROM ` + jobQuestions + `
+ AND NOT EXISTS(SELECT 1 FROM work_request_answers a WHERE a.request_id=aq.id AND a.position=x.position AND a.state='answered')))`
+
+// jobAwaitsDocument is SQL for whether one of job j's answers on request rj.request_id is a document attached to a
+// reply that still waits for its scan or release. The answer names the reply's files, each after ": " or ", " and before
+// ", ", ". " or its end; a file whose whole name stands there counts as its document, so a doubt only makes it wait.
+const jobAwaitsDocument = `EXISTS(SELECT 1 FROM ` + jobQuestions + ` AND EXISTS(SELECT 1 FROM work_request_answers a JOIN client_attachments ca ON ca.request_id=a.request_id
+ WHERE a.request_id=aq.id AND a.position=x.position AND a.answer LIKE 'Document attached with this reply: %' AND ca.state IN ('queued','scanning','clean','failed')
+ AND (position(': '||ca.name||', ' IN a.answer||', ')>0 OR position(', '||ca.name||', ' IN a.answer||', ')>0 OR position(': '||ca.name||'. ' IN a.answer)>0 OR position(', '||ca.name||'. ' IN a.answer)>0)))`
+
+// FinishedFromAnswers is SQL for whether job j of request rj.request_id was completed from the client's own answers to
+// it while the request still waits on the client (its latest reply leaves questions open, an account's or a page's
+// among them) or on its other work: the request then takes the rest of the answers.
+const FinishedFromAnswers = `(j.state='completed' AND ` + JobAnswered + ` AND (NOT COALESCE((SELECT s.complete FROM request_submissions s WHERE s.request_id=rj.request_id ORDER BY s.id DESC LIMIT 1),false)
+ OR EXISTS(SELECT 1 FROM request_jobs other JOIN preparation_jobs oj ON oj.id=other.job_id WHERE other.request_id=rj.request_id AND oj.state NOT IN ('completed','cancelled'))))`
+
+// ResumeAnsweredJobs resumes a consolidated request's work as the client answers it: each document's work once every
+// question about it is answered and a document answering one is scanned and released, the rest staying with the
+// client; with the reply complete and none of the request's documents pending, everything still waiting. A request
+// whose questions do not name their documents resumes only then, all at once.
+func ResumeAnsweredJobs(ctx context.Context, tx *sql.Tx, requestID string, complete, pending bool) error {
+	var named bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM work_requests aq JOIN request_drafts d ON d.id=aq.draft_id CROSS JOIN LATERAL `+proposalQuestions+` WHERE aq.id::text=$1 AND x.question ? 'job')`, requestID).Scan(&named); err != nil {
+		return err
+	}
+	if !named {
+		if complete && !pending {
+			return ResumeRequestJobs(ctx, tx, requestID)
+		}
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `WITH resumed AS (UPDATE preparation_jobs j SET state='waiting_evidence',error='',finished_at=NULL FROM request_jobs rj
+ WHERE rj.request_id::text=$1 AND j.id=rj.job_id AND j.state='waiting_client' AND ($2 OR `+JobAnswered+` AND NOT `+jobAwaitsDocument+`) RETURNING j.id)
+ UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=0 WHERE job_id IN (SELECT id FROM resumed)`, requestID, complete && !pending)
+	return err
+}
+
 // RequestOpen reports whether a replied request still takes additions: no job it covers has a newer request, the work it
-// was approved for is unfinished, and a consolidated request's coverage has moved only by the request's own progress.
-// A request for accounts alone covers no job, so it stays open while its coverage does.
+// was approved for is unfinished (or finished from the client's own answers), and a consolidated request's coverage has
+// moved only by the request's own progress. A request for accounts alone covers no job, so it stays open while its
+// coverage does.
 func RequestOpen(ctx context.Context, tx *sql.Tx, closeID, requestID string) (bool, error) {
 	var open bool
-	err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN work_requests q ON q.id=rj.request_id JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=$1 AND ((j.state IN ('completed','cancelled') AND NOT `+RequestReleased+`) OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))`, requestID).Scan(&open)
+	err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN work_requests q ON q.id=rj.request_id JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=$1 AND ((j.state IN ('completed','cancelled') AND NOT `+RequestReleased+` AND NOT `+FinishedFromAnswers+`) OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))`, requestID).Scan(&open)
 	if err == nil && open {
 		open = RequestCoverageFollows(ctx, tx, closeID, requestID) == nil
 	}
