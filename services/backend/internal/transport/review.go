@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
@@ -225,7 +226,11 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 	path := "/v1/closes/{id}/workpapers/{paper}/reviews"
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
-		err := db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('state',w.review_state,'digest',w.digest,'review_id',w.review_id,'history',COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id DESC) FROM workpaper_reviews r WHERE r.workpaper_id=w.id),'[]'::jsonb)) FROM workpaper_review_state w WHERE w.id::text=$1 AND w.close_id::text=$2`, r.PathValue("paper"), r.PathValue("id")).Scan(&body)
+		// clarification is the question the close's goal asked about the latest return, while it waits for an answer.
+		err := db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('state',w.review_state,'digest',w.digest,'review_id',w.review_id,'history',COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id DESC) FROM workpaper_reviews r WHERE r.workpaper_id=w.id),'[]'::jsonb),
+ 'clarification',CASE WHEN w.review_state='changes_requested' THEN (SELECT ev->>'question' FROM close_goals cg CROSS JOIN jsonb_array_elements(cg.events) WITH ORDINALITY o(ev,n)
+  WHERE cg.close_id=w.close_id AND (ev->>'revision'=w.review_id::text OR ev->>'answers'=w.review_id::text) ORDER BY cg.id DESC,o.n DESC LIMIT 1) END)
+ FROM workpaper_review_state w WHERE w.id::text=$1 AND w.close_id::text=$2`, r.PathValue("paper"), r.PathValue("id")).Scan(&body)
 		if err == sql.ErrNoRows {
 			problem(w, 404, "Workpaper not found in this close.")
 			return
@@ -235,6 +240,56 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		jsonReply(w, 200, json.RawMessage(body))
+	})
+	// Answering the goal's question about a returned draft resumes that return: the goal revises it with the answer on its
+	// next look, without the draft being returned again.
+	mux.HandleFunc("POST /v1/closes/{id}/workpapers/{paper}/clarification", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := reviewActor(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ReviewID string `json:"review_id"`
+			Answer   string `json:"answer"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		in.Answer = strings.TrimSpace(in.Answer)
+		if in.Answer == "" || utf8.RuneCountInString(in.Answer) > 2000 {
+			problem(w, 422, "Answer in 1–2,000 characters.")
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "Review storage unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		var closeID string
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		// The question must still wait on this draft's latest return, and a goal must be working the close to take it up.
+		var goal string
+		err = tx.QueryRowContext(r.Context(), `SELECT g.id::text FROM workpaper_review_state w JOIN close_goals g ON g.close_id=w.close_id AND g.state<>'stopped'
+ WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.review_state='changes_requested' AND w.review_id::text=$3
+ AND COALESCE((SELECT ev ? 'clarify' FROM close_goals cg CROSS JOIN jsonb_array_elements(cg.events) WITH ORDINALITY o(ev,n)
+  WHERE cg.close_id=w.close_id AND (ev->>'revision'=$3 OR ev->>'answers'=$3) ORDER BY cg.id DESC,o.n DESC LIMIT 1),false) ORDER BY g.id DESC LIMIT 1`, r.PathValue("paper"), closeID, in.ReviewID).Scan(&goal)
+		if err == sql.ErrNoRows {
+			problem(w, 409, "This question was answered or the draft changed since. Refresh to see where it stands.")
+			return
+		}
+		if err == nil {
+			_, err = tx.ExecContext(r.Context(), `UPDATE close_goals SET events=events||jsonb_build_array(jsonb_build_object('actor',$2::text,'text',$3::text,'answers',$4::text,'answer',$5::text,'at',now())) WHERE id::text=$1`,
+				goal, actor, "Answered the question on draft #"+r.PathValue("paper")+": "+in.Answer, in.ReviewID, in.Answer)
+		}
+		if err != nil || tx.Commit() != nil {
+			problem(w, 503, "The answer could not be saved. Retry safely.")
+			return
+		}
+		jsonReply(w, 200, map[string]bool{"answered": true})
 	})
 	mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := reviewActor(w, r)
