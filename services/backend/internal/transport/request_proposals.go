@@ -14,13 +14,14 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
 )
 
-// A close's goal drafts one consolidated client request for the open questions its documents raise that the client can
-// answer; a person approves it (and, separately, its email) from the goal card, chat or the Requests tab. The draft is
-// a request_drafts row naming the jobs it covers and the recipient it proposes; approving it opens a consolidated request
-// with no ledger bindings, so it implies nothing about the month's ledger coverage.
+// A close drafts one consolidated client request for what its documents, accounts and drafts need from the client,
+// drafted by its goal or on demand from chat, an agent or the Requests tab; a person can reword it and add questions,
+// then approves it (and, separately, its email) wherever it is shown. The draft is a request_drafts row naming the jobs
+// it covers, the recipient it proposes and how it was routed (proposal); approving it opens a consolidated request.
 
 // proposedQuestion is one question of a drafted request: the document or ledger account it is about, what the client
 // is asked, and what an answer lets the agent continue (the firm's to see; the client is asked the question only).
@@ -37,21 +38,24 @@ type proposedAccount struct {
 	ID        string `json:"id"`
 }
 
-// clientAsk is what a goal's drafted request covers, routed from everything that waits on information: its documents'
-// questions, the accounts whose records are missing and the pages its drafts lack, all the client's to answer; and,
-// kept with the firm and never sent, what needs its own judgment. Withdrawn marks a draft overtaken before approval.
+// clientAsk is what a drafted request covers, routed from everything that waits on information: its documents'
+// questions, the accounts whose records are missing and the pages its drafts lack, all the client's to answer; the
+// questions the firm added itself (Own, asked after them); and, kept with the firm and never sent, what needs its own
+// judgment. Withdrawn marks a draft overtaken before approval.
 type clientAsk struct {
 	Jobs      []proposedJob      `json:"jobs"`
 	Questions []proposedQuestion `json:"questions"`
 	Snapshot  string             `json:"snapshot_id,omitempty"`
 	Accounts  []proposedAccount  `json:"accounts,omitempty"`
 	Papers    []string           `json:"papers,omitempty"`
+	Own       []proposedQuestion `json:"own,omitempty"`
 	Kept      []string           `json:"kept,omitempty"`
 	Withdrawn bool               `json:"withdrawn,omitempty"`
 }
 
-// asks is whether two drafts ask the client the same: the same documents at the same readings, questions, accounts at
-// the same capture and drafts. What stays with the firm does not change what the client is asked.
+// asks is whether two drafts ask the client the same from the close: the same documents at the same readings,
+// questions, accounts at the same capture and drafts. What stays with the firm does not change what the client is
+// asked; the firm's own questions are compared apart, since the close does not derive them.
 func (a clientAsk) asks(b clientAsk) bool {
 	return slices.Equal(a.Jobs, b.Jobs) && slices.Equal(a.Questions, b.Questions) && a.Snapshot == b.Snapshot && slices.Equal(a.Accounts, b.Accounts) && slices.Equal(a.Papers, b.Papers)
 }
@@ -113,7 +117,11 @@ func requestBody(entity, period string, questions []proposedQuestion) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Request for information — %s · %s\n\nPlease help us complete this month's books:\n", entity, period)
 	for n, q := range questions {
-		fmt.Fprintf(&b, "\n%d. %s: %s\n", n+1, q.Document, q.Question)
+		if q.Document == "" {
+			fmt.Fprintf(&b, "\n%d. %s\n", n+1, q.Question)
+		} else {
+			fmt.Fprintf(&b, "\n%d. %s: %s\n", n+1, q.Document, q.Question)
+		}
 	}
 	b.WriteString("\nReply through the private link; you can answer some questions now and the rest later.")
 	return b.String()
@@ -272,39 +280,52 @@ func clientAsks(ctx context.Context, tx *sql.Tx, closeID string) (clientAsk, err
 	return ask, nil
 }
 
-// draftGoalRequest drafts goal g's client request when its close has open client questions no live request covers and
-// the newest draft the goal made does not already cover the same documents at the same readings. It proposes the
-// client's most recently approved recipient. It reports whether it drafted one.
-func draftGoalRequest(ctx context.Context, tx *sql.Tx, g goalRow) (bool, error) {
-	ask, err := clientAsks(ctx, tx, g.close)
+// errRequestTooLong refuses questions a person adds that would take the request past the 20,000 bytes it is stored in.
+var errRequestTooLong = errors.New("request too long")
+
+// draftRequest drafts the close's client request, whoever asks: the close's goal as it works, or a person, chat or an
+// agent on demand, so every entry point drafts the same request. It asks what everything waiting on information needs
+// from the client (clientAsks) and then the questions people added (own, appended to those already on the draft). A
+// close holds one drafted request: unchanged for the client, it stands (what the firm keeps is brought up to date on
+// it); with nothing left to ask it is withdrawn; otherwise a new draft replaces it, proposing the client's most
+// recently approved recipient. It returns what the draft asks and whether it drafted one.
+func draftRequest(ctx context.Context, tx *sql.Tx, closeID, agent, by string, own []proposedQuestion) (clientAsk, bool, error) {
+	ask, err := clientAsks(ctx, tx, closeID)
 	if err != nil {
-		return false, err
+		return ask, false, err
 	}
-	agent := "close goal #" + g.id
-	// The goal's newest draft not yet approved: unchanged, it stands; with nothing left to ask, it is withdrawn.
 	var newestID string
 	var newest []byte
-	err = tx.QueryRowContext(ctx, `SELECT d.id::text,COALESCE(d.proposal,'{}') FROM request_drafts d WHERE d.close_id::text=$1 AND d.agent=$2 AND NOT EXISTS(SELECT 1 FROM work_requests q WHERE q.draft_id=d.id) ORDER BY d.id DESC LIMIT 1`, g.close, agent).Scan(&newestID, &newest)
+	err = tx.QueryRowContext(ctx, `SELECT d.id::text,COALESCE(d.proposal,'{}') FROM request_drafts d WHERE d.close_id::text=$1 AND d.job_ids IS NOT NULL AND NOT EXISTS(SELECT 1 FROM work_requests q WHERE q.draft_id=d.id) ORDER BY d.id DESC LIMIT 1`, closeID).Scan(&newestID, &newest)
 	if err == sql.ErrNoRows {
 		err = nil
 	} else if err != nil {
-		return false, err
+		return ask, false, err
 	}
 	var before clientAsk
 	json.Unmarshal(newest, &before)
-	if len(ask.Questions) == 0 {
+	// A question already on the draft is not added again, so a retried addition asks it once.
+	ask.Own = slices.Clip(before.Own)
+	for _, q := range own {
+		if !slices.ContainsFunc(ask.Own, func(o proposedQuestion) bool { return strings.EqualFold(o.Question, q.Question) }) {
+			ask.Own = append(ask.Own, q)
+		}
+	}
+	if len(ask.Questions)+len(ask.Own) == 0 {
 		if newestID != "" && !before.Withdrawn {
 			_, err = tx.ExecContext(ctx, `UPDATE request_drafts SET proposal=COALESCE(proposal,'{}')||'{"withdrawn":true}' WHERE id::text=$1`, newestID)
 		}
-		return false, err
+		return ask, false, err
 	}
-	// Unchanged for the client, the draft stands; what the firm keeps is brought up to date on it.
-	if newestID != "" && !before.Withdrawn && before.asks(ask) {
+	if len(ask.Questions)+len(ask.Own) > 50 {
+		return ask, false, errRequestTooLong
+	}
+	if newestID != "" && !before.Withdrawn && before.asks(ask) && slices.Equal(before.Own, ask.Own) {
 		if !slices.Equal(before.Kept, ask.Kept) {
 			kept, _ := json.Marshal(ask.Kept)
 			_, err = tx.ExecContext(ctx, `UPDATE request_drafts SET proposal=jsonb_set(proposal,'{kept}',$2::jsonb) WHERE id::text=$1`, newestID, string(kept))
 		}
-		return false, err
+		return ask, false, err
 	}
 	covered, _ := json.Marshal(ask.Jobs)
 	papers, _ := json.Marshal(ask.Papers)
@@ -314,35 +335,47 @@ func draftGoalRequest(ctx context.Context, tx *sql.Tx, g goalRow) (bool, error) 
 	routed, _ := json.Marshal(ask)
 	var entity, period, recipient string
 	if err = tx.QueryRowContext(ctx, `SELECT c.entity,c.period,COALESCE((SELECT q.recipient FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes o ON o.id=d.close_id
-  WHERE o.organization_id=c.organization_id AND client_identity(o.organization_id,o.entity)=client_identity(c.organization_id,c.entity) ORDER BY q.id DESC LIMIT 1),'') FROM client_closes c WHERE c.id::text=$1`, g.close).Scan(&entity, &period, &recipient); err != nil {
-		return false, err
+  WHERE o.organization_id=c.organization_id AND client_identity(o.organization_id,o.entity)=client_identity(c.organization_id,c.entity) ORDER BY q.id DESC LIMIT 1),'') FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&entity, &period, &recipient); err != nil {
+		return ask, false, err
 	}
-	digest, _, err := preparation.RequestContext(ctx, tx, g.close, nil)
+	body := requestBody(entity, period, append(slices.Clip(ask.Questions), ask.Own...))
+	if len(own) > 0 && len(body) > 20000 {
+		return ask, false, errRequestTooLong
+	}
+	digest, err := preparation.RequestContext(ctx, tx, closeID, nil)
 	if err != nil {
-		return false, err
+		return ask, false, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by,agent,job_ids,recipient,proposal) VALUES($1::bigint,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9)`,
-		g.close, requestBody(entity, period, ask.Questions), string(papers), digest, agent+" for "+g.author, agent, string(covered), recipient, string(routed))
-	if err == nil {
-		about := []string{}
-		if len(ask.Jobs) > 0 {
-			about = append(about, plural(len(ask.Jobs), "document", "documents"))
-		}
-		if len(ask.Accounts) > 0 {
-			about = append(about, plural(len(ask.Accounts), "account's records", "accounts' records"))
-		}
-		if len(ask.Papers) > 0 {
-			about = append(about, plural(len(ask.Papers), "statement's missing pages", "statements' missing pages"))
-		}
-		text := fmt.Sprintf("I drafted a client request with %s about %s. It goes nowhere until a person approves it.", plural(len(ask.Questions), "question", "questions"), strings.Join(about, ", "))
-		if len(ask.Kept) > 0 {
-			text += " " + plural(len(ask.Kept), "item needs", "items need") + " the firm's own judgment, so I did not ask the client."
-		}
-		err = goalEvent(ctx, tx, g.id, "agent", text)
+	_, err = tx.ExecContext(ctx, `INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by,agent,job_ids,recipient,proposal) VALUES($1::bigint,$2,$3,$4,$5,NULLIF($6,''),$7,NULLIF($8,''),$9)`,
+		closeID, body, string(papers), digest, by, agent, string(covered), recipient, string(routed))
+	return ask, err == nil, err
+}
+
+// draftGoalRequest drafts goal g's client request (draftRequest) and says so in the goal's history when it drafted one.
+func draftGoalRequest(ctx context.Context, tx *sql.Tx, g goalRow) (bool, error) {
+	agent := "close goal #" + g.id
+	ask, drafted, err := draftRequest(ctx, tx, g.close, agent, agent+" for "+g.author, nil)
+	if err != nil || !drafted {
+		return drafted, err
 	}
-	if err != nil {
+	about := []string{}
+	if len(ask.Jobs) > 0 {
+		about = append(about, plural(len(ask.Jobs), "document", "documents"))
 	}
-	return err == nil, err
+	if len(ask.Accounts) > 0 {
+		about = append(about, plural(len(ask.Accounts), "account's records", "accounts' records"))
+	}
+	if len(ask.Papers) > 0 {
+		about = append(about, plural(len(ask.Papers), "statement's missing pages", "statements' missing pages"))
+	}
+	if len(ask.Own) > 0 {
+		about = append(about, plural(len(ask.Own), "question the firm added", "questions the firm added"))
+	}
+	text := fmt.Sprintf("I drafted a client request with %s about %s. It goes nowhere until a person approves it.", plural(len(ask.Questions)+len(ask.Own), "question", "questions"), strings.Join(about, ", "))
+	if len(ask.Kept) > 0 {
+		text += " " + plural(len(ask.Kept), "item needs", "items need") + " the firm's own judgment, so I did not ask the client."
+	}
+	return true, goalEvent(ctx, tx, g.id, "agent", text)
 }
 
 // requestProposal is a close's newest drafted client request that is still current: not approved, and each document it
@@ -395,7 +428,7 @@ func currentProposal(ctx context.Context, q reader, closeID string, exact *sql.T
 			return nil, nil
 		}
 	}
-	p.Questions, p.Kept = p.ask.Questions, p.ask.Kept
+	p.Questions, p.Kept = append(slices.Clip(p.ask.Questions), p.ask.Own...), p.ask.Kept
 	if p.Kept == nil {
 		p.Kept = []string{}
 	}
@@ -435,6 +468,58 @@ func registerRequestProposals(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		jsonReply(w, 200, map[string]any{"proposal": p})
+	})
+	// Drafting now, for a person, chat or an agent, drafts what the goal would (draftRequest), with any questions the
+	// person adds to it. It answers the current draft, or none, with what stays with the firm. Nothing is sent.
+	mux.HandleFunc("POST /v1/closes/{id}/requests/proposed", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Questions []string `json:"questions"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		own := []proposedQuestion{}
+		for _, q := range in.Questions {
+			q = strings.Join(strings.Fields(q), " ")
+			if q == "" || utf8.RuneCountInString(q) > 1000 {
+				problem(w, 422, "Each question needs 1–1,000 characters.")
+				return
+			}
+			own = append(own, proposedQuestion{Question: q})
+		}
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "Request storage unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		var closeID string
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		by := subject(r)
+		if by == "" || by == "local-development" {
+			by = "local-workspace (development)"
+		}
+		ask, _, err := draftRequest(r.Context(), tx, closeID, auth.Agent(r.Context()), by, own)
+		if errors.Is(err, errRequestTooLong) {
+			problem(w, 422, "The request would be too long to send; shorten or remove some questions.")
+			return
+		}
+		var p *requestProposal
+		if err == nil {
+			p, err = currentProposal(r.Context(), tx, closeID, nil)
+		}
+		if err != nil || tx.Commit() != nil {
+			problem(w, 503, "The request could not be drafted. Retry safely.")
+			return
+		}
+		kept := ask.Kept
+		if kept == nil {
+			kept = []string{}
+		}
+		jsonReply(w, 200, map[string]any{"proposal": p, "kept": kept})
 	})
 	// Approving the drafted request opens it as a consolidated request with a private link; sending its email is a
 	// separate approval of the sender and recipient.

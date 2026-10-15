@@ -14,7 +14,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func TestAssistantRequestCardSavesTheWordingItShowed(t *testing.T) {
+// The chat's request card drafts the close's client request through the same route as the Requests tab, so it is the
+// request the goal would draft: a document's client question is asked, and a reviewer's note stays with the firm.
+func TestAssistantRequestCardDraftsTheClosesRequest(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL not configured")
@@ -31,7 +33,7 @@ func TestAssistantRequestCardSavesTheWordingItShowed(t *testing.T) {
 		}
 	}
 	org := "org_RequestCard" + rand.Text()
-	var alpha, empty, unsourced, clean, older, revision string
+	var alpha, empty string
 	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Request card fixture')`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`, org)
@@ -41,23 +43,19 @@ func TestAssistantRequestCardSavesTheWordingItShowed(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Quiet','2026-09') RETURNING id::text`, org).Scan(&empty))
 	defer func() {
-		for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1`, `DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1`, `DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT w.id FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1)`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
-	paper := func(close, digest, body string) string {
-		t.Helper()
-		var id string
-		must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text`, close, digest, body).Scan(&id))
-		return id
-	}
-	var evidence string
-	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'invoice.txt','rc-source','Invoice','fixture') RETURNING id::text`, alpha).Scan(&evidence))
-	sourced := `"sources":[{"id":"` + evidence + `","role":"invoice","digest":"rc-source"}]`
-	unsourced = paper(alpha, "rc-1", `{"input":{"source_reference":"Insurance invoice"},"sources":[],"blockers":[]}`)
-	clean = paper(alpha, "rc-2", `{"input":{"source_reference":"Rent"},`+sourced+`,"blockers":[]}`)
-	older = paper(alpha, "rc-3", `{"input":{"source_reference":"Loan"},"sources":[],"blockers":[]}`)
-	revision = paper(alpha, "rc-4", `{"revises":"`+older+`","input":{"source_reference":"Loan"},`+sourced+`,"blockers":["Confirm the interest rate."]}`)
+	// A document whose reading asks the client something, and a draft a reviewer returned with an internal note.
+	var source, job, paper string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'insurance invoice.pdf',$2,'Invoice','fixture') RETURNING id::text`, alpha, rand.Text()).Scan(&source))
+	must(db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','needs_confirmation','fixture') RETURNING id::text`, alpha, rand.Text()).Scan(&job))
+	_, err = db.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal) VALUES($1,$2,'{"kind":"prepaid","questions":["Please send the signed policy schedule showing the coverage dates."]}')`, job, source)
+	must(err)
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','rc-returned','{"input":{"source_reference":"Rent"},"sources":[],"blockers":[]}') RETURNING id::text`, alpha).Scan(&paper))
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'rc-returned','changes_requested','Our partner thinks the rent was double-booked','fixture')`, paper)
+	must(err)
 	store := savedCloses(db, strings.Repeat("a", 32))
 	call := func(method, path string, body any, want int) []byte {
 		t.Helper()
@@ -85,14 +83,17 @@ func TestAssistantRequestCardSavesTheWordingItShowed(t *testing.T) {
 		must(json.Unmarshal(call("POST", "/v1/closes/"+close+"/chat", map[string]string{"text": text}, 200), &out))
 		return out.Messages[len(out.Messages)-1]
 	}
-	type candidates struct {
-		Workpapers []struct{ ID string } `json:"workpapers"`
-		Body       string                `json:"body"`
-		Digest     string                `json:"digest"`
-	}
-	read := func(close string) (c candidates) {
+	confirm := func(close, id string) (outcome struct {
+		DraftID   string   `json:"draft_id"`
+		Questions int      `json:"questions"`
+		Kept      []string `json:"kept"`
+	}) {
 		t.Helper()
-		must(json.Unmarshal(call("GET", "/v1/closes/"+close+"/requests/candidates", nil, 200), &c))
+		var confirmed struct {
+			Messages []card `json:"messages"`
+		}
+		must(json.Unmarshal(call("POST", "/v1/closes/"+close+"/chat/"+id+"/confirm", map[string]string{}, 200), &confirmed))
+		must(json.Unmarshal(confirmed.Messages[len(confirmed.Messages)-1].Outcome, &outcome))
 		return
 	}
 
@@ -103,38 +104,28 @@ func TestAssistantRequestCardSavesTheWordingItShowed(t *testing.T) {
 	if first.Action != "request" || len(first.Citations) != 1 || first.Citations[0].Href != "/dashboard/closes/"+alpha+"?tab=requests" {
 		t.Fatalf("a request phrase answers with a card linked to Requests: %+v", first)
 	}
-	shown := read(alpha)
-	if len(shown.Workpapers) != 2 || shown.Workpapers[0].ID != unsourced || shown.Workpapers[1].ID != revision || !strings.Contains(shown.Body, "Please provide the source documents for Insurance invoice") || !strings.Contains(shown.Body, "Confirm the interest rate.") || strings.Contains(shown.Body, "Rent") {
-		t.Fatalf("the card lists only current drafts a request would ask about, and the wording it would save: %+v", shown)
+	outcome := confirm(alpha, first.ID)
+	var proposed struct {
+		Proposal *struct {
+			ID        string
+			Questions []proposedQuestion
+		}
 	}
-	_ = clean
-	call("POST", "/v1/closes/"+alpha+"/chat/"+first.ID+"/confirm", map[string]string{"digest": "stale"}, 409)
-	var confirmed struct {
-		Messages []card `json:"messages"`
+	must(json.Unmarshal(call("GET", "/v1/closes/"+alpha+"/requests/proposed", nil, 200), &proposed))
+	if p := proposed.Proposal; p == nil || outcome.DraftID != p.ID || outcome.Questions != 1 || len(p.Questions) != 1 || !strings.Contains(p.Questions[0].Question, "signed policy schedule") {
+		t.Fatalf("confirming drafts the close's request, the one Requests shows: %+v %+v", outcome, proposed.Proposal)
 	}
-	must(json.Unmarshal(call("POST", "/v1/closes/"+alpha+"/chat/"+first.ID+"/confirm", map[string]string{"digest": shown.Digest}, 200), &confirmed))
-	var outcome struct {
-		DraftID string `json:"draft_id"`
-		Created bool   `json:"created"`
+	var body string
+	must(db.QueryRow(`SELECT body FROM request_drafts WHERE id::text=$1`, outcome.DraftID).Scan(&body))
+	if strings.Contains(body, "double-booked") || strings.Contains(body, "Rent") {
+		t.Fatalf("a reviewer's note stays with the firm: %q", body)
 	}
-	json.Unmarshal(confirmed.Messages[len(confirmed.Messages)-1].Outcome, &outcome)
-	var saved, body string
-	must(db.QueryRow(`SELECT id::text,body FROM request_drafts WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, alpha).Scan(&saved, &body))
-	if outcome.DraftID != saved || !outcome.Created || body != strings.TrimSpace(shown.Body) {
-		t.Fatalf("confirming saves the wording the card showed and records the draft: %+v %s", outcome, saved)
+	call("POST", "/v1/closes/"+alpha+"/chat/"+first.ID+"/confirm", map[string]string{}, 409)
+	// Asked again, the card finds the same draft.
+	if again := confirm(alpha, ask(alpha, "draft the request").ID); again.DraftID != outcome.DraftID {
+		t.Fatalf("the same request again is the same draft: %+v %+v", again, outcome)
 	}
-	call("POST", "/v1/closes/"+alpha+"/chat/"+first.ID+"/confirm", map[string]string{"digest": shown.Digest}, 409)
-	second := ask(alpha, "draft the request")
-	must(json.Unmarshal(call("POST", "/v1/closes/"+alpha+"/chat/"+second.ID+"/confirm", map[string]string{"digest": read(alpha).Digest}, 200), &confirmed))
-	json.Unmarshal(confirmed.Messages[len(confirmed.Messages)-1].Outcome, &outcome)
-	var drafts int
-	must(db.QueryRow(`SELECT count(*) FROM request_drafts WHERE close_id::text=$1`, alpha).Scan(&drafts))
-	if outcome.DraftID != saved || outcome.Created || drafts != 1 {
-		t.Fatalf("the same wording again finds the saved draft and says so: %+v %d", outcome, drafts)
+	if quiet := confirm(empty, ask(empty, "Draft a client request").ID); quiet.DraftID != "" || quiet.Questions != 0 || quiet.Kept == nil {
+		t.Fatalf("a close with nothing for the client drafts nothing and says so: %+v", quiet)
 	}
-	quiet := ask(empty, "Draft a client request")
-	if c := read(empty); len(c.Workpapers) != 0 {
-		t.Fatalf("a close with no draft to ask about lists none: %+v", c)
-	}
-	call("POST", "/v1/closes/"+empty+"/chat/"+quiet.ID+"/confirm", map[string]string{"digest": read(empty).Digest}, 409)
 }

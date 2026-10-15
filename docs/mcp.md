@@ -60,7 +60,7 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 | `cash_plan` | The next 13 weeks of book cash from the latest capture, open items and approved schedules, with each week's lowest end-of-day balance ([cash plan](cash-plan.md)) |
 | `budget_comparison` | The close month's and year-to-date actuals against the approved budget, with every budget version ([management reports](management-reports.md#budget-against-actual)) |
 | `tie_out` | Each asset and liability compared with the balance the close's workpapers support |
-| `list_client_requests`, `draft_client_request` | Client request drafts; save a new draft (not sent or approved) |
+| `list_client_requests`, `draft_client_request` | Saved request drafts; draft the close's client request as its goal does, optionally with the firm's own questions (not sent or approved) |
 | `open_close` | Open or return the close for a client and month |
 | `add_evidence` | Upload a text or CSV document, which starts intake |
 | `preview_close_preparation`, `prepare_close` | Coordinate preparation of a close's evidence |

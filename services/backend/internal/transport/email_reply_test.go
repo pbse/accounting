@@ -65,7 +65,7 @@ func TestInboundReplyHeldUntilSenderAndReviewerMatch(t *testing.T) {
 	if _, err = tx.Exec(`UPDATE preparation_intakes SET revision=1 WHERE job_id=$1`, job); err != nil {
 		t.Fatal(err)
 	}
-	digest, _, err := preparation.RequestContext(context.Background(), tx, closeID, nil)
+	digest, err := preparation.RequestContext(context.Background(), tx, closeID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

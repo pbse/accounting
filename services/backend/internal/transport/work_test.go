@@ -130,11 +130,16 @@ func TestWorkInboxCoordinator(t *testing.T) {
 	call("POST", "/v1/closes/0/work/"+job+"/confirm", map[string]any{"revision": revision}, 404)
 	call("POST", path+"/confirm", map[string]any{"revision": revision, "facts_confirmed": false}, 409)
 	request := map[string]any{"revision": revision, "recipient": "client@example.test", "body": "Please confirm the invoice amount; the booking record differs."}
-	call("POST", base+"/requests", map[string]any{"workpaper_ids": []string{}}, 200)
-	var drafts []requestDraft
-	json.Unmarshal(call("GET", base+"/requests", nil, 200), &drafts)
-	var savedDraft map[string]string
-	json.Unmarshal(call("POST", base+"/requests", map[string]any{"expected_id": drafts[0].ID, "workpaper_ids": []string{}, "context_digest": drafts[0].ContextDigest, "body": request["body"]}, 200), &savedDraft)
+	// A saved request draft of the close's current context, whose wording the request uses.
+	tx, _ := db.Begin()
+	draftDigest, e := preparation.RequestContext(context.Background(), tx, closeID, nil)
+	tx.Rollback()
+	savedDraft := map[string]string{}
+	var savedID string
+	if e != nil || db.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,$2,'[]',$3,'fixture') RETURNING id::text`, closeID, request["body"], draftDigest).Scan(&savedID) != nil {
+		t.Fatal("request draft fixture", e)
+	}
+	savedDraft["id"] = savedID
 	request["draft_id"] = "0"
 	call("POST", path+"/request", request, 422)
 	request["draft_id"] = savedDraft["id"]

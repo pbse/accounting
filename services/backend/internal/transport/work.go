@@ -570,13 +570,13 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 					problem(w, 422, "Request draft not found in this close.")
 					return
 				}
-				fresh, _, e := preparation.RequestContext(r.Context(), tx, closeID, ids)
+				fresh, e := preparation.RequestContext(r.Context(), tx, closeID, ids)
 				if e != nil || fresh != digest || body != strings.TrimSpace(savedBody) {
 					problem(w, 409, "The draft or its evidence context changed. Regenerate and review before approval.")
 					return
 				}
 			} else {
-				digest, _, e := preparation.RequestContext(r.Context(), tx, closeID, nil)
+				digest, e := preparation.RequestContext(r.Context(), tx, closeID, nil)
 				if e != nil {
 					problem(w, 503, "Could not inspect request context.")
 					return

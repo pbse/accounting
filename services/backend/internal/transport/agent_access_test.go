@@ -222,7 +222,7 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 	must(db.QueryRow(`SELECT digest FROM evidence WHERE id::text=$1`, uploaded["id"]).Scan(&digest))
 	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text`, mineID, "agent-paper", `{"sources":[{"id":"`+uploaded["id"].(string)+`","digest":"`+digest+`","role":"invoice"}],"blockers":[]}`).Scan(&paper))
 	tool(session, "request_approval", map[string]any{"close_id": mineID, "workpaper_id": paper, "note": "Check the bank row"})
-	tool(session, "draft_client_request", map[string]any{"close_id": mineID, "expected_id": "", "workpaper_ids": []string{paper}})
+	tool(session, "draft_client_request", map[string]any{"close_id": mineID, "questions": []string{"Please send the signed lease."}})
 	if got := shown("list_client_requests", map[string]any{"close_id": mineID}); !strings.Contains(got, `"agent":"MCP client client_abc"`) {
 		t.Fatalf("a request draft names the MCP client: %s", got)
 	}
