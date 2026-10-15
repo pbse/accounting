@@ -1,6 +1,6 @@
 # Agent-first product fixes and accuracy handoff
 
-Date: **2026-10-10**. Status: **implementation instructions; fixes are not claimed delivered**.
+Original handoff: **2026-10-10**. Demo execution priorities: **2026-10-14**, reconciled with implementation on **2026-10-15**, below. Delivery and validation remain separately recorded in the backlog and validation history.
 
 ## Start here
 
@@ -15,6 +15,102 @@ Read in order:
 5. [Delivery backlog](implementation-backlog.md) and [validation history](validation.md) for current implementation and evidence.
 
 **Authority:** the build plan owns B01–B12, phases A–E and launch gates. This document translates the October 10 review and founder decisions into implementation work; it does not replace the plan or create a competing launch backlog. Keep all B01–B12 requirements, including reports, budget comparison and cash decisions. Track delivery in the existing backlog using those package IDs. Optional extensions below require an explicit scope decision before becoming launch requirements.
+
+## Demo readiness execution update
+
+**October 14, 2026; source baseline `05807121` / PR #499.** These priorities refine the existing slices against that implementation. The product gaps below are established by source inspection, not a new browser reproduction. Recheck them on the implementation branch; older instructions do not mean their fixes are still missing.
+
+**October 15 delivery reconciliation, `51eb2c48`:** PRs #500–#504 implement the five planned core changes: one request flow (#500), partial-reply continuation (#501), correction clarification/relevant evidence (#502), separate evaluation gates (#503), and request attention/refresh/error states (#504). Their local checks are recorded in [validation history](validation.md). The behavior requirements below remain acceptance criteria, not instructions to rebuild those fixes. Live-model and connected acceptance are still outstanding. Decision visibility also remains short of the five-second target: proposal polling is 15 seconds, and the recorded local Home check observed the decision within 10 seconds.
+
+**Outcome:** after one scoped mandate, the agent progresses supported accounting work; the person supplies judgment and consequential approval. An answer, released document or approval continues its permitted dependencies without another instruction. Home, chat and the close show the same current decision. A backend change is unfinished until its visible continuation and recovery work.
+
+Preserve the current shell and the governing B01–B12 scope, including reports, budgets and cash decisions. This is an execution specification, not authorization for live sends, posting or partner access. New vertical connectors, messaging channels, ledgers, dashboards and orchestration infrastructure are outside this demo effort.
+
+### Current status
+
+| Classification | Current position | Next action |
+| --- | --- | --- |
+| Built foundations | Goals, preparation queues, methods, source-linked review, consolidated proposals, private replies, quarantine, recurring work, reports/budgets, publication, executive briefing and cash-buffer versioning exist. | Reuse and connect their existing records, handlers and UI. |
+| Product changes delivered | PRs #500/#501/#502/#504 address the four gaps identified at `05807121`; scoped local checks are recorded. The five-second visibility target is not yet established by the 15-second polling and within-10-second Home observation. | Reuse delivered code, resolve the visibility timing gap and execute the connected acceptance below. Fix other deficiencies only when reproduced. |
+| Validation tooling delivered | PR #503 makes incomplete correction outcomes fail task completion separately from safety and updates the evidence summary. | Run both gates against the configured live model; a local scoring test is not a model result. |
+| Missing validation | Actual-model/provider behavior, connected browser execution, independently checked demo outcomes, unfamiliar reviewers and recovery need candidate-revision evidence. | Run the existing tools and journeys; dependencies and unrun cases stay unverified. |
+
+### P0 product lane
+
+The four acceptance contracts below block the proposed agent-first demo until satisfied; their core implementations are delivered as recorded above. Request unification precedes dependency resumption because approved questions must retain their work associations. Decision visibility completes each continuation; it is not later cosmetic polish.
+
+1. **One request through every entry point — B02/B05/B06; core delivered in #500.** [Chat](../services/backend/internal/transport/chat.go), goal cards and Requests use existing [request proposals](../services/backend/internal/transport/request_proposals.go). At the review baseline, older question generation included blockers and reviewer notes in proposed client wording; #500 removes that automatic path. Approval was required: the finding was a disclosure risk in a proposal, not an observed automatic send. Preserve editing, recipient/sender approval and freshness checks.
+
+   **Done:** every entry point opens the same current proposal; firm-only judgment stays internal; repeated actions cannot create competing requests/sends; a stale card requires review of the changed effect.
+
+2. **Partial answers resume their own work — B04/B05/B11; core delivered in #501.** [Client replies](../services/backend/internal/transport/client_requests.go) and [attachment release](../services/backend/internal/transport/attachments.go) use shared [request resumption](../services/backend/internal/preparation/requests.go). Preserve approved question identities and their work associations when wording changes. Resume only when a dependency has all required answers and usable evidence, with applicable identity, scanning, release, permission and freshness checks. Older requests without question-to-job associations retain complete-request resumption; do not claim granular continuation for those records.
+
+   **Done:** an insurance answer resumes insurance while the bank question remains open; a job needing two answers waits for both. Quarantine still blocks dependent use; duplicate replies/releases do not duplicate preparation. The person sees what resumed and what remains, without copying answers or pressing Resume.
+
+3. **Clarification continues the original correction — B04/B06; core delivered in #502.** [Revisions](../services/backend/internal/transport/revisions.go) retain a pending clarification against its return and current draft/source versions; an answer or newly usable evidence resumes it. Keep deterministic recalculation, fresh review and the bounded shortlist, now selected by newly available evidence and relevance rather than recency alone. Ask for a specific document choice if relevance is unresolved. Keep the supported prepaid/accrual correction boundary explicit.
+
+   **Done:** return a prepaid with an ambiguous service date, then answer or supply its contract: the same correction produces a revised draft without a second Return. An older relevant contract behind more than eight newer documents remains discoverable. Show before/after values, calculation, source and uncertainty. A one-off correction does not activate future policy; revoked access or a superseded draft prevents stale execution.
+
+4. **Decisions appear where the person is — B02/B05/B06; core delivered in #504, timing acceptance open.** Unapproved proposals join existing [attention](../services/backend/internal/transport/attention.go); [Requests](../apps/frontend/src/features/closes/RequestsTab.tsx) and [ProposedRequest](../apps/frontend/src/features/closes/ProposedRequest.tsx) refresh them and show errors. Resolve the remaining five-second visibility target through existing refresh mechanisms; no new push service is required. Check Retry and edit/scope preservation on recoverable failures in the browser.
+
+   **Done:** an already-open Home shows a background-prepared request without refresh, opens the exact proposal and clears its decision after approval. Other views agree and old cards show completed/superseded status. Completion receipts do not inflate approval counts; a read failure does not become zero work. Measure confirmed state changes against the governing five-second online visibility target, separately from model execution time.
+
+### P0 evidence lane
+
+**The scoring fix is delivered in #503; live execution is pending.** Use the existing [revision evaluator](../services/backend/cmd/revision-eval/main.go) and [evidence runner](../scripts/evidence-run.sh); keep expected outcomes fixed before execution. Expected corrections must produce the complete correct change and calculate successfully. Required clarification cases must remain safely unresolved. Unnecessary questions, incomplete changes, calculation refusals, errors and unrun required cases cannot produce an acceptance pass. Report safety and completion separately.
+
+The direct evaluator does not prove the application lifecycle: also exercise return → clarification → answer/evidence → worker → revision → review. For every demonstrated work type, check whether the corpus scores the resulting draft/entries or just extracted facts. Fill only the demonstrated coverage gaps in the existing harness, and independently check their expected accounting results. Evaluation output supports diligence; a passing small fixture is neither a universal safety percentage nor a demonstrated moat.
+
+### P1 connected outcome and execution
+
+**Owners:** engineering prepares fixtures, fixes and execution records; the founder arranges access and an independent accountant; the accountant confirms expected treatments and demonstrated results. Fixture/access preparation proceeds alongside P0. Size the work and confirm dependencies before promising dates.
+
+**Current execution order:** retain the five delivered changes, resolve the remaining visibility timing target and prepare access/fixtures. Run the configured live-model gates and connected browser checks, then accountant review and both rehearsals; complete all P0 acceptance before the confident demo. Fix any reproduced continuation failure at its shared boundary. No backend-only merge or green evaluator substitutes for the journey checks.
+
+Reuse the [seed](seed-data.md). It uses recorded model answers and deliberately leaves the prepaid method unapproved: establish the procedure once through the existing reviewed-method flow. Prepare one synthetic company with an active month, a completed reviewed period and a next-period continuation. Include two independent questions, an ambiguous correction, an older contract, a late amendment and a cash scenario.
+
+Before locking the fixture, inventory the period's expected accounts and work with the accountant. Verify that takeover proposes available scope/mappings/methods and asks only for unresolved choices once. Include the supported bank/card, payroll and schedule work relevant to that company; label manual and unsupported paths. If ordinary supported work still needs repetitive fact entry or manual coordination, record a B01/B04 product gap and resolve it before claiming the person mostly approves. Do not obtain a clean demo by omitting an obligation or preparing the work invisibly outside the product.
+
+Execute the baseline through the actual configured model and ordinary product routes before the pitch. Retain revision, model/settings, source versions, results, timings and assistance receipts. Reset with existing setup paths; preserve valid lineage and rerun affected work when versions change. Do not build a snapshot subsystem or relabel recorded answers as live output.
+
+Verify the connected business result: statements and budget comparisons agree with the published export; the executive sees only permitted client information; cash states its dates, assumptions, readiness and agreed buffer. Proposed or unverified ledger adjustments cannot appear as posted actuals. Traceability follows the actual calculation/report/ledger path; do not promise an underlying invoice for every report figure when that evidence is absent.
+
+Use normal authenticated reviewer/executive accounts, the executive limited to one synthetic client. Check UI, direct URL, API and chat access. Development and automated checks use local PostgreSQL; never create a Neon branch. Capture delivery locally unless a controlled live recipient is separately approved. Verify each actual provider operation shown; synthetic QBO-shaped books do not prove QBO connectivity or posting.
+
+### Experience measures and acceptance
+
+Fix the workload and expected work before running it. Record these measures in existing validation/evaluation outputs; no new analytics platform is required.
+
+| Measure | Acceptance for the defined demo workload |
+| --- | --- |
+| Correctness and authority | Zero observed critical wrong amounts/treatments, missed material obligations, false-ready states, cross-client disclosures or unauthorized/duplicate effects; report attempted cases and failures. |
+| Useful completion and coverage | Report correct completions against all expected completable cases, plus eligible/unsupported/waiting counts across the entire agreed workload. Explain uncovered items; do not improve results by removing difficult work from the denominator. |
+| Human coordination | Zero extra prompts or manual restart/refresh/re-return actions for delegated continuations. Count initial mandate, genuine clarification, required release and consequential approvals separately; these necessary decisions are not defects. |
+| Decision quality | An unfamiliar reviewer identifies client/month, reason, recommendation, financial effect, evidence, uncertainty and exact authority without reconstructing work across tabs. Preserve keyboard/mobile use and recoverable edits. |
+| Persistence | Closing the browser, opening a fresh chat and interrupting the worker preserve mandate, current decisions and completed work without engineer repair. Month two reuses methods only within approved bounds. |
+| Latency | Record acknowledgement, model/provider work and persisted-change-to-visible-state times separately. Show last completed step and next action, without invented progress percentages or ETAs. Retain existing route targets and the five-second online visibility target. |
+| Total human effort | Count preparation, chasing, review, corrections, off-platform work and builder help; report setup separately. A short demo or faster review does not establish total savings. The governing 40% median-effort gate requires its baseline evaluation before partner access. |
+
+### Rehearsal and customer presentation
+
+Keep the full chronological [connected walkthrough](#required-connected-acceptance-walkthrough). Run it from reset data and again with an interruption/retry. Include an unfamiliar qualified reviewer acting without builder directions. Preserve interventions, retries, failed cases and source/model receipts. All required demo cases must run within the existing daily model-call ceiling; a limit or dependency is not a pass.
+
+Present the result first within the governing eight-to-ten-minute customer narrative:
+
+1. **Prepared work and business result.** Open Home's remaining decisions, then the completed period's reviewed report and executive cash briefing. Label prior live execution and distinguish reviewed actuals from forecasts; approved assumptions do not verify a future cash outcome.
+2. **Partial continuation live.** In the active month answer insurance alone; show it continue while the bank question stays open. Complete remaining evidence through its normal checks.
+3. **Correction live.** Return the prepaid, answer its clarification and inspect the recalculated difference. Show the judgment followed by automatic continuation.
+4. **Late change and next month.** Introduce a source revision; affected approvals/publication status change while unrelated approvals survive. Show persisted next-month work. Label any prior run or time transition used for slow work and retain its actual receipts.
+
+Choose live transitions from measured rehearsal timings, not an assumed model latency. During slow work, show durable progress and already completed evidence. On failure, show the real state or identify a labelled recorded fallback; never call a replay live. Presentation order does not replace chronological acceptance.
+
+### Demo go and partner access gates
+
+Engineering assembles candidate-revision evidence for focused regressions, actual-model outcomes, browser/access checks, independently checked accounting outputs and both rehearsals. The accountant confirms demonstrated treatments/results; the founder checks pitch claims against that record. **The confident agent-first demo is no-go if a P0 remains, a required case is unrun, a critical failure is unresolved, a journey needs hidden builder repair or the reviewer cannot act unaided.** A narrower work-in-progress preview must not be described as passing this gate.
+
+A passing synthetic demo establishes behavior on that workload. Partner-operated access still requires all governing B01–B12 gates: independently reviewed enabled methods, varied authorized records and held-out cases, at least three varied eligible clients across two periods, the broader corpus, measured total-effort savings, offered-provider acceptance and hosted security/recovery. New presentation, code paths and model endorsement do not establish commercial confidence or pricing power.
+
+Record delivery in the existing [backlog](implementation-backlog.md) and proof in [validation](validation.md). Extend the nearest existing tests for changed behavior; observe any new regression fail without its fix. Use the main path and at most one key failure path, with no new test framework or broad default checks. Run affected packages/direct consumers and obtain the one final other-model review required by AGENTS before committing the completed change set.
 
 ## Evidence and review boundaries
 
@@ -368,4 +464,4 @@ Start with a focused failing test for reproduced correctness defects; do not add
 
 **Ready-to-paste instruction for the building agent:**
 
-> Read INDEX.md, AGENTS.md, docs/agent-first-build-plan.md and docs/agent-first-implementation-handoff.md. Implement the required fixes in canonical B01–B12 order, beginning with semantic financial claim support, cash-obligation matching and truthful decision states. Verify current code before treating older findings as open. Preserve Krith's current chat-first Home, sidebar, close pages and scoped composer. Make the agent do preparation and coordination while people receive precise supported decisions. Reuse existing engines, records and handlers; preserve exact arithmetic, source lineage and explicit external-action authority. Use only local PostgreSQL and never create a Neon branch. Deliver focused regression and journey evidence; update the existing backlog and validation records. Keep optional watches/outcome extensions distinct from launch scope. Do not claim a fixture, prototype or mocked integration proves live accounting maturity.
+> Read INDEX.md, AGENTS.md, docs/agent-first-build-plan.md and docs/agent-first-implementation-handoff.md. Recheck current code and validation against the October 15 delivery reconciliation before treating historical findings as open. Reuse PRs #500–#504, resolve remaining visibility timing and execute the specified live-model, connected browser, accounting and rehearsal acceptance. Fix reproduced deficiencies in the shared paths; do not rebuild delivered work. Preserve Krith's current chat-first Home, sidebar, close pages and scoped composer. Reuse existing engines, records and handlers; preserve exact arithmetic, source lineage and explicit external-action authority. Use only local PostgreSQL and never create a Neon branch. Update the existing backlog and validation records. Keep optional extensions distinct from required scope, and preserve full partner-access gates after the demo. Do not claim a fixture, prototype or mocked integration proves live accounting maturity.
