@@ -43,7 +43,6 @@ export function Requests({ closeId }: { closeId: string }) {
         The agent drafts one request for everything this month needs from the client: each question says what answering it unblocks, and what needs the firm's own judgment is
         never asked. Reword it or add your own questions; nothing goes to the client until you approve.
       </p>
-      {proposed.isError && <p role="alert">The drafted request could not be read. {proposed.error.message}</p>}
       <ProposedRequest closeId={closeId} />
       {none && (
         <>

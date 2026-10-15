@@ -18,6 +18,7 @@ export const kindLabels: Record<string, string> = {
   approve: "Drafts ready for approval",
   changed: "Changed sources",
   fix: "Requested changes",
+  request: "Drafted client requests to approve",
   release: "Client files and emails to release",
   send: "Approved requests with no delivery",
   email: "Undelivered request emails",
@@ -27,7 +28,7 @@ export const kindLabels: Record<string, string> = {
 };
 
 // Where an event's decision is, the same from Home, the decision list and the sidebar's notices: its draft, its job, its
-// coverage work, or the part of the close that holds it (a reply or request on Requests, a held email reply among the
+// coverage work, or the part of the close that holds it (a drafted request in Requests' draft, a reply or request on Requests, a held email reply among the
 // email replies, a client's scanned file in coverage, a forwarded file among Documents' forwarded files, the goal in the agent's details).
 export function eventTarget(closeId: string, e: AttentionEvent) {
   const base = `/dashboard/closes/${closeId}`;
@@ -37,6 +38,7 @@ export function eventTarget(closeId: string, e: AttentionEvent) {
   if (e.account_id || e.kind === "unanswered" || prefix === "release") return `${base}#coverage-work`;
   if (prefix === "held") return `${base}?tab=requests&view=replies`;
   if (prefix === "forwarded") return `${base}?tab=evidence&view=add#forwarded-${e.key.slice(e.key.indexOf(":") + 1)}`;
+  if (e.kind === "request") return `${base}?tab=requests&view=draft`;
   if (e.kind === "answered" || e.kind === "send" || e.kind === "email") return `${base}?tab=requests`;
   if (e.kind === "goal") return `${base}#agent-details`;
   return base;

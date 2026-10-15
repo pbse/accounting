@@ -12,10 +12,15 @@ type Proposal = { id: string; entity: string; period: string; recipient: string;
 // sender, one action approves the request and its email together, both approvals named in its confirmation; or the
 // request alone, its email a second approval (or the link shared by hand).
 export function ProposedRequest({ closeId, onApproved }: { closeId: string; onApproved?: () => void }) {
-  const read = useQuery(workspaceQuery<{ proposal: Proposal | null }>(`/${closeId}/requests/proposed`));
+  // Read again as the agent works, so a request it drafts in the background appears without a reload.
+  const read = useQuery({ ...workspaceQuery<{ proposal: Proposal | null }>(`/${closeId}/requests/proposed`), refetchInterval: 15_000, refetchOnWindowFocus: true });
   const queries = useQueryClient();
   const email = useQuery(workspaceQuery<{ hosted?: boolean; connection?: { id: string; sender: string } | null }>(`/email`));
   const proposal = read.data?.proposal;
+  // A draft the agent replaced while it was open is a different request: wording edits and the confirmation start again,
+  // and the panel says it changed.
+  const [shownId, setShownId] = useState<string>();
+  const [replaced, setReplaced] = useState(false);
   const sender = email.data?.hosted && email.data.connection ? email.data.connection : null;
   const [recipient, setRecipient] = useState<string>();
   const [wording, setWording] = useState<Record<number, string>>({});
@@ -26,6 +31,13 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [opened, setOpened] = useState<{ id: string; passcode: string; recipient: string; link: string; sent?: boolean }>();
+  if (proposal && proposal.id !== shownId) {
+    setReplaced(shownId !== undefined);
+    setShownId(proposal.id);
+    setWording({});
+    setConfirmed(false);
+    setAdded("");
+  }
   if (opened) {
     return (
       <section aria-label="Approved client request">
@@ -42,7 +54,12 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
       </section>
     );
   }
-  if (!proposal) return null;
+  // With no draft to show, what still needs saying: the request could not be read, or an approval was refused because the
+  // draft was approved elsewhere or changed (the read that followed found none).
+  if (!proposal) {
+    if (read.isError) return <p role="alert">The drafted request could not be read. {read.error.message}</p>;
+    return error ? <p role="alert">{error}</p> : null;
+  }
   const to = recipient ?? proposal.recipient;
   const send = !!sender && !alone;
   const questions = proposal.questions.map((q, i) => ({ document: q.document, question: wording[i] ?? q.question }));
@@ -96,6 +113,7 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
     <form aria-label="Drafted client request" onSubmit={(e) => void approve(e)}>
       <h3>Drafted client request · {proposal.entity} · {proposal.period}</h3>
       <p>The agent drafted these questions from the month's documents, its ledger accounts and its drafts; questions added by the firm follow them. Nothing goes to the client until you approve.</p>
+      {replaced && <p role="status">The agent updated this request since you opened it. Check it again before approving.</p>}
       <ol>
         {questions.map((q, i) => (
           <li key={i}>

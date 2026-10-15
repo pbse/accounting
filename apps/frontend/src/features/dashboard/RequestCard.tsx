@@ -39,7 +39,6 @@ export function RequestCard({ closeId, outcome, live, onConfirm }: { closeId: st
   const none = read.data && !read.data.proposal && !approved;
   return card(
     <>
-      {read.isError && <p role="alert">The drafted request could not be read. {read.error.message}</p>}
       {read.isPending && <p role="status">Reading the close's drafted request…</p>}
       {/* Kept mounted, so an approval made here keeps showing its link and passcode. */}
       <ProposedRequest closeId={closeId} onApproved={() => setApproved(true)} />

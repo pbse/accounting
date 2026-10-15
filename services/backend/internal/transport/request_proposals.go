@@ -394,32 +394,39 @@ type requestProposal struct {
 	ask       clientAsk
 }
 
+// draftJobsWaiting is SQL for whether drafted request d still asks what it asked: each document it covers still waits for
+// a person at the reading it was drafted from, with no live request of its own. The proposal read and the attention
+// feed both decide a draft is current by it.
+const draftJobsWaiting = `NOT EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(d.job_ids)='array' THEN d.job_ids ELSE '[]'::jsonb END) dj
+ LEFT JOIN preparation_jobs j ON j.id::text=dj->>'id' LEFT JOIN preparation_intakes i ON i.job_id=j.id LEFT JOIN evidence e ON e.id=i.source_id
+ WHERE j.id IS NULL OR j.state<>'needs_confirmation' OR i.revision::text IS DISTINCT FROM dj->>'revision' OR e.superseded_by IS NOT NULL
+  OR EXISTS(SELECT 1 FROM work_requests lq JOIN client_request_links l ON l.request_id=lq.id LEFT JOIN work_request_targets t ON t.request_id=lq.id AND t.job_id=j.id
+   WHERE (lq.job_id=j.id AND lq.revision=i.revision OR t.revision=i.revision) AND l.revoked_at IS NULL AND l.expires_at>now()))`
+
 // currentProposal is the close's newest drafted request, unless approved, withdrawn, or its documents answered, read
-// again or covered by another request since (the goal then drafts again). Exact, it also asks the close again what the
+// again or covered by another request since (draftJobsWaiting; the goal then drafts again). Exact, it also asks the close again what the
 // client must be asked (as approval does, inside its transaction) and holds only a draft that still asks exactly that;
 // otherwise the goal's next look, within a minute, brings an account or page answered since up to date.
 func currentProposal(ctx context.Context, q reader, closeID string, exact *sql.Tx) (*requestProposal, error) {
 	var p requestProposal
 	var raw, routed []byte
-	err := q.QueryRowContext(ctx, `SELECT d.id::text,c.entity,c.period,COALESCE(d.recipient,''),d.body,d.job_ids,d.proposal FROM request_drafts d JOIN client_closes c ON c.id=d.close_id
- WHERE d.close_id::text=$1 AND d.job_ids IS NOT NULL AND NOT EXISTS(SELECT 1 FROM work_requests q WHERE q.draft_id=d.id) ORDER BY d.id DESC LIMIT 1`, closeID).Scan(&p.ID, &p.Entity, &p.Period, &p.Recipient, &p.Body, &raw, &routed)
+	var waiting bool
+	err := q.QueryRowContext(ctx, `SELECT d.id::text,c.entity,c.period,COALESCE(d.recipient,''),d.body,d.job_ids,d.proposal,`+draftJobsWaiting+` FROM request_drafts d JOIN client_closes c ON c.id=d.close_id
+ WHERE d.close_id::text=$1 AND d.job_ids IS NOT NULL AND NOT EXISTS(SELECT 1 FROM work_requests q WHERE q.draft_id=d.id) ORDER BY d.id DESC LIMIT 1`, closeID).Scan(&p.ID, &p.Entity, &p.Period, &p.Recipient, &p.Body, &raw, &routed, &waiting)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil || json.Unmarshal(raw, &p.ask.Jobs) != nil {
 		return nil, err
 	}
-	jobs, questions, err := openQuestions(ctx, q, closeID)
-	if err != nil {
-		return nil, err
-	}
-	// A draft from before routing asks its documents' questions only.
 	if routed == nil {
+		// A draft from before routing asks its documents' questions only, read again now.
+		jobs, questions, err := openQuestions(ctx, q, closeID)
+		if err != nil || !slices.Equal(jobs, p.ask.Jobs) {
+			return nil, err
+		}
 		p.ask.Questions = questions
-	} else if json.Unmarshal(routed, &p.ask) != nil || p.ask.Withdrawn {
-		return nil, nil
-	}
-	if !slices.Equal(jobs, p.ask.Jobs) {
+	} else if json.Unmarshal(routed, &p.ask) != nil || p.ask.Withdrawn || !waiting {
 		return nil, nil
 	}
 	if exact != nil && routed != nil {
@@ -563,6 +570,24 @@ func registerRequestProposals(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if p == nil || p.ID != r.PathValue("draft") {
+			// What the client must be asked changed since this draft (a new document's question, an answer, a replaced
+			// source): the request is drafted again now, so the person approves the updated one rather than a dead end.
+			if p == nil {
+				var again *requestProposal
+				if _, _, err = draftRequest(r.Context(), tx, closeID, auth.Agent(r.Context()), actor, nil); err == nil {
+					again, err = currentProposal(r.Context(), tx, closeID, nil)
+				}
+				if err != nil || tx.Commit() != nil {
+					problem(w, 503, "The drafted request is unavailable.")
+					return
+				}
+				if again == nil {
+					problem(w, 409, "The client has nothing left to answer for this month, so the drafted request was withdrawn.")
+					return
+				}
+				problem(w, 409, "What the client needs to answer changed since this request was drafted, so it was drafted again. Check the updated request and approve it.")
+				return
+			}
 			problem(w, 409, "This drafted request was approved, or its documents changed since it was drafted. Refresh to see the current one.")
 			return
 		}

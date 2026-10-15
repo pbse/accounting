@@ -92,6 +92,10 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 	if draft() {
 		t.Fatal("the goal drafts no second request for the same questions")
 	}
+	// The drafted request is one of the close's decisions, opening the draft itself.
+	if body := string(call("GET", "/v1/closes/"+closeID+"/decisions", nil, 200)); !strings.Contains(body, `"key":"request:`+drafted.Proposal.ID+`"`) || !strings.Contains(body, "A drafted client request (1 question) waits for approval") {
+		t.Fatalf("the drafted request waits as a decision: %s", body)
+	}
 	var proposed struct {
 		Proposal *struct {
 			ID, Entity, Period string
@@ -145,6 +149,9 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 		t.Fatalf("an approved draft is no longer proposed: %+v", proposed.Proposal)
 	}
 	call("POST", "/v1/closes/"+closeID+"/requests/"+opened.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true}, 409)
+	if body := string(call("GET", "/v1/closes/"+closeID+"/decisions", nil, 200)); strings.Contains(body, `"kind":"request"`) {
+		t.Fatalf("an approved request is no longer a decision: %s", body)
+	}
 	// The close's Requests lists it: approved, not yet sent, unanswered, handled in the document's work.
 	var approved []struct {
 		ID, Recipient, Email, Answer, Job string
@@ -411,4 +418,72 @@ func TestAPartialReplyResumesTheWorkItAnswers(t *testing.T) {
 	if page.Open {
 		t.Fatal("a request whose work is all finished is closed")
 	}
+}
+
+// Approving a draft that no longer asks exactly what the close needs (a new document's question since) drafts it again,
+// so the person approves the updated request rather than a dead end.
+func TestApprovingAStaleDraftDraftsItAgain(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	var closeID string
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Stale draft "+rand.Text()).Scan(&closeID))
+	defer func() {
+		for _, q := range []string{`DELETE FROM client_request_links WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1)`,
+			`DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`, `DELETE FROM request_drafts WHERE close_id=$1`,
+			`DELETE FROM preparation_jobs WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+			db.Exec(q, closeID)
+		}
+	}()
+	document := func(name string) {
+		t.Helper()
+		var source, job string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,'Document','fixture') RETURNING id::text`, closeID, name, rand.Text()).Scan(&source))
+		must(db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','needs_confirmation','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&job))
+		_, err := db.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal) VALUES($1,$2,'{"kind":"prepaid","questions":["Which months does it cover?"]}')`, job, source)
+		must(err)
+	}
+	token := strings.Repeat("r", 32)
+	handler := apiWithStore(db, token)
+	call := func(method, path string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	var proposed struct {
+		Proposal *struct {
+			ID        string
+			Questions []proposedQuestion
+		}
+	}
+	document("insurance invoice.pdf")
+	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/proposed", map[string]any{}, 200), &proposed))
+	first := proposed.Proposal.ID
+	document("software order.pdf")
+	call("POST", "/v1/closes/"+closeID+"/requests/"+first+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true}, 409)
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/requests/proposed", nil, 200), &proposed))
+	if p := proposed.Proposal; p == nil || p.ID == first || len(p.Questions) != 2 {
+		t.Fatalf("the refused approval drafts the request again with both documents: %+v", proposed.Proposal)
+	}
+	call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", map[string]any{"recipient": "owner@example.test", "confirmed": true}, 200)
 }
