@@ -8,14 +8,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/llm"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestAReturnedDraftIsRevisedFromTheNote(t *testing.T) {
@@ -78,10 +81,17 @@ func TestAReturnedDraftIsRevisedFromTheNote(t *testing.T) {
 	}
 	must(db.QueryRow(`INSERT INTO close_goals(close_id,author) VALUES($1,'user_a') RETURNING id::text`, closeID).Scan(&goal))
 	reply := `{"changes":[{"field":"service_start","value":"2026-07-01","source_id":"` + contract.ID + `","quote":"Service begins July 1, 2026"}],"question":""}`
-	calls := 0
+	calls, sent := 0, ""
+	// during runs while the model reads, as a person's answer might arrive.
+	var during func()
 	client := &http.Client{Transport: modelRoundTrip(func(r *http.Request) (*http.Response, error) {
 		calls++
 		raw, _ := io.ReadAll(r.Body)
+		sent = string(raw)
+		if during != nil {
+			during()
+			during = nil
+		}
 		if !strings.Contains(string(raw), "Use the contract's start date") && !strings.Contains(string(raw), "Fix the dates") {
 			t.Fatal("the reviewer's note reaches the model")
 		}
@@ -160,6 +170,78 @@ func TestAReturnedDraftIsRevisedFromTheNote(t *testing.T) {
 	}
 	if !asked {
 		t.Fatalf("the returned document's line carries the agent's question: %+v", progress.Items)
+	}
+	tx.Rollback()
+	queuedEnd := func() string {
+		t.Helper()
+		var plans string
+		must(db.QueryRow(`SELECT plans::text FROM preparation_jobs WHERE close_id::text=$1 AND state='queued' ORDER BY id DESC LIMIT 1`, closeID).Scan(&plans))
+		var queued []preparation.Plan
+		must(json.Unmarshal([]byte(plans), &queued))
+		var input prepaids.Input
+		json.Unmarshal(queued[0].Input, &input)
+		return input.ServiceEnd
+	}
+
+	// The question waits: another look asks the model nothing. A document the close reads afterwards resumes the return,
+	// offered first, and the revision follows without the draft being returned again.
+	before := calls
+	must(reviseReturned(ctx, db, goal, roles))
+	if calls != before {
+		t.Fatalf("a question waits for its answer or a new document: %d model calls", calls-before)
+	}
+	renewal := evidence("renewal.txt", "Northwind renewal letter for Alpha\nThe subscription now ends June 30, 2027")
+	reply = `{"changes":[{"field":"service_end","value":"2027-06-30","source_id":"` + renewal.ID + `","quote":"The subscription now ends June 30, 2027"}],"question":""}`
+	must(reviseReturned(ctx, db, goal, roles))
+	if calls != before+1 || !strings.Contains(sent, `\"asked\":[\"I read the note as changing service end`) || !strings.Contains(sent, "renewal.txt") || queuedEnd() != "2027-06-30" {
+		t.Fatalf("the new document resumes the return with the question asked: %d calls, end %s", calls-before, queuedEnd())
+	}
+	_, err = db.Exec(`DELETE FROM preparation_jobs WHERE close_id::text=$1`, closeID)
+	must(err)
+
+	// Answering the question on the draft resumes it the same way.
+	third := draft()
+	returnDraft(third, "Fix the dates.")
+	reply = `{"changes":[],"question":"Which end date should it use?"}`
+	must(reviseReturned(ctx, db, goal, roles))
+	var review string
+	must(db.QueryRow(`SELECT review_id::text FROM workpaper_review_state WHERE id::text=$1`, third).Scan(&review))
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(method, path string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"workpapers:review", "clients:all"}}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	var shown struct{ Clarification string }
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/workpapers/"+third+"/reviews", nil, 200), &shown))
+	if shown.Clarification != "Which end date should it use?" {
+		t.Fatalf("the draft's review shows the question waiting for an answer: %+v", shown)
+	}
+	call("POST", "/v1/closes/"+closeID+"/workpapers/"+third+"/clarification", map[string]string{"review_id": review, "answer": "Use June 30, 2027 as the end date."}, 200)
+	call("POST", "/v1/closes/"+closeID+"/workpapers/"+third+"/clarification", map[string]string{"review_id": review, "answer": "Again"}, 409)
+	reply = `{"changes":[{"field":"service_end","value":"2027-06-30","source_id":"note","quote":"June 30, 2027"}],"question":""}`
+	// A further answer arriving while the model reads the first is not lost: that reading is set aside and the next look
+	// reads both.
+	during = func() {
+		_, err := db.Exec(`UPDATE close_goals SET events=events||jsonb_build_array(jsonb_build_object('actor','user_a','text','Answered','answers',$2::text,'answer','It renews on July 1.','at',now())) WHERE id::text=$1`, goal, review)
+		must(err)
+	}
+	must(reviseReturned(ctx, db, goal, roles))
+	var queuedCount int
+	must(db.QueryRow(`SELECT count(*) FROM preparation_jobs WHERE close_id::text=$1`, closeID).Scan(&queuedCount))
+	if queuedCount != 0 {
+		t.Fatal("a reading made before the latest answer settles nothing")
+	}
+	must(reviseReturned(ctx, db, goal, roles))
+	if !strings.Contains(sent, "The reviewer answered: Use June 30, 2027 as the end date.") || !strings.Contains(sent, "It renews on July 1.") || queuedEnd() != "2027-06-30" {
+		t.Fatalf("the answers resume the return: end %s", queuedEnd())
 	}
 }
 

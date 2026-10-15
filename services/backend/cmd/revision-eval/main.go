@@ -144,7 +144,7 @@ func main() {
 			calls++
 			started := time.Now()
 			model, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			rev, err := preparation.Revise(model, c.Kind, ret.Note, input, intake(c.Sources), intake(c.Others))
+			rev, err := preparation.Revise(model, c.Kind, ret.Note, nil, input, intake(c.Sources), intake(c.Others))
 			cancel()
 			o := outcome{Case: c.ID, Return: n + 1, Note: ret.Note, Expected: ret.Expect, Seconds: time.Since(started).Seconds()}
 			if errors.Is(err, preparation.ErrInvalidRevision) {

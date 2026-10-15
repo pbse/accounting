@@ -9,6 +9,8 @@ type Review = {
   state: string;
   digest: string;
   review_id: string;
+  // The agent's question about the latest return, while it waits for an answer.
+  clarification?: string | null;
   history: {
     id: number;
     decision: string;
@@ -46,6 +48,7 @@ export function ReviewDecision({
   const comparison = changes.data;
   const since = sinceReview.data;
   const [note, setNote] = useState("");
+  const [answer, setAnswer] = useState("");
   const [finalSummary, setFinalSummary] = useState(false);
   const [notBooked, setNotBooked] = useState(false);
   const [actionError, setError] = useState("");
@@ -57,6 +60,22 @@ export function ReviewDecision({
     setError("");
     setAsked(true);
     await Promise.all([decision.refetch(), changes.refetch(), sinceReview.refetch()]);
+  }
+  // The answer resumes the return: the agent revises the draft with it on its next look.
+  async function answerQuestion() {
+    if (!review) return;
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/workpapers/${paperId}/clarification`, { review_id: review.review_id, answer });
+      setAnswer("");
+      onChange();
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The answer could not be saved.");
+    } finally {
+      setBusy(false);
+    }
   }
   async function decide(decision: string) {
     if (!review) return;
@@ -100,6 +119,20 @@ export function ReviewDecision({
           <p role="status">
             Current review: {review.state.replaceAll("_", " ")}
           </p>
+          {review.state === "changes_requested" && review.clarification && (
+            <section aria-label="The agent's question">
+              <h4>The agent asks before revising it</h4>
+              <p>{review.clarification}</p>
+              <label>
+                Your answer
+                <textarea value={answer} maxLength={2000} onChange={(e) => setAnswer(e.target.value)} />
+              </label>
+              <button className="primary" disabled={busy || !answer.trim()} onClick={() => void answerQuestion()}>
+                Answer and let the agent revise it
+              </button>
+              <p className="note">Or add the document it needs to the close; the agent revises the draft once it has read it.</p>
+            </section>
+          )}
           {review.state === "source_changed" && (
             <p>
               Evidence was replaced, is unavailable, or a revised draft

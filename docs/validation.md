@@ -5122,6 +5122,17 @@ A change where a question was due, a wrong value, or a value a case forbids coun
 
 The goal didn't ask for an account's records when the agent had matched a document to it, even after that document was replaced, because the old job stays on as the account's suggestion. Now only a matched document that is still current answers the account. `TestTheGoalRoutesWhatWaitsOnInformation` adds a document matched to the prepaid account and since replaced, and the prepaid's records are still asked for. Without the change the test fails.
 
+## 2026-10-14 — An answer or a new document resumes a returned draft's question (B06)
+
+A review found that when the goal could not revise a returned draft from its note, its question settled the return: the reviewer had to return the draft again with the answer, and a contract uploaded afterwards changed nothing. The model also saw only the close's newest eight other documents, so an older contract the note pointed to could be missed.
+
+- A question is recorded as a pending clarification on the return (the goal event carries `clarify`, the question and the newest document the close held). `returnWaits` takes the return up again once someone answers it or the close reads a newer document (scheduled ledger captures aside); every other outcome still settles it, and the latest event about the return decides.
+- The draft's review shows the waiting question (`clarification` on `GET …/reviews`) with an answer box; `POST /v1/closes/{id}/workpapers/{paper}/clarification` records the answer against the return, refused once answered or when no goal works the close. The model reads the note with each answer as the reviewer's words (a quote may come from them) and the questions asked before as context only (never quoted). The goal takes a snapshot as it takes a return up (events about it, the newest document, documents still being read): an answer arriving while the model reads sets that reading aside for the next look, and a document still being read when the question was asked resumes it once read.
+- The close's other documents are chosen by relevance: those read since the goal last asked first, then those whose name or text holds most of the note's words (`noteWords`), newest first, up to eight.
+- The goal card's line for a returned draft shows the goal's latest outcome for the return, not its first.
+
+Test: `TestAReturnedDraftIsRevisedFromTheNote` now also leaves a question waiting (another look calls no model), adds a renewal letter (the next look sends the question and the letter, and queues the new end date without a second return), then returns another draft whose question is answered on its review (the answer reaches the model and the revision is queued; a second answer is refused). The correction, goal and review tests passed on a local PostgreSQL; the frontend type-checks.
+
 ## 2026-10-14 — A partial reply resumes the work it answers (B05)
 
 A review found that a consolidated request kept every document's work waiting until the client had answered every question and every attached document was released: answering the insurance question left the insurance schedule waiting on the bank statement.
