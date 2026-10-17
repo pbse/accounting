@@ -434,7 +434,7 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 		Lines    []briefLine
 	}
 	must(json.Unmarshal(call("GET", base+"/brief", nil, 200), &signedBrief))
-	if !strings.Contains(signedBrief.Headline, "Signed off for the declared scope") {
+	if !strings.HasPrefix(signedBrief.Headline, "Signed off.") {
 		t.Fatalf("a current scope sign-off is not presented as unfinished: %+v", signedBrief)
 	}
 	for _, line := range signedBrief.Lines {
@@ -486,7 +486,7 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 	}
 	capture("600.00", "1400.00")
 	must(json.Unmarshal(call("GET", base+"/brief", nil, 200), &signedBrief))
-	if strings.Contains(signedBrief.Headline, "Signed off for the declared scope") {
+	if strings.Contains(signedBrief.Headline, "Signed off.") {
 		t.Fatal("changed books were hidden behind the old sign-off")
 	}
 	if got := list(); got.Publications[0].State != "needs_correction" {

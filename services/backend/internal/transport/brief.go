@@ -80,7 +80,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 		}
 		if read("/readiness", &standing) && standing.State == "signed_off" {
 			jsonReply(w, 200, map[string]any{
-				"headline": "Signed off for the declared scope. Other findings remain available in Books.",
+				"headline": "Signed off. The declared scope is complete. Other findings remain available in Books.",
 				"lines":    []briefLine{{"sign-off", "done", "The declared scope is signed off. This does not certify every finding in Books as resolved.", "signoff"}},
 			})
 			return
