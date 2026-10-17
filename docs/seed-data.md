@@ -69,3 +69,95 @@ Each close removed is receipted as the deletion route receipts one, under the re
 - **The goals are live.** Harbor's hand-over and Bluegrass's monthly routine are real goals the worker will look at and report on.
 
 `SEED_TRACE=1` prints every request the seed makes and what the route answered.
+
+
+## Admin rehearsal on synthetic records
+
+**Prepared October 17, 2026. Human run: not performed.** This is the initial admin rehearsal, followed by an interruption/retry repetition. It supports the [required connected walkthrough](agent-first-implementation-handoff.md#required-connected-acceptance-walkthrough); a missing or unrun journey stays open. Admin's accounting qualification and independence are unverified. Local development authentication does not establish hosted reviewer/executive access.
+
+### Builder handoff before the timer starts
+
+The isolated prepared database is `krith_admin_20261017` on local PostgreSQL 18 at `127.0.0.1:55437`. The workspace is **http://127.0.0.1:15174/dashboard** while its local API/frontend processes run. Task-only unlock details and the source/case manifest are in `~/krith-evidence/2026-10-17-admin-rehearsal/admin-access.json` and `rehearsal-manifest.json` (private, outside Git). The folder holds builder preflight/setup records, not a completed human rehearsal.
+
+The seed uses recorded model answers and synthetic QuickBooks-shaped captures. Current baseline runtime has **no model configured**. The actual-agent sections must wait for a passing full correction evaluation and a model-enabled runtime with its own bounded call allocation; do not present recorded preparation as live. No provider is connected, no customer contact is authorized, and the exercise sends or posts nothing externally. Keep provider/email credentials unset.
+
+Before handing it over, record the functional candidate and verify the local processes use that binary. Inventory the company's obligations and enabled procedures. Inspect an already approved method before proposing another: genuine setup choices are confirmed once through the existing method flow, with the version recorded. Retain every unsupported/manual item. Freeze the task population and builder expectations before running it; do not remove failed work from the denominator.
+
+The prepared story has these anchors (find by company/month; IDs in the private manifest are run-specific):
+
+| Anchor | Purpose |
+| --- | --- |
+| Harbor Fixture LLC, September | Current approval queue and delegated goal, original linked invoices, bank work and previous months. |
+| Harbor insurance / Northstar NM-2201-26 | An ambiguous return followed by `inputs/northstar-controlling-contract.txt`; the same return must continue after a clear answer. The input and expected calculation are builder-labelled, not accountant accepted. |
+| Summit Peak Fitness LLC, September | Published management pack, approved budget, cash view and export comparison. |
+| Summit cash matching question | A synthetic $10,000 marketing contract and a separate $689 bill from the same vendor/date. The preflight decision was cleared through the ordinary route, retaining its history, so the question is open again. |
+| Meridian Physical Therapy PC, September | Payroll reissue and changed sign-off; unrelated prior approvals/history remain inspectable. |
+| Summit, October; June–August history | Next-period continuation and reproducible historical reports/schedules. |
+
+The anchors are a recorded baseline. They do **not** establish the complete connected walkthrough. The step mapping below names every unrun action, including one-time setup/delegation, mixed input and missing-page isolation, correction/partial-reply/new-sender transitions, a newly introduced amendment and stale-card attempt, publication/successor creation, missing cash assumptions, recovery/revocation and completing next month. These require their own staged inputs and ordinary-route execution before the full walkthrough can pass. Their local route regressions are separate evidence. Do not give admin a pre-solved fake transition or silently repair rows to make a task work.
+
+### Coverage of the required connected walkthrough
+
+Every human step is currently **unrun**. Seeded history and local regression tests are supporting evidence. Before a complete timed pass, stage each missing action below; unavailable actions remain in the denominator. Inspection-only tasks cannot clear the corresponding transition.
+
+| Governing step | Task / available anchor | Required action still unrun or unstaged |
+| --- | --- | --- |
+| 1: setup and delegation | Setup goal A below; separate takeover fixture required | Admin confirms scope, opening baseline and methods once, starts delegation and closes the browser. Builder setup does not establish this. |
+| 2: mixed evidence | Mixed-input goal B below; separately staged workload | Supply statements, payroll, invoices and a credit; isolate a missing page while unrelated work continues. Not staged by the seed alone. |
+| 3: review and return | Tasks 1–2; Harbor software and reserved insurance | Verify current counts/source/effect/authority, review software and return insurance in model mode; prove that returned work stays unresolved until answered. |
+| 4: client follow-through | Task 3; separately staged two-question case | Approve a consolidated request, hold an unknown sender's partial reply, verify/release it and provide remaining evidence; resume only satisfied dependencies. Not yet staged. |
+| 5: late amendment/correction | Task 4; Meridian's existing reissue is inspection only | Introduce a fresh amendment, attempt the stale card, preserve unrelated approvals and separately approve/verify the correction. The provider-dependent verification is unavailable. |
+| 6: publication/change | Tasks 5 and 9; Summit's frozen pack/export/budget | Human review and publication, executive scope checks and a new dependent-source change that prepares a successor. Seeded publication/export agreement is not this sequence. |
+| 7: incomplete cash/AR/AP | Task 6; matching question, cash/scenarios | Stage missing-date and proposed-bonus cases; resolve assumptions, match once, inspect daily low/scenario isolation, and demonstrate AR/AP authority and accurate status. Those extra cases and live-agent actions remain unstaged/unrun. |
+| 8: interrupted authority/effect | Task 7; local recovery regressions | Stop/restart the rehearsal worker, interrupt an external operation, revoke access and recover without duplicate effect. Reopening a tab is insufficient; external recovery needs its provider setup. |
+| 9: repeat next month | Task 8; October/history anchors | Complete the next month with approved methods and carried unresolved items; reproduce historical decisions/reports. Inspection alone does not complete it. |
+
+### Admin task sheet
+
+Give admin the nine-row mapping above, these goals and the blank `admin-observations.csv` in the private package. The mapping's required-action column is part of the task sheet; the numbered baseline goals do not replace those transitions. Keep the builder answer sheet closed until the run ends. Do not coach navigation or repair data during the timed run; record an intervention if one is needed.
+
+**Setup goal A (walkthrough 1):** on the separately staged takeover client, confirm scope, opening baseline and approved methods once, start the delegated month and close the browser. Existing seeded setup is inspection only. Mark this goal unrun until that fixture exists.
+
+**Mixed-input goal B (walkthrough 2):** supply the staged statements, payroll, invoices and credit; verify supported drafts progress while the missing-page item alone waits. This workload is not staged yet; retain it as unrun until executed.
+
+1. Explain what needs your decision across the portfolio, including an older/reopened month. Open one exact decision and identify its company, month, source, financial effect and authority.
+2. Inspect Harbor's current evidence and approved method. Use the **software** draft for baseline review; leave the **insurance** draft unchanged until actual-model mode. Once that mode is ready, return the reserved insurance with “Fix the end date.” Answer the clarification using the controlling contract. Check that the original correction continues without another Return, and inspect the recalculated draft and its fresh-review requirement.
+3. For the separately staged two-question case, approve one contextual request. Supply only the insurance answer from an unrecognized address and observe the verification hold without dependent progress. Verify/release it through the authorized flow, then check that insurance work resumes while the independent bank question stays open. Supply the remaining evidence later. Mark unavailable staging as **unrun**, not passed.
+4. Inspect Meridian's payroll amendment. Explain what changed, what remains approved, and why the old sign-off/card cannot be used. A posted correction needs separate authority.
+5. Find a figure in Summit's published report, trace its source and download both exports. Check the approved budget baseline and current-versus-prior comparison. Inspect the existing frozen version. Human publication, a later dependent-source change and successor preparation belong to the separately staged transition in the mapping above; mark that transition unrun until executed.
+6. During baseline inspection, leave Summit's matching question open. In the model-mode pass, after the agent reads the cash plan, **you resolve the question once using the matching form in chat**; inspect the resulting decision and forecast on the Cash page rather than deciding it a second time. Then inspect the daily low and compare a named scenario without changing base facts. A fresh full repetition gets a fresh question; no mid-run builder reset is allowed. Ask for a supported bill payment date and inspect its bill, amount and reason on the handoff card. Record an external handoff only when the synthetic scenario explicitly supplies that simulated event; it is not payment execution. The actual-model card journey stays unrun until model mode is ready. Record any missing date or unapproved assumption rather than calling an incomplete forecast reliable.
+7. Close the browser and reopen a fresh chat. Find the same mandate, current decisions and completed work. For the interrupted repetition, the operator stops/restarts only this rehearsal worker; verify recovery and that completed effects did not repeat.
+8. Inspect the next month and the historical months. Explain which methods/approvals carried, what changed and what needs fresh review. Do not rebuild a schedule outside the product.
+9. Record the normal authenticated executive UI, direct URL, API and chat checks separately when that environment exists. A local admin token cannot stand in for a scoped executive account.
+
+Seeded effort/history is fictional setup data, and builder preflight adds its own workspace activity. Record the handoff time and measure only the new human run; never use seeded minutes as a savings baseline.
+
+For each task record elapsed time, expected/observed result, initial mandate, genuine clarification and consequential approvals separately from extra prompts, manual refresh/restart, builder help and off-platform work. Record a failed or unavailable task explicitly. Repeat from fresh data with an interruption. The governing demo gate needs both runs and qualified accounting acceptance; admin's initial rehearsal does not waive them.
+
+### Reset without losing a run
+
+Retain the old database and observation file. From the repository root, this isolated shell creates a timestamped **fresh local database**, migrates and seeds it. If creation or migration fails, it stops before touching a retained run. Record the printed name and connection URL; a name collision must be retried with a new name, never reused:
+
+```sh
+(
+  set -e
+  rehearsal_db="krith_admin_rehearsal_$(date -u +%Y%m%dT%H%M%SZ)"
+  createdb -h 127.0.0.1 -p 55437 -U close "$rehearsal_db"
+  printf 'Created rehearsal database: %s\n' "$rehearsal_db"
+  export DATABASE_URL="postgres://close@127.0.0.1:55437/${rehearsal_db}?sslmode=disable"
+  bash infra/postgres/migrate.sh
+  go -C services/backend run ./cmd/seed -database "$DATABASE_URL" -organization local-development -subject local-development
+  printf "Rehearsal database ready: %s\nexport DATABASE_URL='%s'\n" "$rehearsal_db" "$DATABASE_URL"
+)
+```
+
+Use the printed export **only after** `Rehearsal database ready: …` appears and the block exits zero. A migration/seed failure leaves a named failed database: record and retain it, never use it for a rehearsal or resume it as a fresh run.
+
+The block runs in a subshell: the parent terminal's `DATABASE_URL` is unchanged. In **every API and worker terminal**, run the printed export, then `printf '%s\n' "$DATABASE_URL"` and compare it with the new run's manifest. Start only the native processes below; do not run Compose, import another `.env`, assign a default database or migrate/seed again between export and startup. Stop only the prior rehearsal's processes or choose unused ports and record them.
+
+- API, from the repository root: `HTTP_ADDR=127.0.0.1:18081 go -C services/backend run ./cmd/api`.
+- Worker in its own terminal, **only after** the passing evaluation, model setup and bounded allocation: `HTTP_ADDR=127.0.0.1:18082 go -C services/backend run ./cmd/worker`.
+
+Keep task-local authentication. Point the frontend at that API (the prepared baseline uses `API_ORIGIN=http://127.0.0.1:18081`); use a fresh browser context for the new run. Record the process configuration and candidate before starting the timer. Add task-specific inputs only through ordinary product routes and save their IDs/digests. The synthetic cash contract is an approved fixture assumption created through `/cash-obligations`; clearing a preflight matching decision uses `/cash-matches`, with its capture and previous decision ID. Record these builder steps. Do not copy internal database rows, erase a prior run or weaken a scan/passcode/access guard. Never create a Neon branch.
+
+Before enabling actual models, record the prior budget/model configuration and define a timeboxed run within **one UTC day**. Its dispatch deadline is the end of the planned rehearsal window, no later than UTC midnight minus the **sum of the maximum configured end-to-end call duration and sufficient shutdown/verification time**. Record that positive shutdown/verification allowance and the deadline before starting. Configure the same pinned local Context Machine used by the evaluator. Read the isolated firm's counted usage for that UTC day (recorded seed calls count there too), confirm capacity and reserve the bounded actual calls in that same day's ledger under `~/krith-evidence`. Recheck the day and counted usage immediately before enabling model mode; set the firm limit to that usage plus the reservation, never above 200. If capacity is insufficient, wait for reset, then **redo both the ledger reservation and the usage read for the new UTC day**. If the UTC day changes during setup or the run, stop model mode and start a new day-bound allocation; never reuse the old day’s count, reservation or numeric limit. Never delete/refund seed or spent usage to make room. At that timebox deadline, stop launching calls (including retries and later agent rounds), drain the rehearsal's in-flight calls, then confirm model mode is off with none in flight before midnight. Restore the recorded baseline budget and non-model configuration; do not leave the rehearsal limit active. Retain failures and assistance. Keep its live-model status explicit. The scheduled full ten-note correction run is separate from an admin's rehearsal and does not start it or clear its gate.
