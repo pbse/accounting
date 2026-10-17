@@ -73,6 +73,18 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 			}
 			return got.code == 200 && json.Unmarshal(got.body, out) == nil
 		}
+		// A current sign-off attests the declared scope, which can include reviewed external work.
+		// Generic findings outside it remain inspectable in Books, not blockers on that scope.
+		var standing struct {
+			State string `json:"state"`
+		}
+		if read("/readiness", &standing) && standing.State == "signed_off" {
+			jsonReply(w, 200, map[string]any{
+				"headline": "Signed off. The declared scope is complete. Other findings remain available in Books.",
+				"lines":    []briefLine{{"sign-off", "done", "The declared scope is signed off. This does not certify every finding in Books as resolved.", "signoff"}},
+			})
+			return
+		}
 		var jobs [5]int
 		var jobsErr error
 		var approved, ready, unsourced, attention, drafts int
@@ -371,8 +383,6 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 		switch {
 		case !read("/readiness", &status):
 			add("sign-off", "unknown", "Sign-off readiness could not be read.", "signoff")
-		case status.State == "signed_off":
-			add("sign-off", "done", "Signed off.", "signoff")
 		case status.State == "reopen_required":
 			add("sign-off", "attention", "Work changed after sign-off. Reopen the close or sign off again.", "signoff")
 			needs = append(needs, "reopen or re-sign the close")
@@ -390,8 +400,6 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 				verb = "thing needs"
 			}
 			headline = fmt.Sprintf("%d %s you: %s.", len(needs), verb, strings.Join(needs, ", "))
-		} else if status.State == "signed_off" {
-			headline = "Signed off."
 		}
 		if len(unchecked) > 0 {
 			headline += " Not checked: " + strings.Join(unchecked, ", ") + "."

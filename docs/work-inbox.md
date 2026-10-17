@@ -152,6 +152,9 @@ Each item names the QuickBooks transaction IDs, the evidence still missing and a
 
 ## Where this close stands
 
+A close whose sign-off still stands is summarized as signed off for its declared scope. Generic tie-out and exception findings remain inspectable in Books rather than becoming fresh blockers on that signed scope. The brief uses the current readiness check, not a historical sign-off flag; changed books or sources restore the normal blocked/reopen narrative. Existing document/review/request decisions retain their own attention records.
+
+
 The top of the close Overview narrates the close in the order an accountant walks it (`GET /v1/closes/{id}/brief`, MCP `close_brief`), with no provider or model call:
 
 1. **Ledger:** the month-end Trial Balance in use, or a request to capture one.
