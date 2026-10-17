@@ -284,7 +284,7 @@ func TestAgentChatReadsProposesAndAnswersInAClose(t *testing.T) {
 			t.Fatalf("a close conversation at the closes level offers no %s: %v", name, toolsOffered)
 		}
 	}
-	for _, name := range []string{"close_brief", "read_evidence_text", "search_close", "prepare_close", "hand_over", "proposed_request", "list_procedures"} {
+	for _, name := range []string{"close_brief", "read_evidence_text", "search_close", "prepare_close", "hand_over", "proposed_request", "list_procedures", "propose_payment_date"} {
 		if !slices_contains(toolsOffered, name) {
 			t.Fatalf("a close conversation offers %s: %v", name, toolsOffered)
 		}

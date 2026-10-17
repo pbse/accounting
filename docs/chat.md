@@ -126,3 +126,9 @@ Checks: `go test ./internal/transport -run 'TestAgentSupport|TestAgentChat'` wit
 The assistant reads and explains, and an agent answer is text bound to what it read. It never approves, sends, posts or signs off; the only work it starts is a card's action, after its author confirms the listed scope, through the close page's own route and checks. A hand-over card starts a [close goal](close-coordinator.md#hand-the-close-to-the-agent) the same way, and can set up a [monthly hand-over](close-coordinator.md#every-new-month); a firm-wide request that names a client is answered with a link to that close's card, shown once. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
 
 Checks: `go test ./internal/transport -run 'TestAssistant|TestChatAction'` with `TEST_DATABASE_URL`.
+
+### Bill payment-date proposals
+
+After reading a close's open bills, the agent can propose a payment date with its reason and uncertainty. The card shows the actual captured bill, amount, currency, due date and existing follow-up status; model-supplied amounts/capture identifiers are replaced by that read. An unread or unplaceable bill cannot produce this card. Executives are not offered the proposal. Speculative timing belongs in a named cash scenario.
+
+The person confirms that they handed the bill to their external bill-pay tool for that date. Confirmation records the handoff through the same open-item route as Cash, checks the current capture and previous decision, and updates the base forecast timing. It sends no payment instruction and cannot mark a bill paid. Stale/concurrent decisions are refused with an instruction to read the bill again and ask for a new payment-date card; refreshing the old card cannot rebind its fixed capture or prior decision.
