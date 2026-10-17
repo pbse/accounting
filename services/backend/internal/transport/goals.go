@@ -205,6 +205,9 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 			item.Text = strings.TrimSpace("Preparation failed: " + failure + " Fix the document or retry it in Work.")
 		case "waiting_evidence", "interpreting", "queued":
 			item.Status, item.Text = "working", map[string]string{"waiting_evidence": "Waiting to be read.", "interpreting": "Reading it now.", "queued": "Preparing its draft."}[state]
+			if state == "waiting_evidence" && failure != "" {
+				item.Text = failure
+			}
 			if extraction == "failed" {
 				item.Status, item.Text = "needs_you", "Its text could not be extracted. Repair it on the Evidence tab, then recheck it in Work."
 			}

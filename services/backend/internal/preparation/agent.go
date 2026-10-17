@@ -824,10 +824,24 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	_, currentDigest, currentErr := AgentInventory(persist, finish, closeID, id)
 	state, message := "needs_confirmation", ""
+	retry := false
 	if currentErr != nil || currentDigest != digest {
 		state, message = "waiting_evidence", "Evidence changed during interpretation; waiting for a fresh pass."
 	} else if interpretErr != nil {
 		state, message = "failed", interpretErr.Error()
+		temporary := errors.Is(interpretErr, llm.ErrBusy) || errors.Is(interpretErr, llm.ErrUnreachable) || errors.Is(interpretErr, context.DeadlineExceeded) || errors.Is(interpretErr, context.Canceled)
+		var service *llm.ServiceError
+		if errors.As(interpretErr, &service) {
+			temporary = !errors.Is(interpretErr, llm.ErrIncomplete) && !errors.Is(interpretErr, llm.ErrLimit) && slices.Contains([]int{408, 429, 500, 502, 503, 504}, service.Status)
+		}
+		if temporary {
+			if attempts < 2 {
+				retry = true
+				state, message = "waiting_evidence", "The reading service is temporarily unavailable. Retrying automatically."
+			} else {
+				message = "Automatic retry limit reached: " + message
+			}
+		}
 	}
 	straight := ""
 	if state == "needs_confirmation" {
@@ -1022,7 +1036,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		}
 	}
 	checkpointBody, _ := json.Marshal(map[string]any{"stage": state, "inventory_digest": digest, "selected_ids": selectedIDs(selected), "attempt": attempts + 1, "input_tokens": proposal.InputTokens, "output_tokens": proposal.OutputTokens, "straight_through": straight})
-	if _, err = finish.ExecContext(persist, `UPDATE preparation_intakes SET agent_claim=NULL,agent_checkpoint=$2 WHERE job_id=$1`, id, string(checkpointBody)); err != nil {
+	if _, err = finish.ExecContext(persist, `UPDATE preparation_intakes SET agent_claim=NULL,agent_checkpoint=$2,agent_retry_at=CASE WHEN $3 THEN now()+make_interval(mins => $4) ELSE NULL END WHERE job_id=$1`, id, string(checkpointBody), retry, attempts+1); err != nil {
 		return true, err
 	}
 	if _, err = finish.ExecContext(persist, `UPDATE preparation_jobs SET state=$2,error=$3 WHERE id=$1`, id, state, message); err != nil {
