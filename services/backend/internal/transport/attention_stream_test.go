@@ -98,3 +98,19 @@ func TestAttentionStreamFollowsTheInbox(t *testing.T) {
 		}
 	}
 }
+
+// Notification preferences change announcements, not whether Home learns that a decision changed.
+func TestAttentionVersionTracksMutedDecisions(t *testing.T) {
+	read := func(events []attentionEvent) map[string]any {
+		return attentionInbox(events, []string{"approve"}, false, "unread", 0, true)
+	}
+	before := read(nil)
+	events := []attentionEvent{{Key: "request:1", Kind: "request", Yours: true, Text: "A request waits for approval"}}
+	after := read(events)
+	if after["unread"].(int) != 0 || len(after["groups"].([]*attentionGroup)) != 0 {
+		t.Fatal("a muted decision must not become a notification")
+	}
+	if before["version"] == after["version"] {
+		t.Fatal("Home must refresh when a muted decision arrives")
+	}
+}

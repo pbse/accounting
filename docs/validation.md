@@ -5174,3 +5174,16 @@ A review found `cmd/revision-eval` could exit successfully with unnecessary ques
 - `scripts/evidence-run.sh` records which gate failed, or that both passed.
 
 Test: `TestSafetyAndTaskCompletionAreSeparateGates` (an incomplete change, a refused calculation and an unnecessary question are safe but not completed; a false acceptance fails safety; an unread note decides no completion; all correct passes both), with the existing case check. The live run with the context machine has not been made yet.
+
+
+## 2026-10-17 — Decisions become visible without a refresh (B02/B05/B06)
+
+Baseline: main `d816e340` (plan PR #505), isolated `codex/live-decision-freshness` worktree. Only synthetic records, a task-only development token and disposable native PostgreSQL 18 on loopback were used. No provider write or client send occurred.
+
+- Before the fix, the local browser's already-open Home and Requests draft view both missed the five-second visibility deadline after a proposal was persisted through the ordinary API from outside the tab. The test made no browser mutation that could invalidate its cache.
+- A regression, `TestAttentionVersionTracksMutedDecisions`, failed before the shared version fix: notification preferences excluded request notices, so Home did not learn of the new decision through the stream. It now passes while the muted item still contributes zero unread notifications and no unread group.
+- Attention checks now run every three seconds. Active close decision/goal and request reads use a shared three-second interval. Home retains its existing stream-triggered invalidation, avoiding a faster full-portfolio poll.
+- Final local Edge/Playwright check: Home updated after **2,843 ms**, despite request notifications being muted; Requests showed the proposal after **2,800 ms** with the attention stream deliberately unavailable. Both were measured from completion of the background proposal API response. Request wording edits survived subsequent polling; no browser errors were observed. This is a focused two-journey observation, not a hosted latency percentile.
+- Passed: `npm run check -w @close/frontend`; `TEST_DATABASE_URL=<local> go test ./internal/transport -run '^TestAttention(VersionTracksMutedDecisions|StreamFollowsTheInbox|InboxIsScopedPersonalAndDerivedFromCurrentState)$' -count=1`.
+
+Not established: hosted timing/load, a disconnected Home's five-second delivery, recoverable request-read UX, live-model/accountant correctness, full connected acceptance or either rehearsal. The normal minute polling/reconnect fallback remains when Home's stream is unavailable.

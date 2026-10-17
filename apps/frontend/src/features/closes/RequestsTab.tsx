@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Icon } from "@close/ui/components/Icon";
 import { Segmented } from "@close/ui/components/Segmented";
 import { clientPage } from "../../data/clients";
-import { workspaceQuery } from "../../data/queries";
+import { decisionRefreshMs, workspaceQuery } from "../../data/queries";
 import { useDates } from "../../data/time";
 import { EmailReplies } from "./EmailReplies";
 import type { Status } from "./Goal";
@@ -32,9 +32,9 @@ type Approved = {
 };
 type Proposed = { proposal: { id: string; recipient: string; body: string; questions: { question: string }[] } | null };
 // Read on arriving at the tab and on returning from one of its views (a draft approved there is a request now), then
-// every half minute.
-export const useApproved = (closeId: string) => useQuery({ ...workspaceQuery<Approved[]>(`/${closeId}/requests/approved`), refetchOnMount: "always", refetchInterval: 30_000, refetchOnWindowFocus: true });
-const useProposed = (closeId: string) => useQuery({ ...workspaceQuery<Proposed>(`/${closeId}/requests/proposed`), refetchInterval: 15_000, refetchOnWindowFocus: true });
+// within the decision visibility target.
+export const useApproved = (closeId: string) => useQuery({ ...workspaceQuery<Approved[]>(`/${closeId}/requests/approved`), refetchOnMount: "always", refetchInterval: decisionRefreshMs, refetchOnWindowFocus: true });
+const useProposed = (closeId: string) => useQuery({ ...workspaceQuery<Proposed>(`/${closeId}/requests/proposed`), refetchInterval: decisionRefreshMs, refetchOnWindowFocus: true });
 
 const words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 const capital = (text: string) => text[0].toUpperCase() + text.slice(1);

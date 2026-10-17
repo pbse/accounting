@@ -289,7 +289,8 @@ func attentionPreferences(ctx context.Context, db reader, r *http.Request) ([]st
 
 // attentionStreamEvery is how often the stream reads the inbox again; attentionStreamFor is how long one request
 // lives before the sidebar opens another. Tests shorten both.
-var attentionStreamEvery = 10 * time.Second
+// Leave headroom for the inbox refresh and render within the five-second online visibility target.
+var attentionStreamEvery = 3 * time.Second
 var attentionStreamFor = 2 * time.Minute
 
 // sessionDB holds the sign-in sessions (the firm pool itself when there is no separate one), for the stream's recheck.
@@ -576,10 +577,11 @@ func attentionInbox(events []attentionEvent, kinds []string, browser bool, view 
 		}
 		groups[i].Events = append(groups[i].Events, e)
 	}
-	// The version names this reading: the unread keys, and the groups shown in their order with their state, so a
-	// change of order, due date or text counts, not only a key arriving or leaving. The stream and the read share it,
-	// so the sidebar can tell a reading it holds from a change.
+	// The version also covers decisions excluded from notifications (muted, read or snoozed): Home still needs to
+	// refresh when their work changes. Listed groups retain visible ordering and close metadata. The stream and the
+	// unread read share this version, so the sidebar can recognize its cached snapshot.
 	listed, _ := json.Marshal(groups)
-	version := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(unread, "\n")+"\n"+string(listed))))[:16]
+	all, _ := json.Marshal(events)
+	version := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(unread, "\n")+"\n"+string(listed)+"\n"+string(all))))[:16]
 	return map[string]any{"groups": groups, "unread": len(unread), "unread_keys": unread, "page": page, "has_more": end < len(shown), "kinds": attentionKinds, "preferences": map[string]any{"kinds": kinds, "browser": browser}, "version": version}
 }
