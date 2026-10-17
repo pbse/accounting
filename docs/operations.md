@@ -61,7 +61,7 @@ No load test has been run yet.
 ## Release revision check
 
 `scripts/release-check.sh` runs the backend's full test suite for the checked-out revision in the release image's environment. Phase A asks for this ("full PDF/OCR and local-PostgreSQL checks reproduced for the release revision"):
-- **Image.** The `release-test` stage of `services/backend/Dockerfile` uses the same Debian release and document tools as the runtime stage (`poppler-utils`, `tesseract-ocr`).
+- **Image.** The `release-test` stage of `services/backend/Dockerfile` uses the same Debian release and document tools as the runtime stage (`poppler-utils`, `tesseract-ocr`), plus Node 24 for the context-machine CLI protocol fixture. Node is copied from the same image family as the context-machine runtime; the deployed API stage does not include it.
 - **Database.** A disposable PostgreSQL 18 container, production's major version. It is migrated twice, so a migration that cannot run on an already migrated database fails. Packages share it, so they run one at a time (`-p 1`): a test that works the preparation queue never takes another package's job.
 - **Revision.** `scripts/release-check.sh [revision]`, default `HEAD`. The revision is exported with `git archive` and mounted read-only, so uncommitted changes never count.
 - **Requirements.** Docker and `psql`.
