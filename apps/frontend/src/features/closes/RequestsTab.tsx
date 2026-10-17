@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Icon } from "@close/ui/components/Icon";
 import { Segmented } from "@close/ui/components/Segmented";
 import { clientPage } from "../../data/clients";
-import { decisionRefreshMs, workspaceQuery } from "../../data/queries";
+import { decisionRefreshMs, readFailed, workspaceQuery } from "../../data/queries";
 import { useDates } from "../../data/time";
 import { EmailReplies } from "./EmailReplies";
 import type { Status } from "./Goal";
@@ -83,7 +83,8 @@ const groups: [string, string][] = [
 // many wait on it, a draft waiting for approval, or that every one is answered; under it to whom, and the longest wait.
 export function RequestsLede({ closeId }: { closeId: string }) {
   const read = useApproved(closeId);
-  const proposed = useProposed(closeId).data?.proposal;
+  const proposalRead = useProposed(closeId);
+  const proposed = proposalRead.data?.proposal;
   const now = Date.now();
   const list = read.data ?? [];
   const by = (group: string) => list.filter((q) => requestStatus(q, now)[2] === group);
@@ -91,10 +92,10 @@ export function RequestsLede({ closeId }: { closeId: string }) {
   const attention = by("attention").length;
   const expired = by("expired").length;
   const waiting = by("waiting");
-  const sentence = !read.data
-    ? read.isError
-      ? "The requests could not be read."
-      : "Requests to the client."
+  const sentence = readFailed(read) || readFailed(proposalRead)
+    ? "Request status could not be refreshed."
+    : !read.data || proposalRead.isPending
+      ? "Reading requests to the client…"
     : held
       ? held === 1
         ? `The reply to ${by("held")[0].recipient} is held until you check who sent it.`
@@ -126,7 +127,7 @@ export function RequestsLede({ closeId }: { closeId: string }) {
 
 // RequestsTable is the tab's one table: the drafted request waiting for approval, then every approved request, newest
 // first, with its recipient, when it reached the client and where it stands. A row opens the work it is handled in.
-function RequestsTable({ approved, proposed, base }: { approved: Approved[]; proposed: Proposed["proposal"] | undefined; base: string }) {
+function RequestsTable({ approved, proposed, base, stale, loaded }: { approved: Approved[]; proposed: Proposed["proposal"] | undefined; base: string; stale: boolean; loaded: boolean }) {
   const dates = useDates();
   const [filter, setFilter] = useState("all");
   const now = Date.now();
@@ -199,7 +200,7 @@ function RequestsTable({ approved, proposed, base }: { approved: Approved[]; pro
             </span>
           </div>
         ))}
-        {rows.length === 0 && !proposed && <p className="ks-empty-row">No requests yet. The agent drafts one when a document or an account needs the client; or write one yourself.</p>}
+        {rows.length === 0 && !proposed && (stale || loaded) && <p className="ks-empty-row">{stale ? "Request status could not be refreshed." : "No requests yet. The agent drafts one when a document or an account needs the client; or write one yourself."}</p>}
       </div>
     </section>
   );
@@ -215,7 +216,8 @@ export function RequestsTab({ close, papers, needs, brief, briefRead, decisionsE
   const location = useLocation();
   const view = requestsView(params.get("view"), location.hash);
   const approved = useApproved(close.id);
-  const proposed = useProposed(close.id).data?.proposal;
+  const proposalRead = useProposed(close.id);
+  const proposed = proposalRead.data?.proposal;
   // Back on the table from a view the component stays mounted, so the list is read again here.
   const { refetch } = approved;
   const previous = useRef(view);
@@ -255,7 +257,13 @@ export function RequestsTab({ close, papers, needs, brief, briefRead, decisionsE
         ) : (
           <>
             <NeedsYou key={close.id} closeId={close.id} papers={papers} needs={needs} teammates={0} brief={lines} briefRead={briefRead} decisionsError={decisionsError} base={base} preparing={false} />
-            {approved.isError && !approved.data ? <p role="alert">{approved.error.message || "The requests could not be read."}</p> : <RequestsTable approved={list} proposed={proposed} base={base} />}
+            {(readFailed(approved) || readFailed(proposalRead)) && (
+              <p role="alert">
+                Request status could not be refreshed. Cached requests may have changed.{" "}
+                <button type="button" disabled={approved.isFetching || proposalRead.isFetching} onClick={() => void Promise.all([approved.refetch(), proposalRead.refetch()])}>Retry requests</button>
+              </p>
+            )}
+            <RequestsTable approved={list} proposed={proposed} base={base} stale={readFailed(approved) || readFailed(proposalRead)} loaded={approved.data !== undefined && proposalRead.data !== undefined} />
           </>
         )}
       </div>

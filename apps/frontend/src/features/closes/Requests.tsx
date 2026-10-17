@@ -35,7 +35,7 @@ export function Requests({ closeId }: { closeId: string }) {
       setBusy(false);
     }
   }
-  const none = proposed.data && !proposed.data.proposal;
+  const none = !proposed.isError && proposed.data && !proposed.data.proposal;
   return (
     <section id="client-request">
       <h2>Client request</h2>

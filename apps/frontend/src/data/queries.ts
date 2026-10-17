@@ -32,6 +32,10 @@ export function newQueryClient() {
 // Active decisions poll within the five-second visibility target, leaving time for the read and render.
 export const decisionRefreshMs = 3000;
 
+// An initial retry has pending status and no error object; keep the failed read visible until data arrives.
+export const readFailed = (read: { isError: boolean; data: unknown; errorUpdatedAt: number }) =>
+  read.isError || (read.data === undefined && read.errorUpdatedAt > 0);
+
 export const workspaceKey = (path: string): QueryKey => ["workspace", path];
 
 // workspaceQuery is the closes API's GET path (path is relative to /v1/closes, as workspaceRequest takes it).

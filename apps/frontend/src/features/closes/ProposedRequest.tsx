@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { decisionRefreshMs, workspaceKey, workspaceQuery } from "../../data/queries";
+import { decisionRefreshMs, readFailed, workspaceKey, workspaceQuery } from "../../data/queries";
 import { workspaceRequest } from "./workspace";
 import { PasscodeNotice, SendRequestEmail } from "./Email";
 
@@ -38,6 +38,15 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
     setConfirmed(false);
     setAdded("");
   }
+  const failed = readFailed(read);
+  const readError = failed ? (
+    <p role="alert">
+      {proposal ? "This request could not be refreshed. Your edits are kept; retry before approving." : "The drafted request could not be read."} {read.error?.message}{" "}
+      <button type="button" disabled={read.isFetching} onClick={() => void read.refetch()}>
+        {read.isFetching ? "Retrying…" : "Retry request"}
+      </button>
+    </p>
+  ) : null;
   if (opened) {
     return (
       <section aria-label="Approved client request">
@@ -57,8 +66,12 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
   // With no draft to show, what still needs saying: the request could not be read, or an approval was refused because the
   // draft was approved elsewhere or changed (the read that followed found none).
   if (!proposal) {
-    if (read.isError) return <p role="alert">The drafted request could not be read. {read.error.message}</p>;
-    return error ? <p role="alert">{error}</p> : null;
+    return (
+      <>
+        {readError}
+        {error && <p role="alert">{error}</p>}
+      </>
+    );
   }
   const to = recipient ?? proposal.recipient;
   const send = !!sender && !alone;
@@ -81,7 +94,7 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
   }
   async function approve(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!proposal) return;
+    if (!proposal || failed) return;
     setBusy(true);
     setError("");
     let result: { id: string; passcode: string; link_token: string };
@@ -113,6 +126,7 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
     <form aria-label="Drafted client request" onSubmit={(e) => void approve(e)}>
       <h3>Drafted client request · {proposal.entity} · {proposal.period}</h3>
       <p>The agent drafted these questions from the month's documents, its ledger accounts and its drafts; questions added by the firm follow them. Nothing goes to the client until you approve.</p>
+      {readError}
       {replaced && <p role="status">The agent updated this request since you opened it. Check it again before approving.</p>}
       <ol>
         {questions.map((q, i) => (
@@ -178,7 +192,7 @@ export function ProposedRequest({ closeId, onApproved }: { closeId: string; onAp
         {send ? `I approve this request, and its email from ${sender!.sender}, to this exact recipient.` : "I approve this request to this exact recipient. The email is a separate approval."}
       </label>
       {error && <p role="alert">{error}</p>}
-      <button className="primary" disabled={busy || !confirmed || !to.trim() || questions.some((q) => !q.question.trim())}>
+      <button className="primary" disabled={busy || failed || !confirmed || !to.trim() || questions.some((q) => !q.question.trim())}>
         {busy ? "Approving…" : send ? "Approve and send" : "Approve request"}
       </button>
     </form>

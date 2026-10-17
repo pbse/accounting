@@ -5187,3 +5187,17 @@ Baseline: main `d816e340` (plan PR #505), isolated `codex/live-decision-freshnes
 - Passed: `npm run check -w @close/frontend`; `TEST_DATABASE_URL=<local> go test ./internal/transport -run '^TestAttention(VersionTracksMutedDecisions|StreamFollowsTheInbox|InboxIsScopedPersonalAndDerivedFromCurrentState)$' -count=1`.
 
 Not established: hosted timing/load, a disconnected Home's five-second delivery, recoverable request-read UX, live-model/accountant correctness, full connected acceptance or either rehearsal. The normal minute polling/reconnect fallback remains when Home's stream is unavailable.
+
+
+## 2026-10-17 — Recover request reads without losing work (B02/B05/B06)
+
+Baseline: `eb8b548a` (visibility PR #506). Local synthetic client/month, development-token authentication and native PostgreSQL 18 only.
+
+- Before the fix, browser checks reproducing initial and background-refresh HTTP 503 failures both failed: no Retry action was available; a cached proposal did not expose its failed refresh.
+- `ProposedRequest`, shared by chat, goals and Requests, now offers **Retry request**. A cached form stays mounted with its edits and an explicit stale-read warning. Approval is disabled and the submit handler refuses it while the read is in error. A successful read of the same proposal restores approval eligibility; an actual replacement still clears wording and confirmation under the existing revision rule.
+- Requests' headline and list distinguish a failed read from no requests/all answered, retain cached rows and filters, and offer **Retry requests**. The drafting view does not offer an empty-request action from a failed cached read.
+- Local Edge/Playwright: initial read failure → Retry → current form passed. Cached refresh failure → disabled approval → Retry → same wording, recipient and confirmation → enabled approval passed; no page errors. The first cached check inspected the button before the retry response arrived; the corrected check awaited that response and passed. No request was approved or sent during these checks.
+- Opus found that an initial retry briefly clears query error status before data arrives. A delayed-503 browser regression reproduced a false empty list and disappearing Retry during that poll. The shared failure predicate now retains this state until a successful read; the list requires both reads before saying no requests exist.
+- Passed: affected frontend package type-check. Browser HTTP 503 responses were deliberately injected only on the synthetic proposal GET; successful reads used the ordinary local API.
+
+This establishes focused browser recovery, not a live-provider interruption/recovery rehearsal or full unaided-demo acceptance.
