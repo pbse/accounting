@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { workspaceKey, workspaceQuery } from "../../data/queries";
+import { decisionRefreshMs, workspaceKey, workspaceQuery } from "../../data/queries";
 import { workspaceRequest } from "./workspace";
 import { PasscodeNotice, SendRequestEmail } from "./Email";
 
@@ -13,7 +13,7 @@ type Proposal = { id: string; entity: string; period: string; recipient: string;
 // request alone, its email a second approval (or the link shared by hand).
 export function ProposedRequest({ closeId, onApproved }: { closeId: string; onApproved?: () => void }) {
   // Read again as the agent works, so a request it drafts in the background appears without a reload.
-  const read = useQuery({ ...workspaceQuery<{ proposal: Proposal | null }>(`/${closeId}/requests/proposed`), refetchInterval: 15_000, refetchOnWindowFocus: true });
+  const read = useQuery({ ...workspaceQuery<{ proposal: Proposal | null }>(`/${closeId}/requests/proposed`), refetchInterval: decisionRefreshMs, refetchOnWindowFocus: true });
   const queries = useQueryClient();
   const email = useQuery(workspaceQuery<{ hosted?: boolean; connection?: { id: string; sender: string } | null }>(`/email`));
   const proposal = read.data?.proposal;

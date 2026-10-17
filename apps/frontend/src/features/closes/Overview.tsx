@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Dialog } from "@close/ui/components/Dialog";
 import { Icon } from "@close/ui/components/Icon";
 import { Segmented } from "@close/ui/components/Segmented";
-import { workPath, workspaceQuery } from "../../data/queries";
+import { decisionRefreshMs, workPath, workspaceQuery } from "../../data/queries";
 import { closeTabs, type CloseTab } from "../../data/closeTabs";
 import { monthName, useDates } from "../../data/time";
 import { askAssistant } from "../dashboard/assistantStore";
@@ -25,13 +25,13 @@ import { scheduleTerms } from "../prepaids/MethodFields";
 // A close's decisions (GET /{id}/decisions): the events the inbox and the sidebar show, for this close alone, read or
 // snoozed included, since neither takes the work off the close.
 export function useDecisions(closeId: string) {
-  return useQuery({ ...workspaceQuery<{ events: AttentionEvent[] }>(`/${closeId}/decisions`), refetchInterval: 30_000, refetchOnWindowFocus: true });
+  return useQuery({ ...workspaceQuery<{ events: AttentionEvent[] }>(`/${closeId}/decisions`), refetchInterval: decisionRefreshMs, refetchOnWindowFocus: true });
 }
 
 // The goal as the header needs it: is the agent preparing, and is the close still to be handed over. Its light read is
 // the one the goal panel polls, so the page reads it once.
 export function useGoalStatus(closeId: string) {
-  return useQuery({ ...workspaceQuery<Status>(`/${closeId}/goal`), refetchInterval: 15_000 });
+  return useQuery({ ...workspaceQuery<Status>(`/${closeId}/goal`), refetchInterval: decisionRefreshMs });
 }
 const preparing = (status: Status | undefined) => status?.goal?.state === "active" && status.progress.items.some((i) => i.status === "working");
 const toHandOver = (status: Status | undefined) => !!status && !status.signed_off && (!status.goal || status.goal.state === "stopped");
