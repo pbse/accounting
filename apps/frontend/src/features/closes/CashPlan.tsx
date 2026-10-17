@@ -1,3 +1,4 @@
+import { decisionRefreshMs, readFailed } from "../../data/queries";
 import { cashPlanQuery } from "../../data/cashPlan";
 import { useQuery } from "@tanstack/react-query";
 import { useDates } from "../../data/time";
@@ -703,9 +704,35 @@ function Reviews({ closeId, plan, scenario, readOnly }: { closeId: string; plan:
   );
 }
 
+// Chat and the page supervise the same saved forecast decisions, with the same query and form.
+export function CashDecisionCard({ closeId }: { closeId: string }) {
+  const view = useQuery({
+    ...cashPlanQuery<Plan, Obligation, Scenario>(closeId, "", false),
+    refetchInterval: (query) => query.state.data?.plan.state === "ready" && query.state.data.plan.questions.length > 0 ? decisionRefreshMs : false,
+  });
+  const plan = view.data?.plan;
+  const failed = readFailed(view);
+  return (
+    <section className="assistant-card" aria-label="Current cash decisions">
+      <strong>{plan?.state === "ready" ? `${plan.entity} · Current cash decisions` : "Current cash decisions"}</strong>
+      {failed && <p role="alert">Could not refresh cash decisions. Refresh before deciding.</p>}
+      {failed && <button type="button" disabled={view.isFetching} onClick={() => void view.refetch()}>Retry cash decisions</button>}
+      {!plan && !failed && <p role="status">Reading the current forecast…</p>}
+      {plan?.state === "waiting" && <p>{plan.reason}</p>}
+      {plan?.state === "ready" && <>
+        <p>Forecast starts {plan.start}. These decisions change what the forecast counts.</p>
+        {plan.questions.length > 0 ? <fieldset disabled={failed}>
+          <Questions key={plan.digest} headingId={`chat-cash-questions-${closeId}`} closeId={closeId} capture={plan.open_items.capture_id} questions={plan.questions} show={(value) => amount(value, plan.currency)} onDecided={() => void view.refetch()} />
+        </fieldset> : !failed && <p role="status">No bill-to-schedule questions are open now.</p>}
+      </>}
+      <Link to={`/dashboard/closes/${closeId}?tab=cash`}>Open cash plan</Link>
+    </section>
+  );
+}
+
 // One focused decision per schedule date with undecided bills from its vendor that week: what each bill is to that
 // date's payment. Until then both count, which the effect states.
-function Questions({ closeId, capture, questions, show, onDecided }: { closeId: string; capture: string; questions: Question[]; show: (v: string) => string; onDecided: () => void }) {
+function Questions({ closeId, capture, questions, show, onDecided, headingId = "cash-questions" }: { headingId?: string; closeId: string; capture: string; questions: Question[]; show: (v: string) => string; onDecided: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [chosen, setChosen] = useState<Record<string, Relation>>({});
@@ -723,7 +750,7 @@ function Questions({ closeId, capture, questions, show, onDecided }: { closeId: 
   }
   return (
     <>
-      <SectionHeader id="cash-questions" title="Needs your decision: bills against schedules" />
+      <SectionHeader id={headingId} title="Needs your decision: bills against schedules" />
       {error && <p role="alert">{error}</p>}
       {questions.map((q) => (
         <fieldset key={`${q.obligation_id}-${q.on}`} disabled={busy}>
