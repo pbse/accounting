@@ -32,6 +32,7 @@ func TestOpenItemsKeepDecisionsAndSettleFromTheLedger(t *testing.T) {
 	var closeID, connection string
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
 	defer func() {
+		db.Exec(`DELETE FROM chat_sessions WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM open_item_actions WHERE client_entity=$1`, entity)
 		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, closeID)
@@ -93,7 +94,44 @@ func TestOpenItemsKeepDecisionsAndSettleFromTheLedger(t *testing.T) {
 	call("POST", map[string]any{"capture_id": got.CaptureID, "kind": "Invoice", "item_id": "404", "status": "following_up"}, 409)
 	call("POST", map[string]any{"capture_id": got.CaptureID, "kind": "Invoice", "item_id": "1", "status": "promised", "expected_on": "2026-10-10", "note": "Their AP lead promised on the phone", "assign": "take"}, 200)
 	call("POST", map[string]any{"capture_id": got.CaptureID, "kind": "Invoice", "item_id": "1", "status": "following_up"}, 409)
-	call("POST", map[string]any{"capture_id": got.CaptureID, "kind": "Bill", "item_id": "9", "status": "handed_to_bill_pay", "expected_on": "2026-10-14", "note": "Scheduled in the client's bill-pay tool"}, 200)
+	// A proposed date does nothing until the person confirms an external handoff; the ordinary route owns freshness.
+	args := map[string]any{"item_id": "9", "expected_on": "2026-10-14", "note": "Scheduled in the client's bill-pay tool"}
+	if why := billHandoffProposal(string(call("GET", nil, 200)), args); why != "" {
+		t.Fatal(why)
+	}
+	var session string
+	must(db.QueryRow(`INSERT INTO chat_sessions(organization_id,author,close_id,title) VALUES('local-development','local-development',$1,'Bill handoff') RETURNING id::text`, closeID).Scan(&session))
+	card := func() string {
+		t.Helper()
+		var id string
+		raw, _ := json.Marshal(agentProposal{Action: "bill_pay", Args: args})
+		must(db.QueryRow(`INSERT INTO chat_messages(organization_id,author,close_id,role,body,action,proposal,session_id) VALUES('local-development','local-development',$1,'assistant','Proposed date','bill_pay',$2,$3) RETURNING id::text`, closeID, string(raw), session).Scan(&id))
+		return id
+	}
+	confirm := func(id string, handed bool, want int) []byte {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/chat/"+id+"/confirm", strings.NewReader(fmtAny(map[string]bool{"handed_off": handed})))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("confirm %s: %d %s", id, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	id := card()
+	confirm(id, false, 422)
+	read()
+	if got.Payables[0].Action != nil {
+		t.Fatal("a proposal changed the bill without handoff confirmation")
+	}
+	confirm(id, true, 200)
+	confirm(id, true, 409)
+	if raw := confirm(card(), true, 409); !strings.Contains(string(raw), "new payment-date card") {
+		t.Fatalf("a stale card asks for a new proposal, not a futile refresh: %s", raw)
+	}
+
 	read()
 	promise, handoff := got.Receivables[0].Action, got.Payables[0].Action
 	if promise == nil || promise.Status != "promised" || promise.ExpectedOn != "2026-10-10" || promise.Owner == "" || handoff == nil || handoff.Status != "handed_to_bill_pay" || handoff.ExpectedOn != "2026-10-14" || handoff.Owner != "" {

@@ -81,10 +81,11 @@ const (
 )
 
 // agentWrites maps a write tool to the card it proposes. The tool never runs from the loop.
-var agentWrites = map[string]string{"prepare_close": "prepare", "recheck_close": "recheck", "stop_work": "stop", "draft_client_request": "request", "request_approval": "approval", "hand_over": "delegate", "select_closes": "portfolio", "open_close": "open_close"}
+var agentWrites = map[string]string{"prepare_close": "prepare", "recheck_close": "recheck", "stop_work": "stop", "draft_client_request": "request", "request_approval": "approval", "hand_over": "delegate", "select_closes": "portfolio", "open_close": "open_close", "propose_payment_date": "bill_pay"}
 
 // agentExtra are the tools the registry does not list for MCP: the chat's own reads and its proposals.
 var agentExtra = []mcpTool{
+	{name: "propose_payment_date", title: "Propose a bill payment date", description: "Propose a supported payment date for a bill from open_items read in this turn, with the reason and any uncertainty. It changes nothing until a person confirms they handed it to their external bill-pay tool. For speculative timing use a named cash scenario instead; never claim a payment was executed.", method: "POST", path: "/v1/closes/{close_id}/open-items", props: map[string]any{"close_id": mcpCloseID, "item_id": mcpText("An open Bill id from open_items."), "expected_on": mcpText("The proposed bill-pay date, YYYY-MM-DD."), "note": mcpText("Why this date is supported; name any uncertainty, 5 to 2,000 characters.")}, required: []string{"close_id", "item_id", "expected_on", "note"}},
 	{name: "executive_overview", title: "Your business overview", description: "The closes of the clients you are an executive of, and each close's newest published report with its headline figures (net income, book cash, working capital) and whether you acknowledged it.", method: "GET", path: "/v1/closes/executive", props: map[string]any{}, readOnly: true, cap: toolCap{array: "closes", limit: 40, arrays: []string{"published"}}, lineage: "closes[].id|truncated"},
 	{name: "list_publications", title: "Published reports", description: "A close's published management reports, newest first: version, who published it and when, commentary and acknowledgments.", method: "GET", path: "/v1/closes/{close_id}/management-pack/publications", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true, cap: toolCap{array: "publications", limit: 20}},
 	{name: "read_publication", title: "Read a published report", description: "One published management report as it was frozen. Without a section: its headline (the Profit and Loss measures, working capital, status). With section profit_and_loss, balance_sheet, working_capital, cash_flow or commentary: that part in full.", method: "GET", path: "/v1/closes/{close_id}/management-pack/publications/{publication_id}", props: map[string]any{"close_id": mcpCloseID, "publication_id": mcpText("The report's number from list_publications."), "section": map[string]any{"type": "string", "enum": []string{"summary", "profit_and_loss", "balance_sheet", "working_capital", "cash_flow", "commentary"}, "description": "The part to read; summary when omitted."}}, required: []string{"close_id", "publication_id"}, readOnly: true},
@@ -1078,6 +1079,15 @@ func validateProposal(t mcpTool, args map[string]any) string {
 		}
 	}
 	switch t.name {
+	case "propose_payment_date":
+		d, err := time.Parse("2006-01-02", text("expected_on"))
+		if err != nil || d.Year() < 2000 || d.Year() > 2100 {
+			return "expected_on must be a day between 2000 and 2100"
+		}
+		if n := len(text("note")); n < 5 || n > 2000 {
+			return "note must be 5 to 2,000 characters"
+		}
+		args["expected_on"], args["note"] = text("expected_on"), text("note")
 	case "hand_over":
 		if f := text("finish"); f != "review" && f != "signoff" {
 			return "finish must be review or signoff"
@@ -1202,6 +1212,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 	messages = append(messages, history...)
 	messages = append(messages, llm.Message{Role: "user", Content: asked(question)})
 	reads := map[string]agentRead{}
+	billReads := map[string]string{}
 	names := []string{entity}
 	deadline, hasDeadline := ctx.Deadline()
 	if !hasDeadline {
@@ -1218,6 +1229,10 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 	// finish takes up a read that ran: redaction, caps, lineage, and the text the model is told.
 	finish := func(p *agentPending, step *agentStep) string {
 		t, args, raw, ok := p.t, p.args, p.raw, p.ok
+		if t.name == "open_items" {
+			named, _ := args["close_id"].(string)
+			delete(billReads, named)
+		}
 		var value any
 		decoder := json.NewDecoder(strings.NewReader(raw))
 		decoder.UseNumber()
@@ -1311,10 +1326,14 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			db.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id::text=$1 AND organization_id=$2`, named, org).Scan(&scoped.entity, &scoped.period)
 		}
 		reads[step.ID] = scoped
+		if t.name == "open_items" {
+			billReads[pinned] = string(capped)
+		}
 		step.Status, step.Size, step.Truncated, step.Link = "ok", len(capped), truncated, &link
 		return step.ID + ": " + string(capped)
 	}
 	for round := 0; round < agentRounds && out.calls < agentCalls && !finalize; round++ {
+		seenBills := maps.Clone(billReads)
 		if left := time.Until(deadline); left < agentReserve+agentMinRound {
 			break
 		}
@@ -1474,6 +1493,12 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				if why := validateProposal(t, args); why != "" {
 					step.Status, output = "refused", "refused: "+why
 					break
+				}
+				if call.Name == "propose_payment_date" {
+					if why := billHandoffProposal(seenBills[target], args); why != "" {
+						step.Status, output = "refused", "refused: "+why
+						break
+					}
 				}
 				if agentWrites[call.Name] == "open_close" {
 					// The month is opened for a client the member is assigned to; the card confirms it as the Clients page

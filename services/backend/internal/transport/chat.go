@@ -1417,6 +1417,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	// the jobs it covered on the card. The route checks permission and re-checks the digest under its own lock.
 	confirm := func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
+			HandedOff  bool   `json:"handed_off"`
 			Digest     string `json:"digest"`
 			Reason     string `json:"reason"`
 			DueOn      string `json:"due_on"`
@@ -1518,6 +1519,26 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			}
 			json.Unmarshal(rec.Body.Bytes(), &goal)
 			record(map[string]any{"goal_id": goal.ID}, "The agent has the close, but this card could not record it. Open the close to see its progress.")
+			return
+		}
+		if action == "bill_pay" {
+			if !in.HandedOff {
+				problem(w, 422, "Confirm that you handed this bill to your external bill-pay tool for the proposed date.")
+				return
+			}
+			args := proposal.Args
+			rec := replay(r, "POST", base+"/open-items", map[string]any{"kind": "Bill", "item_id": args["item_id"], "capture_id": args["capture_id"], "previous_id": args["previous_id"], "status": "handed_to_bill_pay", "expected_on": args["expected_on"], "note": args["note"]})
+			if rec.Code == 409 {
+				problem(w, 409, "The bill or its follow-up changed. Read it again and ask for a new payment-date card.")
+				return
+			}
+			if rec.Code != 200 {
+				relay(rec)
+				return
+			}
+			var saved map[string]any
+			json.Unmarshal(rec.Body.Bytes(), &saved)
+			record(saved, "The handoff was saved, but this card could not record it. Check the bill's follow-up before retrying.")
 			return
 		}
 		if action == "approval" {
