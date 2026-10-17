@@ -38,7 +38,7 @@ run() {
 }
 echo "revision $revision"
 echo "postgres $(docker exec "$name-pg" psql -U close -d close_release -Atc 'show server_version')"
-run sh -c 'echo "go $(go env GOVERSION)"; pdftotext -v 2>&1 | head -1; tesseract --version 2>&1 | head -1'
+run sh -c 'echo "go $(go env GOVERSION)"; node --version; pdftotext -v 2>&1 | head -1; tesseract --version 2>&1 | head -1'
 status=0
 run || status=$?
 if [ "$status" -eq 0 ]; then echo "release check passed for $revision"; else echo "release check FAILED for $revision" >&2; fi

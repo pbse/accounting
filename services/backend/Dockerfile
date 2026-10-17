@@ -10,6 +10,7 @@ RUN CGO_ENABLED=0 go build -trimpath -o /api ./cmd/api && CGO_ENABLED=0 go build
 # release-test is the runtime's Debian release with the same document tools, plus Go: scripts/release-check.sh runs a
 # revision's full test suite in it. Nothing below builds from it; the image deployed is the last stage.
 FROM golang:1.27.1-bookworm AS release-test
+COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng util-linux && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo/services/backend
 CMD ["go", "test", "-count=1", "-p", "1", "./..."]
