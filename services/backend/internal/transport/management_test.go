@@ -429,6 +429,19 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 	must(json.Unmarshal(call("GET", base+"/readiness", nil, 200), &current))
 	call("POST", base+"/scope", map[string]any{"digest": current.Digest, "scope": closeScope{Description: "Management accounts", RequiredPapers: []string{}, ExternalSteps: []externalStep{{Name: "Ledger review", Complete: true, Reference: "Reviewed"}}}}, 200)
 	sign("sign")
+	var signedBrief struct {
+		Headline string
+		Lines    []briefLine
+	}
+	must(json.Unmarshal(call("GET", base+"/brief", nil, 200), &signedBrief))
+	if !strings.Contains(signedBrief.Headline, "Signed off for the declared scope") {
+		t.Fatalf("a current scope sign-off is not presented as unfinished: %+v", signedBrief)
+	}
+	for _, line := range signedBrief.Lines {
+		if line.State == "attention" || line.State == "waiting" {
+			t.Fatalf("the signed scope acquired a generic blocker: %+v", line)
+		}
+	}
 	publish["digest"] = digest()
 	// The drafted commentary is a starting point: published unedited, it is refused.
 	var drafted struct {
@@ -472,6 +485,10 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 		t.Fatalf("signed again with the same figures, the publication is current again: %+v", got)
 	}
 	capture("600.00", "1400.00")
+	must(json.Unmarshal(call("GET", base+"/brief", nil, 200), &signedBrief))
+	if strings.Contains(signedBrief.Headline, "Signed off for the declared scope") {
+		t.Fatal("changed books were hidden behind the old sign-off")
+	}
 	if got := list(); got.Publications[0].State != "needs_correction" {
 		t.Fatalf("changed books flag the published version: %+v", got)
 	}
