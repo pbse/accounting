@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/preparation"
 )
 
@@ -20,6 +22,16 @@ func TestTheCasesAreDraftsTheGoalCouldRevise(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range cases {
+		for _, group := range [][]document{c.Sources, c.Others} {
+			for _, source := range group {
+				if strings.HasSuffix(strings.ToLower(source.Name), ".pdf") {
+					_, body, _ := strings.Cut(source.Content, "\n")
+					if _, ok := documents.QuoteLocation(source.Name, source.Content, body); !ok {
+						t.Errorf("%s/%s: PDF fixture must carry extracted page labels so its text can be cited", c.ID, source.Name)
+					}
+				}
+			}
+		}
 		var fields struct {
 			Entity string `json:"entity"`
 			Period string `json:"close_period"`

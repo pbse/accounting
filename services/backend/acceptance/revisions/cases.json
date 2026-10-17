@@ -27,7 +27,7 @@
     "name": "northwind-invoice-INV-2207.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "NORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
    },
    {
     "id": "gl",
@@ -41,7 +41,7 @@
    {
     "id": "order",
     "name": "northwind-order-form.pdf",
-    "content": "NORTHWIND SOFTWARE ORDER FORM\nCustomer: Brightline Studio LLC\nPlan: Team, 12 months\nService begins July 1, 2026 and runs twelve months, through June 30, 2027.\nSigned 2026-06-02"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE ORDER FORM\nCustomer: Brightline Studio LLC\nPlan: Team, 12 months\nService begins July 1, 2026 and runs twelve months, through June 30, 2027.\nSigned 2026-06-02"
    }
   ],
   "returns": [
@@ -83,7 +83,7 @@
     "name": "northwind-invoice-INV-2207.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "NORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
    },
    {
     "id": "gl",
@@ -97,7 +97,7 @@
    {
     "id": "order",
     "name": "northwind-order-form.pdf",
-    "content": "NORTHWIND SOFTWARE ORDER FORM\nCustomer: Brightline Studio LLC\nPlan: Team, 12 months\nService begins July 1, 2026 and runs twelve months, through June 30, 2027.\nSigned 2026-06-02"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE ORDER FORM\nCustomer: Brightline Studio LLC\nPlan: Team, 12 months\nService begins July 1, 2026 and runs twelve months, through June 30, 2027.\nSigned 2026-06-02"
    }
   ],
   "returns": [
@@ -137,7 +137,7 @@
     "name": "northwind-invoice-INV-2207.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "NORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
    },
    {
     "id": "gl",
@@ -185,7 +185,7 @@
     "name": "northwind-invoice-INV-2207.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "NORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
    },
    {
     "id": "gl",
@@ -199,12 +199,12 @@
    {
     "id": "order",
     "name": "northwind-order-form.pdf",
-    "content": "NORTHWIND SOFTWARE ORDER FORM\nCustomer: Brightline Studio LLC\nPlan: Team, 12 months\nService begins July 1, 2026 and runs twelve months, through June 30, 2027.\nSigned 2026-06-02"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE ORDER FORM\nCustomer: Brightline Studio LLC\nPlan: Team, 12 months\nService begins July 1, 2026 and runs twelve months, through June 30, 2027.\nSigned 2026-06-02"
    },
    {
     "id": "amend",
     "name": "northwind-order-amendment.pdf",
-    "content": "AMENDMENT No. 1 TO ORDER FORM\nCustomer: Brightline Studio LLC\nThe parties agree the service start moves to August 1, 2026, with the term running through July 31, 2027.\nSigned 2026-06-20"
+    "content": "--- Page 1 · PDF text ---\nAMENDMENT No. 1 TO ORDER FORM\nCustomer: Brightline Studio LLC\nThe parties agree the service start moves to August 1, 2026, with the term running through July 31, 2027.\nSigned 2026-06-20"
    }
   ],
   "returns": [
@@ -244,7 +244,7 @@
     "name": "northwind-invoice-INV-2207.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "NORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
    },
    {
     "id": "gl",
@@ -258,7 +258,7 @@
    {
     "id": "renewal",
     "name": "northwind-renewal-letter.pdf",
-    "content": "Dear Brightline Studio,\nThank you for renewing. Your current term is extended and now runs through June 30, 2027.\nNorthwind Software billing team"
+    "content": "--- Page 1 · PDF text ---\nDear Brightline Studio,\nThank you for renewing. Your current term is extended and now runs through June 30, 2027.\nNorthwind Software billing team"
    }
   ],
   "returns": [
@@ -306,7 +306,7 @@
     "name": "northwind-invoice-INV-2207.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "NORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
    },
    {
     "id": "gl",
@@ -356,7 +356,7 @@
     "name": "northwind-invoice-INV-2207.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "NORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
    },
    {
     "id": "gl",
@@ -412,7 +412,7 @@
     "name": "northwind-invoice-INV-2207.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "NORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
+    "content": "--- Page 1 · PDF text ---\nNORTHWIND SOFTWARE INC.\n500 Market Street, San Francisco CA\n\nINVOICE INV-2207\nInvoice date: June 3, 2026\nBill to: Brightline Studio LLC\n\nDescription                                 Amount\nTeam plan, annual subscription            USD 1,200.00\nSubscription term: June 1, 2026 to May 31, 2027\n\nTotal due                                 USD 1,200.00\nPayment terms: Net 30"
    },
    {
     "id": "gl",
@@ -472,7 +472,7 @@
     "name": "harbor-cleaning-HC-881.pdf",
     "role": "invoice",
     "location": "page 1",
-    "content": "HARBOR CLEANING CO.\nInvoice HC-881, dated October 5, 2026\nBill to: Brightline Studio LLC\nOffice cleaning, September 1-30, 2026     USD 4,500.00\nTotal                                     USD 4,500.00"
+    "content": "--- Page 1 · PDF text ---\nHARBOR CLEANING CO.\nInvoice HC-881, dated October 5, 2026\nBill to: Brightline Studio LLC\nOffice cleaning, September 1-30, 2026     USD 4,500.00\nTotal                                     USD 4,500.00"
    }
   ],
   "others": [],
