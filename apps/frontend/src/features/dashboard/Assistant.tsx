@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { authKitClientId, useSession } from "../auth/Auth";
 import { GoalCard, localDate } from "../closes/Goal";
@@ -19,6 +19,8 @@ import { Icon } from "@close/ui/components/Icon";
 // A step the agent made for an answer: what ran, its outcome and where its detail lives; never its content.
 type Step = { id: string; tool: string; title: string; status: string; size?: number; truncated?: boolean; link?: { label: string; href: string } };
 type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request" | "approval" | "portfolio" | "open_close"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null; proposal?: Record<string, unknown>; target_close_id?: string; target_close?: string; steps?: Step[] };
+
+const CashDecisionCard = lazy(() => import("../closes/CashPlan").then((module) => ({ default: module.CashDecisionCard })));
 
 function readOpen() {
   try {
@@ -356,6 +358,9 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
   }
   // Only the newest card follows the close's work; older ones keep what they started.
   const newestCard = messages.map((m) => !!m.action).lastIndexOf(true);
+  const cashReads = messages.map((m) => [...new Set((m.steps ?? []).filter((step) => m.role === "assistant" && step.tool === "cash_plan" && step.status === "ok").flatMap((step) => step.link?.href.match(/^\/dashboard\/closes\/(\d+)\?tab=cash$/)?.[1] ?? []))]);
+  const latestCashRead = new Map(cashReads.flatMap((closes, i) => closes.map((id) => [id, i] as const)));
+
   // Typing "/" lists the commands, the same list the palette shows; arrows choose, Tab or Enter completes.
   const slash = !executive && text.startsWith("/") && !text.includes(" ") ? commands.filter((c) => c.name.startsWith(text.slice(1).toLowerCase()) && (!c.close || closeId || true)) : [];
   const chosen = slash[Math.min(selected, Math.max(slash.length - 1, 0))];
@@ -553,6 +558,9 @@ export function Conversation({ closeId, paperId, executive, focus, onClose, mode
                     <ActionCard closeId={cardClose} action={m.action} outcome={m.outcome} live={i === newestCard} proposedReason={String((m.proposal?.args as Record<string, unknown> | undefined)?.reason ?? "")} onConfirm={(body) => confirm(m.id, body)} />
                   ))
                 )}
+                {!executive && cashReads[i].filter((id) => latestCashRead.get(id) === i).map((id) => (
+                  <Suspense key={id} fallback={<p role="status">Loading cash decisions…</p>}><CashDecisionCard closeId={id} /></Suspense>
+                ))}
                 {(m.citations.length > 0 || (last && liveLinks.length > 0)) && (
                   <span className="assistant-chips" aria-label="Where this comes from">
                     {[...m.citations, ...(last ? liveLinks : [])].map((c, n) => (
