@@ -53,12 +53,12 @@ func simpleAsset(t *testing.T, withdraw bool) {
 		db.Exec(`UPDATE procedure_drafts SET activated_version_id=NULL WHERE id::text=$1`, draftID)
 		db.Exec(`UPDATE procedure_versions SET draft_id=NULL WHERE id::text=$1`, procedureID)
 		db.Exec(`DELETE FROM procedure_drafts WHERE id::text=$1`, draftID)
-		db.Exec(`DELETE FROM procedure_versions WHERE organization_id='local-development' AND client_entity=$1`, entity)
 		for _, id := range []string{closeID, exampleClose} {
 			for _, q := range []string{`DELETE FROM preparation_jobs WHERE close_id=$1`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id=$1`, `DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
 				db.Exec(q, id)
 			}
 		}
+		db.Exec(`DELETE FROM procedure_versions WHERE organization_id='local-development' AND client_entity=$1`, entity)
 	}()
 	instructions := "Asset cost account: Equipment\nDepreciation expense account: Depreciation\nAccumulated depreciation account: Accumulated Depreciation\nUseful life months: 12\nSalvage value: 0.00\nDepreciation convention: full_first_month\nQuickBooks company: 123\nVendor ID for Acme Equipment: 8"
 	must(db.QueryRow(`INSERT INTO procedure_drafts(organization_id,client_entity,kind,method,instructions,created_by) VALUES('local-development',$1,'prepaid',$2,$3,'fixture') RETURNING id::text`, entity, prepaids.Method, instructions).Scan(&draftID))
