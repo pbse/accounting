@@ -856,8 +856,7 @@ func OtherEvidence(ctx context.Context, q interface {
 }, closeID, jobID string) (bool, error) {
 	var other bool
 	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM evidence e WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND (e.extraction_state<>'ready'
- OR EXISTS(SELECT 1 FROM work_replies r WHERE r.source_id=e.id AND NOT EXISTS(SELECT 1 FROM request_jobs q WHERE q.request_id=r.request_id AND q.job_id::text=$2))
- OR EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id::text<>$2)))`, closeID, jobID).Scan(&other)
+ OR NOT (`+jobEvidence+`)))`, closeID, jobID).Scan(&other)
 	return other, err
 }
 

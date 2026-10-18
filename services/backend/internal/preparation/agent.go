@@ -33,11 +33,18 @@ func ReserveModelCalls(ctx context.Context, q interface {
 	return budget.ReserveModelCalls(ctx, q, org, n)
 }
 
+// jobEvidence is the visibility of evidence alias e to job $2, shared with the ambiguity check.
+// Deduplicated text can belong to several jobs; an explicit binding to this one remains authoritative.
+const jobEvidence = `(NOT EXISTS(SELECT 1 FROM work_replies r WHERE r.source_id=e.id) AND NOT EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id)
+ OR EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id=$2::bigint)
+ OR EXISTS(SELECT 1 FROM work_replies r JOIN request_jobs q ON q.request_id=r.request_id WHERE r.source_id=e.id AND q.job_id=$2::bigint)
+ OR EXISTS(SELECT 1 FROM preparation_intakes i WHERE i.source_id=e.id AND i.job_id=$2::bigint))`
+
 // Inventory is always scoped by the authenticated close. Replies belonging to
 // another request are not interchangeable evidence, even inside the same close. A released client document
 // is a reply to the request it answered, but the primary source of its own intake, so that job reads it as one.
 func AgentInventory(ctx context.Context, tx *sql.Tx, closeID, jobID string) ([]IntakeSource, string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT e.id::text,e.name,e.digest,e.content,e.extraction_state,COALESCE(e.superseded_by::text,''),e.procedure_id IS NOT NULL,EXISTS(SELECT 1 FROM work_replies r JOIN request_jobs q ON q.request_id=r.request_id WHERE r.source_id=e.id AND q.job_id=$2 AND NOT EXISTS(SELECT 1 FROM preparation_intakes i WHERE i.job_id=$2 AND i.source_id=e.id)),EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id=$2) FROM evidence e WHERE e.close_id=$1 AND e.purpose='work' AND (NOT EXISTS(SELECT 1 FROM work_replies r WHERE r.source_id=e.id) OR EXISTS(SELECT 1 FROM work_replies r JOIN request_jobs q ON q.request_id=r.request_id WHERE r.source_id=e.id AND q.job_id=$2)) AND (NOT EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id) OR EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id=$2)) ORDER BY e.id`, closeID, jobID)
+	rows, err := tx.QueryContext(ctx, `SELECT e.id::text,e.name,e.digest,e.content,e.extraction_state,COALESCE(e.superseded_by::text,''),e.procedure_id IS NOT NULL,EXISTS(SELECT 1 FROM work_replies r JOIN request_jobs q ON q.request_id=r.request_id WHERE r.source_id=e.id AND q.job_id=$2 AND NOT EXISTS(SELECT 1 FROM preparation_intakes i WHERE i.job_id=$2 AND i.source_id=e.id)),EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id=$2) FROM evidence e WHERE e.close_id=$1 AND e.purpose='work' AND `+jobEvidence+` ORDER BY e.id`, closeID, jobID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -65,6 +72,7 @@ func AgentInventory(ctx context.Context, tx *sql.Tx, closeID, jobID string) ([]I
 		if reply {
 			s.Role = "client_reply"
 		}
+		s.PreparerAnswer = answer
 		s.Location = "Full extracted text"
 		sources = append(sources, s)
 	}
@@ -225,7 +233,7 @@ Prepaid supports accrual, equal full months or inclusive actual-day allocation. 
 Accrual supports a fixed incurred closing amount or a separately approved actual-invoice true-up linked to a cited prior estimate. Confirm the booked liability credit balance (including zero), evidence/estimate basis and optional next-month reversal; only the new adjustment reverses. Propose estimate_amount, estimate_reference and actual_reference when cited, but do not choose the method or invent estimates, actuals or materiality. Choose primary source as invoice (service evidence), other records, including account-scoped ledger pages, as support. Ledger role is reserved for reconciliation CSV. Fields: amount, service_start, service_end, currency, expense_account, liability_account, booked_balance, booking_reference, estimation_basis, estimate_amount, estimate_reference, actual_reference.
 Reconciliation begins with unique exact-date/amount candidates from TWO separate CSV documents whose header is id,date,amount. Select statement and ledger, with primary source one of them; other evidence may be support or client_reply. Grouped and exact-net split matches, approved tolerances, cited prior and current outstanding items, and transfers across two accounts are reviewed methods, not agent-confirmed facts. Ask for the accountant-approved rule, gross/fee source rows for a split, clearing row for a prior item, and both accounts' statement and ledger records for a transfer; propose relevant evidence as support. Native QuickBooks reconciliation status remains a separate reviewer-cited observation; never infer it from a matching workpaper. Fields: account,currency,statement_opening,statement_closing,ledger_opening,ledger_closing,expected_pages,pages (comma-separated observed page numbers). Never fabricate transactions or infer missing pages/balances from totals. A PDF statement's rows become a CSV only after a person reviews them from its Evidence entry; until then ask for that review. A reviewed "<name> rows.csv" is the statement CSV, and its PDF is support for the opening and closing balances and pages.
 Deferred_revenue schedules an amount billed to a customer in advance over its service period, between a revenue account and a deferred revenue liability. Select the customer invoice or contract as primary invoice and related records as support. Fields: amount, service_start, service_end, currency, expense_account (the revenue account), prepaid_account (the deferred revenue liability), booked_balance, booking_reference.
-Depreciation schedules a fixed asset's cost over its useful life, between depreciation expense and accumulated depreciation. Select the purchase invoice as primary invoice and the asset register, policy or in-service evidence as support. Fields: amount (cost), service_start (date placed in service), service_end (last day of the useful life), salvage_value, currency, expense_account (depreciation expense), prepaid_account (accumulated depreciation), booked_balance (booked accumulated depreciation), booking_reference. Read vendor, invoice_number and billed_to from the purchase invoice. An applied, approved asset policy may explicitly state Asset cost account, Depreciation expense account, Accumulated depreciation account, Useful life months, Salvage value and Depreciation convention: full_first_month. In that case the server derives the allocation dates and reads booked depreciation from current books; do not invent or ask for those derived values. Still cite the actual placed-in-service date from the invoice; invoice, order or delivery dates do not establish it. Select that policy as support. Never infer useful life, salvage, convention or disposal when policy/evidence does not state it.
+Depreciation schedules a fixed asset's cost over its useful life, between depreciation expense and accumulated depreciation. Select the purchase invoice as primary invoice and the asset register, policy or in-service evidence as support. Fields: amount (cost), service_start (date placed in service), service_end (last day of the useful life), salvage_value, currency, expense_account (depreciation expense), prepaid_account (accumulated depreciation), booked_balance (booked accumulated depreciation), booking_reference. Read vendor, invoice_number and billed_to from the purchase invoice. An applied, approved asset policy may explicitly state Asset cost account, Depreciation expense account, Accumulated depreciation account, Useful life months, Salvage value and Depreciation convention: full_first_month. In that case the server derives the allocation dates and reads booked depreciation from current books; do not invent or ask for those derived values. Cite the actual placed-in-service date from the invoice or this job's preparer answer. A direct answer may give only that date; it cannot supply policy authority. Invoice, order or delivery dates do not establish it. Select that policy as support. Never infer useful life, salvage, convention or disposal when policy/evidence does not state it.
 Loan checks one month of a loan against the lender's statement. The primary source must be the lender statement (role statement); the note or agreement and the amortization schedule are support, and one ledger page for the loan account is ledger. A note, agreement or schedule alone is support for its statement's job: return unsupported and say which statement it supports. Fields: lender, agreement_reference, annual_rate (percent), opening_principal, interest_paid_through, closing_principal, book_balance, loan_account, interest_account, principal_due_next_12_months, schedule_reference. Never split payments, choose a method or day-count, or infer rate changes or fees; cite the note's interest clause as agreement_reference, and the preparer enters payments from the statement.
 Owner is one owner-related transaction in the close month: a personal cost paid by the business, or a business cost paid by the owner. Select the receipt or transaction record as primary support and one ledger page showing its booking as ledger. Fields: transaction_reference, transaction_date, payee, amount, ledger_reference, stated_purpose, client_confirmation_reference. Never decide the direction, treatment, business-use share or entity type.
 Payroll records one month's payroll from the payroll provider's summary of pay dates in the close month; it never runs payroll. Select the provider's payroll summary or register as primary support and one ledger page of the account the payroll bank debits are booked to as ledger. Fields: provider, source_reference (the summary's title and date range), first_pay_date, last_pay_date, gross_wages, employee_taxes (withheld from employees), employee_deductions (other employee withholdings), net_pay, employer_taxes, employer_contributions, provider_debits (what the provider debited from the bank for these pay dates), ledger_debits (the payroll debits on the ledger page, in total), ledger_reference. A summary spanning several months is unsupported: ask for one per month. Never choose accounts.
@@ -381,12 +389,22 @@ func validateInterpretation(result agentResult, primary string, sources []Intake
 		if s.Role != "invoice" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "client_reply" {
 			return invalid()
 		}
-		if (s.Role == "client_reply") != (source.Role == "client_reply") {
-			return invalid()
+		// The database identifies replies, answers and applied procedures; the model cannot reattribute them.
+		role := s.Role
+		switch source.Role {
+		case "answer", "procedure", "client_reply":
+			role = "support"
+			if source.Role == "client_reply" {
+				role = "client_reply"
+			}
+		default:
+			if role == "client_reply" {
+				return invalid()
+			}
 		}
-		source.Role = s.Role
+		source.Role = role
 		selected[s.ID] = source.Source
-		roles[s.Role]++
+		roles[role]++
 	}
 	// All replies to this job stay visible and bound to final preparation.
 	for _, s := range sources {
@@ -868,7 +886,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		// Facts the source and the ledger both show advance to a draft under the firm's procedure; anything else waits for a person.
 		// The procedure, the capture and the aliases are read here, in the finishing transaction, and only for a proposal that could qualify.
 		var plan Plan
-		reason := "only an agent-read prepaid invoice with no open questions can be prepared without confirmation"
+		reason := "this preparation needs a person to confirm its method or evidence"
 		if (proposal.Kind == "prepaid" || proposal.Kind == "depreciation") && llm.IsModelEngine(proposal.Engine) && len(proposal.Questions) == 0 && len(proposal.Lines) == 0 {
 			procedure, e := CurrentProcedure(persist, finish, closeID, "prepaid")
 			if e != nil && e != sql.ErrNoRows {
