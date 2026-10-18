@@ -100,6 +100,41 @@ func TestStraightAssetRequiresApprovedPolicyAndCapitalizedPurchase(t *testing.T)
 	}
 	invoice.Content = strings.TrimSuffix(invoice.Content, "\nPlaced in service: 2026-09-20")
 	answer.PreparerAnswer = false
+	answer.Role = "client_reply"
+	answer.Content = "Client reply for Example\n\n1. asset.txt: When was it placed in service?\nAnswer: 2026-09-14\n\n2. Other document: When was it placed in service?\nAnswer: 2026-09-20\n"
+	answer.ClientAnswers = []ClientAnswer{{"When was it placed in service?", "2026-09-14", "\n1. asset.txt: When was it placed in service?\nAnswer: 2026-09-14\n"}}
+	if _, reason = StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); reason != "" {
+		t.Fatal("the explicitly bound client answer did not complete preparation:", reason)
+	}
+	for _, question := range []string{"When was it placed in service, or when is it going to be?", "When is it going to be placed in service?", "When should it be placed in service?", "When will it be placed in service?", "When is it scheduled to be placed in service?", "When is it expected to be placed in service?", "When was it ordered and placed in service?", "in service asset.pdf: When was it delivered?"} {
+		answer.ClientAnswers[0].Question = question
+		if _, why := StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); why == "" {
+			t.Fatal("a planned or unrelated date question established actual in-service:", question)
+		}
+	}
+	answer.ClientAnswers[0].Question = "Per the fixed asset schedule, when was it placed in service?"
+	if _, why := StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); why != "" {
+		t.Fatal("a past-tense question mentioning its schedule was held:", why)
+	}
+	for i := range proposal.Facts {
+		if proposal.Facts[i].Field == "service_start" {
+			proposal.Facts[i].Value = "2026-09-20"
+			proposal.Facts[i].Candidates[0].Value = "2026-09-20"
+			proposal.Facts[i].Candidates[0].Quote = "2026-09-20"
+		}
+	}
+	if _, why := StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); why == "" {
+		t.Fatal("another job's client answer supplied the asset date")
+	}
+	for i := range proposal.Facts {
+		if proposal.Facts[i].Field == "service_start" {
+			proposal.Facts[i].Value = "2026-09-14"
+			proposal.Facts[i].Candidates[0].Value = "2026-09-14"
+			proposal.Facts[i].Candidates[0].Quote = "2026-09-14"
+		}
+	}
+	answer.Content = "2026-09-14"
+	answer.ClientAnswers = nil
 	if _, reason = StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); reason == "" {
 		t.Fatal("an unbound answer supplied the asset date")
 	}

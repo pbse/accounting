@@ -120,6 +120,9 @@ func requestBody(entity, period string, questions []proposedQuestion) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Request for information — %s · %s\n\nPlease help us complete this month's books:\n", entity, period)
 	for n, q := range questions {
+		// Each stored question occupies one numbered line, even when model text or a filename contains line breaks.
+		q.Document = strings.Join(strings.Fields(q.Document), " ")
+		q.Question = strings.Join(strings.Fields(q.Question), " ")
 		if q.Document == "" {
 			fmt.Fprintf(&b, "\n%d. %s\n", n+1, q.Question)
 		} else {

@@ -55,8 +55,13 @@ type ScheduleLine struct {
 	Facts    []Fact `json:"facts"`
 	SetAside string `json:"set_aside,omitempty"`
 }
+type ClientAnswer struct {
+	Question, Answer, Content string
+}
+
 type IntakeSource struct {
-	PreparerAnswer bool `json:"-"` // Set only from this job's stored answer ownership.
+	PreparerAnswer bool           `json:"-"` // Set only from this job's stored answer ownership.
+	ClientAnswers  []ClientAnswer `json:"-"` // Verified numbered answers bound to this job.
 	Source
 	Content string
 }

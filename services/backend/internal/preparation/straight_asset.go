@@ -29,7 +29,7 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 	}
 	answers := map[string]IntakeSource{}
 	for _, source := range selected {
-		if source.PreparerAnswer {
+		if source.PreparerAnswer || len(source.ClientAnswers) > 0 {
 			answers[source.ID] = source
 		}
 	}
@@ -45,7 +45,7 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 					invoice.Source = source
 				}
 			}
-		} else if !machine[source.ID] && !answers[source.ID].PreparerAnswer {
+		} else if !machine[source.ID] && answers[source.ID].ID == "" {
 			return Plan{}, "additional asset support needs a person to weigh it"
 		}
 	}
@@ -78,7 +78,7 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 		if _, ok := documents.QuoteLocation(source.Name, source.Content, f.Candidates[0].Quote); !ok || !valueShown(f.Field, f.Value, f.Candidates[0].Quote) {
 			return Plan{}, "a fact's value or quote is not in its source"
 		}
-		fromAnswer := f.Field == "service_start" && source.PreparerAnswer
+		fromAnswer := f.Field == "service_start" && answers[source.ID].ID != ""
 		if slices.Contains([]string{"amount", "currency", "service_start", "vendor", "billed_to", "invoice_number"}, f.Field) && source.ID != invoice.ID && !fromAnswer {
 			return Plan{}, "purchase identity, cost and in-service date must come from the invoice"
 		}
@@ -103,11 +103,11 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 	}
 	start, err := time.Parse("2006-01-02", facts["service_start"])
 	explicit := dateLineSays(quotes["service_start"], facts["service_start"], "", []string{"in service"}, []string{"invoice date", "due", "delivery", "order"}, nil)
-	if dateSource.PreparerAnswer {
-		explicit = assetAnswerDate(dateSource.Content, facts["service_start"])
+	if answers[dateSource.ID].ID != "" {
+		explicit = assetSourceDate(dateSource, facts["service_start"], quotes["service_start"])
 	}
 	if err != nil || !strings.HasPrefix(facts["service_start"], period+"-") || !explicit {
-		return Plan{}, "the invoice or this job's preparer answer must explicitly state when the asset was placed in service in this close month"
+		return Plan{}, "the invoice or this job's answer must explicitly state when the asset was placed in service in this close month"
 	}
 	for _, line := range strings.Split(invoice.Content, "\n") {
 		normal := documents.NormalizeEntity(line)
@@ -116,8 +116,8 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 		}
 	}
 	for _, answer := range answers {
-		if !assetAnswerDate(answer.Content, facts["service_start"]) {
-			return Plan{}, "a preparer answer is ambiguous or changes more than this asset's in-service date; a person weighs it"
+		if !assetSourceDate(answer, facts["service_start"], "") {
+			return Plan{}, "a job-bound answer is ambiguous or changes more than this asset's in-service date; a person weighs it"
 		}
 	}
 	amount, err := prepaids.Amount(facts["amount"])
@@ -144,7 +144,7 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 	}
 	first := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
 	input := prepaids.Input{Schedule: prepaids.Depreciation, Entity: entity, ClosePeriod: period, Currency: currency, Amount: prepaids.Money(amount), ServiceStart: first.Format("2006-01-02"), ServiceEnd: first.AddDate(0, months, -1).Format("2006-01-02"), SalvageValue: policy("Salvage value"), ExpenseAccount: policy("Depreciation expense account"), PrepaidAccount: policy("Accumulated depreciation account"), BookedBalance: "0.00", BookingReference: "Current Trial Balance #" + ledger.ChartSource.ID, SourceReference: "Evidence #" + invoice.ID + "; in service " + facts["service_start"] + "; approved full first month", Basis: "accrual", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true}
-	if dateSource.PreparerAnswer {
+	if answers[dateSource.ID].ID != "" {
 		input.SourceReference += "; date from answer #" + dateSource.ID
 	}
 	raw, _ := json.Marshal(input)
@@ -255,7 +255,7 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 	rule.Role, rule.Location = "procedure", "Version "+procedure.ID+"; approved full-first-month asset policy"
 	plan.Sources = []Source{invoice.Source, capture, chart, rule}
 	for _, source := range p.Sources {
-		if answers[source.ID].PreparerAnswer {
+		if answers[source.ID].ID != "" {
 			plan.Sources = append(plan.Sources, source)
 		}
 	}
@@ -300,4 +300,24 @@ func assetAnswerDate(body, date string) bool {
 		}
 	}
 	return dateLineSays(body, date, "", []string{"in service"}, []string{"invoice date", "due", "delivery", "order", "received"}, nil)
+}
+
+var assetInServiceQuestion = regexp.MustCompile(`^(?:per the fixed asset schedule )?(?:when|on what date) (?:was|were) (?:it|they|this asset|the asset|this equipment|the equipment) (?:first )?(?:placed|put|brought) in service$`)
+
+// A consolidated reply can contain dates for other work; only this job's verified question/answer blocks count.
+func assetSourceDate(source IntakeSource, date, quote string) bool {
+	if source.PreparerAnswer {
+		return assetAnswerDate(source.Content, date)
+	}
+	matched := quote == ""
+	for _, part := range source.ClientAnswers {
+		q := documents.NormalizeEntity(part.Question)
+		if !assetInServiceQuestion.MatchString(q) || !assetAnswerDate(part.Answer, date) {
+			return false
+		}
+		if _, ok := documents.QuoteLocation(source.Name, part.Content, quote); quote != "" && ok {
+			matched = true
+		}
+	}
+	return len(source.ClientAnswers) > 0 && matched
 }
