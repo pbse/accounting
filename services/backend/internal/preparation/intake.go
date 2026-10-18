@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -89,10 +90,10 @@ func Propose(sources []IntakeSource) Proposal {
 	}
 	if p.Kind == "accrual" {
 		definitions = nil
-		for _, field := range []string{"amount", "service_start", "service_end", "currency", "expense_account", "liability_account", "booked_balance", "booking_reference", "estimation_basis", "estimate_amount", "estimate_reference", "actual_reference"} {
+		for _, field := range []string{"amount", "service_start", "service_end", "currency", "expense_account", "liability_account", "booked_balance", "booking_reference", "estimation_basis", "estimate_amount", "estimate_reference", "actual_reference", "reverse_next_month", "vendor", "billed_to", "invoice_number"} {
 			label := strings.ReplaceAll(field, "_", " ")
 			question := "Confirm " + label + " from incurred-service and ledger evidence."
-			if field == "estimate_amount" || field == "estimate_reference" || field == "actual_reference" {
+			if field == "estimate_amount" || field == "estimate_reference" || field == "actual_reference" || field == "reverse_next_month" || slices.Contains(IdentityFacts, field) {
 				question = ""
 			}
 			definitions = append(definitions, struct{ field, label, question string }{field, label, question})

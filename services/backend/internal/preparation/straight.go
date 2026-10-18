@@ -26,14 +26,20 @@ type LedgerRow struct {
 // Ledger is the close's current QuickBooks capture: its evidence entry, the rows the check reads, and the account
 // names by ID and IDs by name from the same connection's newest chart of accounts.
 type Ledger struct {
-	Source      Source
-	Chart       string // the quickbooks_snapshots row the accounts come from
-	ChartSource Source // that snapshot's evidence entry, cited by the draft so a new chart reopens its review
-	Rows        []LedgerRow
-	Accounts    map[string]string   // account ID → name
-	Types       map[string]string   // account ID → its QuickBooks account type ("Bank", "Credit Card")
-	IDs         map[string][]string // lower-cased name or fully qualified name → account IDs
-	Machine     map[string]bool     // every capture, period-snapshot and procedure-copy evidence entry of the close, current or older
+	AccountCatalog json.RawMessage
+	TrialBalance   json.RawMessage
+	ReportPeriod   string
+	Realm          string
+	CaptureRealm   string
+	ChartRealm     string
+	Source         Source
+	Chart          string // the quickbooks_snapshots row the accounts come from
+	ChartSource    Source // that snapshot's evidence entry, cited by the draft so a new chart reopens its review
+	Rows           []LedgerRow
+	Accounts       map[string]string   // account ID → name
+	Types          map[string]string   // account ID → its QuickBooks account type ("Bank", "Credit Card")
+	IDs            map[string][]string // lower-cased name or fully qualified name → account IDs
+	Machine        map[string]bool     // every capture, period-snapshot and procedure-copy evidence entry of the close, current or older
 }
 
 // StraightThrough turns an agent proposal into a prepaid plan without a person confirming each field, when every
@@ -874,8 +880,8 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	var l Ledger
 	var connection string
 	var captured time.Time
-	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name,s.connection_id::text,COALESCE(s.started_at,s.finished_at,now()) FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
- WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND `+SourceAllows("s.close_id", "quickbooks")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name, &connection, &captured)
+	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name,s.connection_id::text,COALESCE(x.realm,''),COALESCE(s.payload->>'realm',''),COALESCE(s.started_at,s.finished_at,now()) FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
+ WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND `+SourceAllows("s.close_id", "quickbooks")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name, &connection, &l.Realm, &l.CaptureRealm, &captured)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -900,7 +906,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	var catalog []byte
 	// The chart must be at least as current as the transaction capture it is read beside; a chart refresh that failed
 	// after a successful capture leaves no chart to trust.
-	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload->'accounts',COALESCE(e.id::text,''),COALESCE(e.digest,''),COALESCE(e.name,'') FROM quickbooks_snapshots s LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id::text=$1 AND s.connection_id::text=$2 AND s.payload ? 'period' AND COALESCE(s.captured_at,s.started_at)>=$3 ORDER BY s.id DESC LIMIT 1`, closeID, connection, captured).Scan(&l.Chart, &catalog, &l.ChartSource.ID, &l.ChartSource.Digest, &l.ChartSource.Name)
+	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload->'accounts',COALESCE(s.payload->'reports'->'TrialBalance','{}'::jsonb),COALESCE(s.payload->>'period',''),COALESCE(s.realm,''),COALESCE(e.id::text,''),COALESCE(e.digest,''),COALESCE(e.name,'') FROM quickbooks_snapshots s LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id::text=$1 AND s.connection_id::text=$2 AND s.payload ? 'period' AND COALESCE(s.captured_at,s.started_at)>=$3 ORDER BY s.id DESC LIMIT 1`, closeID, connection, captured).Scan(&l.Chart, &catalog, &l.TrialBalance, &l.ReportPeriod, &l.ChartRealm, &l.ChartSource.ID, &l.ChartSource.Digest, &l.ChartSource.Name)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
@@ -921,6 +927,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	if err := machine.Err(); err != nil {
 		return nil, err
 	}
+	l.AccountCatalog = catalog
 	var accounts []struct{ ID, Name, FullyQualifiedName, AccountType string }
 	json.Unmarshal(catalog, &accounts)
 	l.Accounts, l.IDs, l.Types = map[string]string{}, map[string][]string{}, map[string]string{}
@@ -939,7 +946,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 }
 
 // queueStraightThrough queues the plan on the job as the agent's confirmation. When the invoice replaced exactly one
-// source that exactly one current prepaid draft cites, the plan revises that draft: the old draft is already marked as
+// source that exactly one current draft of the same kind cites, the plan revises that draft: the old draft is already marked as
 // changed at source, the new one carries the lineage, and the change review shows only what moved. Any other lineage
 // (two replaced sources, two drafts citing one) is a person's to resolve, and the reason says so.
 func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoiceID string, plan Plan) (string, error) {
@@ -955,9 +962,9 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
   SELECT id, superseded_by, 1 FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2
   UNION ALL SELECT e.id, e.superseded_by, c.depth+1 FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE c.depth < 20),
  drafts AS (SELECT DISTINCT w.id, (COALESCE((w.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=w.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND i.confirmed_by='agent')) AND w.paper->'carry_forward' IS NULL AS straight FROM workpapers w, chain
-  WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role','invoice'))
+  WHERE w.close_id::text=$1 AND w.kind=$3 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role','invoice'))
   AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
- SELECT EXISTS(SELECT 1 FROM chain GROUP BY parent HAVING count(*)>1),EXISTS(SELECT 1 FROM chain WHERE depth>=20),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID).Scan(&branching, &truncated, &citing, &eligible, &revises)
+ SELECT EXISTS(SELECT 1 FROM chain GROUP BY parent HAVING count(*)>1),EXISTS(SELECT 1 FROM chain WHERE depth>=20),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID, plan.Kind).Scan(&branching, &truncated, &citing, &eligible, &revises)
 	if err != nil {
 		return "", err
 	}
@@ -982,6 +989,11 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 		}
 	}
 	plan.Revises = revises
+	if plan.Kind == "accrual" {
+		if reason, err := AccrualDrafted(ctx, tx, closeID, plan); err != nil || reason != "" {
+			return reason, err
+		}
+	}
 	plans, _ := json.Marshal([]Plan{plan})
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans)); err != nil {
 		return "", err
@@ -1025,7 +1037,7 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 	rows, err := q.QueryContext(ctx, `SELECT e.id::text,COALESCE(e.content,''),i.proposal,e.id>COALESCE((SELECT source_id FROM preparation_intakes WHERE job_id::text=$2),0) OR EXISTS(SELECT 1 FROM preparation_jobs oj WHERE oj.id=i.job_id AND oj.state IN ('failed','cancelled'))
  FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
 
- WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
+ WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','accrual','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -1043,8 +1055,11 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 		if json.Unmarshal(raw, &other) != nil || strings.TrimSpace(text) == "" || strings.Contains(text, documents.UnreadPage) {
 			continue
 		}
+		if p.Kind != "accrual" && other.Kind == "accrual" {
+			continue
+		}
 		lower, normal := strings.ToLower(text), documents.NormalizeEntity(text)
-		if other.Kind != "prepaid" {
+		if other.Kind != "prepaid" && other.Kind != "accrual" {
 			statement := other.Kind != "unsupported"
 			for _, src := range other.Sources {
 				statement = statement || src.ID == id && src.Role == "statement"
@@ -1102,7 +1117,7 @@ func sameInvoice(a, b Proposal) bool {
 	return x != nil && slices.Equal(x, read(b))
 }
 
-// EarlierCopy names the close's earlier current prepaid document this job's reading is a copy of (a rescan of the same
+// EarlierCopy names the close's earlier current invoice document of the same kind this job's reading is a copy of (a rescan of the same
 // invoice) whose work has not failed or been cancelled, or "" when there is none; that document's work prepares the
 // invoice.
 func EarlierCopy(ctx context.Context, q interface {
@@ -1110,8 +1125,8 @@ func EarlierCopy(ctx context.Context, q interface {
 }, closeID, jobID string, p Proposal) (string, error) {
 	rows, err := q.QueryContext(ctx, `SELECT e.name,i.proposal FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
  JOIN preparation_jobs j ON j.id=i.job_id AND j.state NOT IN ('failed','cancelled')
- WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind'='prepaid'
- AND e.id<(SELECT source_id FROM preparation_intakes WHERE job_id::text=$2) ORDER BY e.id`, closeID, jobID)
+ WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind'=$3
+ AND e.id<(SELECT source_id FROM preparation_intakes WHERE job_id::text=$2) ORDER BY e.id`, closeID, jobID, p.Kind)
 	if err != nil {
 		return "", err
 	}

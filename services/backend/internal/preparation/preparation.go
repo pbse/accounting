@@ -353,7 +353,12 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil && e != sql.ErrNoRows {
 				return false, e
 			}
-			if e := ProcedurePinned(p, current); e != nil {
+			if p.Kind == "accrual" && p.RecurringAccrual == nil {
+				if reason := AccrualProcedurePinned(p, current); reason != "" {
+					failure = reason
+					break
+				}
+			} else if e := ProcedurePinned(p, current); e != nil {
 				failure = e.Error()
 				break
 			}
@@ -398,6 +403,46 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			ledger, e := CloseLedger(ctx, tx, closeID)
 			if e != nil {
 				return false, e
+			}
+			if p.Kind == "accrual" && p.RecurringAccrual == nil {
+				if reason, e := AccrualDrafted(ctx, tx, closeID, p); e != nil {
+					return false, e
+				} else if reason != "" {
+					failure = reason
+					break
+				}
+				if copied, e := EarlierCopy(ctx, tx, closeID, id, proposal); e != nil {
+					return false, e
+				} else if copied != "" {
+					failure = "Another copy already prepares this service; a person confirms whether it is separate."
+					break
+				}
+				selected, e := CurrentProposalSources(ctx, tx, closeID, id, proposal)
+				if e != nil {
+					failure = e.Error()
+					break
+				}
+				rule, e := ProcedureEvidence(ctx, tx, closeID, current.ID)
+				if e != nil {
+					return false, e
+				}
+				profile, e := ClientProfile(ctx, tx, closeID)
+				if e != nil {
+					return false, e
+				}
+				other, e := UnrelatedEvidence(ctx, tx, closeID, id, proposal)
+				if e != nil {
+					return false, e
+				}
+				home := ""
+				if profile.State == "detected" || profile.State == "confirmed" {
+					home = profile.Currency
+				}
+				_, reason := StraightAccrual(proposal, selected, current, rule, home, entity, period, aliases, false, other, ledger)
+				if reason != "" {
+					failure = reason
+					break
+				}
 			}
 			if ledger == nil || ledger.Chart != p.Chart || !slices.ContainsFunc(p.Sources, func(s Source) bool {
 				return s.Role == "period_ledger" && s.ID == ledger.Source.ID && s.Digest == ledger.Source.Digest
