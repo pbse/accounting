@@ -955,16 +955,20 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 	// revision in a person's hands. The chain of replacements is followed, so a source replaced twice before its
 	// replacement was read still leads to the current draft; two sources replaced by the same file anywhere along the chain,
 	// or a chain longer than twenty replacements, are a person's to resolve.
-	var branching, truncated bool
+	var schedule struct {
+		Schedule string `json:"schedule"`
+	}
+	json.Unmarshal(plan.Input, &schedule)
+	var branching, truncated, mismatched bool
 	var citing, eligible int
 	var revises string
 	err := tx.QueryRowContext(ctx, `WITH RECURSIVE chain(id, parent, depth) AS (
   SELECT id, superseded_by, 1 FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2
   UNION ALL SELECT e.id, e.superseded_by, c.depth+1 FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE c.depth < 20),
- drafts AS (SELECT DISTINCT w.id, (COALESCE((w.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=w.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND i.confirmed_by='agent')) AND w.paper->'carry_forward' IS NULL AS straight FROM workpapers w, chain
+ drafts AS (SELECT DISTINCT w.id, (COALESCE((w.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=w.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND i.confirmed_by='agent')) AND w.paper->'carry_forward' IS NULL AS straight,COALESCE(w.paper->'input'->>'schedule','')=$4 AS same_schedule FROM workpapers w, chain
   WHERE w.close_id::text=$1 AND w.kind=$3 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role','invoice'))
   AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
- SELECT EXISTS(SELECT 1 FROM chain GROUP BY parent HAVING count(*)>1),EXISTS(SELECT 1 FROM chain WHERE depth>=20),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID, plan.Kind).Scan(&branching, &truncated, &citing, &eligible, &revises)
+ SELECT EXISTS(SELECT 1 FROM chain GROUP BY parent HAVING count(*)>1),EXISTS(SELECT 1 FROM chain WHERE depth>=20),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight AND same_schedule),COALESCE((SELECT max(id)::text FROM drafts WHERE straight AND same_schedule),''),EXISTS(SELECT 1 FROM drafts WHERE NOT same_schedule)`, closeID, invoiceID, plan.Kind, schedule.Schedule).Scan(&branching, &truncated, &citing, &eligible, &revises, &mismatched)
 	if err != nil {
 		return "", err
 	}
@@ -973,6 +977,8 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 		return "the replacement stands for more than one earlier source or draft; a person chooses which draft it revises", nil
 	case truncated:
 		return "the replacement chain is too long to follow; a person chooses which draft it revises", nil
+	case citing == 1 && mismatched:
+		return "the draft citing the replaced invoice uses a different schedule; a person chooses its revision", nil
 	case citing == 1 && eligible == 0:
 		return "the draft citing the replaced invoice was confirmed by a person; a person chooses its revision", nil
 	case eligible == 0:
@@ -1037,7 +1043,7 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 	rows, err := q.QueryContext(ctx, `SELECT e.id::text,COALESCE(e.content,''),i.proposal,e.id>COALESCE((SELECT source_id FROM preparation_intakes WHERE job_id::text=$2),0) OR EXISTS(SELECT 1 FROM preparation_jobs oj WHERE oj.id=i.job_id AND oj.state IN ('failed','cancelled'))
  FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
 
- WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','accrual','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
+ WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','accrual','depreciation','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -1055,11 +1061,11 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 		if json.Unmarshal(raw, &other) != nil || strings.TrimSpace(text) == "" || strings.Contains(text, documents.UnreadPage) {
 			continue
 		}
-		if p.Kind != "accrual" && other.Kind == "accrual" {
+		if p.Kind == "prepaid" && other.Kind == "accrual" {
 			continue
 		}
 		lower, normal := strings.ToLower(text), documents.NormalizeEntity(text)
-		if other.Kind != "prepaid" && other.Kind != "accrual" {
+		if other.Kind != "prepaid" && other.Kind != "accrual" && other.Kind != "depreciation" {
 			statement := other.Kind != "unsupported"
 			for _, src := range other.Sources {
 				statement = statement || src.ID == id && src.Role == "statement"

@@ -225,7 +225,7 @@ Prepaid supports accrual, equal full months or inclusive actual-day allocation. 
 Accrual supports a fixed incurred closing amount or a separately approved actual-invoice true-up linked to a cited prior estimate. Confirm the booked liability credit balance (including zero), evidence/estimate basis and optional next-month reversal; only the new adjustment reverses. Propose estimate_amount, estimate_reference and actual_reference when cited, but do not choose the method or invent estimates, actuals or materiality. Choose primary source as invoice (service evidence), other records, including account-scoped ledger pages, as support. Ledger role is reserved for reconciliation CSV. Fields: amount, service_start, service_end, currency, expense_account, liability_account, booked_balance, booking_reference, estimation_basis, estimate_amount, estimate_reference, actual_reference.
 Reconciliation begins with unique exact-date/amount candidates from TWO separate CSV documents whose header is id,date,amount. Select statement and ledger, with primary source one of them; other evidence may be support or client_reply. Grouped and exact-net split matches, approved tolerances, cited prior and current outstanding items, and transfers across two accounts are reviewed methods, not agent-confirmed facts. Ask for the accountant-approved rule, gross/fee source rows for a split, clearing row for a prior item, and both accounts' statement and ledger records for a transfer; propose relevant evidence as support. Native QuickBooks reconciliation status remains a separate reviewer-cited observation; never infer it from a matching workpaper. Fields: account,currency,statement_opening,statement_closing,ledger_opening,ledger_closing,expected_pages,pages (comma-separated observed page numbers). Never fabricate transactions or infer missing pages/balances from totals. A PDF statement's rows become a CSV only after a person reviews them from its Evidence entry; until then ask for that review. A reviewed "<name> rows.csv" is the statement CSV, and its PDF is support for the opening and closing balances and pages.
 Deferred_revenue schedules an amount billed to a customer in advance over its service period, between a revenue account and a deferred revenue liability. Select the customer invoice or contract as primary invoice and related records as support. Fields: amount, service_start, service_end, currency, expense_account (the revenue account), prepaid_account (the deferred revenue liability), booked_balance, booking_reference.
-Depreciation schedules a fixed asset's cost over its useful life, between depreciation expense and accumulated depreciation. Select the purchase invoice as primary invoice and the asset register, policy or in-service evidence as support. Fields: amount (cost), service_start (date placed in service), service_end (last day of the useful life), salvage_value, currency, expense_account (depreciation expense), prepaid_account (accumulated depreciation), booked_balance (booked accumulated depreciation), booking_reference. Never infer a useful life, salvage value, declining balance, convention or disposal; ask for the evidence.
+Depreciation schedules a fixed asset's cost over its useful life, between depreciation expense and accumulated depreciation. Select the purchase invoice as primary invoice and the asset register, policy or in-service evidence as support. Fields: amount (cost), service_start (date placed in service), service_end (last day of the useful life), salvage_value, currency, expense_account (depreciation expense), prepaid_account (accumulated depreciation), booked_balance (booked accumulated depreciation), booking_reference. Read vendor, invoice_number and billed_to from the purchase invoice. An applied, approved asset policy may explicitly state Asset cost account, Depreciation expense account, Accumulated depreciation account, Useful life months, Salvage value and Depreciation convention: full_first_month. In that case the server derives the allocation dates and reads booked depreciation from current books; do not invent or ask for those derived values. Still cite the actual placed-in-service date from the invoice; invoice, order or delivery dates do not establish it. Select that policy as support. Never infer useful life, salvage, convention or disposal when policy/evidence does not state it.
 Loan checks one month of a loan against the lender's statement. The primary source must be the lender statement (role statement); the note or agreement and the amortization schedule are support, and one ledger page for the loan account is ledger. A note, agreement or schedule alone is support for its statement's job: return unsupported and say which statement it supports. Fields: lender, agreement_reference, annual_rate (percent), opening_principal, interest_paid_through, closing_principal, book_balance, loan_account, interest_account, principal_due_next_12_months, schedule_reference. Never split payments, choose a method or day-count, or infer rate changes or fees; cite the note's interest clause as agreement_reference, and the preparer enters payments from the statement.
 Owner is one owner-related transaction in the close month: a personal cost paid by the business, or a business cost paid by the owner. Select the receipt or transaction record as primary support and one ledger page showing its booking as ledger. Fields: transaction_reference, transaction_date, payee, amount, ledger_reference, stated_purpose, client_confirmation_reference. Never decide the direction, treatment, business-use share or entity type.
 Payroll records one month's payroll from the payroll provider's summary of pay dates in the close month; it never runs payroll. Select the provider's payroll summary or register as primary support and one ledger page of the account the payroll bank debits are booked to as ledger. Fields: provider, source_reference (the summary's title and date range), first_pay_date, last_pay_date, gross_wages, employee_taxes (withheld from employees), employee_deductions (other employee withholdings), net_pay, employer_taxes, employer_contributions, provider_debits (what the provider debited from the bank for these pay dates), ledger_debits (the payroll debits on the ledger page, in total), ledger_reference. A summary spanning several months is unsupported: ask for one per month. Never choose accounts.
@@ -234,8 +234,9 @@ If identity, work type, source role, date scope or method is ambiguous or unsupp
 
 // agentFields are the cited facts each form-prepared kind accepts, named as that form's fields.
 var agentFields = map[string][]string{
+	"reconciliation":   {"account", "currency", "statement_opening", "statement_closing", "ledger_opening", "ledger_closing", "expected_pages", "pages"},
 	"deferred_revenue": {"amount", "service_start", "service_end", "currency", "expense_account", "prepaid_account", "booked_balance", "booking_reference"},
-	"depreciation":     {"amount", "service_start", "service_end", "salvage_value", "currency", "expense_account", "prepaid_account", "booked_balance", "booking_reference"},
+	"depreciation":     {"amount", "service_start", "service_end", "salvage_value", "currency", "expense_account", "prepaid_account", "booked_balance", "booking_reference", "vendor", "billed_to", "invoice_number"},
 	"loan":             {"lender", "agreement_reference", "annual_rate", "opening_principal", "interest_paid_through", "closing_principal", "book_balance", "loan_account", "interest_account", "principal_due_next_12_months", "schedule_reference"},
 	"owner":            {"transaction_reference", "transaction_date", "payee", "amount", "ledger_reference", "stated_purpose", "client_confirmation_reference"},
 	"payroll":          {"provider", "source_reference", "first_pay_date", "last_pay_date", "gross_wages", "employee_taxes", "employee_deductions", "net_pay", "employer_taxes", "employer_contributions", "provider_debits", "ledger_debits", "ledger_reference"},
@@ -299,7 +300,27 @@ func interpret(ctx context.Context, entity, period, currency, primary string, so
 	}
 	// The schema describes only proposals. There are deliberately no executable
 	// tools, URLs, journal fields, confirmations, or credentials in model context.
-	schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["kind","summary","questions","sources","facts","lines"],"properties":{"kind":{"type":"string","enum":["prepaid","accrual","reconciliation","deferred_revenue","depreciation","loan","owner","payroll","unsupported"]},"summary":{"type":"string"},"questions":{"type":"array","items":{"type":"string"}},"sources":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","role"],"properties":{"id":{"type":"string"},"role":{"type":"string","enum":["invoice","statement","ledger","support","client_reply","schedule"]}}}},"facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["field","value","source_id","quote","line"],"properties":{"field":{"type":"string"},"value":{"type":"string"},"source_id":{"type":"string"},"quote":{"type":"string"},"line":{"type":"integer"}}}},"lines":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["line","row"],"properties":{"line":{"type":"integer"},"row":{"type":"string"}}}}}}`)
+	// The provider must use the same fact vocabulary the proposal validators accept. Policy context is not a second
+	// input channel: life, convention and account decisions the server reads itself cannot become invented fact fields.
+	fields := append(slices.Clone(scheduleFields), loanFields...)
+	fields = append(fields, loanRowFields...)
+	byKind := map[string][]string{}
+	for kind, definitions := range map[string][]Fact{"prepaid": Propose(nil).Facts, "accrual": Propose([]IntakeSource{{Source: Source{Role: "invoice"}, Content: "Preparation kind: accrual"}}).Facts} {
+		for _, f := range definitions {
+			fields = append(fields, f.Field)
+			byKind[kind] = append(byKind[kind], f.Field)
+		}
+	}
+	for kind, names := range agentFields {
+		fields = append(fields, names...)
+		byKind[kind] = names
+	}
+	slices.Sort(fields)
+	fieldNames, _ := json.Marshal(slices.Compact(fields))
+	kinds, _ := json.Marshal(byKind)
+	fieldDescription, _ := json.Marshal("Use only the fields for the returned kind: " + string(kinds) + ". Policy context outside that kind's fields is read by the server; do not map it to another kind's field. Opening schedule rows additionally use their documented row fields.")
+
+	schema := json.RawMessage(fmt.Sprintf(`{"type":"object","additionalProperties":false,"required":["kind","summary","questions","sources","facts","lines"],"properties":{"kind":{"type":"string","enum":["prepaid","accrual","reconciliation","deferred_revenue","depreciation","loan","owner","payroll","unsupported"]},"summary":{"type":"string"},"questions":{"type":"array","items":{"type":"string"}},"sources":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","role"],"properties":{"id":{"type":"string"},"role":{"type":"string","enum":["invoice","statement","ledger","support","client_reply","schedule"]}}}},"facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["field","value","source_id","quote","line"],"properties":{"field":{"type":"string","enum":%s,"description":%s},"value":{"type":"string"},"source_id":{"type":"string"},"quote":{"type":"string"},"line":{"type":"integer"}}}},"lines":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["line","row"],"properties":{"line":{"type":"integer"},"row":{"type":"string"}}}}}}`, fieldNames, fieldDescription))
 	contextData, _ := json.Marshal(map[string]any{"entity": entity, "close_period": period, "home_currency": currency, "primary_source_id": primary, "evidence": sources})
 	request := llm.Request{Purpose: "preparation", MaxResponseBytes: 262144, MaxOutputTokens: 6000, Instructions: agentInstructions, Data: json.RawMessage(contextData), Schema: &llm.OutputSchema{Name: "preparation_proposal", Definition: schema}}
 	if opening {
@@ -416,18 +437,11 @@ func validateInterpretation(result agentResult, primary string, sources []Intake
 	if p.Kind == "accrual" {
 		definitions = Propose([]IntakeSource{{Source: Source{Role: "invoice"}, Content: "Preparation kind: accrual"}}).Facts
 	}
-	if p.Kind == "reconciliation" {
-		definitions = []Fact{}
-		for _, field := range []string{"account", "currency", "statement_opening", "statement_closing", "ledger_opening", "ledger_closing", "expected_pages", "pages"} {
-			label := strings.ReplaceAll(field, "_", " ")
-			definitions = append(definitions, Fact{Field: field, Label: label, Question: "Confirm " + label + " from the source evidence.", Candidates: []Candidate{}})
-		}
-	}
 	if fields := agentFields[p.Kind]; fields != nil {
 		definitions = []Fact{}
 		for _, field := range fields {
 			label := strings.ReplaceAll(field, "_", " ")
-			definitions = append(definitions, Fact{Field: field, Label: label, Question: "Confirm " + label + " from the source evidence.", Candidates: []Candidate{}})
+			definitions = append(definitions, Fact{Field: field, Label: label, Optional: slices.Contains(IdentityFacts, field), Question: "Confirm " + label + " from the source evidence.", Candidates: []Candidate{}})
 		}
 	}
 	if p.Kind == "unsupported" {
@@ -855,7 +869,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		// The procedure, the capture and the aliases are read here, in the finishing transaction, and only for a proposal that could qualify.
 		var plan Plan
 		reason := "only an agent-read prepaid invoice with no open questions can be prepared without confirmation"
-		if proposal.Kind == "prepaid" && llm.IsModelEngine(proposal.Engine) && len(proposal.Questions) == 0 && len(proposal.Lines) == 0 {
+		if (proposal.Kind == "prepaid" || proposal.Kind == "depreciation") && llm.IsModelEngine(proposal.Engine) && len(proposal.Questions) == 0 && len(proposal.Lines) == 0 {
 			procedure, e := CurrentProcedure(persist, finish, closeID, "prepaid")
 			if e != nil && e != sql.ErrNoRows {
 				return true, e
@@ -896,7 +910,11 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 			check := proposal
 			check.Unselected = slices.DeleteFunc(slices.Clone(proposal.Unselected), func(s Source) bool { return unrelated[s.ID] })
-			plan, reason = StraightThrough(check, invoice, current, procedure, rule, home, entity, period, id, unread, ledger)
+			if proposal.Kind == "depreciation" {
+				plan, reason = StraightAsset(check, selected, procedure, rule, home, entity, period, current, unread, ledger)
+			} else {
+				plan, reason = StraightThrough(check, invoice, current, procedure, rule, home, entity, period, id, unread, ledger)
+			}
 			// A rescan of an invoice already in the close is not prepared twice; a person decides only if it is a separate invoice.
 			if copied, e := EarlierCopy(persist, finish, closeID, id, proposal); e != nil {
 				return true, e
@@ -910,6 +928,9 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 			if reason == "" {
 				straight = "Prepared without confirmation: every fact is one verified candidate, procedure v" + procedure.ID + " fixes the method and accounts, and one captured bill from its vendor expenses the amount."
+				if proposal.Kind == "depreciation" {
+					straight = "Prepared without confirmation: the purchase is capitalized, the invoice gives its in-service date, and the approved asset policy fixes useful life, salvage, accounts and the full first month. Current books explicitly show zero accumulated depreciation. Review is still required."
+				}
 			}
 		} else if proposal.Kind == "accrual" && llm.IsModelEngine(proposal.Engine) && len(proposal.Lines) == 0 {
 			procedure, e := CurrentProcedure(persist, finish, closeID, "accrual")
@@ -1084,7 +1105,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	// Read as a prepaid invoice or a statement, this document may have been the last thing another invoice's job was left
 	// for a person over: a job not yet confirmed, whose every other unused document now proves to be another invoice, is read again.
 	// Siblings someone holds are skipped; a sibling still waiting on a document not yet read stays as it is.
-	if (state == "needs_confirmation" || state == "queued") && llm.IsModelEngine(proposal.Engine) && slices.Contains([]string{"prepaid", "accrual", "reconciliation", "payroll", "loan", "unsupported"}, proposal.Kind) {
+	if (state == "needs_confirmation" || state == "queued") && llm.IsModelEngine(proposal.Engine) && slices.Contains([]string{"prepaid", "accrual", "depreciation", "reconciliation", "payroll", "loan", "unsupported"}, proposal.Kind) {
 		if err = rereadSiblings(persist, finish, closeID, id, primary); err != nil {
 			return true, err
 		}

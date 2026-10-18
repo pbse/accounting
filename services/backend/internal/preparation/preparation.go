@@ -349,12 +349,22 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				}
 			}
 		} else if p.Procedure != "" {
+			var schedule struct {
+				Schedule string `json:"schedule"`
+			}
+			json.Unmarshal(p.Input, &schedule)
+			asset := p.Kind == "prepaid" && schedule.Schedule == prepaids.Depreciation
 			current, e := CurrentProcedure(ctx, tx, closeID, p.Kind)
 			if e != nil && e != sql.ErrNoRows {
 				return false, e
 			}
 			if p.Kind == "accrual" && p.RecurringAccrual == nil {
 				if reason := AccrualProcedurePinned(p, current); reason != "" {
+					failure = reason
+					break
+				}
+			} else if asset {
+				if reason := AssetProcedurePinned(p, current); reason != "" {
 					failure = reason
 					break
 				}
@@ -404,12 +414,14 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return false, e
 			}
-			if p.Kind == "accrual" && p.RecurringAccrual == nil {
-				if reason, e := AccrualDrafted(ctx, tx, closeID, p); e != nil {
-					return false, e
-				} else if reason != "" {
-					failure = reason
-					break
+			if asset || p.Kind == "accrual" && p.RecurringAccrual == nil {
+				if !asset {
+					if reason, e := AccrualDrafted(ctx, tx, closeID, p); e != nil {
+						return false, e
+					} else if reason != "" {
+						failure = reason
+						break
+					}
 				}
 				if copied, e := EarlierCopy(ctx, tx, closeID, id, proposal); e != nil {
 					return false, e
@@ -438,7 +450,14 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				if profile.State == "detected" || profile.State == "confirmed" {
 					home = profile.Currency
 				}
-				_, reason := StraightAccrual(proposal, selected, current, rule, home, entity, period, aliases, false, other, ledger)
+				reason := ""
+				if asset {
+					check := proposal
+					check.Unselected = slices.DeleteFunc(slices.Clone(proposal.Unselected), func(s Source) bool { return other[s.ID] })
+					_, reason = StraightAsset(check, selected, current, rule, home, entity, period, aliases, false, ledger)
+				} else {
+					_, reason = StraightAccrual(proposal, selected, current, rule, home, entity, period, aliases, false, other, ledger)
+				}
 				if reason != "" {
 					failure = reason
 					break

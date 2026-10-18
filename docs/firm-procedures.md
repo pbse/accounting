@@ -75,3 +75,24 @@ Vendor ID for Acme Services: 8
 The company/vendor IDs above are illustrative. Record the client’s actual company ID and map each source issuer to its approved QuickBooks vendor ID; a firm-wide default cannot supply company-specific identities. The active connection, transaction capture and chart must agree with that company. Vendor IDs prevent a different ledger display name from hiding a booking. Confirmed client aliases remain valid billed-to names. Use the actual chart names and an explicit `true` or `false` reversal choice. This is approved policy, not permission an uploaded invoice can grant. The agent cites the account choices from the applied procedure copy. It needs one source identifying the issuer, document number, billed client, positive **unbilled** service amount and wholly incurred service dates in the close month and home currency. The current connected QuickBooks capture and accrual Trial Balance must explicitly establish a zero current-liability balance, unique accounts, no matching service booking and no liability activity. A missing row is not zero. An existing accrual draft on that liability also holds a new zero-balance adjustment, including one made by the recurring sweep. Nonzero balances, estimates, credits, amendments, extra related evidence, transactions whose posting accounts or counterparties cannot be resolved, and ambiguous facts remain specific decisions for a person. Fixed recurring accruals continue through the existing approved-rule sweep; this path does not infer a recurring rule from a first service.
 
 The queued job rechecks its source inventory, current policy, books and duplicate-document lineage before saving. A source replacement can revise its own unposted agent-prepared draft through the existing lineage path; a posted or human-confirmed predecessor needs a person's correction. Sources, capture, chart and procedure remain attached to the draft and ordinary review remains required. This local capability is not accountant acceptance or live-provider validation.
+
+## Automatic new assets
+
+A newly capitalized purchase can advance from intake to a reviewable depreciation draft under the existing equal-month calculator. Activate a **client-specific learned prepaid procedure with a reviewed depreciation example**, then apply it to the close. A prepaid example alone does not enable assets. Keep the normal prepaid account fields for prepaids; asset mappings are explicit instruction lines:
+
+```text
+Asset cost account: Equipment
+Depreciation expense account: Depreciation
+Accumulated depreciation account: Accumulated Depreciation
+Useful life months: 12
+Salvage value: 0.00
+Depreciation convention: full_first_month
+QuickBooks company: 123
+Vendor ID for Acme Equipment: 8
+```
+
+Use the client's actual accounts, life, salvage and provider identities. These illustrative values are not accounting advice or an activated firm policy. The approved full-first-month convention derives calendar allocation dates from the invoice's actual placed-in-service date; the draft preserves that actual date in its source reference. Delivery, invoice, planned or negated in-service dates do not qualify. Cost, issuer, invoice number, billed client and currency must be explicit on one undisputed purchase invoice. Other supporting records still need a person's judgment.
+
+The current QuickBooks capture must show exactly one bill or purchase capitalizing the full invoice amount to the unique approved Fixed Asset cost account. Current company/vendor IDs, chart types and names must agree. The close-month accrual Trial Balance must explicitly show zero accumulated depreciation; a missing row or nonzero shared balance needs allocation by a person. Existing journal activity on the asset, accumulated-depreciation or depreciation-expense accounts, related credits/refunds and unknown posting details hold the draft. The worker repeats source, policy, example-approval, profile, alias and books checks before saving; repeated jobs do not prepare a completed draft again. All sources remain cited and normal review is required.
+
+This bounded initial path does not enable declining balance, mid-month conventions, disposals, allocation of an existing accumulated balance, or missing in-service evidence. Those retain their existing reviewed preparation paths. Qualified accounting examples, actual-model mixed workloads and live provider acceptance remain separate gates.

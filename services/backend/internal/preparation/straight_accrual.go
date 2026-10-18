@@ -124,8 +124,8 @@ func StraightAccrual(p Proposal, selected []IntakeSource, procedure Procedure, r
 			return Plan{}, "the cited date must describe incurred service"
 		}
 	}
-	company, companyOK := accrualPolicyValue(procedure.Instructions, "QuickBooks company")
-	vendorID, vendorOK := accrualPolicyValue(procedure.Instructions, "Vendor ID for "+facts["vendor"])
+	company, companyOK := procedureValue(procedure.Instructions, "QuickBooks company")
+	vendorID, vendorOK := procedureValue(procedure.Instructions, "Vendor ID for "+facts["vendor"])
 	vendorNumber, vendorErr := strconv.ParseUint(vendorID, 10, 64)
 	if !companyOK || company != ledger.Realm || company != ledger.CaptureRealm || company != ledger.ChartRealm || !vendorOK || vendorErr != nil || vendorNumber == 0 || strconv.FormatUint(vendorNumber, 10) != vendorID {
 		return Plan{}, "the client's approved procedure must map this document's vendor to its ID in the current QuickBooks company"
@@ -280,7 +280,7 @@ func AccrualProcedurePinned(p Plan, current Procedure) string {
 		return "the fixed incurred accrual procedure changed; confirm the current policy"
 	}
 	for label, value := range map[string]string{"Expense account": in.ExpenseAccount, "Liability account": in.LiabilityAccount, "Reverse next month": strconv.FormatBool(in.ReverseNextMonth)} {
-		if approved, ok := accrualPolicyValue(current.Instructions, label); !ok || !strings.EqualFold(approved, value) {
+		if approved, ok := procedureValue(current.Instructions, label); !ok || !strings.EqualFold(approved, value) {
 			return "the approved procedure must unambiguously state " + label + ": " + value
 		}
 	}
@@ -303,16 +303,4 @@ func AccrualDrafted(ctx context.Context, q interface {
 		return "", err
 	}
 	return "another current accrual draft already uses this liability account; resolve its allocation before preparing a new zero-balance adjustment", nil
-}
-
-func accrualPolicyValue(instructions, label string) (string, bool) {
-	value, count := "", 0
-	for _, line := range strings.Split(instructions, "\n") {
-		key, v, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if ok && documents.NormalizeEntity(key) == documents.NormalizeEntity(label) {
-			value = strings.TrimSpace(v)
-			count++
-		}
-	}
-	return value, count == 1 && value != ""
 }
