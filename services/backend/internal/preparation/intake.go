@@ -56,6 +56,7 @@ type ScheduleLine struct {
 	SetAside string `json:"set_aside,omitempty"`
 }
 type IntakeSource struct {
+	PreparerAnswer bool `json:"-"` // Set only from this job's stored answer ownership.
 	Source
 	Content string
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -22,11 +23,13 @@ func TestSimpleAssetQueuesAndRechecksItsApprovedExample(t *testing.T) {
 		if withdraw {
 			name = "example withdrawn"
 		}
-		t.Run(name, func(t *testing.T) { simpleAsset(t, withdraw) })
+		t.Run(name, func(t *testing.T) { simpleAsset(t, withdraw, false) })
 	}
 }
 
-func simpleAsset(t *testing.T, withdraw bool) {
+func TestAssetInServiceAnswerResumesPreparation(t *testing.T) { simpleAsset(t, false, true) }
+
+func simpleAsset(t *testing.T, withdraw, answered bool) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
@@ -105,15 +108,35 @@ func simpleAsset(t *testing.T, withdraw bool) {
 	must(err)
 	_, err = db.Exec(`INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,'Bill','41','1','2026-09-03',now(),'USD',1200,'{"DocNumber":"EQ-778","TotalAmt":1200,"VendorRef":{"value":"8","name":"Acme Equipment"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12","name":"Equipment"}}}]}')`, syncID)
 	must(err)
-	invoice := insert("asset.txt", "Acme Equipment\nInvoice EQ-778\nBill to: "+entity+"\nTotal USD 1,200.00\nPlaced in service: 2026-09-14")
+	invoiceText := "Acme Equipment\nInvoice EQ-778\nBill to: " + entity + "\nTotal USD 1,200.00"
+	if !answered {
+		invoiceText += "\nPlaced in service: 2026-09-14"
+	}
+	invoice := insert("asset.txt", invoiceText)
+	answerID := ""
 	original := http.DefaultTransport
 	defer func() { http.DefaultTransport = original }()
 	http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
 		facts := []map[string]string{}
 		for _, f := range []struct{ field, value, quote string }{{"amount", "1200.00", "Total USD 1,200.00"}, {"currency", "USD", "Total USD 1,200.00"}, {"service_start", "2026-09-14", "Placed in service: 2026-09-14"}, {"vendor", "Acme Equipment", "Acme Equipment"}, {"invoice_number", "EQ-778", "Invoice EQ-778"}, {"billed_to", entity, "Bill to: " + entity}} {
-			facts = append(facts, map[string]string{"field": f.field, "value": f.value, "source_id": invoice, "quote": f.quote})
+			id, quote := invoice, f.quote
+			if answered && f.field == "service_start" {
+				if answerID == "" {
+					continue
+				}
+				id, quote = answerID, "2026-09-14"
+			}
+			facts = append(facts, map[string]string{"field": f.field, "value": f.value, "source_id": id, "quote": quote})
 		}
-		output, _ := json.Marshal(map[string]any{"kind": "depreciation", "summary": "New equipment purchase", "questions": []string{}, "sources": []map[string]string{{"id": invoice, "role": "invoice"}, {"id": ruleID, "role": "support"}}, "facts": facts})
+		questions := []string{}
+		sources := []map[string]string{{"id": invoice, "role": "invoice"}, {"id": ruleID, "role": "support"}}
+		if answered && answerID == "" {
+			questions = append(questions, "When was this asset placed in service?")
+		}
+		if answerID != "" {
+			sources = append(sources, map[string]string{"id": answerID, "role": "client_reply"})
+		}
+		output, _ := json.Marshal(map[string]any{"kind": "depreciation", "summary": "New equipment purchase", "questions": questions, "sources": sources, "facts": facts})
 		body, _ := json.Marshal(map[string]any{"id": "mock-response", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
 	})
@@ -128,6 +151,33 @@ func simpleAsset(t *testing.T, withdraw bool) {
 		t.Fatal("intake did not run")
 	}
 	var state, checkpoint string
+	if answered {
+		var revision int
+		must(db.QueryRow(`SELECT j.state,i.revision FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &revision))
+		if state != "needs_confirmation" {
+			t.Fatalf("missing date did not ask a question: %s", state)
+		}
+		raw, _ := json.Marshal(map[string]any{"revision": revision, "body": "2026-09-14"})
+		req := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/work/"+job+"/answer", bytes.NewReader(raw))
+		token := strings.Repeat("a", 32)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		apiWithStore(db, token).ServeHTTP(response, req)
+		if response.Code != 200 {
+			t.Fatalf("answer: %d %s", response.Code, response.Body.String())
+		}
+		must(db.QueryRow(`SELECT source_id::text FROM preparation_answers WHERE job_id::text=$1`, job).Scan(&answerID))
+		must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id::text=$1`, job).Scan(&state))
+		if state != "waiting_evidence" {
+			t.Fatalf("answer did not resume its job: %s", state)
+		}
+		worked, err = preparation.ProcessIntake(modelContext(t, context.Background()), db)
+		must(err)
+		if !worked {
+			t.Fatal("answered work did not resume")
+		}
+	}
 	must(db.QueryRow(`SELECT j.state,j.error || COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &checkpoint))
 	if state != "queued" {
 		t.Fatalf("asset did not queue: %s %s", state, checkpoint)
@@ -156,6 +206,13 @@ func simpleAsset(t *testing.T, withdraw bool) {
 	must(db.QueryRow(`SELECT paper->>'period_expense',COALESCE((paper->>'straight_through')::boolean,false) FROM workpapers WHERE close_id=$1`, closeID).Scan(&expense, &straight))
 	if expense != "100.00" || !straight {
 		t.Fatalf("wrong asset draft: %s %t", expense, straight)
+	}
+	if answered {
+		var cited bool
+		must(db.QueryRow(`SELECT paper->'sources' @> jsonb_build_array(jsonb_build_object('id',$2::text)) FROM workpapers WHERE close_id=$1`, closeID, answerID).Scan(&cited))
+		if !cited {
+			t.Fatal("the draft lost its answer source")
+		}
 	}
 	// Replaying a completed queue does not save another draft.
 	worked, err = preparation.ProcessOne(context.Background(), db)

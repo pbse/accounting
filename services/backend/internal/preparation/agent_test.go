@@ -67,6 +67,17 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 	if err != nil || misread.Facts[0].Value != "" || len(misread.Facts[0].Candidates) != 0 || !strings.Contains(strings.Join(misread.Questions, "\n"), "does not show 12000.00") {
 		t.Fatal("A value its quote does not show was cited", misread, err)
 	}
+	for _, origin := range []string{"answer", "procedure", "client_reply"} {
+		json.Unmarshal([]byte(output), &result)
+		known := result.Sources[0]
+		known.ID = "3"
+		known.Role = "ledger"
+		result.Sources = append(result.Sources, known)
+		available := append(append([]IntakeSource{}, sources...), IntakeSource{Source: Source{ID: "3", Name: "Known response.txt", Role: origin}, Content: "Known response"})
+		if _, err := validateInterpretation(result, "1", available); err != nil {
+			t.Fatal("known source origin was rejected instead of assigned:", origin, err)
+		}
+	}
 	// A completed transport response without completed model output is not a proposal.
 	client.Transport = agentRoundTrip(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"incomplete","output":[]}`)), Header: http.Header{}}, nil

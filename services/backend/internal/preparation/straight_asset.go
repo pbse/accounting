@@ -2,6 +2,7 @@ package preparation
 
 import (
 	"encoding/json"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +27,12 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 	for id := range ledger.Machine {
 		machine[id] = true
 	}
+	answers := map[string]IntakeSource{}
+	for _, source := range selected {
+		if source.PreparerAnswer {
+			answers[source.ID] = source
+		}
+	}
 	invoice := IntakeSource{}
 	for _, source := range p.Sources {
 		if source.Role == "invoice" {
@@ -38,7 +45,7 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 					invoice.Source = source
 				}
 			}
-		} else if !machine[source.ID] {
+		} else if !machine[source.ID] && !answers[source.ID].PreparerAnswer {
 			return Plan{}, "additional asset support needs a person to weigh it"
 		}
 	}
@@ -51,6 +58,7 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 		}
 	}
 	facts, quotes := map[string]string{}, map[string]string{}
+	dateSource := IntakeSource{}
 	for _, f := range p.Facts {
 		if len(f.Candidates) == 0 {
 			continue
@@ -70,13 +78,17 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 		if _, ok := documents.QuoteLocation(source.Name, source.Content, f.Candidates[0].Quote); !ok || !valueShown(f.Field, f.Value, f.Candidates[0].Quote) {
 			return Plan{}, "a fact's value or quote is not in its source"
 		}
-		if slices.Contains([]string{"amount", "currency", "service_start", "vendor", "billed_to", "invoice_number"}, f.Field) && source.ID != invoice.ID {
+		fromAnswer := f.Field == "service_start" && source.PreparerAnswer
+		if slices.Contains([]string{"amount", "currency", "service_start", "vendor", "billed_to", "invoice_number"}, f.Field) && source.ID != invoice.ID && !fromAnswer {
 			return Plan{}, "purchase identity, cost and in-service date must come from the invoice"
 		}
-		if source.ID != invoice.ID && source.ID != rule.ID && source.ID != ledger.ChartSource.ID {
+		if source.ID != invoice.ID && source.ID != rule.ID && source.ID != ledger.ChartSource.ID && !fromAnswer {
 			return Plan{}, "a fact comes from additional support that needs a person"
 		}
 		facts[f.Field], quotes[f.Field] = f.Value, f.Candidates[0].Quote
+		if f.Field == "service_start" {
+			dateSource = source
+		}
 	}
 	for _, field := range []string{"amount", "currency", "service_start", "vendor", "billed_to", "invoice_number"} {
 		if facts[field] == "" {
@@ -90,13 +102,22 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 		return Plan{}, "the invoice must explicitly identify its issuer, invoice number and billed client"
 	}
 	start, err := time.Parse("2006-01-02", facts["service_start"])
-	if err != nil || !strings.HasPrefix(facts["service_start"], period+"-") || !dateLineSays(quotes["service_start"], facts["service_start"], "", []string{"in service"}, []string{"invoice date", "due", "delivery", "order"}, nil) {
-		return Plan{}, "the invoice must explicitly state when the asset was placed in service in this close month"
+	explicit := dateLineSays(quotes["service_start"], facts["service_start"], "", []string{"in service"}, []string{"invoice date", "due", "delivery", "order"}, nil)
+	if dateSource.PreparerAnswer {
+		explicit = assetAnswerDate(dateSource.Content, facts["service_start"])
+	}
+	if err != nil || !strings.HasPrefix(facts["service_start"], period+"-") || !explicit {
+		return Plan{}, "the invoice or this job's preparer answer must explicitly state when the asset was placed in service in this close month"
 	}
 	for _, line := range strings.Split(invoice.Content, "\n") {
 		normal := documents.NormalizeEntity(line)
 		if strings.Contains(normal, "in service") && (negated(normal) || mentionsAny(line, []string{"expected", "planned", "anticipat", "proposed"}) || !documents.DateIn(line, facts["service_start"], false)) {
 			return Plan{}, "the invoice gives a conflicting or unconfirmed in-service date"
+		}
+	}
+	for _, answer := range answers {
+		if !assetAnswerDate(answer.Content, facts["service_start"]) {
+			return Plan{}, "a preparer answer is ambiguous or changes more than this asset's in-service date; a person weighs it"
 		}
 	}
 	amount, err := prepaids.Amount(facts["amount"])
@@ -123,6 +144,9 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 	}
 	first := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
 	input := prepaids.Input{Schedule: prepaids.Depreciation, Entity: entity, ClosePeriod: period, Currency: currency, Amount: prepaids.Money(amount), ServiceStart: first.Format("2006-01-02"), ServiceEnd: first.AddDate(0, months, -1).Format("2006-01-02"), SalvageValue: policy("Salvage value"), ExpenseAccount: policy("Depreciation expense account"), PrepaidAccount: policy("Accumulated depreciation account"), BookedBalance: "0.00", BookingReference: "Current Trial Balance #" + ledger.ChartSource.ID, SourceReference: "Evidence #" + invoice.ID + "; in service " + facts["service_start"] + "; approved full first month", Basis: "accrual", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true}
+	if dateSource.PreparerAnswer {
+		input.SourceReference += "; date from answer #" + dateSource.ID
+	}
 	raw, _ := json.Marshal(input)
 	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, BilledTo: facts["billed_to"], Input: raw}
 	if reason := AssetProcedurePinned(plan, procedure); reason != "" {
@@ -230,6 +254,11 @@ func StraightAsset(p Proposal, selected []IntakeSource, procedure Procedure, rul
 	chart.Role, chart.Location = "chart", location+"; zero accumulated depreciation; accounts "+strings.Join([]string{costIDs[0], depIDs[0], accumIDs[0]}, ", ")
 	rule.Role, rule.Location = "procedure", "Version "+procedure.ID+"; approved full-first-month asset policy"
 	plan.Sources = []Source{invoice.Source, capture, chart, rule}
+	for _, source := range p.Sources {
+		if answers[source.ID].PreparerAnswer {
+			plan.Sources = append(plan.Sources, source)
+		}
+	}
 	if _, err := Calculate(plan, entity, period); err != nil {
 		return Plan{}, err.Error()
 	}
@@ -254,4 +283,21 @@ func AssetProcedurePinned(p Plan, current Procedure) string {
 		return "the asset useful life no longer matches the approved policy"
 	}
 	return ""
+}
+
+// A job's own factual answer can establish an in-service date, never a treatment or account choice.
+func assetAnswerDate(body, date string) bool {
+	dates := regexp.MustCompile(`(?i)(?:[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}|[0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4}|[a-z]{3,9}\.? [0-9]{1,2}(?:st|nd|rd|th)?,? [0-9]{4}|[0-9]{1,2}(?:st|nd|rd|th)? [a-z]{3,9} [0-9]{4})`).FindAllString(body, -1)
+	if len(dates) != 1 || strings.Contains(" "+documents.NormalizeEntity(body)+" ", " or ") {
+		return false
+	}
+	if moneyFigures(body) > 0 || negated(documents.NormalizeEntity(body)) || mentionsAny(body, []string{"maybe", "expect", "plan", "anticipat", "propos", "estimate", "uncertain", "unknown", "credit", "cancel", "refund", "adjust", "dispos", "impair", "salvage", "life", "convention", "account", "amount", "cost", "instead"}) {
+		return false
+	}
+	for _, layout := range []string{"2006-01-02", "1/2/2006", "January 2, 2006", "Jan 2, 2006"} {
+		if parsed, err := time.Parse(layout, strings.TrimSpace(body)); err == nil {
+			return parsed.Format("2006-01-02") == date
+		}
+	}
+	return dateLineSays(body, date, "", []string{"in service"}, []string{"invoice date", "due", "delivery", "order", "received"}, nil)
 }

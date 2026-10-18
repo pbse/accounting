@@ -36,6 +36,22 @@ func TestStraightAssetRequiresApprovedPolicyAndCapitalizedPurchase(t *testing.T)
 	if !strings.Contains(input.SourceReference, "2026-09-14") || len(plan.Sources) != 4 {
 		t.Fatalf("missing source/convention proof: %+v", plan)
 	}
+	for _, label := range []string{"First used:", "Expected first used:"} {
+		changed := invoice
+		changed.Content = strings.ReplaceAll(invoice.Content, "Placed in service:", label)
+		check := proposal
+		check.Facts = append([]Fact{}, proposal.Facts...)
+		for i, f := range check.Facts {
+			if f.Field == "service_start" {
+				f.Candidates = append([]Candidate{}, f.Candidates...)
+				f.Candidates[0].Quote = label + " 2026-09-14"
+				check.Facts[i] = f
+			}
+		}
+		if _, why := StraightAsset(check, []IntakeSource{changed, {Source: rule, Content: instructions}}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); why == "" {
+			t.Fatal("an unsupported invoice date phrase bypassed the guard:", label)
+		}
+	}
 	// A planned or negated in-service date is not an actual placed-in-service date.
 	invoice.Content = strings.ReplaceAll(invoice.Content, "Placed in service:", "Not yet placed in service:")
 	for i := range proposal.Facts {
@@ -56,6 +72,36 @@ func TestStraightAssetRequiresApprovedPolicyAndCapitalizedPurchase(t *testing.T)
 	procedure.Instructions = strings.Replace(instructions, "Vendor ID for Acme Equipment: 8", "Vendor ID for Acme Equipment: 9", 1) + "\nVendor ID for Acme Equipment: 8"
 	if _, reason = StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: procedure.Instructions}}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); reason == "" {
 		t.Fatal("conflicting vendor policy lines were silently resolved")
+	}
+
+	procedure.Instructions = instructions
+	invoice.Content = strings.ReplaceAll(invoice.Content, "\nPlaced in service: 2026-09-14", "")
+	answer := IntakeSource{Source: Source{ID: "4", Digest: "answer", Name: "Preparer answer.txt", Role: "support"}, Content: "2026-09-14", PreparerAnswer: true}
+	proposal.Sources = append(proposal.Sources, answer.Source)
+	for i := range proposal.Facts {
+		if proposal.Facts[i].Field == "service_start" {
+			proposal.Facts[i].Candidates[0].SourceID = "4"
+			proposal.Facts[i].Candidates[0].Quote = "2026-09-14"
+		}
+	}
+	if _, reason = StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); reason != "" {
+		t.Fatal("the job's own date answer did not complete preparation:", reason)
+	}
+	for _, body := range []string{"Placed in service 2026-09-14 or 2026-09-15", "Placed in service 2026-09-14T01:00:00Z and 2026-09-15T01:00:00Z", "Placed in service 2026-09-14; cost USD 1,250.00", "Placed in service 2026-09-14, use account 1510", "Expected in service 2026-09-14"} {
+		answer.Content = body
+		if _, reason = StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); reason == "" {
+			t.Fatal("an ambiguous or policy-changing answer was accepted:", body)
+		}
+	}
+	answer.Content = "2026-09-14"
+	invoice.Content += "\nPlaced in service: 2026-09-20"
+	if _, why := StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); why == "" {
+		t.Fatal("an answer overrode a conflicting invoice date")
+	}
+	invoice.Content = strings.TrimSuffix(invoice.Content, "\nPlaced in service: 2026-09-20")
+	answer.PreparerAnswer = false
+	if _, reason = StraightAsset(proposal, []IntakeSource{invoice, {Source: rule, Content: instructions}, answer}, procedure, rule, "USD", "Example", "2026-09", nil, false, ledger); reason == "" {
+		t.Fatal("an unbound answer supplied the asset date")
 	}
 
 }

@@ -192,6 +192,35 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 	if err = db.QueryRow(`SELECT source_id::text FROM preparation_answers WHERE job_id=$1`, job).Scan(&answerID); err != nil {
 		t.Fatal(err)
 	}
+	// A deduplicated answer can be explicitly supplied to two jobs; each still owns its own answer.
+	scope, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sibling string
+	if e := scope.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,'shared-answer-sibling','[]','cancelled','fixture') RETURNING id::text`, closeID).Scan(&sibling); e != nil {
+		scope.Rollback()
+		t.Fatal(e)
+	}
+	var siblingSource string
+	if e := scope.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'Sibling.txt',$2,'Separate cancelled work','fixture') RETURNING id::text`, closeID, "sibling:"+sibling).Scan(&siblingSource); e != nil {
+		scope.Rollback()
+		t.Fatal(e)
+	}
+	if _, e := scope.Exec(`INSERT INTO preparation_intakes(job_id,source_id) VALUES($1,$2)`, sibling, siblingSource); e != nil {
+		scope.Rollback()
+		t.Fatal(e)
+	}
+	if _, e := scope.Exec(`INSERT INTO preparation_answers(job_id,source_id,created_by) VALUES($1,$2,'fixture')`, sibling, answerID); e != nil {
+		scope.Rollback()
+		t.Fatal(e)
+	}
+	answerBlocked, scopeErr := preparation.OtherEvidence(context.Background(), scope, closeID, job)
+	sources, _, inventoryErr := preparation.AgentInventory(context.Background(), scope, closeID, job)
+	scope.Rollback()
+	if scopeErr != nil || inventoryErr != nil || answerBlocked || !slices.ContainsFunc(sources, func(s preparation.IntakeSource) bool { return s.ID == answerID }) {
+		t.Fatalf("an explicitly owned shared answer was treated as foreign: answerBlocked=%t %v %v", answerBlocked, scopeErr, inventoryErr)
+	}
 	// The documents list shows the answer under the job that reads it.
 	var files []struct {
 		ID    string `json:"id"`
