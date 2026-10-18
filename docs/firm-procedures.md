@@ -59,3 +59,19 @@ Choose **Accounting basis** in **Approved procedures and client overrides** to r
 
 Record each client's entity type under **Owner treatments** (a client override): sole proprietor or single-member LLC, partnership, S corporation, or C corporation. The firm default can hold the firm's owner policy and account naming, but never an entity type; that is a fact about one client. Owner reclassification drafts are refused until the client's entity type is recorded, and must use it.
 
+
+## Automatic fixed incurred accruals
+
+The agent can prepare a new `fixed_incurred_amount_v1` draft without field-by-field confirmation when the active learned client-specific accrual procedure, approved through the existing example-and-activation flow, names these unambiguous lines in its instructions:
+
+```text
+Expense account: Professional Fees
+Liability account: Accrued Expenses
+Reverse next month: true
+QuickBooks company: 123
+Vendor ID for Acme Services: 8
+```
+
+The company/vendor IDs above are illustrative. Record the client’s actual company ID and map each source issuer to its approved QuickBooks vendor ID; a firm-wide default cannot supply company-specific identities. The active connection, transaction capture and chart must agree with that company. Vendor IDs prevent a different ledger display name from hiding a booking. Confirmed client aliases remain valid billed-to names. Use the actual chart names and an explicit `true` or `false` reversal choice. This is approved policy, not permission an uploaded invoice can grant. The agent cites the account choices from the applied procedure copy. It needs one source identifying the issuer, document number, billed client, positive **unbilled** service amount and wholly incurred service dates in the close month and home currency. The current connected QuickBooks capture and accrual Trial Balance must explicitly establish a zero current-liability balance, unique accounts, no matching service booking and no liability activity. A missing row is not zero. An existing accrual draft on that liability also holds a new zero-balance adjustment, including one made by the recurring sweep. Nonzero balances, estimates, credits, amendments, extra related evidence, transactions whose posting accounts or counterparties cannot be resolved, and ambiguous facts remain specific decisions for a person. Fixed recurring accruals continue through the existing approved-rule sweep; this path does not infer a recurring rule from a first service.
+
+The queued job rechecks its source inventory, current policy, books and duplicate-document lineage before saving. A source replacement can revise its own unposted agent-prepared draft through the existing lineage path; a posted or human-confirmed predecessor needs a person's correction. Sources, capture, chart and procedure remain attached to the draft and ordinary review remains required. This local capability is not accountant acceptance or live-provider validation.
