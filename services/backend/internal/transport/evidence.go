@@ -214,6 +214,10 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Import a prior schedule from its reading on the Work page.")
 			return
 		}
+		if p.Procedure != "" || p.Chart != "" || p.BilledTo != "" || len(p.Unrelated) > 0 || p.PayrollPrecedent != nil || p.RecurringAccrual != nil {
+			problem(w, 422, "Omit agent verification and lineage fields when submitting a manual draft.")
+			return
+		}
 		if len(p.Sources) < 1 || len(p.Sources) > 8 {
 			problem(w, 422, "Link source evidence and the ledger/credit support for the selected method.")
 			return

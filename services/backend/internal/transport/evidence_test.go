@@ -138,6 +138,10 @@ func TestEvidencePreparationRoundTrip(t *testing.T) {
 	input := json.RawMessage(`{"entity":"Evidence job fixture","account":"Bank","currency":"USD","close_period":"2026-09","statement_reference":"manual","ledger_reference":"manual","statement_opening":"1000.00","statement_closing":"1150.00","ledger_opening":"1000.00","ledger_closing":"1100.00","expected_pages":2,"pages":[1,2],"statement_csv":"wrong","ledger_csv":"wrong","policy_confirmed":true}`)
 	plan := preparation.Plan{Kind: "reconciliation", Input: input, Sources: []preparation.Source{{ID: s, Role: "statement", Location: "rows 1–3"}, {ID: l, Role: "ledger", Location: "rows 1–4"}}}
 	call("POST", "/v1/closes/"+other+"/preparations", plan, 422)
+	// Human-supplied instructions cannot label themselves as agent-verified.
+	forged := plan
+	forged.Procedure = "unearned-agent-verification"
+	call("POST", base+"/preparations", forged, 422)
 	planID := idOf(call("POST", base+"/preparations", plan, 200))
 	selection := map[string]any{"plans": []string{planID}}
 	call("POST", "/v1/closes/"+other+"/jobs", selection, 422)
