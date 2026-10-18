@@ -5,9 +5,34 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"close.local/backend/internal/quickbooks"
 )
+
+var requestQuestionLine = regexp.MustCompile(`^\s*[0-9]{1,2}[.)]\s+(\S.*)$`)
+
+// RequestQuestions splits a firm-approved request into its numbered questions; a line continues its question until a
+// blank line, and a request without numbered lines, or with more than 50, is one question.
+func RequestQuestions(body string) []string {
+	questions := []string{}
+	open := false
+	for _, line := range strings.Split(body, "\n") {
+		if m := requestQuestionLine.FindStringSubmatch(line); m != nil {
+			questions = append(questions, strings.TrimSpace(m[1]))
+			open = true
+		} else if strings.TrimSpace(line) == "" {
+			open = false
+		} else if open {
+			questions[len(questions)-1] += " " + strings.TrimSpace(line)
+		}
+	}
+	if len(questions) == 0 || len(questions) > 50 {
+		return []string{strings.TrimSpace(body)}
+	}
+	return questions
+}
 
 // RequestContext digests the selected work and the close's evidence less unrelated scheduled ledger captures: an upload
 // or review changes it.

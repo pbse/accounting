@@ -134,7 +134,7 @@ func TestTheGoalDraftsOneClientRequestAPersonApproves(t *testing.T) {
 	var state, body string
 	must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&state))
 	must(db.QueryRow(`SELECT d.body FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id::text=$1`, opened.ID).Scan(&body))
-	if state != "waiting_client" || opened.Link_token == "" || !slices.Equal(requestQuestions(body), []string{"insurance invoice.pdf: Please send the signed policy schedule for this year.", "Did the policy change mid-year?"}) {
+	if state != "waiting_client" || opened.Link_token == "" || !slices.Equal(preparation.RequestQuestions(body), []string{"insurance invoice.pdf: Please send the signed policy schedule for this year.", "Did the policy change mid-year?"}) {
 		t.Fatalf("approving opens the request as worded, with a private link, and the document waits on the client: %s %+v %q", state, opened, body)
 	}
 	// Without a ledger capture the request is still current: it binds no ledger account.
@@ -354,7 +354,7 @@ func TestAPartialReplyResumesTheWorkItAnswers(t *testing.T) {
 		var source, job string
 		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,'Document','fixture') RETURNING id::text`, closeID, name, rand.Text()).Scan(&source))
 		must(db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','needs_confirmation','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&job))
-		_, err = db.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal) VALUES($1,$2,'{"kind":"prepaid","questions":["Which months does it cover?"]}')`, job, source)
+		_, err = db.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal) VALUES($1,$2,'{"kind":"prepaid","questions":["Which months does it cover?\n1. Keep this with its document."]}')`, job, source)
 		must(err)
 		jobs = append(jobs, job)
 	}
@@ -385,6 +385,11 @@ func TestAPartialReplyResumesTheWorkItAnswers(t *testing.T) {
 		LinkToken string `json:"link_token"`
 	}
 	must(json.Unmarshal(call("POST", "/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", token, map[string]any{"recipient": "owner@example.test", "confirmed": true}, 200), &opened))
+	var sentBody string
+	must(db.QueryRow(`SELECT body FROM request_drafts WHERE id::text=$1`, proposed.Proposal.ID).Scan(&sentBody))
+	if len(preparation.RequestQuestions(sentBody)) != 2 {
+		t.Fatal("an embedded numbered line changed the approved question positions")
+	}
 	state := func(job string) (s string) {
 		t.Helper()
 		must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&s))
@@ -399,6 +404,24 @@ func TestAPartialReplyResumesTheWorkItAnswers(t *testing.T) {
 	if state(jobs[0]) != "waiting_evidence" || state(jobs[1]) != "waiting_client" {
 		t.Fatalf("the answered document's work resumes and the other waits: %s %s", state(jobs[0]), state(jobs[1]))
 	}
+	checkAnswers := func(job, want string) {
+		t.Helper()
+		tx, err := db.Begin()
+		must(err)
+		defer tx.Rollback()
+		sources, _, err := preparation.AgentInventory(context.Background(), tx, closeID, job)
+		must(err)
+		found := []string{}
+		for _, source := range sources {
+			for _, answer := range source.ClientAnswers {
+				found = append(found, answer.Answer)
+			}
+		}
+		if !slices.Equal(found, []string{want}) {
+			t.Fatalf("job %s received another question's answers: %v", job, found)
+		}
+	}
+	checkAnswers(jobs[0], "September 2026 to August 2027")
 	// The first document's work finishes; the request still takes the second answer.
 	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed' WHERE id=$1`, jobs[0])
 	must(err)
@@ -411,6 +434,8 @@ func TestAPartialReplyResumesTheWorkItAnswers(t *testing.T) {
 	if state(jobs[0]) != "completed" || state(jobs[1]) != "waiting_evidence" {
 		t.Fatalf("the second answer resumes only the second document's work: %s %s", state(jobs[0]), state(jobs[1]))
 	}
+	checkAnswers(jobs[0], "September 2026 to August 2027")
+	checkAnswers(jobs[1], "October 2026 to September 2027")
 	// With all its work finished, the request takes no more answers.
 	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed' WHERE id=$1`, jobs[1])
 	must(err)

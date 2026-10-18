@@ -23,13 +23,15 @@ func TestSimpleAssetQueuesAndRechecksItsApprovedExample(t *testing.T) {
 		if withdraw {
 			name = "example withdrawn"
 		}
-		t.Run(name, func(t *testing.T) { simpleAsset(t, withdraw, false) })
+		t.Run(name, func(t *testing.T) { simpleAsset(t, withdraw, false, false) })
 	}
 }
 
-func TestAssetInServiceAnswerResumesPreparation(t *testing.T) { simpleAsset(t, false, true) }
+func TestAssetInServiceAnswerResumesPreparation(t *testing.T) { simpleAsset(t, false, true, false) }
 
-func simpleAsset(t *testing.T, withdraw, answered bool) {
+func TestAssetClientAnswerResumesPreparation(t *testing.T) { simpleAsset(t, false, true, true) }
+
+func simpleAsset(t *testing.T, withdraw, answered, client bool) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
@@ -52,6 +54,9 @@ func simpleAsset(t *testing.T, withdraw, answered bool) {
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-08') RETURNING id::text`, entity).Scan(&exampleClose))
 	defer func() {
+		for _, q := range []string{`DELETE FROM client_request_links WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`, `DELETE FROM request_drafts WHERE close_id=$1`} {
+			db.Exec(q, closeID)
+		}
 		db.Exec(`DELETE FROM procedure_example_approvals WHERE draft_id::text=$1`, draftID)
 		db.Exec(`UPDATE procedure_drafts SET activated_version_id=NULL WHERE id::text=$1`, draftID)
 		db.Exec(`UPDATE procedure_versions SET draft_id=NULL WHERE id::text=$1`, procedureID)
@@ -112,7 +117,11 @@ func simpleAsset(t *testing.T, withdraw, answered bool) {
 	if !answered {
 		invoiceText += "\nPlaced in service: 2026-09-14"
 	}
-	invoice := insert("asset.txt", invoiceText)
+	name := "asset.txt"
+	if client {
+		name = "Delivery van accounting asset.txt"
+	}
+	invoice := insert(name, invoiceText)
 	answerID := ""
 	original := http.DefaultTransport
 	defer func() { http.DefaultTransport = original }()
@@ -157,17 +166,45 @@ func simpleAsset(t *testing.T, withdraw, answered bool) {
 		if state != "needs_confirmation" {
 			t.Fatalf("missing date did not ask a question: %s", state)
 		}
-		raw, _ := json.Marshal(map[string]any{"revision": revision, "body": "2026-09-14"})
-		req := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/work/"+job+"/answer", bytes.NewReader(raw))
-		token := strings.Repeat("a", 32)
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		response := httptest.NewRecorder()
-		apiWithStore(db, token).ServeHTTP(response, req)
-		if response.Code != 200 {
-			t.Fatalf("answer: %d %s", response.Code, response.Body.String())
+		if client {
+			token := strings.Repeat("a", 32)
+			handler := apiWithStore(db, token)
+			call := func(path, bearer string, body any) []byte {
+				t.Helper()
+				raw, _ := json.Marshal(body)
+				req := httptest.NewRequest("POST", path, bytes.NewReader(raw))
+				req.Header.Set("Authorization", "Bearer "+bearer)
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, req)
+				if w.Code != 200 {
+					t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+				}
+				return w.Body.Bytes()
+			}
+			var proposed struct{ Proposal struct{ ID string } }
+			must(json.Unmarshal(call("/v1/closes/"+closeID+"/requests/proposed", token, map[string]any{"questions": []string{"When is the next board meeting?"}}), &proposed))
+			var opened struct {
+				ID        string
+				LinkToken string `json:"link_token"`
+			}
+			must(json.Unmarshal(call("/v1/closes/"+closeID+"/requests/"+proposed.Proposal.ID+"/approve", token, map[string]any{"recipient": "owner@example.test", "confirmed": true}), &opened))
+			answers, _ := json.Marshal(map[string]any{"answers": []clientAnswer{{1, "answered", "2026-09-14"}, {2, "answered", "2026-09-25"}}})
+			call("/v1/client-request", opened.LinkToken, map[string]any{"body": string(answers), "confirmed": true})
+			must(db.QueryRow(`SELECT source_id::text FROM request_submissions WHERE request_id::text=$1 ORDER BY id DESC LIMIT 1`, opened.ID).Scan(&answerID))
+		} else {
+			raw, _ := json.Marshal(map[string]any{"revision": revision, "body": "2026-09-14"})
+			req := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/work/"+job+"/answer", bytes.NewReader(raw))
+			token := strings.Repeat("a", 32)
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			apiWithStore(db, token).ServeHTTP(response, req)
+			if response.Code != 200 {
+				t.Fatalf("answer: %d %s", response.Code, response.Body.String())
+			}
+			must(db.QueryRow(`SELECT source_id::text FROM preparation_answers WHERE job_id::text=$1`, job).Scan(&answerID))
 		}
-		must(db.QueryRow(`SELECT source_id::text FROM preparation_answers WHERE job_id::text=$1`, job).Scan(&answerID))
 		must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id::text=$1`, job).Scan(&state))
 		if state != "waiting_evidence" {
 			t.Fatalf("answer did not resume its job: %s", state)

@@ -405,7 +405,7 @@ func TestPartialClientRepliesKeepAnswersAndResumeOnlyWhenComplete(t *testing.T) 
 	call("POST", path+"/resume", auth, map[string]any{"revision": revision()}, 409)
 	call("POST", "/v1/client-request", token, map[string]any{"body": `{"answers":[{"position":1,"state":"answered","answer":"x","extra":1}]}`, "confirmed": true}, 422)
 	call("POST", "/v1/client-request", token, map[string]any{"body": "It ends 2027-08-31", "confirmed": true}, 422)
-	if len(requestQuestions(strings.Repeat("1. Question\n", 51))) != 1 {
+	if len(preparation.RequestQuestions(strings.Repeat("1. Question\n", 51))) != 1 {
 		t.Fatal("a request with more than 50 numbered questions is answered as one, not truncated")
 	}
 	partial := []clientAnswer{{1, "answered", "It ends 2027-08-31"}, {2, "awaiting_document", "Scanning it tomorrow"}}

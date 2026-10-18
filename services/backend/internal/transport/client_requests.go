@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -130,29 +129,6 @@ func recordReply(ctx context.Context, tx *sql.Tx, closeID, jobID, requestID, bod
 		return "", 503, fmt.Errorf("Reply could not be saved. Try again.")
 	}
 	return source, 200, nil
-}
-
-var requestQuestionLine = regexp.MustCompile(`^\s*[0-9]{1,2}[.)]\s+(\S.*)$`)
-
-// requestQuestions splits a firm-approved request into its numbered questions; a line continues its question until a
-// blank line, and a request without numbered lines, or with more than 50, is one question.
-func requestQuestions(body string) []string {
-	questions := []string{}
-	open := false
-	for _, line := range strings.Split(body, "\n") {
-		if m := requestQuestionLine.FindStringSubmatch(line); m != nil {
-			questions = append(questions, strings.TrimSpace(m[1]))
-			open = true
-		} else if strings.TrimSpace(line) == "" {
-			open = false
-		} else if open {
-			questions[len(questions)-1] += " " + strings.TrimSpace(line)
-		}
-	}
-	if len(questions) == 0 || len(questions) > 50 {
-		return []string{strings.TrimSpace(body)}
-	}
-	return questions
 }
 
 type clientAnswer struct {
@@ -326,7 +302,7 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			problem(w, 404, "Request link expired or was revoked. Ask the firm for a new link.")
 			return
 		}
-		questions, err := requestAnswers(r.Context(), tx, requestID, requestQuestions(body))
+		questions, err := requestAnswers(r.Context(), tx, requestID, preparation.RequestQuestions(body))
 		if err != nil {
 			problem(w, 503, "Request unavailable.")
 			return
