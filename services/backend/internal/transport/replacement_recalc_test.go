@@ -235,8 +235,22 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	if state != "waiting_evidence" {
 		t.Fatalf("recording the replacement resumes the corrected invoice's interpretation: %s", state)
 	}
+	// Both schedule types are stored as prepaid. A replacement cannot silently change the predecessor's treatment.
+	_, err = db.Exec(`UPDATE workpapers SET paper=jsonb_set(paper,'{input,schedule}','"depreciation"') WHERE id::text=$1`, draft1)
+	must(err)
 	if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || !worked {
-		t.Fatalf("the agent did not run again: %v %v", worked, e)
+		t.Fatal(e)
+	}
+	must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job2).Scan(&state, &checkpoint))
+	if state != "needs_confirmation" || !strings.Contains(checkpoint, "different schedule") {
+		t.Fatalf("a replacement changed the schedule without a person: %s %s", state, checkpoint)
+	}
+	_, err = db.Exec(`UPDATE workpapers SET paper=paper #- '{input,schedule}' WHERE id::text=$1`, draft1)
+	must(err)
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='waiting_evidence' WHERE id::text=$1`, job2)
+	must(err)
+	if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || !worked {
+		t.Fatal(e)
 	}
 	draft2 := finish(job2)
 	var revises string
@@ -259,8 +273,8 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	if state, _, _ := review(other); state != "approved" {
 		t.Fatalf("an unrelated approval stands: %s", state)
 	}
-	if calls != 3 {
-		t.Fatalf("one model call for the first invoice and two for the corrected one: %d", calls)
+	if calls != 4 {
+		t.Fatalf("one model call for the first invoice and three for corrected-invoice/lineage checks: %d", calls)
 	}
 	// Once the recalculated draft's entry has been posted, a further correction is a person's: it must be made against that entry.
 	_, err = db.Exec(`INSERT INTO sandbox_postings(close_id,workpaper_id,source_key,realm,digest,journal,state) VALUES($1,$2,'recalc-source','test-realm','test-digest','{}','verified')`, closeID, draft2)

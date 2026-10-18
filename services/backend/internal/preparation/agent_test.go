@@ -28,6 +28,15 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 		if request["store"] != false || request["max_output_tokens"] != float64(6000) || request["tools"] != nil || strings.Contains(string(raw), "fixture-key") {
 			t.Fatal("Unsafe provider contract")
 		}
+		field := request["text"].(map[string]any)["format"].(map[string]any)["schema"].(map[string]any)["properties"].(map[string]any)["facts"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["field"].(map[string]any)
+		names, _ := field["enum"].([]any)
+		allowed := map[string]bool{}
+		for _, name := range names {
+			allowed[name.(string)] = true
+		}
+		if !allowed["amount"] || !allowed["service_start"] || !allowed["remaining"] || !allowed["principal"] || allowed["useful_life_months"] || allowed["asset_cost_account"] {
+			t.Fatal("the proposal contract does not constrain fact names to supported inputs")
+		}
 		body, _ := json.Marshal(map[string]any{"id": "response-fixture", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": output}}}}, "usage": map[string]int{"input_tokens": 100, "output_tokens": 50}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
 	})}
