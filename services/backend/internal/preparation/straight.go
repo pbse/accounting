@@ -118,8 +118,10 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		if f.Value == "" || len(f.Candidates) != 1 {
 			return Plan{}, "the " + f.Label + " has more than one candidate"
 		}
-		// A value only a supporting document gives may contradict what the invoice prints; the invoice itself must cite it.
-		if f.Candidates[0].SourceID != primary {
+		// Account choices may cite the current applied procedure; their values must still match it below.
+		// Invoice identity, money and service facts must come from the invoice itself.
+		policyAccount := (f.Field == "expense_account" || f.Field == "prepaid_account") && f.Candidates[0].SourceID == procedureSource.ID
+		if f.Candidates[0].SourceID != primary && !policyAccount {
 			return Plan{}, "the " + f.Label + " is cited from a supporting document, not the invoice"
 		}
 		// Amounts and dates were checked against their quotes when the proposal was validated; names are checked here.

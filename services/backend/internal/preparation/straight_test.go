@@ -75,6 +75,30 @@ func straightThroughEngineChecks(t *testing.T, engine string) {
 	if reason != "" || plan.Kind != "prepaid" || len(plan.Sources) != 4 || plan.Sources[1].Role != "period_ledger" || plan.Sources[1].Digest != "cap" || !strings.Contains(plan.Sources[1].Location, "Bill 41") || plan.Sources[2].Role != "chart" || plan.Sources[2].ID != "8" || plan.Sources[3].Role != "procedure" || plan.Sources[3].ID != "3" {
 		t.Fatal("expensed invoice not prepared with the capture cited", reason, plan.Sources)
 	}
+	// Account choices belong to the current applied policy; invoice facts retain their own source.
+	withAccounts := proposal
+	withAccounts.Facts = append([]Fact{}, proposal.Facts...)
+	withAccounts.Sources = append(append([]Source{}, proposal.Sources...), rule)
+	for i, f := range withAccounts.Facts {
+		value, label := "", ""
+		if f.Field == "expense_account" {
+			value, label = "Insurance", "Expense account"
+		}
+		if f.Field == "prepaid_account" {
+			value, label = "Prepaid Expenses", "Prepaid account"
+		}
+		if value != "" {
+			withAccounts.Facts[i].Value = value
+			withAccounts.Facts[i].Candidates = []Candidate{{Value: value, SourceID: rule.ID, Quote: label + ": " + value}}
+		}
+	}
+	if _, why := StraightThrough(withAccounts, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); why != "" {
+		t.Fatal("accounts cited from the current applied policy were refused:", why)
+	}
+	withAccounts.Facts[4].Candidates[0].SourceID = "old-policy"
+	if _, why := StraightThrough(withAccounts, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); why == "" {
+		t.Fatal("an account from another policy was accepted")
+	}
 	// The same invoice with a page Gemini read differently from its PDF text goes to a person, who compares the original.
 	disputed := "--- Page 1 · PDF text; Gemini gemini-3.8-flash-001 read it differently, so check the original ---\n" + invoice
 	if _, why := StraightThrough(proposal, disputed, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200"))); !strings.Contains(why, "The image model read page 1 of the invoice differently") {
