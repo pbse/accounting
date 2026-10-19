@@ -355,6 +355,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			json.Unmarshal(p.Input, &schedule)
 			asset := p.Kind == "prepaid" && schedule.Schedule == prepaids.Depreciation
 			deferred := p.Kind == "prepaid" && schedule.Schedule == prepaids.DeferredRevenue
+			loan := p.Kind == "loan"
 			current, e := CurrentProcedure(ctx, tx, closeID, p.Kind)
 			if e != nil && e != sql.ErrNoRows {
 				return false, e
@@ -362,6 +363,11 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			if p.Kind == "accrual" && p.RecurringAccrual == nil {
 				if reason := AccrualProcedurePinned(p, current); reason != "" {
 					failure = reason
+					break
+				}
+			} else if loan {
+				if current.ID != p.Procedure || !current.Enabled || current.Method != loans.Method {
+					failure = "the loan policy changed; a person confirms its current method"
 					break
 				}
 			} else if deferred {
@@ -420,9 +426,17 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return false, e
 			}
-			if asset || deferred || p.Kind == "accrual" && p.RecurringAccrual == nil {
-				if !asset && !deferred {
+			if asset || deferred || loan || p.Kind == "accrual" && p.RecurringAccrual == nil {
+				if !asset && !deferred && !loan {
 					if reason, e := AccrualDrafted(ctx, tx, closeID, p); e != nil {
+						return false, e
+					} else if reason != "" {
+						failure = reason
+						break
+					}
+				}
+				if loan {
+					if reason, e := LoanDrafted(ctx, tx, closeID, p); e != nil {
 						return false, e
 					} else if reason != "" {
 						failure = reason
@@ -457,10 +471,26 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 					home = profile.Currency
 				}
 				reason := ""
-				if asset || deferred {
+				if loan || asset || deferred {
 					check := proposal
 					check.Unselected = slices.DeleteFunc(slices.Clone(proposal.Unselected), func(s Source) bool { return other[s.ID] })
-					if deferred {
+					if loan {
+						check.Sources = slices.DeleteFunc(slices.Clone(check.Sources), func(s Source) bool { return other[s.ID] })
+						var expected Plan
+						expected, reason = StraightLoan(check, selected, current, rule, home, entity, period, aliases, false, ledger)
+						if reason == "" {
+							var stored, want loans.Input
+							if Strict(p.Input, &stored) != nil || Strict(expected.Input, &want) != nil {
+								reason = "loan input is invalid"
+							} else {
+								a, _ := json.Marshal(stored)
+								b, _ := json.Marshal(want)
+								if !bytes.Equal(a, b) {
+									reason = "the queued loan inputs no longer match their source, policy and books"
+								}
+							}
+						}
+					} else if deferred {
 						_, reason = StraightDeferred(check, selected, current, rule, home, entity, period, aliases, false, ledger)
 					} else {
 						_, reason = StraightAsset(check, selected, current, rule, home, entity, period, aliases, false, ledger)
