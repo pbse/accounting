@@ -1023,9 +1023,9 @@ func pendingEvidence(close string) string {
 }
 
 // UnrelatedEvidence is the close's documents that positively are another matter: another job's own document, fully read
-// by a model (its latest reading, even while that job is read again), whose text names neither this vendor nor this
-// invoice number (whole words), and that is either
-//   - another prepaid invoice, whose own vendor and invoice number its text prints and differ from this proposal's, and
+// by a model (its latest reading, even while that job is read again), with no unread page or image/text conflict,
+// whose text names neither this counterparty nor this invoice number (whole words), and that is either
+//   - another invoice, compared by its vendor (or customer for client-issued revenue), whose identity differs from this proposal's, and
 //     which speaks of no credit, cancellation, refund, adjustment, reversal or void; or
 //   - a statement: read as a reconciliation, payroll summary or lender statement, or as unsupported work whose own
 //     document it cites as a statement (an ordinary bank or card statement), which nowhere prints this invoice's amount
@@ -1049,7 +1049,7 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 	rows, err := q.QueryContext(ctx, `SELECT e.id::text,COALESCE(e.content,''),i.proposal,e.id>COALESCE((SELECT source_id FROM preparation_intakes WHERE job_id::text=$2),0) OR EXISTS(SELECT 1 FROM preparation_jobs oj WHERE oj.id=i.job_id AND oj.state IN ('failed','cancelled'))
  FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
 
- WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','accrual','depreciation','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
+ WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','accrual','depreciation','deferred_revenue','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,14 +1064,14 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 		if err = rows.Scan(&id, &text, &raw, &yields); err != nil {
 			return nil, err
 		}
-		if json.Unmarshal(raw, &other) != nil || strings.TrimSpace(text) == "" || strings.Contains(text, documents.UnreadPage) {
+		if json.Unmarshal(raw, &other) != nil || strings.TrimSpace(text) == "" || strings.Contains(text, documents.UnreadPage) || len(documents.ImageDisputed(text)) > 0 {
 			continue
 		}
 		if p.Kind == "prepaid" && other.Kind == "accrual" {
 			continue
 		}
 		lower, normal := strings.ToLower(text), documents.NormalizeEntity(text)
-		if other.Kind != "prepaid" && other.Kind != "accrual" && other.Kind != "depreciation" {
+		if other.Kind != "prepaid" && other.Kind != "accrual" && other.Kind != "depreciation" && other.Kind != "deferred_revenue" {
 			statement := other.Kind != "unsupported"
 			for _, src := range other.Sources {
 				statement = statement || src.ID == id && src.Role == "statement"

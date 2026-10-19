@@ -286,6 +286,41 @@ func mixedClose(t *testing.T, serial bool) {
 	if !unrelated[plain] || unrelated[refunded] || unrelated[named] || unrelated[unnamed] || unrelated[whole] {
 		t.Fatalf("a plain bank statement is another matter; one printing Acme's amount or naming its invoice, or a document not read as a statement, is not: %v", unrelated)
 	}
+	t.Run("independent customer invoices", func(t *testing.T) {
+		scope, err := db.Begin()
+		must(err)
+		defer scope.Rollback()
+		advance := func(customer, number, extra string) (string, string, preparation.Proposal) {
+			t.Helper()
+			body := entity + "\nInvoice " + number + "\nBill to: " + customer + "\nTotal USD 1,200.00\nService period 2026-09-01 to 2027-08-31\n" + extra
+			var source, job string
+			must(scope.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,$2,$3,$4,'fixture','ready') RETURNING id::text`, closeID, number+".txt", preparation.Digest([]byte(body)), body).Scan(&source))
+			must(scope.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','needs_confirmation','fixture') RETURNING id::text`, closeID, "intake:"+source).Scan(&job))
+			p := preparation.Proposal{Kind: "deferred_revenue", Engine: "context_machine", Sources: []preparation.Source{{ID: source, Role: "invoice"}}}
+			for _, f := range []struct{ field, value, quote string }{{"vendor", entity, entity}, {"billed_to", customer, "Bill to: " + customer}, {"invoice_number", number, "Invoice " + number}, {"amount", "1200.00", "Total USD 1,200.00"}, {"currency", "USD", "Total USD 1,200.00"}, {"service_start", "2026-09-01", "Service period 2026-09-01 to 2027-08-31"}, {"service_end", "2027-08-31", "Service period 2026-09-01 to 2027-08-31"}} {
+				p.Facts = append(p.Facts, preparation.Fact{Field: f.field, Value: f.value, Candidates: []preparation.Candidate{{Value: f.value, SourceID: source, Quote: f.quote}}})
+			}
+			raw, _ := json.Marshal(p)
+			_, err = scope.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal) VALUES($1,$2,$3)`, job, source, string(raw))
+			must(err)
+			return source, job, p
+		}
+		firstAdvance, advanceJob, advanceProposal := advance("Northwind", "REV-22", "")
+		secondAdvance, _, _ := advance("Contoso", "REV-23", "")
+		sameCustomer, _, _ := advance("Northwind", "REV-24", "")
+		credit, _, _ := advance("Another customer", "REV-25", "Credit applied for overbilling")
+		disputed, _, _ := advance("Different customer", "REV-26", "--- Page 1 · PDF text; Gemini fixture read it differently, so check the original ---")
+		unused, err := preparation.UnrelatedEvidence(context.Background(), scope, closeID, jobA, proposal)
+		must(err)
+		if !unused[firstAdvance] || !unused[secondAdvance] || unused[credit] || unused[disputed] {
+			t.Fatalf("independent advances release supplier work; credits and image conflicts remain held: %v", unused)
+		}
+		unused, err = preparation.UnrelatedEvidence(context.Background(), scope, closeID, advanceJob, advanceProposal)
+		must(err)
+		if !unused[first] || !unused[secondAdvance] || unused[sameCustomer] || unused[credit] || unused[disputed] {
+			t.Fatalf("different counterparties progress, same customer and credits remain held: %v", unused)
+		}
+	})
 	// A rescan of Acme's invoice (other bytes, the same vendor, number, amount, currency and service dates) does not hold
 	// Acme's invoice, and its own job waits for a person, naming the document it copies, rather than preparing it twice.
 	rescan := insert("acme rescan.txt", text(acme)+"Scanned 2026-09-30", "ready")
