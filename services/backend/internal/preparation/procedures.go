@@ -555,6 +555,11 @@ func ApprovalAuthority(ctx context.Context, q interface {
 	return nil
 }
 
+// InstructionValue reads one unambiguous labelled value from the approved instructions.
+func (p Procedure) InstructionValue(label string) (string, bool) {
+	return procedureValue(p.Instructions, label)
+}
+
 func procedureValue(instructions, label string) (string, bool) {
 	value, count := "", 0
 	for _, line := range strings.Split(instructions, "\n") {

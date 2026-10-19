@@ -44,6 +44,7 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Corrections fixture','2026-09') RETURNING id::text`, org).Scan(&closeID))
 	defer func() {
 		db.Exec(`DELETE FROM bill_corrections WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM procedure_versions WHERE organization_id=$1`, org)
 		db.Exec(`DELETE FROM production_posting_grants WHERE organization_id=$1`, org)
 		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM evidence WHERE close_id=$1`, closeID)
@@ -204,6 +205,16 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 	call(purchasePath, purchasePreview, 422)
 	purchasePreview["rule_reference"] = "Coding rule 3.1"
 	json.Unmarshal(call(purchasePath, purchasePreview, 200), &recoded)
+	// A withdrawn automatic proposal must enter the same manual preview path without retaining its rule authority.
+	var policy string
+	must(db.QueryRow(`INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor) VALUES($1,'Corrections fixture','coding','Synthetic old rule',true,'Synthetic rule','fixture') RETURNING id::text`, org).Scan(&policy))
+	_, err = db.Exec(`UPDATE bill_corrections SET state='withdrawn',policy_version_id=$2,policy_evidence_id=$3,account_evidence_id=$3,candidate_reviews='[{"action":"withdrawn","reason":"Old source no longer applies"}]' WHERE id::text=$1`, recoded.ID, policy, evidenceID)
+	must(err)
+	json.Unmarshal(call(purchasePath, purchasePreview, 200), &recoded)
+	if recoded.State != "preview" || recoded.PolicyID != "" || recoded.PolicyEvidenceID != "" || recoded.AccountEvidenceID != "" || !strings.Contains(string(recoded.CandidateReviews), "withdrawn") || purchaseWrites != 0 {
+		t.Fatalf("withdrawn candidate did not become an independent manual preview: %+v writes=%d", recoded, purchaseWrites)
+	}
+
 	call(purchasePath, map[string]any{"action": "approve", "digest": recoded.Digest, "confirmed": true}, 200)
 	json.Unmarshal(call(purchasePath, map[string]any{"action": "execute", "digest": recoded.Digest, "confirmed": true}, 200), &recoded)
 	if purchaseWrites != 1 || recoded.State != "verified" || recoded.Entity != "Purchase" || recoded.RuleReference != "Coding rule 3.1" || writes != 1 {

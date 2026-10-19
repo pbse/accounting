@@ -308,9 +308,9 @@ export function Books({ close, papers, needs, brief, briefRead, decisionsError, 
               {view === "matching" && <Matching key={`matching-${close.id}`} closeId={close.id} open />}
               {view === "corrections" && (
                 <>
-                  <BillCorrection closeId={close.id} />
-                  <BillCorrection closeId={close.id} kind="purchases" />
-                  <BillCorrection closeId={close.id} kind="deposits" />
+                  <BillCorrection key={`bills-${close.id}`} closeId={close.id} />
+                  <BillCorrection key={`purchases-${close.id}`} closeId={close.id} kind="purchases" />
+                  <BillCorrection key={`deposits-${close.id}`} closeId={close.id} kind="deposits" />
                   <CreditApplications closeId={close.id} />
                 </>
               )}

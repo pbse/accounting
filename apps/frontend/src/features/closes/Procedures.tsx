@@ -23,10 +23,11 @@ type Impact = {
   version_id: string;
   source_id: string;
   impact_digest: string;
+  native_corrections?:{id:string;entity:string;transaction_id:string;state:string}[];
   affected_drafts: { id: string; kind: string; review_state: string }[];
 };
 type Suggestion = { draft_instructions: string; changed_fields: string[]; source_draft_ids: string[] };
-type PublishImpact = { kind: string; client_entity: string; previous_id: string; impact_digest: string; total_closes: number; has_more: boolean; closes: { close_id: string; entity: string; period: string; pinned_source_id: string; draft_count: number }[] };
+type PublishImpact = { kind: string; client_entity: string; previous_id: string; impact_digest: string; total_closes: number; has_more: boolean; closes: { close_id: string; entity: string; period: string; pinned_source_id: string; draft_count: number;native_correction_count:number }[] };
 // open shows the procedures unfolded, read as they open.
 export function Procedures({
   closeId,
@@ -279,7 +280,7 @@ export function Procedures({
                       <button disabled={busy} onClick={() => void preview(v)}>Preview affected work</button>
                       {impact?.version_id === v.id && <>
                         <p>Current pinned procedure source: {impact.source_id ? `#${impact.source_id}` : "none"}. Applying this version changes the cited context for {impact.affected_drafts.length} workpaper(s); their review may become stale.</p>
-                        {impact.affected_drafts.length > 0 && <ul>{impact.affected_drafts.map((draft) => <li key={draft.id}>Draft #{draft.id} · {draft.kind} · {draft.review_state}</li>)}</ul>}
+                        {(impact.native_corrections?.length??0)>0 && <><p>{impact.native_corrections?.length} native correction(s) cite this rule and need fresh review after it changes.</p><ul>{impact.native_corrections?.map(n=><li key={n.id}>{n.entity} #{n.transaction_id} · {n.state}</li>)}</ul></>}{impact.affected_drafts.length > 0 && <ul>{impact.affected_drafts.map((draft) => <li key={draft.id}>Draft #{draft.id} · {draft.kind} · {draft.review_state}</li>)}</ul>}
                         <button disabled={busy || !applyConfirmed} onClick={() => void apply(v)}>Apply version #{v.id} to this close</button>
                       </>}
                     </>}
@@ -442,7 +443,7 @@ export function Procedures({
                 {publishImpact?.kind === kind && publishImpact.client_entity.toLowerCase() === (target === "client" ? entity : "").toLowerCase() && <section role="status">
                   <p>{publishImpact.total_closes} existing close{publishImpact.total_closes === 1 ? "" : "s"} in this procedure scope. Publishing leaves their pinned context unchanged; each close needs a separate reviewed apply action.</p>
                   {publishImpact.has_more && <p>Showing the latest 100 closes. Open older closes individually before a firm-wide change.</p>}
-                  <ul>{publishImpact.closes.map(item => <li key={item.close_id}>{item.entity} · {item.period} · {item.draft_count} draft{item.draft_count === 1 ? "" : "s"} · {item.pinned_source_id ? `pinned source #${item.pinned_source_id}` : "no pinned procedure"}</li>)}</ul>
+                  <ul>{publishImpact.closes.map(item => <li key={item.close_id}>{item.entity} · {item.period} · {item.draft_count} draft{item.draft_count === 1 ? "" : "s"} · {kind === "coding" && <>{item.native_correction_count} native correction(s) · </>}{item.pinned_source_id ? `pinned source #${item.pinned_source_id}` : "no pinned procedure"}</li>)}</ul>
                 </section>}
                 <button disabled={!publishImpact || publishImpact.kind !== kind || publishImpact.previous_id !== (previous?.id ?? "") || publishImpact.client_entity.toLowerCase() !== (target === "client" ? entity : "").toLowerCase()}>Publish approved version</button>
                 <button type="button" onClick={() => setEditing(false)}>
@@ -478,6 +479,7 @@ export function Procedures({
                           {restoring.impact.closes.map((c) => (
                             <li key={c.close_id}>
                               {c.entity} · {c.period} · {c.draft_count} draft{c.draft_count === 1 ? "" : "s"}
+                              {v.kind === "coding" && <> · {c.native_correction_count} native correction(s)</>}
                               {c.pinned_source_id ? " · pinned to an earlier version" : ""}
                             </li>
                           ))}

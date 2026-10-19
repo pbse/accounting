@@ -47,12 +47,15 @@ type goalItem struct {
 // means every current document has a draft ready for review; a goal that finishes at sign-off also carries what sign-off
 // needs.
 type goalProgress struct {
-	Items    []goalItem    `json:"items"`
-	Needs    []string      `json:"needs"`
-	Ready    bool          `json:"ready"`
-	Signoff  *goalSignoff  `json:"signoff,omitempty"`
-	Coverage *goalCoverage `json:"coverage,omitempty"`
-	Plan     []planStep    `json:"plan,omitempty"`
+	Coding      []nativeCodingReview `json:"coding_candidates,omitempty"`
+	CodingCount int                  `json:"coding_candidate_count"`
+	CodingMore  bool                 `json:"coding_candidates_more,omitempty"`
+	Items       []goalItem           `json:"items"`
+	Needs       []string             `json:"needs"`
+	Ready       bool                 `json:"ready"`
+	Signoff     *goalSignoff         `json:"signoff,omitempty"`
+	Coverage    *goalCoverage        `json:"coverage,omitempty"`
+	Plan        []planStep           `json:"plan,omitempty"`
 	// accounts is the capture's coverage when it was read, for handing accounts to teammates.
 	accounts *coverageView
 	// approve counts documents whose drafts a sign-off goal needs approved; limited, a close past coverage's limit;
@@ -321,6 +324,18 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 			p.Items[w.at].Status, p.Items[w.at].Text = "needs_you", "Request #"+w.request+" no longer takes replies. "+stale.Error()
 		}
 	}
+
+	coding, total, nativeErr := nativeCodingProgress(ctx, tx, closeID)
+	if nativeErr != nil {
+		return p, nativeErr
+	}
+	p.Coding, p.CodingCount, p.CodingMore = coding, total, total > len(coding)
+	nativeNeeds, err := nativeCodingNeeds(ctx, tx, closeID)
+	if err != nil {
+		return p, err
+	}
+	p.Needs = append(p.Needs, nativeNeeds...)
+
 	switch {
 	case len(p.Items) == 0:
 		p.Needs = append(p.Needs, "Add the client's documents: upload, forward or request them, and I'll take it from there.")
@@ -682,6 +697,16 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 		}
 		g.state = "active"
 	}
+
+	nativeCount, nativeErr := prepareNativeCoding(ctx, tx, g.close, "close goal #"+g.id+" for "+g.author)
+	if nativeErr != nil {
+		return nativeErr
+	}
+	if nativeCount > 0 {
+		if err := goalEvent(ctx, tx, g.id, "agent", fmt.Sprintf("I prepared %s under the approved native coding rule; review their exact accounts in Books.", plural(nativeCount, "native correction candidate", "native correction candidates"))); err != nil {
+			return err
+		}
+	}
 	inventory, err := preparationInventory(ctx, tx, g.close)
 	if err != nil {
 		return err
@@ -734,6 +759,10 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 			}
 		}
 		text := fmt.Sprintf("Every uploaded document has a draft ready for review: %s from %s.", plural(drafts, "draft", "drafts"), plural(documents, "document", "documents"))
+		if progress.CodingCount > 0 {
+			text += " " + plural(progress.CodingCount, "native coding candidate needs", "native coding candidates need") + " review."
+		}
+
 		if stopped := len(progress.Items) - documents; stopped > 0 {
 			text += " " + plural(stopped, "stopped document is", "stopped documents are") + " left out."
 		}
