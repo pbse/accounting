@@ -16,14 +16,15 @@ import (
 )
 
 type Procedure struct {
-	AssetExample   bool   `json:"-"` // An activated equal-month policy explicitly includes a reviewed depreciation example.
-	ID             string `json:"id"`
-	ClientEntity   string `json:"client_entity"`
-	Kind           string `json:"kind"`
-	Method         string `json:"method"`
-	Instructions   string `json:"instructions"`
-	ExpenseAccount string `json:"expense_account"`
-	PrepaidAccount string `json:"prepaid_account"`
+	DeferredExample bool   `json:"-"` // Current approved example of this schedule, distinct from prepaids.
+	AssetExample    bool   `json:"-"` // An activated equal-month policy explicitly includes a reviewed depreciation example.
+	ID              string `json:"id"`
+	ClientEntity    string `json:"client_entity"`
+	Kind            string `json:"kind"`
+	Method          string `json:"method"`
+	Instructions    string `json:"instructions"`
+	ExpenseAccount  string `json:"expense_account"`
+	PrepaidAccount  string `json:"prepaid_account"`
 	// CoversCards is a reconciliation procedure's approval of card accounts for preparation without confirmation.
 	CoversCards bool   `json:"covers_cards,omitempty"`
 	Enabled     bool   `json:"enabled"`
@@ -38,7 +39,7 @@ type Procedure struct {
 // month counts.
 func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Procedure, error) {
 	var p Procedure
-	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text,COALESCE(p.effective_from,''),p.covers_cards,EXISTS(SELECT 1 FROM procedure_drafts d JOIN procedure_example_approvals a ON a.draft_id=d.id AND a.draft_revision=d.revision JOIN workpaper_review_state w ON w.id=a.workpaper_id AND w.digest=a.workpaper_digest AND w.review_id::text=a.review_id AND w.review_state='approved' WHERE d.id=p.draft_id AND d.activated_version_id=p.id AND w.kind='prepaid' AND w.paper->'input'->>'schedule'='depreciation' AND w.paper->'input'->>'method'=p.method) FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom, &p.CoversCards, &p.AssetExample)
+	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text,COALESCE(p.effective_from,''),p.covers_cards,EXISTS(SELECT 1 FROM procedure_drafts d JOIN procedure_example_approvals a ON a.draft_id=d.id AND a.draft_revision=d.revision JOIN workpaper_review_state w ON w.id=a.workpaper_id AND w.digest=a.workpaper_digest AND w.review_id::text=a.review_id AND w.review_state='approved' WHERE d.id=p.draft_id AND d.activated_version_id=p.id AND w.kind='prepaid' AND w.paper->'input'->>'schedule'='depreciation' AND w.paper->'input'->>'method'=p.method),EXISTS(SELECT 1 FROM procedure_drafts d JOIN procedure_example_approvals a ON a.draft_id=d.id AND a.draft_revision=d.revision JOIN workpaper_review_state w ON w.id=a.workpaper_id AND w.digest=a.workpaper_digest AND w.review_id::text=a.review_id AND w.review_state='approved' WHERE d.id=p.draft_id AND d.activated_version_id=p.id AND w.kind='prepaid' AND w.paper->'input'->>'schedule'='deferred_revenue' AND w.paper->'input'->>'method'=p.method) FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom, &p.CoversCards, &p.AssetExample, &p.DeferredExample)
 	return p, err
 }
 
@@ -366,15 +367,27 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		return "", nil
 	}
 	workKind := p.Kind
-	if p.Kind == "prepaid" && p.AssetExample {
-		workKind = "prepaid and depreciation (shared schedule calculator)"
+	if p.Kind == "prepaid" {
+		kinds := []string{p.Kind}
+		if p.AssetExample {
+			kinds = append(kinds, "depreciation")
+		}
+		if p.DeferredExample {
+			kinds = append(kinds, "deferred_revenue")
+		}
+		if len(kinds) > 1 {
+			workKind = strings.Join(kinds, " and ") + " (shared schedule calculator)"
+		}
 	}
 	text := fmt.Sprintf("Approved firm procedure version: %s\nWork kind: %s\nInstructions: %s\nApproval actor: %s\nApproval reason: %s\nThese instructions do not prove invoice booking, source completeness or ledger state. Human method and booking confirmations remain required.\n", p.ID, workKind, p.Instructions, p.Actor, p.Reason)
-	if p.Kind == "prepaid" && p.AssetExample {
+	if p.Kind == "prepaid" && (p.AssetExample || p.DeferredExample) {
 		text = strings.Replace(text, "Human method and booking confirmations remain required.", "The server verifies approved method and booking for automatic preparation; otherwise human confirmations remain required.", 1)
 	}
 	if p.Kind == "prepaid" && p.AssetExample {
 		text += "This activated policy includes an approved depreciation example. Its explicit asset accounts, useful life, salvage value and convention apply to depreciation. The server separately verifies eligibility for automatic preparation; a qualifying draft still requires review.\n"
+	}
+	if p.Kind == "prepaid" && p.DeferredExample {
+		text += "This activated policy includes an approved deferred-revenue example. Its explicit revenue and deferred-revenue accounts apply to that schedule. The server separately verifies the full advance and service period before preparing an unapproved draft.\n"
 	}
 	if p.Method != "" {
 		text += "Approved method boundary: " + p.Method + "\n"
