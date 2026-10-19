@@ -16,6 +16,7 @@ import (
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/documents"
 	"close.local/backend/internal/llm"
+	"close.local/backend/internal/loans"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 )
@@ -48,6 +49,8 @@ func learnedMethod(kind, method string) bool {
 	switch kind {
 	case "prepaid":
 		return slices.Contains([]string{prepaids.Method, prepaids.DailyMethod, prepaids.DecliningMethod, prepaids.Boundary(prepaids.Method, prepaids.MidMonth), prepaids.Boundary(prepaids.DecliningMethod, prepaids.MidMonth)}, method)
+	case "loan":
+		return method == loans.Method
 	case "accrual":
 		return slices.Contains([]string{accruals.Method, accruals.ActualMethod, accruals.RecurringMethod, accruals.ProRataMethod}, method)
 	}
@@ -208,6 +211,16 @@ func replayLearnedExample(kind string, raw []byte) (string, error) {
 			return "", fmt.Errorf("Prepaid example no longer matches the calculator")
 		}
 		return prepaids.Boundary(saved.Input.Method, saved.Input.Convention), nil
+	case "loan":
+		var saved loans.Workpaper
+		if json.Unmarshal(raw, &saved) != nil {
+			return "", fmt.Errorf("Invalid loan example")
+		}
+		got, err := loans.Prepare(saved.Input)
+		if err != nil || !reflect.DeepEqual(got, saved) {
+			return "", fmt.Errorf("Loan example no longer matches the calculator")
+		}
+		return saved.Input.Method, nil
 	case "accrual":
 		var saved accruals.Workpaper
 		if json.Unmarshal(raw, &saved) != nil {
@@ -226,7 +239,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 	base := "/v1/closes/{id}/procedures/drafts"
 	mux.HandleFunc("GET "+base, func(w http.ResponseWriter, r *http.Request) {
 		kind := r.URL.Query().Get("kind")
-		if !slices.Contains([]string{"prepaid", "accrual"}, kind) {
+		if !slices.Contains([]string{"prepaid", "accrual", "loan"}, kind) {
 			problem(w, 422, "Choose a supported work kind.")
 			return
 		}
