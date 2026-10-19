@@ -235,7 +235,7 @@ export function Procedures({
       {loaded && (
         <>
           <h3>Effective versions for {entity}</h3>
-          {["basis", "owner", "prepaid", "reconciliation", "accrual", "loan", "payroll"].map((k) => {
+          {["basis", "owner", "prepaid", "reconciliation", "accrual", "loan", "payroll", "coding"].map((k) => {
             // The version in effect for this close's month: a version taking effect later does not apply to it yet.
             const inEffect = (p: Version) => !p.effective_from || p.effective_from <= period;
             const v =
@@ -244,7 +244,7 @@ export function Procedures({
             return (
               <section key={k}>
                 <h4>
-                  {k === "basis" ? "Accounting basis" : k === "owner" ? "Owner treatments" : k === "prepaid" ? "Prepaid preparation" : k === "accrual" ? "Accrual preparation" : k === "loan" ? "Loan schedules" : k === "payroll" ? "Payroll recording" : "Statement reconciliation"}
+                  {k === "coding" ? "Native coding rules" : k === "basis" ? "Accounting basis" : k === "owner" ? "Owner treatments" : k === "prepaid" ? "Prepaid preparation" : k === "accrual" ? "Accrual preparation" : k === "loan" ? "Loan schedules" : k === "payroll" ? "Payroll recording" : "Statement reconciliation"}
                 </h4>
                 {!v ? (
                   <p>
@@ -328,9 +328,11 @@ export function Procedures({
                   <option value="basis">Accounting basis</option>
                   <option value="owner">Owner treatments (entity type)</option>
                   <option value="payroll">Payroll recording (provider summary method)</option>
+                  <option value="coding">Native coding rules</option>
                 </select>
               </label>
-              {target === "client" && kind !== "basis" && kind !== "owner" && kind !== "payroll" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
+              {kind === "coding" && <p>Record the accountant's account-coding instructions. A person reviews each correction and separately authorizes any ledger write.</p>}
+              {target === "client" && kind !== "basis" && kind !== "owner" && kind !== "payroll" && kind !== "coding" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
               <button onClick={() => { setSuggestion(undefined);setEditing(true); }} disabled={busy}>
                 Propose and approve a new version
               </button>
