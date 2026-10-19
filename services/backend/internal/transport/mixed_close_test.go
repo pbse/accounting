@@ -65,7 +65,7 @@ func mixedClose(t *testing.T, serial, supplierCredit bool) {
 	must(err)
 	procedure, err := preparation.CurrentProcedure(context.Background(), tx, closeID, "prepaid")
 	must(err)
-	_, err = preparation.AttachProcedure(context.Background(), tx, closeID, procedure, false, "fixture")
+	ruleID, err := preparation.AttachProcedure(context.Background(), tx, closeID, procedure, false, "fixture")
 	must(err)
 	must(tx.Commit())
 	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,home_currency,fiscal_year_start) VALUES($1,'local-development',$2,'fixture','active',$3,now(),'123','USD',1) RETURNING id::text`, closeID, entity, rand.Text()).Scan(&connection))
@@ -128,7 +128,8 @@ func mixedClose(t *testing.T, serial, supplierCredit bool) {
 			quote("service_start", "2026-09-01", "Coverage period 2026-09-01 to 2027-08-31"), quote("service_end", "2027-08-31", "Coverage period 2026-09-01 to 2027-08-31"),
 			quote("vendor", inv.vendor, inv.vendor), quote("billed_to", entity, "Bill to: "+entity), quote("invoice_number", inv.number, "Invoice "+inv.number),
 		}
-		output, _ := json.Marshal(map[string]any{"kind": "prepaid", "summary": "Insurance prepaid schedule", "questions": []string{}, "sources": []map[string]string{{"id": given.Primary, "role": "invoice"}}, "facts": facts})
+		facts = append(facts, map[string]string{"field": "expense_account", "value": "Insurance", "source_id": ruleID, "quote": "Expense account: Insurance"}, map[string]string{"field": "prepaid_account", "value": "Prepaid Expenses", "source_id": ruleID, "quote": "Prepaid account: Prepaid Expenses"})
+		output, _ := json.Marshal(map[string]any{"kind": "prepaid", "summary": "Insurance prepaid schedule", "questions": []string{}, "sources": []map[string]string{{"id": given.Primary, "role": "invoice"}, {"id": ruleID, "role": "support"}}, "facts": facts})
 		body, _ := json.Marshal(map[string]any{"id": "mock-response", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
 	})
@@ -194,8 +195,17 @@ func mixedClose(t *testing.T, serial, supplierCredit bool) {
 			var done string
 			must(db.QueryRow(`SELECT state||' '||jsonb_array_length(workpaper_ids) FROM preparation_jobs WHERE id::text=$1`, job).Scan(&done))
 			if supplierCredit && job == jobC {
-				if s, checkpoint := state(job); done != "needs_confirmation 0" || !strings.Contains(checkpoint, "evidence in the close (carter-credit.txt) was not used") {
-					t.Fatalf("Carter still needs its credit decision: %s %s %s", done, s, checkpoint)
+				var raw []byte
+				must(db.QueryRow(`SELECT proposal FROM preparation_intakes WHERE job_id::text=$1`, job).Scan(&raw))
+				var proposal preparation.Proposal
+				must(json.Unmarshal(raw, &proposal))
+				s, checkpoint := state(job)
+				creditQuestion := false
+				for _, question := range proposal.Questions {
+					creditQuestion = creditQuestion || strings.Contains(question, "CA-12-C") && strings.Contains(strings.ToLower(question), "credit")
+				}
+				if done != "needs_confirmation 0" || !creditQuestion && !strings.Contains(checkpoint, "evidence in the close (carter-credit.txt) was not used") {
+					t.Fatalf("Carter still needs its credit decision: %s %s %s %v", done, s, checkpoint, proposal.Questions)
 				}
 				continue
 			}
