@@ -6,6 +6,12 @@ Approval records the exact workpaper digest, reviewer identity, note and time. C
 
 Approval requires current linked evidence and no unresolved calculation blockers. Older drafts without uploaded evidence must be prepared through source-linked instructions first. Accepting unresolved exceptions is not implemented. Hosted users need the WorkOS `workpapers:review` permission; the shared local token records decisions as `local-workspace (development)`, not as a named accountant.
 
+## Returning an ordinary loan draft
+
+A delegated goal can now revise an ordinary loan draft from a review note that names the statement closing principal and its controlling source. The existing quote checks and loan calculator validate the change; it returns as a fresh draft for review. An unsupported or unsourced change becomes a question.
+
+The lender and loan agreement identity, and facts covered by rate or booking confirmations, stay on the reviewed form: annual rate, opening principal/interest-paid-through date, book balances and booking accounts. The note also cannot change method, currency, day count, confirmations, payments, dated rate/fee schedules or other structured treatments. Imported schedules retain their existing reviewed page workflow. No return approves a workpaper or authorizes a provider write.
+
 ## When evidence changes
 
 1. Upload the corrected text or CSV into the same close.

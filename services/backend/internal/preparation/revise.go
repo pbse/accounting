@@ -16,6 +16,7 @@ import (
 // inputs, never its method, currency or a confirmation, which a person changes on the draft's page.
 var reviseFields = map[string][]string{
 	"prepaid": {"amount", "service_start", "service_end", "salvage_value", "expense_account", "prepaid_account", "booked_balance", "booking_reference", "credit_amount", "credit_period", "credit_reference", "cancellation_period", "cancellation_reference"},
+	"loan":    {"closing_principal"},
 	"accrual": {"amount", "service_start", "service_end", "expense_account", "liability_account", "booked_balance", "booking_reference", "estimation_basis", "estimate_amount", "estimate_reference", "actual_reference"},
 }
 
