@@ -137,4 +137,52 @@ func TestLoanDraftsNeedTheClientsApprovedLoanProcedure(t *testing.T) {
 	}
 	call("/v1/closes/procedures", map[string]any{"client_entity": entity, "kind": "loan", "method": "lender_statement_v1", "instructions": "Accrue interest monthly.", "enabled": true, "reason": "Synthetic", "confirmed": true, "previous_id": "stale"}, 409)
 	call("/v1/closes/procedures", map[string]any{"client_entity": entity, "kind": "loan", "method": "lender_statement_costs_v1", "instructions": "Amortize issuance costs straight-line.", "enabled": true, "reason": "Synthetic", "confirmed": true, "previous_id": "stale"}, 409)
+	// A later lender amendment reopens the earlier schedule when it becomes readable.
+	defer db.Exec(`DELETE FROM evidence WHERE close_id=$1`, closeID)
+	loanState := func() string {
+		t.Helper()
+		var state string
+		if e := db.QueryRow(`SELECT review_state FROM workpaper_review_state WHERE id::text=$1`, saved.ID).Scan(&state); e != nil {
+			t.Fatal(e)
+		}
+		return state
+	}
+	var ordinary, amendment string
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,'other-lender.txt',$2,'First Banking revised loan terms','fixture','ready') RETURNING id::text`, closeID, rand.Text()).Scan(&ordinary); err != nil {
+		t.Fatal(err)
+	}
+	if state := loanState(); state == "source_changed" {
+		t.Fatal("an amendment from another lender reopened the loan")
+	}
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,'rate-notice.txt',$2,'First Bank rate change effective September 2026','fixture','queued') RETURNING id::text`, closeID, rand.Text()).Scan(&amendment); err != nil {
+		t.Fatal(err)
+	}
+	if state := loanState(); state == "source_changed" {
+		t.Fatal("an unread notice reopened the loan")
+	}
+	if _, err = db.Exec(`UPDATE evidence SET extraction_state='ready' WHERE id::text=$1`, amendment); err != nil {
+		t.Fatal(err)
+	}
+	if state := loanState(); state != "source_changed" {
+		t.Fatalf("the lender rate notice did not reopen the saved loan: %s", state)
+	}
+
+	var replacement string
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,'withdrawn-notice.txt',$2,'Other Bank ordinary notice','fixture','ready') RETURNING id::text`, closeID, rand.Text()).Scan(&replacement); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE evidence SET superseded_by=$2 WHERE id::text=$1`, amendment, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if state := loanState(); state == "source_changed" {
+		t.Fatal("a replaced lender notice still holds the loan")
+	}
+
+	if _, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,'payoff.txt',$2,'First Bank Payoff Statement','fixture','ready')`, closeID, rand.Text()); err != nil {
+		t.Fatal(err)
+	}
+	if state := loanState(); state != "source_changed" {
+		t.Fatalf("a lender payoff notice did not reopen the loan: %s", state)
+	}
+
 }
