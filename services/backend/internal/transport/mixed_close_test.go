@@ -306,7 +306,7 @@ func mixedClose(t *testing.T, serial, supplierCredit bool) {
 		t.Helper()
 		id := insert(name, body, "ready")
 		job := start(id)
-		_, e := db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_build_object('kind','unsupported','engine','openai','summary','Bank statement','facts','[]'::jsonb,'questions',jsonb_build_array('Which work does this statement support?'),'sources',jsonb_build_array(jsonb_build_object('id',$2::text,'role',$3::text))) WHERE job_id::text=$1`, job, id, role)
+		_, e := db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_build_object('kind','unsupported','engine','openai','summary','Bank statement','facts','[]'::jsonb,'questions',jsonb_build_array('Which work does this statement support?'),'sources',jsonb_build_array(jsonb_build_object('id',$2::text,'role',$3::text,'digest',$4::text))) WHERE job_id::text=$1`, job, id, role, preparation.Digest([]byte(body)))
 		must(e)
 		_, e = db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`, job)
 		must(e)
@@ -326,6 +326,38 @@ func mixedClose(t *testing.T, serial, supplierCredit bool) {
 	if !unrelated[plain] || unrelated[refunded] || unrelated[named] || unrelated[unnamed] || unrelated[whole] {
 		t.Fatalf("a plain bank statement is another matter; one printing Acme's amount or naming its invoice, or a document not read as a statement, is not: %v", unrelated)
 	}
+	t.Run("payroll owns its current clearing ledger", func(t *testing.T) {
+		clearing := statement("payroll-ledger.txt", "Payroll Clearing ledger, September 2026\nGusto debits 10,265.00", "ledger")
+		summary := statement("payroll-summary.txt", "Gusto payroll summary September 2026\nProvider debits USD 10,265.00", "support")
+		var digest, summaryDigest string
+		must(db.QueryRow(`SELECT digest FROM evidence WHERE id::text=$1`, clearing).Scan(&digest))
+		must(db.QueryRow(`SELECT digest FROM evidence WHERE id::text=$1`, summary).Scan(&summaryDigest))
+		_, err := db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_build_object('kind','payroll','engine','context_machine','questions',jsonb_build_array('Choose first payroll accounts'),'sources',jsonb_build_array(jsonb_build_object('id',$1::text,'digest',$3::text,'role','support'),jsonb_build_object('id',$2::text,'digest',$4::text,'role','ledger'))) WHERE source_id::text=$1`, summary, clearing, summaryDigest, digest)
+		must(err)
+		unused, err := preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal, ledger)
+		must(err)
+		if !unused[clearing] {
+			t.Fatal("a current ledger already read as payroll support held the unrelated invoice")
+		}
+		_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(proposal,'{sources,1,digest}','"old"') WHERE source_id::text=$1`, summary)
+		must(err)
+		unused, err = preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal, ledger)
+		must(err)
+		if unused[clearing] {
+			t.Fatal("a stale payroll source link released its ledger")
+		}
+		_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(proposal,'{sources,1,digest}',to_jsonb($2::text)) WHERE source_id::text=$1`, summary, digest)
+		must(err)
+		_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(jsonb_set(proposal,'{kind}','"prepaid"'),'{sources,0,role}','"invoice"') WHERE source_id::text=$1`, clearing)
+		must(err)
+		unused, err = preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal, ledger)
+		must(err)
+		if unused[clearing] {
+			t.Fatal("a payroll citation overrode the document's own invoice reading without an identity")
+		}
+		_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(jsonb_set(proposal,'{kind}','"unsupported"'),'{sources,0,role}','"ledger"') WHERE source_id::text=$1`, clearing)
+		must(err)
+	})
 	t.Run("independent customer invoices", func(t *testing.T) {
 		scope, err := db.Begin()
 		must(err)
