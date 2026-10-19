@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +30,19 @@ var recodeKinds = []struct {
 	{"deposits", "Deposit", "deposit_correction", "deposit", []string{"uncategorized_income", "inconsistent_coding"}},
 }
 
+func nativeCorrectionLink(closeID, kind, id string) string {
+	base := "/dashboard/closes/" + closeID + "?tab=books"
+	if n, err := strconv.ParseUint(id, 10, 64); err == nil && n > 0 && slices.Contains([]string{"bills", "purchases", "deposits"}, kind) {
+		return base + "#correct-" + kind + "-" + id
+	}
+	return base
+}
+
 type billCorrection struct {
+	PolicyID          string          `json:"policy_version_id,omitempty"`
+	PolicyEvidenceID  string          `json:"policy_evidence_id,omitempty"`
+	AccountEvidenceID string          `json:"account_evidence_id,omitempty"`
+	CandidateReviews  json.RawMessage `json:"candidate_reviews,omitempty"`
 	ID                string          `json:"id"`
 	Entity            string          `json:"entity"`
 	CaptureID         string          `json:"capture_id"`
@@ -54,9 +67,9 @@ type billCorrection struct {
 	GrantID           string          `json:"grant_id,omitempty"`
 }
 
-func readBillCorrection(ctx context.Context, db *sql.DB, closeID, entity, id string) (billCorrection, error) {
+func readBillCorrection(ctx context.Context, db reader, closeID, entity, id string) (billCorrection, error) {
 	var b billCorrection
-	err := db.QueryRowContext(ctx, `SELECT id::text,entity,capture_id::text,evidence_id::text,realm,bill_id,treatment,reason,rule_reference,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by,COALESCE(approved_by,''),approval_expires_at,COALESCE(attempted_by,''),last_error,COALESCE(readback,'null'::jsonb),COALESCE(grant_id::text,'') FROM bill_corrections WHERE close_id::text=$1 AND entity=$2 AND bill_id=$3`, closeID, entity, id).Scan(&b.ID, &b.Entity, &b.CaptureID, &b.EvidenceID, &b.Realm, &b.BillID, &b.Treatment, &b.Reason, &b.RuleReference, &b.TargetAccountID, &b.TargetLineID, &b.TargetAccountName, &b.BeforeBill, &b.Digest, &b.State, &b.ProposedBy, &b.ApprovedBy, &b.Expires, &b.AttemptedBy, &b.Error, &b.Readback, &b.GrantID)
+	err := db.QueryRowContext(ctx, `SELECT id::text,entity,capture_id::text,evidence_id::text,realm,bill_id,treatment,reason,rule_reference,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by,COALESCE(approved_by,''),approval_expires_at,COALESCE(attempted_by,''),last_error,COALESCE(readback,'null'::jsonb),COALESCE(grant_id::text,''),COALESCE(policy_version_id::text,''),COALESCE(policy_evidence_id::text,''),COALESCE(account_evidence_id::text,''),candidate_reviews FROM bill_corrections WHERE close_id::text=$1 AND entity=$2 AND bill_id=$3`, closeID, entity, id).Scan(&b.ID, &b.Entity, &b.CaptureID, &b.EvidenceID, &b.Realm, &b.BillID, &b.Treatment, &b.Reason, &b.RuleReference, &b.TargetAccountID, &b.TargetLineID, &b.TargetAccountName, &b.BeforeBill, &b.Digest, &b.State, &b.ProposedBy, &b.ApprovedBy, &b.Expires, &b.AttemptedBy, &b.Error, &b.Readback, &b.GrantID, &b.PolicyID, &b.PolicyEvidenceID, &b.AccountEvidenceID, &b.CandidateReviews)
 	return b, err
 }
 
@@ -146,6 +159,7 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 }
 
 func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, label string, treatments []string) {
+	registerNativeCandidateReview(mux, db, segment, entity)
 	mux.HandleFunc("GET /v1/closes/{id}/quickbooks/"+segment+"/candidates", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
 		err := db.QueryRowContext(r.Context(), `SELECT payload FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw)
@@ -167,15 +181,15 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 		items := []map[string]string{}
 		for _, row := range capture.Records[entity] {
 			var t struct {
-				ID                   string `json:"Id"`
-				TxnDate              string
-				TotalAmt             json.Number
-				VendorRef, EntityRef quickbooks.Reference
+				ID                                string `json:"Id"`
+				TxnDate                           string
+				TotalAmt                          json.Number
+				VendorRef, EntityRef, CurrencyRef quickbooks.Reference
 			}
 			if json.Unmarshal(row, &t) != nil || t.ID == "" {
 				continue
 			}
-			items = append(items, map[string]string{"id": t.ID, "date": t.TxnDate, "amount": string(t.TotalAmt), "vendor_id": t.VendorRef.Value + t.EntityRef.Value})
+			items = append(items, map[string]string{"id": t.ID, "date": t.TxnDate, "amount": string(t.TotalAmt), "vendor_id": t.VendorRef.Value + t.EntityRef.Value, "currency": t.CurrencyRef.Value})
 			if len(items) == 100 {
 				break
 			}
@@ -186,7 +200,7 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 	path := "/v1/closes/{id}/quickbooks/" + segment + "/{bill}/correction"
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		item, err := readBillCorrection(r.Context(), db, r.PathValue("id"), entity, r.PathValue("bill"))
-		if err == sql.ErrNoRows {
+		if err == sql.ErrNoRows || err == nil && item.State == "withdrawn" {
 			realm := sandboxConfiguration().Realm
 			db.QueryRowContext(r.Context(), `SELECT realm FROM quickbooks_connections WHERE id=`+quickbooks.ReadingConnection("$1::bigint")+` AND environment='production'`, r.PathValue("id")).Scan(&realm)
 			_, _, captured, captureErr := capturedTxn(r.Context(), db, r.PathValue("id"), entity, r.PathValue("bill"), realm)
@@ -194,7 +208,12 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 				problem(w, 409, captureErr.Error())
 				return
 			}
-			jsonReply(w, 200, map[string]any{"state": "not_prepared", "entity": entity, "before_bill": captured})
+			response := map[string]any{"state": "not_prepared", "entity": entity, "before_bill": captured}
+			if item.State == "withdrawn" {
+				response["message"] = "The prior automatic proposal was withdrawn. Review the latest complete captured transaction and confirm its treatment separately."
+				response["candidate_reviews"] = item.CandidateReviews
+			}
+			jsonReply(w, 200, response)
 			return
 		}
 		if err != nil {
@@ -324,7 +343,7 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 				}
 			}
 			digest := preparation.Digest([]byte(entity + "/" + captureID + "/" + evidenceID + "/" + string(live) + "/" + in.Treatment + "/" + in.Reason + "/" + in.RuleReference + "/" + in.TargetLineID + "/" + in.TargetAccountID + "/" + name + "/" + grant.ID))
-			result, err := db.ExecContext(r.Context(), `INSERT INTO bill_corrections(close_id,entity,capture_id,evidence_id,realm,bill_id,treatment,reason,rule_reference,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by,grant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'preview',$15,NULLIF($16,'')::bigint) ON CONFLICT(realm,entity,bill_id) DO UPDATE SET grant_id=EXCLUDED.grant_id,capture_id=EXCLUDED.capture_id,evidence_id=EXCLUDED.evidence_id,treatment=EXCLUDED.treatment,reason=EXCLUDED.reason,rule_reference=EXCLUDED.rule_reference,target_account_id=EXCLUDED.target_account_id,target_line_id=EXCLUDED.target_line_id,target_account_name=EXCLUDED.target_account_name,before_bill=EXCLUDED.before_bill,digest=EXCLUDED.digest,state='preview',proposed_by=EXCLUDED.proposed_by,approved_by=NULL,approval_expires_at=NULL WHERE bill_corrections.close_id=EXCLUDED.close_id AND bill_corrections.attempted_at IS NULL`, closeID, entity, captureID, evidenceID, sandbox.Realm, txnID, in.Treatment, in.Reason, in.RuleReference, in.TargetAccountID, in.TargetLineID, name, string(live), digest, a.Subject, grant.ID)
+			result, err := db.ExecContext(r.Context(), `INSERT INTO bill_corrections(close_id,entity,capture_id,evidence_id,realm,bill_id,treatment,reason,rule_reference,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by,grant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'preview',$15,NULLIF($16,'')::bigint) ON CONFLICT(realm,entity,bill_id) DO UPDATE SET grant_id=EXCLUDED.grant_id,capture_id=EXCLUDED.capture_id,evidence_id=EXCLUDED.evidence_id,treatment=EXCLUDED.treatment,reason=EXCLUDED.reason,rule_reference=EXCLUDED.rule_reference,target_account_id=EXCLUDED.target_account_id,target_line_id=EXCLUDED.target_line_id,target_account_name=EXCLUDED.target_account_name,before_bill=EXCLUDED.before_bill,digest=EXCLUDED.digest,state='preview',proposed_by=EXCLUDED.proposed_by,approved_by=NULL,approval_expires_at=NULL,policy_version_id=NULL,policy_evidence_id=NULL,account_evidence_id=NULL WHERE bill_corrections.close_id=EXCLUDED.close_id AND bill_corrections.attempted_at IS NULL`, closeID, entity, captureID, evidenceID, sandbox.Realm, txnID, in.Treatment, in.Reason, in.RuleReference, in.TargetAccountID, in.TargetLineID, name, string(live), digest, a.Subject, grant.ID)
 			if err != nil {
 				problem(w, 503, "Could not save the correction preview.")
 				return

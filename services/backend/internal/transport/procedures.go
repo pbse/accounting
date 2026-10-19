@@ -21,6 +21,7 @@ type procedureImpact struct {
 	VersionID    string          `json:"version_id"`
 	SourceID     string          `json:"source_id"`
 	Affected     json.RawMessage `json:"affected_drafts"`
+	Native       json.RawMessage `json:"native_corrections,omitempty"`
 	ImpactDigest string          `json:"impact_digest"`
 }
 
@@ -33,7 +34,7 @@ type procedureScopeReader interface {
 func procedureScopeDigest(ctx context.Context, q procedureScopeReader, org, client, kind, previous, from string) (string, int, error) {
 	var total int
 	var scopeHash string
-	err := q.QueryRowContext(ctx, `SELECT count(*),COALESCE(md5(string_agg(c.id::text||':'||COALESCE(w.last_id::text,'')||':'||COALESCE(e.source_id::text,''),',' ORDER BY c.id)),'') FROM client_closes c LEFT JOIN LATERAL (SELECT max(id) last_id FROM workpapers WHERE close_id=c.id AND kind=$3) w ON true LEFT JOIN LATERAL (SELECT max(e.id) source_id FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL) e ON true WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3 AND (p.effective_from IS NULL OR p.effective_from<=c.period)))) AND ($4='' OR c.period>=$4)`, org, client, kind, from).Scan(&total, &scopeHash)
+	err := q.QueryRowContext(ctx, `SELECT count(*),COALESCE(md5(string_agg(c.id::text||':'||COALESCE(w.last_id::text,'')||':'||COALESCE(e.source_id::text,'')||CASE WHEN $3='coding' THEN COALESCE((SELECT ':'||md5(jsonb_agg(jsonb_build_array(n.id,n.digest,n.state,n.policy_evidence_id) ORDER BY n.id)::text) FROM bill_corrections n WHERE n.close_id=c.id),'') ELSE '' END,',' ORDER BY c.id)),'') FROM client_closes c LEFT JOIN LATERAL (SELECT max(id) last_id FROM workpapers WHERE close_id=c.id AND kind=$3) w ON true LEFT JOIN LATERAL (SELECT max(e.id) source_id FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL) e ON true WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3 AND (p.effective_from IS NULL OR p.effective_from<=c.period)))) AND ($4='' OR c.period>=$4)`, org, client, kind, from).Scan(&total, &scopeHash)
 	return preparation.Digest([]byte(kind + "/" + strings.ToLower(client) + "/" + previous + "/" + from + "/" + scopeHash)), total, err
 }
 
@@ -52,7 +53,17 @@ func readProcedureImpact(ctx context.Context, tx *sql.Tx, closeID, kind string) 
 	if err != nil {
 		return out, err
 	}
-	out.ImpactDigest = preparation.Digest([]byte(out.VersionID + "/" + out.SourceID + "/" + string(out.Affected)))
+	binding := out.VersionID + "/" + out.SourceID + "/" + string(out.Affected)
+	if kind == "coding" {
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'entity',entity,'transaction_id',bill_id,'state',state,'digest',digest) ORDER BY id),'[]'::jsonb) FROM bill_corrections WHERE close_id::text=$1 AND policy_evidence_id::text=$2`, closeID, out.SourceID).Scan(&out.Native)
+		if err != nil {
+			return out, err
+		}
+		if string(out.Native) != "[]" {
+			binding += "/" + string(out.Native)
+		}
+	}
+	out.ImpactDigest = preparation.Digest([]byte(binding))
 	return out, nil
 }
 
@@ -164,7 +175,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Procedure impact unavailable.")
 				return
 			}
-			rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period,COALESCE((SELECT e.id::text FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),''),(SELECT count(*) FROM workpapers w WHERE w.close_id=c.id AND w.kind=$3) FROM client_closes c WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3 AND (p.effective_from IS NULL OR p.effective_from<=c.period)))) AND ($4='' OR c.period>=$4) ORDER BY c.id DESC LIMIT 100`, organization(r), client, kind, from)
+			rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period,COALESCE((SELECT e.id::text FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),''),(SELECT count(*) FROM workpapers w WHERE w.close_id=c.id AND w.kind=$3),(SELECT count(*) FROM bill_corrections n WHERE n.close_id=c.id AND $3='coding') FROM client_closes c WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3 AND (p.effective_from IS NULL OR p.effective_from<=c.period)))) AND ($4='' OR c.period>=$4) ORDER BY c.id DESC LIMIT 100`, organization(r), client, kind, from)
 			if err != nil {
 				problem(w, 503, "Procedure impact unavailable.")
 				return
@@ -173,12 +184,12 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			items := []map[string]any{}
 			for rows.Next() {
 				var id, entity, period, source string
-				var drafts int
-				if rows.Scan(&id, &entity, &period, &source, &drafts) != nil {
+				var drafts, native int
+				if rows.Scan(&id, &entity, &period, &source, &drafts, &native) != nil {
 					problem(w, 503, "Procedure impact unavailable.")
 					return
 				}
-				items = append(items, map[string]any{"close_id": id, "entity": entity, "period": period, "pinned_source_id": source, "draft_count": drafts})
+				items = append(items, map[string]any{"close_id": id, "entity": entity, "period": period, "pinned_source_id": source, "draft_count": drafts, "native_correction_count": native})
 			}
 			if rows.Err() != nil {
 				problem(w, 503, "Procedure impact unavailable.")

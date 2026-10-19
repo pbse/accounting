@@ -26,6 +26,7 @@ type LedgerRow struct {
 // Ledger is the close's current QuickBooks capture: its evidence entry, the rows the check reads, and the account
 // names by ID and IDs by name from the same connection's newest chart of accounts.
 type Ledger struct {
+	Capture        string // Current transaction-sync ID.
 	AccountCatalog json.RawMessage
 	TrialBalance   json.RawMessage
 	GeneralLedger  json.RawMessage
@@ -885,8 +886,8 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	var l Ledger
 	var connection string
 	var captured time.Time
-	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name,s.connection_id::text,COALESCE(x.realm,''),COALESCE(s.payload->>'realm',''),COALESCE(s.started_at,s.finished_at,now()) FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
- WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND `+SourceAllows("s.close_id", "quickbooks")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name, &connection, &l.Realm, &l.CaptureRealm, &captured)
+	err := tx.QueryRowContext(ctx, `SELECT s.id::text,e.id::text,e.digest,e.name,s.connection_id::text,COALESCE(x.realm,''),COALESCE(s.payload->>'realm',''),COALESCE(s.started_at,s.finished_at,now()) FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
+ WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND `+SourceAllows("s.close_id", "quickbooks")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Capture, &l.Source.ID, &l.Source.Digest, &l.Source.Name, &connection, &l.Realm, &l.CaptureRealm, &captured)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

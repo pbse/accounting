@@ -138,4 +138,24 @@ An independently read unrelated bank statement does not hold the loan, even if t
 
 Choose **Native coding rules** in **Approved procedures and client overrides** to record the accountant's instructions for native Bill, expense or deposit account coding. Firm defaults and client overrides use the existing immutable versions, approval reason, effective month, impact preview and explicit **Apply version** controls. Prior-review suggestions and typed method learning are not offered for this kind; the accountant supplies the rule. Its applied evidence identifies coding guidance rather than a reconciliation calculator.
 
-This records accounting instructions, not correction approval or permission to write to the provider. Exact transaction eligibility, supported native previews and separate human approval/write grants still apply. Automatic rule-bound candidate preparation remains B04 work until its own eligibility path is delivered and validated.
+This records accounting instructions, not correction approval or permission to write to the provider. Exact transaction eligibility, supported native previews and separate human approval/write grants still apply. The bounded automatic candidate path and its separate validation level are described below.
+
+### Automatic native coding candidates
+
+A delegated close can prepare a candidate for a captured QuickBooks Bill, Purchase or Deposit without another prompt. This requires an enabled, client-specific **coding** procedure, explicitly applied to the close, with these exact labels (IDs and limits below are illustrative):
+
+```text
+QuickBooks company: 123
+Home currency: USD
+Automatic native correction candidates: true
+Bill vendor 21 source account: 8
+Bill vendor 21 target account: 7
+Bill vendor 21 maximum line amount: 150.00
+Bill vendor 21 rule reference: Approved accountant memo 4
+```
+
+Use `Purchase vendor <ID>` or `Deposit customer <ID>` for the other supported records. Deposit customer identity comes from its income line. The rule admits one simple positive home-currency line, an unpaid Bill where applicable, an exact source account and counterparty, a cited rule and an explicit amount limit. Current transaction and account captures must name the same company and close month; source and target must be unique, active Expense/Other Expense accounts, or Income/Other Income for deposits. Existing native eligibility checks also apply. No model chooses a target account.
+
+The goal prepares eligible records independently and names missing firm setup or out-of-bounds mapped records. Correcting the source or applying the approved rule lets the existing goal recheck without another prompt. Pending candidates link to the existing Books review panels and prevent sign-off until a person previews the correction or records a reasoned dismissal. Coding activity does not satisfy the separate document-preparation milestone or replace workpaper approvals. Unchanged replays preserve the decision and history; changed source/rule decisions can reopen a dismissed candidate. A candidate no longer supported by the current capture or active rule is withdrawn with its prior evidence IDs retained in history; restored eligibility can prepare it again. Opening a withdrawn item starts from the latest complete capture with no reused target or coding reason. Human previewed or attempted corrections are preserved. Policy impact previews count and identify native records separately from workpapers.
+
+Each candidate cites the applied procedure, transaction capture and account evidence. A reviewer can dismiss it with an exact-digest confirmation and reason, without provider access. Proceeding requires the existing fresh provider preview, separate approval, scoped grant, one-attempt execution and canonical readback; preparation grants no ledger authority. This is synthetic local implementation proof. Live provider and qualified accountant acceptance remain open.

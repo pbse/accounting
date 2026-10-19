@@ -249,6 +249,7 @@ func goalPlan(p goalProgress, b booksRead, closeID, entity, period, finish strin
 		accounts.State, accounts.Text = "none", "Account coverage needs a QuickBooks or Xero capture of the month."
 	}
 	review := planStep{Key: "review", Title: "Get every draft ready for review", Link: base + "?tab=workpapers"}
+
 	switch {
 	case finish == "signoff" && p.approve > 0:
 		review.Title, review.State, review.Text = "Approve every draft", "you", "Review and approve the drafts of "+plural(p.approve, "document", "documents")+"."
@@ -266,6 +267,19 @@ func goalPlan(p goalProgress, b booksRead, closeID, entity, period, finish strin
 		}
 	}
 	plan := []planStep{booksStep(b, closeID, entity, period), docs, accounts, {Key: "verify", Title: "Reconcile and verify", State: "unknown", Text: "Checking…", Link: base + "?tab=books"}, review}
+
+	for _, candidate := range p.Coding {
+		segment := ""
+		for _, kind := range recodeKinds {
+			if kind.kind == candidate.Entity {
+				segment = kind.path
+			}
+		}
+		plan = append(plan, planStep{Key: "native:" + candidate.ID, Title: "Review native coding candidate", State: "you", Text: candidate.Entity + " #" + candidate.BillID + " → " + candidate.Target + " under " + candidate.Rule + ". Review the exact preview or record why it does not apply.", Link: nativeCorrectionLink(closeID, segment, candidate.BillID)})
+	}
+	if p.CodingMore {
+		plan = append(plan, planStep{Key: "native:more", Title: "More native coding candidates", State: "you", Text: fmt.Sprintf("Showing %d of %d prepared candidates; use Books for the others.", len(p.Coding), p.CodingCount), Link: base + "?tab=books"})
+	}
 	if finish != "signoff" {
 		return plan
 	}
