@@ -120,7 +120,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/procedures/impact", func(w http.ResponseWriter, r *http.Request) {
 		kind := r.URL.Query().Get("kind")
-		if kind != "prepaid" && kind != "reconciliation" && kind != "accrual" && kind != "loan" {
+		if kind != "prepaid" && kind != "reconciliation" && kind != "accrual" && kind != "loan" && kind != "coding" {
 			problem(w, 422, "Choose supported work to preview.")
 			return
 		}
@@ -144,7 +144,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/procedures", func(w http.ResponseWriter, r *http.Request) {
 		if kind := r.URL.Query().Get("impact_kind"); kind != "" {
 			client, from := strings.TrimSpace(r.URL.Query().Get("client_entity")), r.URL.Query().Get("effective_from")
-			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis" && kind != "owner" && kind != "payroll") || len(client) > 200 || !effectiveMonth(from) {
+			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis" && kind != "owner" && kind != "payroll" && kind != "coding") || len(client) > 200 || !effectiveMonth(from) {
 				problem(w, 422, "Choose a supported procedure scope.")
 				return
 			}
@@ -257,7 +257,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			// Entity type is a fact about one client; the firm default carries only policy and account names.
 			methodOK = (in.ClientEntity != "") == (in.Method != "") && (in.Method == "" || slices.Contains(owners.EntityTypes, in.Method))
 		}
-		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis" && in.Kind != "owner" && in.Kind != "payroll") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) || !effectiveMonth(in.EffectiveFrom) {
+		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis" && in.Kind != "owner" && in.Kind != "payroll" && in.Kind != "coding") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) || !effectiveMonth(in.EffectiveFrom) {
 			problem(w, 422, "Confirm a supported procedure, bounded instructions, a reason and optional single-line prepaid account names.")
 			return
 		}
@@ -339,7 +339,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		if !decode(w, r, &in) {
 			return
 		}
-		if !in.Confirmed || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan") {
+		if !in.Confirmed || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "coding") {
 			problem(w, 422, "Confirm a supported procedure and its impact on existing work.")
 			return
 		}

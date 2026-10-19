@@ -441,6 +441,9 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 			text += "This activated policy includes a current approved loan example. Explicit Loan <reference> labels and current statement/cash/loan proof may enable the one month-end payment path with false accrual/current-portion choices; a qualifying draft still requires review.\n"
 		}
 		text += "Supported method: lender_statement_v1. The lender statement's principal/interest split is authoritative; recomputed interest raises questions. Accrued interest and current portion entries need the preparer's per-draft choices and balances that tie to the lender.\n"
+
+	} else if p.Kind == "coding" {
+		text += "Approved native account-coding instructions. These do not establish that a transaction is wrong. A supported native correction needs its source and booking checks, current provider verification and a person's approval before any ledger write.\n"
 	} else {
 		text += "Supported methods: exact_bank_month_v1 uses positive deposits; card_liability_month_v1 uses positive charges and negative payments/credits under a cited accountant-approved card rule. Both begin with unique exact-date and signed-amount CSV candidates. Grouped matches, net splits, tolerances, timing and clearing items, and transfers require cited accountant-approved rules and source review. Native reconciliation status is separately observed.\n"
 	}

@@ -11,6 +11,7 @@ import (
 	neturl "net/url"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"close.local/backend/internal/auth"
@@ -297,4 +298,28 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	if got := current(october); got != published.ID {
 		t.Fatalf("October takes the new version: %s, want %s", got, published.ID)
 	}
+	// Native coding instructions use the same human publish and explicit context-application gates.
+	request = httptest.NewRequest("GET", "/v1/closes/procedures?impact_kind=coding&client_entity=Same%20client", nil)
+	request = request.WithContext(auth.WithActor(request.Context(), actor))
+	response = httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &scope) != nil || scope.ImpactDigest == "" {
+		t.Fatalf("coding scope unavailable: %d %s", response.Code, response.Body.String())
+	}
+	coding := map[string]any{"client_entity": "Same client", "kind": "coding", "instructions": "Only propose a native line recode under the accountant's explicit captured-account rule. No provider write is authorized.", "enabled": true, "reason": "Synthetic approved coding instructions", "confirmed": true, "previous_id": scope.PreviousID, "impact_digest": scope.ImpactDigest}
+	permissions := actor.Permissions
+	actor.Permissions = []string{"clients:all", "workpapers:review"}
+	call("/v1/closes/procedures", coding, 403)
+	actor.Permissions = permissions
+	var codingVersion struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(call("/v1/closes/procedures", coding, 200), &codingVersion)
+	codingImpact := preview("coding")
+	call("/v1/closes/"+id+"/procedures/apply", map[string]any{"kind": "coding", "version_id": codingVersion.ID, "impact_digest": codingImpact.ImpactDigest, "confirmed": true}, 200)
+	var appliedCoding string
+	if e := db.QueryRow(`SELECT content FROM evidence WHERE close_id::text=$1 AND procedure_id::text=$2 AND superseded_by IS NULL`, id, codingVersion.ID).Scan(&appliedCoding); e != nil || !strings.Contains(appliedCoding, "Work kind: coding") || strings.Contains(appliedCoding, "exact_bank_month_v1") {
+		t.Fatalf("wrong coding policy context: %s %v", appliedCoding, e)
+	}
+
 }
