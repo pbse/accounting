@@ -414,7 +414,7 @@ type accountRef struct {
 // moneyFigures counts the money figures a quote prints: a number with cents, or one a currency sign or code precedes.
 // Bare integers such as a year or an invoice number do not count.
 func moneyFigures(quote string) int {
-	plain := regexp.MustCompile(`(?i)(usd|eur|gbp|cad|aud|[$€£])\s*`).ReplaceAllString(quote, "¤")
+	plain := invoiceCurrencyPrefix.ReplaceAllString(quote, "¤")
 	count := 0
 	for _, figure := range regexp.MustCompile(`¤?\d[\d,]*(\.\d{2})?`).FindAllString(plain, -1) {
 		if strings.HasPrefix(figure, "¤") || strings.Contains(figure, ".") {
@@ -533,9 +533,12 @@ func totalDisagrees(invoice string, cents int64) string {
 	return ""
 }
 
+// Currency codes embedded in an issuer/reference identifier are not monetary prefixes.
+var invoiceCurrencyPrefix = regexp.MustCompile(`(?i)(\b(?:usd|eur|gbp|cad|aud)|[$€£])\s*`)
+
 // distinctFigures is the set of money figures the invoice prints, in cents, read as largestFigure reads them.
 func distinctFigures(invoice string) map[int64]bool {
-	plain := regexp.MustCompile(`(?i)(usd|eur|gbp|cad|aud|[$€£])\s*`).ReplaceAllString(invoice, "¤")
+	plain := invoiceCurrencyPrefix.ReplaceAllString(invoice, "¤")
 	out := map[int64]bool{}
 	for _, figure := range regexp.MustCompile(`¤?\d[\d,]*(\.\d{2})?`).FindAllString(plain, -1) {
 		if !strings.HasPrefix(figure, "¤") && !strings.Contains(figure, ".") {
@@ -648,7 +651,7 @@ func mentionsAny(quote string, words []string) bool {
 
 // largestFigure is the largest money figure the invoice prints, in cents; zero when it prints none it can read.
 func largestFigure(invoice string) int64 {
-	plain := regexp.MustCompile(`(?i)(usd|eur|gbp|cad|aud|[$€£])\s*`).ReplaceAllString(invoice, "¤")
+	plain := invoiceCurrencyPrefix.ReplaceAllString(invoice, "¤")
 	var largest int64
 	for _, figure := range regexp.MustCompile(`¤?\d[\d,]*(\.\d{2})?`).FindAllString(plain, -1) {
 		if !strings.HasPrefix(figure, "¤") && !strings.Contains(figure, ".") {

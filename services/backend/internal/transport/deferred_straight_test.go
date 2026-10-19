@@ -46,7 +46,8 @@ func simpleDeferred(t *testing.T, withdraw, statementLater bool) {
 	}
 	t.Setenv("OPENAI_API_KEY", "mock-only-key")
 	t.Setenv("OPENAI_MODEL", "mock-only-model")
-	entity := "Revenue " + rand.Text()
+	// Keep the generated token inside an issuer identifier, never as a bare currency-shaped word.
+	entity := "Revenue Fixture" + rand.Text()
 	var closeID, exampleClose, connection, procedureID, draftID, exampleID, reviewID string
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-08') RETURNING id::text`, entity).Scan(&exampleClose))

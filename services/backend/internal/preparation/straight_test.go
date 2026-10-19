@@ -420,3 +420,17 @@ func TestCitedBilledToIsTheInvoicesOwnBillToLine(t *testing.T) {
 		t.Errorf("an invoice billing two names bills neither for certain: %q", got)
 	}
 }
+
+func TestInvoiceCurrencyCodesAreSeparateFromIssuerIdentifiers(t *testing.T) {
+	invoice := "Issuer SAMPLEUSD9999Z\nInvoice REV-22\nTotal USD1,200.00"
+	if largestFigure(invoice) != 120000 || len(distinctFigures(invoice)) != 1 || !totalLineShows(invoice, 120000) {
+		t.Fatalf("issuer identifier was treated as money: largest=%d figures=%v", largestFigure(invoice), distinctFigures(invoice))
+	}
+	if totalDisagrees("Invoice REV-22\nTotal USD 1,200.00\nTotal payable ACMEUSD2 1,500", 120000) == "" {
+		t.Fatal("an embedded currency code hid a conflicting payable figure")
+	}
+	invoice += "\nSeparate amount EUR 1,300"
+	if largestFigure(invoice) != 130000 || len(distinctFigures(invoice)) != 2 {
+		t.Fatalf("a separate real currency amount was discarded: largest=%d figures=%v", largestFigure(invoice), distinctFigures(invoice))
+	}
+}
