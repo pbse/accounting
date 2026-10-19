@@ -112,3 +112,24 @@ An activated client-specific equal-month procedure can include a current approve
 For a new, untaxed customer invoice issued by this client, service must start on the first of the close month and end at a full-month boundary. The server verifies invoice identity, amount/currency and service dates. The current captured customer activity, General Ledger and Trial Balance must identify the full invoice in the deferred liability, with a zero opening GL balance, no other activity or unallocated balance, and an exact full-amount TB credit. Historical posting is verified from the captured GL rather than an item's current default account. The existing calculator prepares the earned month as debit deferred revenue / credit revenue; nothing posts automatically. Sources, current books and the approved example/policy are checked again by the worker.
 
 A full advance of USD 1,200 for September–August produces USD 100 September revenue and USD 1,100 remaining deferred revenue. An unrelated statement about other bank activity does not block it, including when that statement is read afterward. A fully read customer invoice can be treated as independent of supplier invoices or another customer's invoice when its counterparty/number differ and its text does not refer to this item or to a credit/change. The same customer, linked references, credits, unknown identity, unread pages and image/text conflicts still need a person. Missing proof, tax, credits/refunds, extra activity, earlier balances, partial months and invoices booked directly to revenue still require reviewed treatment. This initial path does not certify every deferred-revenue case or complete B04.
+
+## Automatic simple monthly loans
+
+A client-specific fixed-loan procedure can prepare one lender-stated month-end payment without a confirmation form. Activate a learned `lender_statement_v1` policy with a current approved example of the same currency/day-count and explicit false interest-accrual/current-portion choices, then apply it to the close. A restored or directly published policy without its own activated examples cannot enable this path. In the policy instructions, give explicit company/lender identities and per-loan account and treatment labels, for example:
+
+```text
+QuickBooks company: 123
+Lender ID for First Bank: 9
+Loan L777 account: Term Loan
+Loan L777 interest account: Interest Expense
+Loan L777 payment account: Checking
+Loan L777 day count: actual_360
+Loan L777 annual rate: 12
+Loan L777 agreement reference: Note L777
+Loan L777 accrue interest: false
+Loan L777 reclass current portion: false
+```
+
+Use actual company/vendor IDs, loan reference and unique chart accounts. The lender statement must explicitly identify the complete borrower, lender, loan reference, home currency, full close-month period, opening interest-paid-through date, opening/closing principal, fixed annual rate, exactly one received payment at month-end, its total and its stated principal/interest split. The current QuickBooks cash/check purchase must book that same split to the approved bank, liability and expense accounts; the loan's General Ledger opening/payment/closing and credit Trial Balance must agree. The existing loan calculator must return no questions, blockers, entries or book difference. Method, source, example, current books and duplicate/replacement lineage are checked again by the worker. The draft cites the statement, current capture/chart and policy/example and still requires review.
+
+An independently read unrelated bank statement does not hold the loan, even if the model selected it as support; the same current independence proof is repeated before saving. Related or unread evidence, another current draft on the loan account, fees, multiple payments, rate/term changes, shared borrowers, ambiguous identities and unsupported booking stay with the existing reviewed loan workflow. This bounded path neither executes a payment nor creates an adjustment to books. Actual-model synthetic acceptance is distinct from live QBO or qualified accounting acceptance.

@@ -15,16 +15,22 @@ import (
 	"strings"
 )
 
+type LoanExample struct {
+	Precedent
+	Input loans.Input
+}
+
 type Procedure struct {
-	DeferredExample bool   `json:"-"` // Current approved example of this schedule, distinct from prepaids.
-	AssetExample    bool   `json:"-"` // An activated equal-month policy explicitly includes a reviewed depreciation example.
-	ID              string `json:"id"`
-	ClientEntity    string `json:"client_entity"`
-	Kind            string `json:"kind"`
-	Method          string `json:"method"`
-	Instructions    string `json:"instructions"`
-	ExpenseAccount  string `json:"expense_account"`
-	PrepaidAccount  string `json:"prepaid_account"`
+	LoanExamples    []LoanExample `json:"-"`
+	DeferredExample bool          `json:"-"` // Current approved example of this schedule, distinct from prepaids.
+	AssetExample    bool          `json:"-"` // An activated equal-month policy explicitly includes a reviewed depreciation example.
+	ID              string        `json:"id"`
+	ClientEntity    string        `json:"client_entity"`
+	Kind            string        `json:"kind"`
+	Method          string        `json:"method"`
+	Instructions    string        `json:"instructions"`
+	ExpenseAccount  string        `json:"expense_account"`
+	PrepaidAccount  string        `json:"prepaid_account"`
 	// CoversCards is a reconciliation procedure's approval of card accounts for preparation without confirmation.
 	CoversCards bool   `json:"covers_cards,omitempty"`
 	Enabled     bool   `json:"enabled"`
@@ -40,7 +46,35 @@ type Procedure struct {
 func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Procedure, error) {
 	var p Procedure
 	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text,COALESCE(p.effective_from,''),p.covers_cards,EXISTS(SELECT 1 FROM procedure_drafts d JOIN procedure_example_approvals a ON a.draft_id=d.id AND a.draft_revision=d.revision JOIN workpaper_review_state w ON w.id=a.workpaper_id AND w.digest=a.workpaper_digest AND w.review_id::text=a.review_id AND w.review_state='approved' WHERE d.id=p.draft_id AND d.activated_version_id=p.id AND w.kind='prepaid' AND w.paper->'input'->>'schedule'='depreciation' AND w.paper->'input'->>'method'=p.method),EXISTS(SELECT 1 FROM procedure_drafts d JOIN procedure_example_approvals a ON a.draft_id=d.id AND a.draft_revision=d.revision JOIN workpaper_review_state w ON w.id=a.workpaper_id AND w.digest=a.workpaper_digest AND w.review_id::text=a.review_id AND w.review_state='approved' WHERE d.id=p.draft_id AND d.activated_version_id=p.id AND w.kind='prepaid' AND w.paper->'input'->>'schedule'='deferred_revenue' AND w.paper->'input'->>'method'=p.method) FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) AND (p.effective_from IS NULL OR p.effective_from<=c.period) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt, &p.EffectiveFrom, &p.CoversCards, &p.AssetExample, &p.DeferredExample)
-	return p, err
+	if err != nil || kind != "loan" || p.ClientEntity == "" {
+		return p, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,w.id::text,w.digest,w.review_id::text,c.period,w.paper
+ FROM procedure_versions v JOIN procedure_drafts d ON d.id=v.draft_id AND d.activated_version_id=v.id
+ JOIN procedure_example_approvals a ON a.draft_id=d.id AND a.draft_revision=d.revision
+ JOIN workpaper_review_state w ON w.id=a.workpaper_id AND w.digest=a.workpaper_digest AND w.review_id::text=a.review_id AND w.review_state='approved'
+ JOIN client_closes c ON c.id=w.close_id AND c.organization_id=v.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(v.organization_id,v.client_entity)
+ WHERE v.id::text=$1 AND w.kind='loan' ORDER BY w.id`, p.ID)
+	if err != nil {
+		return p, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var example LoanExample
+		var raw []byte
+		if err = rows.Scan(&example.CloseID, &example.PaperID, &example.Digest, &example.ReviewID, &example.Period, &raw); err != nil {
+			return p, err
+		}
+		var paper struct {
+			Input               loans.Input
+			Questions, Blockers []string
+		}
+		if json.Unmarshal(raw, &paper) == nil && len(paper.Questions) == 0 && len(paper.Blockers) == 0 && paper.Input.Method == p.Method {
+			example.Input = paper.Input
+			p.LoanExamples = append(p.LoanExamples, example)
+		}
+	}
+	return p, rows.Err()
 }
 
 // Profile is the client's home currency and first fiscal month for a month: its confirmed profile in force then, else
@@ -380,7 +414,7 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		}
 	}
 	text := fmt.Sprintf("Approved firm procedure version: %s\nWork kind: %s\nInstructions: %s\nApproval actor: %s\nApproval reason: %s\nThese instructions do not prove invoice booking, source completeness or ledger state. Human method and booking confirmations remain required.\n", p.ID, workKind, p.Instructions, p.Actor, p.Reason)
-	if p.Kind == "prepaid" && (p.AssetExample || p.DeferredExample) {
+	if p.Kind == "prepaid" && (p.AssetExample || p.DeferredExample) || p.Kind == "loan" && len(p.LoanExamples) > 0 {
 		text = strings.Replace(text, "Human method and booking confirmations remain required.", "The server verifies approved method and booking for automatic preparation; otherwise human confirmations remain required.", 1)
 	}
 	if p.Kind == "prepaid" && p.AssetExample {
@@ -403,6 +437,9 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 	} else if p.Kind == "accrual" {
 		text += "Supported method: fixed_incurred_amount_v1, actual_invoice_true_up_v1, fixed_recurring_incurred_v1 or pro_rata_service_days_v1 (the elapsed share of a contract amount less what is invoiced). For a true-up, cite the prior estimate and actual invoice; the true-up, recurring and pro-rata methods require the client accountant's approved rule reference. Confirm incurred amount, booked liability and reversal choice; never infer estimates.\n"
 	} else if p.Kind == "loan" {
+		if len(p.LoanExamples) > 0 {
+			text += "This activated policy includes a current approved loan example. Explicit Loan <reference> labels and current statement/cash/loan proof may enable the one month-end payment path with false accrual/current-portion choices; a qualifying draft still requires review.\n"
+		}
 		text += "Supported method: lender_statement_v1. The lender statement's principal/interest split is authoritative; recomputed interest raises questions. Accrued interest and current portion entries need the preparer's per-draft choices and balances that tie to the lender.\n"
 	} else {
 		text += "Supported methods: exact_bank_month_v1 uses positive deposits; card_liability_month_v1 uses positive charges and negative payments/credits under a cited accountant-approved card rule. Both begin with unique exact-date and signed-amount CSV candidates. Grouped matches, net splits, tolerances, timing and clearing items, and transfers require cited accountant-approved rules and source review. Native reconciliation status is separately observed.\n"

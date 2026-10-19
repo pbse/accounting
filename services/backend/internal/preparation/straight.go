@@ -961,6 +961,10 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 	// revision in a person's hands. The chain of replacements is followed, so a source replaced twice before its
 	// replacement was read still leads to the current draft; two sources replaced by the same file anywhere along the chain,
 	// or a chain longer than twenty replacements, are a person's to resolve.
+	primaryRole := "invoice"
+	if plan.Kind == "loan" {
+		primaryRole = "statement"
+	}
 	var schedule struct {
 		Schedule string `json:"schedule"`
 	}
@@ -972,9 +976,9 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
   SELECT id, superseded_by, 1 FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2
   UNION ALL SELECT e.id, e.superseded_by, c.depth+1 FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE c.depth < 20),
  drafts AS (SELECT DISTINCT w.id, (COALESCE((w.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=w.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND i.confirmed_by='agent')) AND w.paper->'carry_forward' IS NULL AS straight,COALESCE(w.paper->'input'->>'schedule','')=$4 AS same_schedule FROM workpapers w, chain
-  WHERE w.close_id::text=$1 AND w.kind=$3 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role','invoice'))
+  WHERE w.close_id::text=$1 AND w.kind=$3 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role',$5::text))
   AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
- SELECT EXISTS(SELECT 1 FROM chain GROUP BY parent HAVING count(*)>1),EXISTS(SELECT 1 FROM chain WHERE depth>=20),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight AND same_schedule),COALESCE((SELECT max(id)::text FROM drafts WHERE straight AND same_schedule),''),EXISTS(SELECT 1 FROM drafts WHERE NOT same_schedule)`, closeID, invoiceID, plan.Kind, schedule.Schedule).Scan(&branching, &truncated, &citing, &eligible, &revises, &mismatched)
+ SELECT EXISTS(SELECT 1 FROM chain GROUP BY parent HAVING count(*)>1),EXISTS(SELECT 1 FROM chain WHERE depth>=20),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight AND same_schedule),COALESCE((SELECT max(id)::text FROM drafts WHERE straight AND same_schedule),''),EXISTS(SELECT 1 FROM drafts WHERE NOT same_schedule)`, closeID, invoiceID, plan.Kind, schedule.Schedule, primaryRole).Scan(&branching, &truncated, &citing, &eligible, &revises, &mismatched)
 	if err != nil {
 		return "", err
 	}
@@ -1001,6 +1005,11 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 		}
 	}
 	plan.Revises = revises
+	if plan.Kind == "loan" {
+		if reason, err := LoanDrafted(ctx, tx, closeID, plan); err != nil || reason != "" {
+			return reason, err
+		}
+	}
 	if plan.Kind == "accrual" {
 		if reason, err := AccrualDrafted(ctx, tx, closeID, plan); err != nil || reason != "" {
 			return reason, err
@@ -1042,7 +1051,7 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 	}
 	amount := ""
 	for _, f := range p.Facts {
-		if f.Field == "amount" {
+		if f.Field == "amount" || p.Kind == "loan" && f.Field == "payment_total" {
 			amount = strings.ReplaceAll(strings.TrimSpace(f.Value), ",", "")
 		}
 	}
@@ -1159,15 +1168,18 @@ func EarlierCopy(ctx context.Context, q interface {
 
 // identity is the normalized counterparty (customer for a client-issued invoice) and invoice number.
 func identity(p Proposal) (vendor, number string) {
-	party := "vendor"
+	party, reference := "vendor", "invoice_number"
 	if p.Kind == "deferred_revenue" {
 		party = "billed_to"
+	}
+	if p.Kind == "loan" {
+		party, reference = "lender", "loan_reference"
 	}
 	for _, f := range p.Facts {
 		switch f.Field {
 		case party:
 			vendor = documents.NormalizeEntity(f.Value)
-		case "invoice_number":
+		case reference:
 			number = strings.ToLower(strings.TrimSpace(f.Value))
 		}
 	}
