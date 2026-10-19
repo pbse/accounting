@@ -354,12 +354,18 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 			json.Unmarshal(p.Input, &schedule)
 			asset := p.Kind == "prepaid" && schedule.Schedule == prepaids.Depreciation
+			deferred := p.Kind == "prepaid" && schedule.Schedule == prepaids.DeferredRevenue
 			current, e := CurrentProcedure(ctx, tx, closeID, p.Kind)
 			if e != nil && e != sql.ErrNoRows {
 				return false, e
 			}
 			if p.Kind == "accrual" && p.RecurringAccrual == nil {
 				if reason := AccrualProcedurePinned(p, current); reason != "" {
+					failure = reason
+					break
+				}
+			} else if deferred {
+				if reason := DeferredProcedurePinned(p, current); reason != "" {
 					failure = reason
 					break
 				}
@@ -376,7 +382,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return false, e
 			}
-			if e := BilledToClient(p.BilledTo, entity, aliases); e != nil {
+			if e := BilledToClient(p.BilledTo, entity, aliases); e != nil && !deferred {
 				failure = e.Error()
 				break
 			}
@@ -414,8 +420,8 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return false, e
 			}
-			if asset || p.Kind == "accrual" && p.RecurringAccrual == nil {
-				if !asset {
+			if asset || deferred || p.Kind == "accrual" && p.RecurringAccrual == nil {
+				if !asset && !deferred {
 					if reason, e := AccrualDrafted(ctx, tx, closeID, p); e != nil {
 						return false, e
 					} else if reason != "" {
@@ -451,10 +457,14 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 					home = profile.Currency
 				}
 				reason := ""
-				if asset {
+				if asset || deferred {
 					check := proposal
 					check.Unselected = slices.DeleteFunc(slices.Clone(proposal.Unselected), func(s Source) bool { return other[s.ID] })
-					_, reason = StraightAsset(check, selected, current, rule, home, entity, period, aliases, false, ledger)
+					if deferred {
+						_, reason = StraightDeferred(check, selected, current, rule, home, entity, period, aliases, false, ledger)
+					} else {
+						_, reason = StraightAsset(check, selected, current, rule, home, entity, period, aliases, false, ledger)
+					}
 				} else {
 					_, reason = StraightAccrual(proposal, selected, current, rule, home, entity, period, aliases, false, other, ledger)
 				}

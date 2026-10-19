@@ -28,13 +28,15 @@ type LedgerRow struct {
 type Ledger struct {
 	AccountCatalog json.RawMessage
 	TrialBalance   json.RawMessage
+	GeneralLedger  json.RawMessage
 	ReportPeriod   string
 	Realm          string
 	CaptureRealm   string
 	ChartRealm     string
 	Source         Source
-	Chart          string // the quickbooks_snapshots row the accounts come from
-	ChartSource    Source // that snapshot's evidence entry, cited by the draft so a new chart reopens its review
+	Chart          string      // the quickbooks_snapshots row the accounts come from
+	ChartSource    Source      // that snapshot's evidence entry, cited by the draft so a new chart reopens its review
+	CustomerRows   []LedgerRow // Customer activity from the same capture, kept separate from purchase validators.
 	Rows           []LedgerRow
 	Accounts       map[string]string   // account ID → name
 	Types          map[string]string   // account ID → its QuickBooks account type ("Bank", "Credit Card")
@@ -873,7 +875,8 @@ func ProcedureEvidence(ctx context.Context, tx *sql.Tx, closeID, procedureID str
 
 // CloseLedger is the newest completed capture of the close month on the close's active reading connection, with its
 // current evidence entry and its bill, purchase, journal, vendor credit and deposit rows (a newer sync that found the books
-// unchanged reuses them); nil when a newer capture is still pending or failed,
+// unchanged reuses them). Customer invoice/receipt/credit/refund rows are kept separately, alongside the captured General Ledger.
+// It returns nil when a newer capture is still pending or failed,
 // or there is none.
 func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, error) {
 	var l Ledger
@@ -887,7 +890,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT t.kind,t.provider_id,t.txn_date::text,COALESCE(t.currency,''),t.record FROM quickbooks_transaction_rows t JOIN quickbooks_entity_syncs s ON s.id=t.sync_id WHERE s.evidence_id::text=$1 AND t.kind IN ('Bill','Purchase','JournalEntry','VendorCredit','Deposit')`, l.Source.ID)
+	rows, err := tx.QueryContext(ctx, `SELECT t.kind,t.provider_id,t.txn_date::text,COALESCE(t.currency,''),t.record FROM quickbooks_transaction_rows t JOIN quickbooks_entity_syncs s ON s.id=t.sync_id WHERE s.evidence_id::text=$1 AND t.kind IN ('Bill','Purchase','JournalEntry','VendorCredit','Deposit','Invoice','SalesReceipt','CreditMemo','RefundReceipt')`, l.Source.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -897,7 +900,11 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 		if err := rows.Scan(&r.Kind, &r.ProviderID, &r.Date, &r.Currency, &r.Record); err != nil {
 			return nil, err
 		}
-		l.Rows = append(l.Rows, r)
+		if slices.Contains([]string{"Invoice", "SalesReceipt", "CreditMemo", "RefundReceipt"}, r.Kind) {
+			l.CustomerRows = append(l.CustomerRows, r)
+		} else {
+			l.Rows = append(l.Rows, r)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -905,7 +912,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	var catalog []byte
 	// The chart must be at least as current as the transaction capture it is read beside; a chart refresh that failed
 	// after a successful capture leaves no chart to trust.
-	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload->'accounts',COALESCE(s.payload->'reports'->'TrialBalance','{}'::jsonb),COALESCE(s.payload->>'period',''),COALESCE(s.realm,''),COALESCE(e.id::text,''),COALESCE(e.digest,''),COALESCE(e.name,'') FROM quickbooks_snapshots s LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id::text=$1 AND s.connection_id::text=$2 AND s.payload ? 'period' AND COALESCE(s.captured_at,s.started_at)>=$3 ORDER BY s.id DESC LIMIT 1`, closeID, connection, captured).Scan(&l.Chart, &catalog, &l.TrialBalance, &l.ReportPeriod, &l.ChartRealm, &l.ChartSource.ID, &l.ChartSource.Digest, &l.ChartSource.Name)
+	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload->'accounts',COALESCE(s.payload->'reports'->'TrialBalance','{}'::jsonb),COALESCE(s.payload->'reports'->'GeneralLedger','{}'::jsonb),COALESCE(s.payload->>'period',''),COALESCE(s.realm,''),COALESCE(e.id::text,''),COALESCE(e.digest,''),COALESCE(e.name,'') FROM quickbooks_snapshots s LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id::text=$1 AND s.connection_id::text=$2 AND s.payload ? 'period' AND COALESCE(s.captured_at,s.started_at)>=$3 ORDER BY s.id DESC LIMIT 1`, closeID, connection, captured).Scan(&l.Chart, &catalog, &l.TrialBalance, &l.GeneralLedger, &l.ReportPeriod, &l.ChartRealm, &l.ChartSource.ID, &l.ChartSource.Digest, &l.ChartSource.Name)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
@@ -1150,11 +1157,15 @@ func EarlierCopy(ctx context.Context, q interface {
 	return "", rows.Err()
 }
 
-// identity is a proposal's normalized vendor and lower-cased invoice number.
+// identity is the normalized counterparty (customer for a client-issued invoice) and invoice number.
 func identity(p Proposal) (vendor, number string) {
+	party := "vendor"
+	if p.Kind == "deferred_revenue" {
+		party = "billed_to"
+	}
 	for _, f := range p.Facts {
 		switch f.Field {
-		case "vendor":
+		case party:
 			vendor = documents.NormalizeEntity(f.Value)
 		case "invoice_number":
 			number = strings.ToLower(strings.TrimSpace(f.Value))
