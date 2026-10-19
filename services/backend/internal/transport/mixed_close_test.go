@@ -19,14 +19,20 @@ import (
 
 // Two unrelated invoices in one close are each prepared without confirmation, whatever order they are read in; a
 // document still being read makes the agent wait, and one naming an invoice, or speaking of a credit, still holds it.
-func TestUnrelatedInvoicesInOneCloseArePreparedStraightThrough(t *testing.T) { mixedClose(t, false) }
+func TestUnrelatedInvoicesInOneCloseArePreparedStraightThrough(t *testing.T) {
+	mixedClose(t, false, false)
+}
 
 // With the preparation worker saving drafts between reads, as it runs, all three invoices end as drafts within budget.
 func TestUnrelatedInvoicesAreDraftedWithTheWorkerRunningBetweenReads(t *testing.T) {
-	mixedClose(t, true)
+	mixedClose(t, true, false)
 }
 
-func mixedClose(t *testing.T, serial bool) {
+func TestAnIdentifiedOtherSupplierCreditLeavesIndependentInvoicesRunning(t *testing.T) {
+	mixedClose(t, true, true)
+}
+
+func mixedClose(t *testing.T, serial, supplierCredit bool) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
@@ -74,7 +80,7 @@ func mixedClose(t *testing.T, serial bool) {
 	acme, beacon, carter := invoice{"Acme Insurance Co", "INV-778", "1200.00", "1,200.00", ""}, invoice{"Beacon Mutual", "BM-4410", "600.00", "600.00", ""}, invoice{"Carter Assurance", "CA-12", "300.00", "300.00", ""}
 	captured := insert("QuickBooks transactions 2026-09", "capture", "ready")
 	var syncID string
-	must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,started_at,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',$3,now()-interval '1 hour',now()-interval '1 hour','{}') RETURNING id::text`, closeID, connection, captured).Scan(&syncID))
+	must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,started_at,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',$3,now()-interval '1 hour',now()-interval '1 hour','{"realm":"123"}') RETURNING id::text`, closeID, connection, captured).Scan(&syncID))
 	for i, inv := range []invoice{acme, beacon, carter} {
 		record, _ := json.Marshal(map[string]any{"DocNumber": inv.number, "TotalAmt": json.Number(inv.amount), "VendorRef": map[string]string{"value": string(rune('7' + i)), "name": inv.vendor}, "Line": []map[string]any{{"Amount": json.Number(inv.amount), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"value": "12", "name": "Insurance"}}}}})
 		_, e := db.Exec(`INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,'Bill',$2,'1','2026-09-03',now(),'USD',$3,$4)`, syncID, string(rune('4'+i)), inv.amount, string(record))
@@ -83,6 +89,11 @@ func mixedClose(t *testing.T, serial bool) {
 	snapshot := insert("QuickBooks 2026-09 accrual period evidence.txt", "period snapshot", "ready")
 	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123',$3,$4,now(),now(),'fixture')`, closeID, connection, rand.Text(), `{"period":"2026-09","source_id":"`+snapshot+`","accounts":[{"Id":"12","Name":"Insurance"},{"Id":"13","Name":"Prepaid Expenses"}],"reports":{}}`)
 	must(err)
+	tx, err = db.Begin()
+	must(err)
+	ledger, err := preparation.CloseLedger(context.Background(), tx, closeID)
+	must(err)
+	must(tx.Rollback())
 	text := func(inv invoice) string {
 		return inv.vendor + "\nInvoice " + inv.number + "\nBill to: " + entity + "\nAnnual premium USD " + inv.printed + "\nCoverage period 2026-09-01 to 2027-08-31\n" + inv.extra
 	}
@@ -148,6 +159,16 @@ func mixedClose(t *testing.T, serial bool) {
 	second := insert("beacon.txt", text(beacon), "processing")
 	third := insert("carter.txt", text(carter), "ready")
 	invoices[first], invoices[second], invoices[third] = acme, beacon, carter
+	if supplierCredit {
+		_, err = db.Exec(`INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,'VendorCredit','51','1','2026-09-04',now(),'USD',30,$2)`, syncID, `{"Id":"51","DocNumber":"CA-12-C","VendorRef":{"value":"9","name":"Carter Assurance"},"TotalAmt":30,"Line":[{"Amount":30,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12","name":"Insurance"}}}]}`)
+		must(err)
+		credit := insert("carter-credit.txt", "Carter Assurance\nCredit note CA-12-C\nBill to: "+entity+"\nOriginal invoice: CA-12\nCredit total USD 30.00", "ready")
+		creditJob := start(credit)
+		_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_build_object('kind','unsupported','engine','context_machine','summary','Supplier credit','facts','[]'::jsonb,'questions',jsonb_build_array('Confirm credit treatment'),'sources',jsonb_build_array(jsonb_build_object('id',$2::text,'role','support'))) WHERE job_id::text=$1`, creditJob, credit)
+		must(err)
+		_, err = db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`, creditJob)
+		must(err)
+	}
 	jobA, jobB, jobC := start(first), start(second), start(third)
 	if read() {
 		t.Fatal("the agent waits while other evidence in the close is still being read")
@@ -172,10 +193,19 @@ func mixedClose(t *testing.T, serial bool) {
 		for _, job := range []string{jobA, jobB, jobC} {
 			var done string
 			must(db.QueryRow(`SELECT state||' '||jsonb_array_length(workpaper_ids) FROM preparation_jobs WHERE id::text=$1`, job).Scan(&done))
+			if supplierCredit && job == jobC {
+				if s, checkpoint := state(job); done != "needs_confirmation 0" || !strings.Contains(checkpoint, "evidence in the close (carter-credit.txt) was not used") {
+					t.Fatalf("Carter still needs its credit decision: %s %s %s", done, s, checkpoint)
+				}
+				continue
+			}
 			if done != "completed 1" {
 				_, checkpoint := state(job)
 				t.Fatalf("each invoice ends as one draft: %s %s", done, checkpoint)
 			}
+		}
+		if supplierCredit {
+			return
 		}
 		// A credit note arriving after the drafts reopens only the draft whose invoice it names; a document that names no
 		// draft's invoice, credit or not, changes nothing.
@@ -252,7 +282,7 @@ func mixedClose(t *testing.T, serial bool) {
 		must(json.Unmarshal(raw, &proposal))
 		tx, err := db.Begin()
 		must(err)
-		unrelated, err := preparation.UnrelatedEvidence(context.Background(), tx, closeID, jobA, proposal)
+		unrelated, err := preparation.UnrelatedEvidence(context.Background(), tx, closeID, jobA, proposal, ledger)
 		tx.Rollback()
 		must(err)
 		if unrelated[id] || unrelated[note] || !unrelated[second] {
@@ -281,7 +311,7 @@ func mixedClose(t *testing.T, serial bool) {
 	must(db.QueryRow(`SELECT proposal FROM preparation_intakes WHERE job_id::text=$1`, jobA).Scan(&raw))
 	var proposal preparation.Proposal
 	must(json.Unmarshal(raw, &proposal))
-	unrelated, err := preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal)
+	unrelated, err := preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal, ledger)
 	must(err)
 	if !unrelated[plain] || unrelated[refunded] || unrelated[named] || unrelated[unnamed] || unrelated[whole] {
 		t.Fatalf("a plain bank statement is another matter; one printing Acme's amount or naming its invoice, or a document not read as a statement, is not: %v", unrelated)
@@ -310,12 +340,12 @@ func mixedClose(t *testing.T, serial bool) {
 		sameCustomer, _, _ := advance("Northwind", "REV-24", "")
 		credit, _, _ := advance("Another customer", "REV-25", "Credit applied for overbilling")
 		disputed, _, _ := advance("Different customer", "REV-26", "--- Page 1 · PDF text; Gemini fixture read it differently, so check the original ---")
-		unused, err := preparation.UnrelatedEvidence(context.Background(), scope, closeID, jobA, proposal)
+		unused, err := preparation.UnrelatedEvidence(context.Background(), scope, closeID, jobA, proposal, ledger)
 		must(err)
 		if !unused[firstAdvance] || !unused[secondAdvance] || unused[credit] || unused[disputed] {
 			t.Fatalf("independent advances release supplier work; credits and image conflicts remain held: %v", unused)
 		}
-		unused, err = preparation.UnrelatedEvidence(context.Background(), scope, closeID, advanceJob, advanceProposal)
+		unused, err = preparation.UnrelatedEvidence(context.Background(), scope, closeID, advanceJob, advanceProposal, ledger)
 		must(err)
 		if !unused[first] || !unused[secondAdvance] || unused[sameCustomer] || unused[credit] || unused[disputed] {
 			t.Fatalf("different counterparties progress, same customer and credits remain held: %v", unused)
@@ -328,7 +358,7 @@ func mixedClose(t *testing.T, serial bool) {
 	rescanJob := start(rescan)
 	for read() {
 	}
-	if unrelated, err = preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal); err != nil || !unrelated[rescan] {
+	if unrelated, err = preparation.UnrelatedEvidence(context.Background(), db, closeID, jobA, proposal, ledger); err != nil || !unrelated[rescan] {
 		t.Fatalf("a later copy does not hold the original: %v %v", unrelated, err)
 	}
 	// Acme's own work failed in this fixture, so the rescan is not deferred to it: Acme's copy does not hold the rescan.
@@ -338,7 +368,7 @@ func mixedClose(t *testing.T, serial bool) {
 	if s, checkpoint := state(jobA); s != "failed" || strings.Contains(checkpoint, "another copy") {
 		t.Fatalf("the fixture's Acme job failed: %s %s", s, checkpoint)
 	}
-	if unrelated, err = preparation.UnrelatedEvidence(context.Background(), db, closeID, rescanJob, rescanProposal); err != nil || !unrelated[first] {
+	if unrelated, err = preparation.UnrelatedEvidence(context.Background(), db, closeID, rescanJob, rescanProposal, ledger); err != nil || !unrelated[first] {
 		t.Fatalf("an earlier copy whose work stopped does not hold the rescan: %v %v", unrelated, err)
 	}
 	if _, checkpoint := state(rescanJob); strings.Contains(checkpoint, "another copy") {

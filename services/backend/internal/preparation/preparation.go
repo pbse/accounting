@@ -410,9 +410,14 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				failure = "Evidence arrived in the close that a person must weigh before this draft is prepared."
 				break
 			}
+			// The capture the plan cites must still be the close's current one; a capture queued or failed since then is a question for a person.
+			ledger, e := CloseLedger(ctx, tx, closeID)
+			if e != nil {
+				return false, e
+			}
 			// Each other invoice this plan left unused must still be one, as its own job now reads it.
 			if len(p.Unrelated) > 0 {
-				still, e := UnrelatedEvidence(ctx, tx, closeID, id, proposal)
+				still, e := UnrelatedEvidence(ctx, tx, closeID, id, proposal, ledger)
 				if e != nil {
 					return false, e
 				}
@@ -420,11 +425,6 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 					failure, changed = "Another document in the close is no longer read as a separate invoice; reading the close again.", true
 					break
 				}
-			}
-			// The capture the plan cites must still be the close's current one; a capture queued or failed since then is a question for a person.
-			ledger, e := CloseLedger(ctx, tx, closeID)
-			if e != nil {
-				return false, e
 			}
 			if asset || deferred || loan || p.Kind == "accrual" && p.RecurringAccrual == nil {
 				if !asset && !deferred && !loan {
@@ -462,7 +462,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				if e != nil {
 					return false, e
 				}
-				other, e := UnrelatedEvidence(ctx, tx, closeID, id, proposal)
+				other, e := UnrelatedEvidence(ctx, tx, closeID, id, proposal, ledger)
 				if e != nil {
 					return false, e
 				}

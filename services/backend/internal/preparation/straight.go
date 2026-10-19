@@ -256,6 +256,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 	if len(expenseIDs) != 1 || len(prepaidIDs) != 1 {
 		return "", "the current chart of accounts does not name the procedure's expense and prepaid accounts exactly once each"
 	}
+	separateCredits := otherSupplierCredits(ledger, vendor, number, currency, period)
 	matches := 0
 	for _, row := range ledger.Rows {
 		if !strings.HasPrefix(row.Date, period+"-") {
@@ -365,7 +366,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			if row.Kind == "Deposit" && (mentioned || fromVendor || onExpense || onPrepaid) {
 				return "", "a deposit in the close month may refund what this invoice expensed"
 			}
-			if row.Kind == "VendorCredit" && (mentioned || fromVendor || onExpense || onPrepaid) {
+			if row.Kind == "VendorCredit" && (mentioned || fromVendor || onPrepaid || onExpense && separateCredits[row.ProviderID].Number == "") {
 				return "", "a vendor credit in the close month may change what this invoice expensed"
 			}
 			if row.Kind == "Purchase" && record.Credit && (mentioned || fromVendor || onExpense || onPrepaid) {
@@ -1042,12 +1043,14 @@ func pendingEvidence(close string) string {
 //     which speaks of no credit, cancellation, refund, adjustment, reversal or void; or
 //   - a statement: read as a reconciliation, payroll summary or lender statement, or as unsupported work whose own
 //     document it cites as a statement (an ordinary bank or card statement), which nowhere prints this invoice's amount
-//     (a payment or refund of it would).
+//     (a payment or refund of it would); or
+//   - a supplier credit identified by vendor ID, credit number, currency, amount and client in the same current
+//     company capture, belonging to a different supplier and naming neither this vendor nor its invoice.
 //
 // Anything else stays something a person weighs.
 func UnrelatedEvidence(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, closeID, jobID string, p Proposal) (map[string]bool, error) {
+}, closeID, jobID string, p Proposal, ledger *Ledger) (map[string]bool, error) {
 	vendor, number := identity(p)
 	out := map[string]bool{}
 	if vendor == "" || number == "" {
@@ -1068,6 +1071,20 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 	}
 	defer rows.Close()
 	thisVendor, thisNumber := wholeWord(vendor), wholeWord(number)
+	currency, billedTo := "", ""
+	for _, fact := range p.Facts {
+		if fact.Field == "currency" {
+			currency = fact.Value
+		}
+		if fact.Field == "billed_to" {
+			billedTo = fact.Value
+		}
+	}
+
+	credits := map[string]supplierCredit{}
+	if ledger != nil {
+		credits = otherSupplierCredits(ledger, vendor, number, currency, ledger.ReportPeriod)
+	}
 	for rows.Next() {
 		var id, text string
 		var raw []byte
@@ -1084,6 +1101,17 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 			continue
 		}
 		lower, normal := strings.ToLower(text), documents.NormalizeEntity(text)
+		if mentionsAny(text, []string{"credit"}) && !thisVendor.MatchString(normal) && !thisNumber.MatchString(lower) {
+			independent := false
+			for _, credit := range credits {
+				independent = independent || credit.ownsDocument(text, billedTo)
+			}
+			if independent {
+				out[id] = true
+				continue
+			}
+		}
+
 		if other.Kind != "prepaid" && other.Kind != "accrual" && other.Kind != "depreciation" && other.Kind != "deferred_revenue" {
 			statement := other.Kind != "unsupported"
 			for _, src := range other.Sources {

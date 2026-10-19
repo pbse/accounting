@@ -985,7 +985,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 			// Another job's own document that, read in full, names neither this vendor nor this invoice and speaks of no
 			// credit is that job's to prepare, not this one's to weigh.
-			unrelated, e := UnrelatedEvidence(persist, finish, closeID, id, proposal)
+			unrelated, e := UnrelatedEvidence(persist, finish, closeID, id, proposal, ledger)
 			if e != nil {
 				return true, e
 			}
@@ -1039,7 +1039,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return true, e
 			}
-			other, e := UnrelatedEvidence(persist, finish, closeID, id, proposal)
+			other, e := UnrelatedEvidence(persist, finish, closeID, id, proposal, ledger)
 			if e != nil {
 				return true, e
 			}
@@ -1299,7 +1299,7 @@ func rereadSiblings(ctx context.Context, tx *sql.Tx, closeID, jobID, document st
 		machine[ledger.Source.ID], machine[ledger.ChartSource.ID] = true, true
 	}
 	for _, s := range siblings {
-		unrelated, err := UnrelatedEvidence(ctx, tx, closeID, s.id, s.proposal)
+		unrelated, err := UnrelatedEvidence(ctx, tx, closeID, s.id, s.proposal, ledger)
 		if err != nil {
 			return err
 		}
