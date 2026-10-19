@@ -128,3 +128,21 @@ func TestLineageComesFromTheReadNotTheModel(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeCorrectionReadsLinkToTheExistingReviewPanel(t *testing.T) {
+	var read mcpTool
+	for _, tool := range mcpTools {
+		if tool.name == "read_native_correction" {
+			read = tool
+		}
+	}
+	if read.name == "" || !read.readOnly || read.method != "GET" {
+		t.Fatal("the native correction read is missing or can write")
+	}
+	for _, kind := range []string{"bills", "purchases", "deposits"} {
+		link := agentLink(read, map[string]any{"close_id": "7", "kind": kind, "transaction_id": "41"})
+		if link.Href != "/dashboard/closes/7?tab=books#correct-"+kind+"-41" {
+			t.Fatalf("wrong native review link: %+v", link)
+		}
+	}
+}

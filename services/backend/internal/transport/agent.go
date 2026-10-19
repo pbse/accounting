@@ -248,7 +248,15 @@ func agentLink(t mcpTool, args map[string]any) chatCitation {
 	if id, ok := args["workpaper_id"].(string); ok {
 		return chatCitation{"Draft #" + id, base + "/workpapers/" + url.PathEscape(id)}
 	}
-	tabs := map[string]string{"list_evidence": "?tab=evidence", "get_readiness": "?tab=signoff", "proposed_request": "?tab=requests", "list_client_requests": "?tab=requests", "management_pack": "?tab=reports", "budget_comparison": "?tab=reports", "cash_plan": "?tab=cash", "open_items": "?tab=cash"}
+
+	if t.name == "read_native_correction" {
+		kind, _ := args["kind"].(string)
+		id, _ := args["transaction_id"].(string)
+		if n, err := strconv.ParseUint(id, 10, 64); err == nil && n > 0 && slices.Contains([]string{"bills", "purchases", "deposits"}, kind) {
+			return chatCitation{t.title, base + "?tab=books#correct-" + kind + "-" + id}
+		}
+	}
+	tabs := map[string]string{"list_native_corrections": "?tab=books", "read_native_correction": "?tab=books", "list_evidence": "?tab=evidence", "get_readiness": "?tab=signoff", "proposed_request": "?tab=requests", "list_client_requests": "?tab=requests", "management_pack": "?tab=reports", "budget_comparison": "?tab=reports", "cash_plan": "?tab=cash", "open_items": "?tab=cash"}
 	return chatCitation{t.title, base + tabs[t.name]}
 }
 

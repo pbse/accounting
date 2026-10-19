@@ -188,3 +188,9 @@ Four pull requests, each shippable on its own and each with its user journey, ag
 - **The executive view gets the agent this round** (PR 5).
 
 The context-machine golden-set replay now carries the recorded gateway identity as well as the platform actor. Run a local context machine and replay recorded fixture identities directly, or use the optional `agent-eval -profile local-eval` mapping. Both the database and service must be local; the hosted personal profile is never widened for evaluation. See [context-machine deployment](context-machine-deployment.md#local-golden-set-evaluation).
+
+## Native correction investigation reads
+
+The shared tool registry exposes `list_native_corrections` and `read_native_correction` for QuickBooks bills, purchases and deposits. They replay the existing signed-in read routes: the first lists captured transaction IDs; the second reads exact captured lines or the saved correction state, rule and target. Chat caps the list at 20 and marks truncation, including the legacy `bills` alias. A cited record links to its existing Books review panel and transaction ID.
+
+These reads do not determine that coding is wrong or verify the current provider record. A saved approval is not proof of current authority or a completed write. No prepare, approve or execute operation is added to the agent. Automatic correction-candidate preparation under approved rules remains B04 product work; provider and accountant acceptance remain separate gates.

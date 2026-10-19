@@ -56,6 +56,8 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 			db.Exec(`DELETE FROM preparation_intakes WHERE job_id IN (SELECT id FROM preparation_jobs WHERE close_id=$1)`, id)
 			db.Exec(`DELETE FROM preparation_jobs WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM evidence WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM client_closes WHERE id=$1`, id)
 		}
@@ -72,6 +74,17 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	}
 	var blockedID string
 	if err = db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper,created_by) VALUES($1,'prepaid','mcp-blocked',$2,'fixture') RETURNING id::text`, mine, strings.Replace(sources, `"blockers":[]`, `"blockers":["Service end date missing"]`, 1)).Scan(&blockedID); err != nil {
+		t.Fatal(err)
+	}
+
+	var connection, capture string
+	if err = db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,environment,home_currency) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123','production','USD' FROM client_closes WHERE id::text=$1 RETURNING id::text`, mine, rand.Text()).Scan(&connection); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'QuickBooks capture',$2,'captured native records','fixture') RETURNING id::text`, mine, rand.Text()).Scan(&capture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',$3,now(),$4)`, mine, connection, capture, `{"realm":"123","records":{"Bill":[{"Id":"41","TxnDate":"2026-09-15","TotalAmt":100,"Line":[{"Id":"1","Amount":100,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"7"}}}]}],"Purchase":[{"Id":"42","TxnDate":"2026-09-16","TotalAmt":25,"Line":[{"Id":"1","Amount":25,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"8"}}}]}],"Deposit":[{"Id":"43","TxnDate":"2026-09-17","TotalAmt":300,"Line":[{"Id":"1","Amount":300,"DepositLineDetail":{"AccountRef":{"value":"9"}}}]}]}}`); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MCP_ALLOWED_ORIGINS", "https://agent.example, https://other.example")
@@ -95,7 +108,7 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"list_closes", "get_workpaper", "find_exceptions", "close_brief", "tie_out", "explain_changes", "agent_track_record", "morning_brief", "draft_client_request", "request_approval", "export_close_package", "recheck_close", "prepare_close"} {
+	for _, want := range []string{"list_closes", "get_workpaper", "find_exceptions", "close_brief", "tie_out", "explain_changes", "agent_track_record", "morning_brief", "draft_client_request", "request_approval", "export_close_package", "recheck_close", "prepare_close", "list_native_corrections", "read_native_correction"} {
 		if !slices.Contains(names, want) {
 			t.Fatalf("missing tool %s in %v", want, names)
 		}
@@ -119,6 +132,24 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	}
 	if denied := call("get_close", map[string]any{"close_id": theirs}); !denied.IsError || !strings.Contains(text(denied), "NOT_FOUND") {
 		t.Fatalf("another firm's close must stay hidden: %s", text(denied))
+	}
+
+	for kind, id := range map[string]string{"bills": "41", "purchases": "42", "deposits": "43"} {
+		listed := call("list_native_corrections", map[string]any{"close_id": mine, "kind": kind})
+		if listed.IsError || !strings.Contains(text(listed), `"id":"`+id+`"`) {
+			t.Fatalf("native candidates %s: %s", kind, text(listed))
+		}
+		read := call("read_native_correction", map[string]any{"close_id": mine, "kind": kind, "transaction_id": id})
+		if read.IsError || !strings.Contains(text(read), `"state":"not_prepared"`) || !strings.Contains(text(read), `"Id":"`+id+`"`) {
+			t.Fatalf("native record %s: %s", kind, text(read))
+		}
+	}
+	if denied := call("read_native_correction", map[string]any{"close_id": theirs, "kind": "bills", "transaction_id": "41"}); !denied.IsError || !strings.Contains(text(denied), "NOT_FOUND") {
+		t.Fatalf("another firm's native record escaped scope: %s", text(denied))
+	}
+	var nativeWrites int
+	if err = db.QueryRow(`SELECT count(*) FROM bill_corrections WHERE close_id::text=$1`, mine).Scan(&nativeWrites); err != nil || nativeWrites != 0 {
+		t.Fatalf("native reads changed correction state: %d %v", nativeWrites, err)
 	}
 	if added := call("add_evidence", map[string]any{"close_id": mine, "name": "bank.csv", "text": "id,date,amount\nB1,2026-09-02,10.00\n"}); added.IsError {
 		t.Fatalf("add_evidence: %s", text(added))
