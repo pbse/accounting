@@ -434,3 +434,54 @@ func TestInvoiceCurrencyCodesAreSeparateFromIssuerIdentifiers(t *testing.T) {
 		t.Fatalf("a separate real currency amount was discarded: largest=%d figures=%v", largestFigure(invoice), distinctFigures(invoice))
 	}
 }
+
+func TestAnotherSuppliersCreditDoesNotHoldThisInvoice(t *testing.T) {
+	ledger := &Ledger{Realm: "123", CaptureRealm: "123", ChartRealm: "123", Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12"}, "prepaid expenses": {"13"}}, Rows: []LedgerRow{
+		{Kind: "Bill", ProviderID: "4", Date: "2026-09-03", Currency: "USD", Record: json.RawMessage(`{"Id":"4","DocNumber":"INV-778","VendorRef":{"value":"7","name":"Acme Insurance Co"},"TotalAmt":1200,"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)},
+		{Kind: "VendorCredit", ProviderID: "51", Date: "2026-09-04", Currency: "USD", Record: json.RawMessage(`{"Id":"51","DocNumber":"CA-12-C","VendorRef":{"value":"9","name":"Carter Assurance"},"TotalAmt":30,"Line":[{"Amount":30,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)},
+	}}
+	invoice := "Acme Insurance Co\nInvoice INV-778\nBill to: Example\nTotal USD 1,200.00"
+	if _, why := expensedLine(ledger, invoice, "Acme Insurance Co", "INV-778", "1200.00", "USD", "2026-09", "Insurance", "Prepaid Expenses"); why != "" {
+		t.Fatalf("other supplier's identified credit blocked the invoice: %s", why)
+	}
+	credit := ledger.Rows[1]
+	for name, change := range map[string]func(){
+		"own supplier": func() {
+			ledger.Rows[1].Record = json.RawMessage(strings.ReplaceAll(string(credit.Record), `"value":"9","name":"Carter Assurance"`, `"value":"7","name":"Acme Insurance Co"`))
+		},
+		"supplier in broker memo": func() {
+			ledger.Rows[1].Record = json.RawMessage(strings.Replace(string(credit.Record), `{`, `{"PrivateNote":"Acme Insurance Co policy return premium",`, 1))
+		},
+		"invoice in memo": func() {
+			ledger.Rows[1].Record = json.RawMessage(strings.Replace(string(credit.Record), `{`, `{"PrivateNote":"Return premium INV-778",`, 1))
+		},
+		"header link": func() {
+			ledger.Rows[1].Record = json.RawMessage(strings.Replace(string(credit.Record), `{`, `{"LinkedTxn":[{"TxnId":"4","TxnType":"Bill"}],`, 1))
+		},
+		"line link": func() {
+			ledger.Rows[1].Record = json.RawMessage(strings.Replace(string(credit.Record), `"Amount":30,`, `"Amount":30,"LinkedTxn":[{"TxnId":"4","TxnType":"Bill"}],`, 1))
+		},
+		"prepaid account": func() {
+			ledger.Rows[1].Record = json.RawMessage(strings.Replace(string(credit.Record), `"value":"12"`, `"value":"13"`, 1))
+		},
+		"unknown account": func() {
+			ledger.Rows[1].Record = json.RawMessage(strings.Replace(string(credit.Record), `"value":"12"`, `"value":"99"`, 1))
+		},
+		"different captured company": func() { ledger.CaptureRealm = "456" },
+		"ambiguous original bill":    func() { ledger.Rows = append(ledger.Rows, ledger.Rows[0]) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ledger.Rows = ledger.Rows[:2]
+			ledger.Rows[1], ledger.CaptureRealm = credit, "123"
+			change()
+			if _, why := expensedLine(ledger, invoice, "Acme Insurance Co", "INV-778", "1200.00", "USD", "2026-09", "Insurance", "Prepaid Expenses"); why == "" {
+				t.Fatal("a related or ambiguous credit was separated")
+			}
+		})
+	}
+	document := "Carter Assurance\nCredit note CA-12-C\nBill to: Example\nOriginal invoice: CA-12\nCredit total USD 30.00"
+	proof := supplierCredit{"CA-12-C", "Carter Assurance", "USD", 3000}
+	if !proof.ownsDocument(document, "Example") || proof.ownsDocument(document+"\nBill to: Another client", "Example") {
+		t.Fatal("credit source identity must name exactly the current client")
+	}
+}
