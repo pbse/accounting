@@ -1049,6 +1049,8 @@ func pendingEvidence(close string) string {
 //   - a supplier credit identified by vendor ID, credit number, currency, amount and client in the same current
 //     company capture, belonging to a different supplier and naming neither this vendor nor its invoice.
 //
+// A payroll's separately uploaded ledger can use that payroll reading when both source digests are current and
+// its primary summary and job are still current. The same text/identity/amount checks apply to that ledger.
 // Anything else stays something a person weighs.
 func UnrelatedEvidence(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -1065,9 +1067,20 @@ func UnrelatedEvidence(ctx context.Context, q interface {
 		}
 	}
 	rows, err := q.QueryContext(ctx, `SELECT e.id::text,COALESCE(e.content,''),i.proposal,e.id>COALESCE((SELECT source_id FROM preparation_intakes WHERE job_id::text=$2),0) OR EXISTS(SELECT 1 FROM preparation_jobs oj WHERE oj.id=i.job_id AND oj.state IN ('failed','cancelled'))
- FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
-
- WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','accrual','depreciation','deferred_revenue','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
+ FROM preparation_intakes i JOIN preparation_jobs owner ON owner.id=i.job_id
+ JOIN evidence primary_source ON primary_source.id=i.source_id AND primary_source.close_id=owner.close_id AND primary_source.superseded_by IS NULL AND primary_source.extraction_state='ready'
+ JOIN evidence e ON e.close_id=owner.close_id AND (i.source_id=e.id OR (
+  i.proposal->>'kind'='payroll' AND owner.state NOT IN ('failed','cancelled')
+  AND EXISTS(SELECT 1 FROM preparation_intakes own_reading WHERE own_reading.source_id=e.id AND own_reading.proposal->>'kind'='unsupported'
+   AND own_reading.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')
+   AND EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(own_reading.proposal->'sources','null'::jsonb),'[]'::jsonb)) own_source
+    WHERE own_source->>'id'=e.id::text AND own_source->>'role'='ledger' AND own_source->>'digest'=e.digest))
+  AND EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(i.proposal->'sources','null'::jsonb),'[]'::jsonb)) s
+   WHERE s->>'id'=e.id::text AND s->>'role'='ledger' AND s->>'digest'=e.digest)
+  AND EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(i.proposal->'sources','null'::jsonb),'[]'::jsonb)) s
+   WHERE s->>'id'=primary_source.id::text AND s->>'role'='support' AND s->>'digest'=primary_source.digest)
+ ))
+ WHERE i.job_id::text<>$2 AND e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind' IN ('prepaid','accrual','depreciation','deferred_revenue','reconciliation','payroll','loan','unsupported') AND i.proposal->>'engine' IN ('`+string(llm.OpenAI)+`','`+string(llm.ContextMachine)+`')`, closeID, jobID)
 	if err != nil {
 		return nil, err
 	}
