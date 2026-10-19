@@ -18,6 +18,7 @@ import (
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/loans"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"github.com/golang-jwt/jwt/v5"
@@ -100,6 +101,23 @@ func TestLearnedExampleMustReplayExactApprovedResult(t *testing.T) {
 	raw, _ = json.Marshal(paper)
 	if _, err := replayLearnedExample("prepaid", raw); err == nil {
 		t.Fatal("changed expected result passed regression replay")
+	}
+}
+
+func TestLearnedLoanExampleMustReplayExactApprovedResult(t *testing.T) {
+	input := loans.Input{Entity: "Synthetic client", ClosePeriod: "2026-01", Lender: "First Bank", SourceReference: "Statement", AgreementReference: "Note", Currency: "USD", AnnualRate: "12", DayCount: "actual_360", OpeningPrincipal: "1000.00", InterestPaidThrough: "2025-12-31", Payments: []loans.Payment{{Date: "2026-01-31", Principal: "100.00", Interest: "10.33"}}, ClosingPrincipal: "900.00", BookBalance: "900.00", LoanAccount: "Loan payable", InterestAccount: "Interest expense", Method: loans.Method, MethodConfirmed: true, RateConfirmed: true, BookingConfirmed: true}
+	paper, err := loans.Prepare(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(paper)
+	if method, err := replayLearnedExample("loan", raw); err != nil || method != loans.Method {
+		t.Fatalf("approved loan baseline failed: %s %v", method, err)
+	}
+	paper.BookDifference = "999.99"
+	raw, _ = json.Marshal(paper)
+	if _, err := replayLearnedExample("loan", raw); err == nil {
+		t.Fatal("changed loan expected result passed replay")
 	}
 }
 
@@ -204,6 +222,28 @@ func TestLearnedRuleRequiresApprovedExampleBeforeActivation(t *testing.T) {
 		t.Fatal("policy source entered ordinary agent evidence")
 	}
 	base := "/v1/closes/" + closeID + "/procedures/drafts"
+
+	// Loans reuse the same inactive proposal, approved example and explicit activation routes.
+	loanInput := loans.Input{Entity: "Synthetic client", ClosePeriod: "2026-01", Lender: "First Bank", SourceReference: "Statement", AgreementReference: "Note", Currency: "USD", AnnualRate: "12", DayCount: "actual_360", OpeningPrincipal: "1000.00", InterestPaidThrough: "2025-12-31", Payments: []loans.Payment{{Date: "2026-01-31", Principal: "100.00", Interest: "10.33"}}, ClosingPrincipal: "900.00", BookBalance: "900.00", LoanAccount: "Loan payable", InterestAccount: "Interest expense", Method: loans.Method, MethodConfirmed: true, RateConfirmed: true, BookingConfirmed: true}
+	loanPaper, err := loans.Prepare(loanInput)
+	must(err)
+	loanRaw, _ := json.Marshal(loanPaper)
+	loanDigest := preparation.Digest(loanRaw)
+	var loanPaperID, loanReviewID string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'loan',$2,$3) RETURNING id::text`, closeID, loanDigest, string(loanRaw)).Scan(&loanPaperID))
+	must(db.QueryRow(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,$2,'approved','Synthetic loan example','user_accountant') RETURNING id::text`, loanPaperID, loanDigest).Scan(&loanReviewID))
+	var loanDraft learnedDraft
+	must(json.Unmarshal(call("POST", base, map[string]any{"client_entity": "Synthetic client", "kind": "loan", "method": loans.Method, "source_id": sourceID, "from_edits": false}, 200), &loanDraft))
+	call("GET", base+"?kind=loan", nil, 200)
+	var loanImpact struct {
+		PreviousID string `json:"previous_id"`
+		Digest     string `json:"impact_digest"`
+	}
+	must(json.Unmarshal(call("GET", "/v1/closes/procedures?impact_kind=loan&client_entity=Synthetic%20client", nil, 200), &loanImpact))
+	loanActivation := map[string]any{"previous_id": loanImpact.PreviousID, "impact_digest": loanImpact.Digest, "draft_revision": loanDraft.Revision, "reason": "Synthetic loan policy", "confirmed": true}
+	call("POST", base+"/"+loanDraft.ID+"/activate", loanActivation, 409)
+	call("POST", base+"/"+loanDraft.ID+"/examples", map[string]any{"workpaper_id": loanPaperID, "digest": loanDigest, "review_id": loanReviewID, "draft_revision": loanDraft.Revision, "reason": "Synthetic reviewed loan baseline", "confirmed": true}, 200)
+	call("POST", base+"/"+loanDraft.ID+"/activate", loanActivation, 200)
 	var draft learnedDraft
 	must(json.Unmarshal(call("POST", base, map[string]any{"client_entity": "Synthetic client", "kind": "prepaid", "method": prepaids.Method, "source_id": sourceID, "from_edits": false}, 200), &draft))
 	if draft.Engine != "local" {
