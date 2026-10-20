@@ -184,7 +184,7 @@ func goalPlan(p goalProgress, b booksRead, closeID, entity, period, finish strin
 		by[item.Status]++
 	}
 	// A sign-off goal's drafts awaiting approval are prepared documents; approving them is the review step's.
-	active, prepared := len(p.Items)-by["stopped"], by["prepared"]+p.approve
+	active, prepared := len(p.Items)-by["stopped"]-by["supporting"], by["prepared"]+p.approve
 	needs := by["needs_you"] + by["unsupported"] - p.approve
 	// Sign-off's own need is the sign-off step's.
 	docs := planStep{Key: "documents", Title: "Prepare every document", Lines: slices.DeleteFunc(slices.Clone(p.Needs), func(n string) bool { return n == coverageLimitNeed })}
@@ -256,7 +256,7 @@ func goalPlan(p goalProgress, b booksRead, closeID, entity, period, finish strin
 	case finish == "signoff" && p.Ready:
 		review.Title, review.State, review.Text = "Approve every draft", "done", "Every draft is approved."
 	case p.Ready:
-		review.State, review.Text = "done", "Every document has a draft ready for your review."
+		review.State, review.Text = "done", "Every preparation has a draft ready for your review."
 	default:
 		review.State, review.Text = "waits", "Waits on the documents."
 		if n := active - prepared; n > 0 {
