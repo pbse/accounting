@@ -360,7 +360,7 @@ var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b|[(�
 var agentObservation = regexp.MustCompile(`(?i)\b(?:see|saw|seen|found|finds?|shows?|showed|is|are|was|were|has|have|had|looks?|looked|appears?|seems?|remains?|stands?|sits?|holds?|owes?|totals?|came|comes)\b[^.!?]*\b(?:cash|surplus|deficit|balances?|invoices?|bills?|ledger|accounts?|revenue|expenses?|payroll|loans?|budget|snapshot|exceptions?|receivables?|payables?|overdue|paid|unpaid|ties?|reconciled|journal|entry|entries|amounts?|difference|variance|drafts?|blockers?|sign-off|signoff)\b`)
 
 // agentCapabilityStart is how a help, refusal or card sentence may begin: speaking for the agent or to the person.
-var agentCapabilityStart = regexp.MustCompile(`(?i)^(?:i |i'|i’|ask |say |open |you |to |here |this card|the card|confirm|check |choose |type |use |try |tell |nothing |no, |yes, |sorry|that |that's|that’s|it's|it’s)`)
+var agentCapabilityStart = regexp.MustCompile(`(?i)^(?:please )?(?:i |i'|i’|ask |say |open |you |to |here |this card|the card|confirm|check |choose |type |use |try |tell |nothing |no, |yes, |sorry|that |that's|that’s|it's|it’s)`)
 
 // A clarification has no qualifier that could imply an unsupported book fact.
 var agentClarification = regexp.MustCompile(`(?i)^(?:which|what) (?:client|company|month|period|close)(?: and (?:which |what )?(?:client|company|month|period))? (?:should i (?:use|read|check)|do you mean|are you asking about)\??$`)
