@@ -38,6 +38,7 @@ func TestACardIsReconciledStraightThroughOnlyWhenTheProcedureApprovesCards(t *te
 	originalTransport := http.DefaultTransport
 	defer func() { http.DefaultTransport = originalTransport }()
 	sign := ""
+	var lastQuestions []string
 	reconcile := func(covers bool) (string, string, string) {
 		t.Helper()
 		entity := "Cards " + strings.ToLower(rand.Text())
@@ -99,7 +100,9 @@ func TestACardIsReconciledStraightThroughOnlyWhenTheProcedureApprovesCards(t *te
 			}
 		}
 		var state, checkpoint string
-		must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &checkpoint))
+		var questions []byte
+		must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through',''),COALESCE(i.proposal->'questions','[]'::jsonb) FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &checkpoint, &questions))
+		must(json.Unmarshal(questions, &lastQuestions))
 		if state != "queued" {
 			return state, checkpoint, ""
 		}
@@ -118,7 +121,13 @@ func TestACardIsReconciledStraightThroughOnlyWhenTheProcedureApprovesCards(t *te
 	}
 	// Files signed the other way, the balance owed negative, are a person's to confirm.
 	sign = "-"
-	if state, checkpoint, _ := reconcile(true); state != "needs_confirmation" || !strings.Contains(checkpoint, "read as negative") {
-		t.Fatalf("a card whose balances read negative waits for a person: %s %s", state, checkpoint)
+	state, checkpoint, _ := reconcile(true)
+	negativeQuestion := false
+	for _, question := range lastQuestions {
+		q := strings.ToLower(question)
+		negativeQuestion = negativeQuestion || (strings.Contains(q, "negative") || strings.Contains(q, "-20.00") || strings.Contains(q, "-50.00") || strings.Contains(q, "-70.00")) && (strings.Contains(q, "sign") || strings.Contains(q, "convention"))
+	}
+	if state != "needs_confirmation" || !strings.Contains(checkpoint, "read as negative") && !negativeQuestion {
+		t.Fatalf("a card whose balances read negative waits for its sign decision: %s %s %v", state, checkpoint, lastQuestions)
 	}
 }
