@@ -37,7 +37,7 @@ type WorkItem = Plan & {
   blockers: string[];
   agent_started_at: string;
   agent_attempts: number;
-  agent_checkpoint: { stage?: string; input_tokens?: number; output_tokens?: number; straight_through?: string };
+  agent_checkpoint: { stage?: string; input_tokens?: number; output_tokens?: number; straight_through?: string; support_for?: { job_id: string; source_id: string } };
   revision: number;
   stale: boolean;
   coordinated: boolean;
@@ -96,6 +96,7 @@ const labels: Record<string, string> = {
   queued: "Preparation queued",
   interpreting: "Agent interpreting evidence",
   completed: "Prepared",
+  supporting: "Used with payroll",
   failed: "Needs attention",
   cancelled: "Cancelled",
 };
@@ -613,6 +614,9 @@ function WorkDetails({
           Confirmed instructions are queued for the preparation worker.
         </p>
       )}
+      {item.state === "supporting" && item.agent_checkpoint.support_for && (
+        <p>This ledger is used with <Link to={`/dashboard/closes/${item.close_id}?job=${item.agent_checkpoint.support_for.job_id}`}>the payroll summary</Link>. Its accounting decisions stay with that work.</p>
+      )}
       {item.state === "completed" && (
         <p>
           Prepared draft{item.workpaper_ids.length === 1 ? "" : "s"}{" "}
@@ -1040,7 +1044,7 @@ function WorkDetails({
         </section>
       )}
       {item.coordinated &&
-        ["failed", "needs_confirmation", "waiting_client", "cancelled"].includes(
+        ["failed", "needs_confirmation", "waiting_client", "cancelled", "supporting"].includes(
           item.state,
         ) &&
         !item.stale && (

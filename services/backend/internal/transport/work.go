@@ -254,7 +254,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		action := r.PathValue("action")
-		if action != "revoke_link" && (state == "completed" || state == "queued" || (state == "cancelled" && action != "retry")) {
+		if action != "revoke_link" && (state == "completed" || state == "queued" || (state == "cancelled" && action != "retry") || (state == "supporting" && action != "retry")) {
 			problem(w, 409, "This work is already preparing or finished. Refresh its status.")
 			return
 		}
@@ -651,8 +651,8 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			}
 
 		case "retry", "alias":
-			if state != "failed" && state != "needs_confirmation" && state != "waiting_client" && state != "cancelled" {
-				problem(w, 409, "Only stopped or unresolved work can be rechecked.")
+			if state != "failed" && state != "needs_confirmation" && state != "waiting_client" && state != "cancelled" && state != "supporting" {
+				problem(w, 409, "Only stopped, unresolved or supporting work can be rechecked.")
 				return
 			}
 			reason := "Work inbox recheck"
@@ -868,10 +868,10 @@ func closeDiffers(r *http.Request, db *sql.DB, closeID string) ([]map[string]any
 func workPredicates() (issues string, predicates map[string]string) {
 	issues = `EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=j.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND (w.review_state IN ('source_changed','changes_requested') OR jsonb_array_length(COALESCE(w.paper->'blockers','[]'))>0))`
 	predicates = map[string]string{
-		"active":             "j.state NOT IN ('completed','cancelled') OR " + issues,
-		"mine":               "c.owner<>'' AND c.owner=$5 AND (j.state NOT IN ('completed','cancelled') OR " + issues + ")",
+		"active":             "j.state NOT IN ('completed','cancelled','supporting') OR " + issues,
+		"mine":               "c.owner<>'' AND c.owner=$5 AND (j.state NOT IN ('completed','cancelled','supporting') OR " + issues + ")",
 		"needs_confirmation": "j.state='needs_confirmation'",
-		"blocked":            "j.state='failed' OR e.superseded_by IS NOT NULL OR i.proposal->>'kind'='unsupported' OR EXISTS(SELECT 1 FROM email_delivery m JOIN work_requests q ON q.id=m.request_id WHERE EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND rj.job_id=j.id) AND (m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))) OR " + issues,
+		"blocked":            "j.state='failed' OR e.superseded_by IS NOT NULL OR (i.proposal->>'kind'='unsupported' AND j.state<>'supporting') OR EXISTS(SELECT 1 FROM email_delivery m JOIN work_requests q ON q.id=m.request_id WHERE EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND rj.job_id=j.id) AND (m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))) OR " + issues,
 		"running":            "j.state IN ('waiting_evidence','interpreting','queued')",
 		"waiting_client":     "j.state='waiting_client'",
 		"completed":          "j.state='completed'",

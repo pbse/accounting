@@ -221,7 +221,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		}
 	}
 	for _, j := range snapshot.Jobs {
-		if j.State != "completed" && j.State != "cancelled" {
+		if j.State != "completed" && j.State != "cancelled" && j.State != "supporting" {
 			out.Blockers = append(out.Blockers, "Work #"+j.ID+" is "+strings.ReplaceAll(j.State, "_", " ")+".")
 		}
 	}

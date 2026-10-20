@@ -726,6 +726,8 @@ function itemStatus(item: Item, papers: Paper[]): [string, string] {
       return ["Waiting for client", "muted"];
     case "unsupported":
       return ["Can't prepare", "danger"];
+    case "supporting":
+      return ["Used with payroll", "neutral"];
     case "stopped":
       return ["Left out", "neutral"];
   }
@@ -735,7 +737,7 @@ function itemStatus(item: Item, papers: Paper[]): [string, string] {
   if (states.length > 0 && states.every((s) => s === "approved")) return ["Approved", ""];
   return ["Ready for review", "muted"];
 }
-const order = ["Preparing", "Needs your decision", "Waiting for client", "Ready for review", "Source changed", "Changes requested", "Approved", "Can't prepare", "Left out"];
+const order = ["Preparing", "Needs your decision", "Waiting for client", "Ready for review", "Source changed", "Changes requested", "Approved", "Can't prepare", "Used with payroll", "Left out"];
 const where = (item: Item) => (item.drafts.length ? "Workpapers" : item.status === "client" ? "Requests" : "Documents");
 
 // AgentWork is the tab's one table: each document the agent works from and where it stands, filtered by status. Before

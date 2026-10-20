@@ -256,6 +256,8 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 			if request != nil && !request.Partial && !request.Undelivered && !request.Unsent && request.Follow != "held" {
 				waiting = append(waiting, wait{len(p.Items), request.ID})
 			}
+		case "supporting":
+			item.Status, item.Text = "supporting", "This ledger is used with the payroll summary. Open Work for its link and current status."
 		case "completed":
 			ready, approved := []string{}, []string{}
 			for _, id := range papers {
@@ -301,7 +303,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 		switch item.Status {
 		case "prepared":
 			prepared++
-		case "stopped":
+		case "stopped", "supporting":
 		default:
 			open++
 		}
@@ -340,7 +342,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	case len(p.Items) == 0:
 		p.Needs = append(p.Needs, "Add the client's documents: upload, forward or request them, and I'll take it from there.")
 	case prepared+open == 0:
-		p.Needs = append(p.Needs, "Every document here is stopped. Add documents, or restart one from Work.")
+		p.Needs = append(p.Needs, "No preparation is ready. Add documents, or restart stopped work from Work.")
 	case len(p.Items) > 100:
 		p.Needs = append(p.Needs, "This close has more than 100 current documents, more than one preparation scope holds. Prepare it from Work.")
 	}
@@ -698,6 +700,10 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 		g.state = "active"
 	}
 
+	if err := preparation.RecordPayrollSupport(ctx, tx, g.close, g.author); err != nil {
+		return err
+	}
+
 	nativeCount, nativeErr := prepareNativeCoding(ctx, tx, g.close, "close goal #"+g.id+" for "+g.author)
 	if nativeErr != nil {
 		return nativeErr
@@ -751,19 +757,26 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 	}
 	switch {
 	case progress.Ready && !was:
-		drafts, documents := 0, 0
+		drafts, documents, ledgers, stopped := 0, 0, 0, 0
 		for _, item := range progress.Items {
 			if item.Status == "prepared" {
 				drafts += len(item.Drafts)
 				documents++
+			} else if item.Status == "supporting" {
+				ledgers++
+			} else if item.Status == "stopped" {
+				stopped++
 			}
 		}
-		text := fmt.Sprintf("Every uploaded document has a draft ready for review: %s from %s.", plural(drafts, "draft", "drafts"), plural(documents, "document", "documents"))
+		text := fmt.Sprintf("Preparation is ready for review: %s from %s.", plural(drafts, "draft", "drafts"), plural(documents, "document", "documents"))
 		if progress.CodingCount > 0 {
 			text += " " + plural(progress.CodingCount, "native coding candidate needs", "native coding candidates need") + " review."
 		}
 
-		if stopped := len(progress.Items) - documents; stopped > 0 {
+		if ledgers > 0 {
+			text += " " + plural(ledgers, "ledger is", "ledgers are") + " used with payroll; no separate draft is needed."
+		}
+		if stopped > 0 {
 			text += " " + plural(stopped, "stopped document is", "stopped documents are") + " left out."
 		}
 		if g.finish == "signoff" {

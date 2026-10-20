@@ -130,7 +130,7 @@ const attentionQuery = `WITH scope AS (
   AND (` + waitingRequest + ` OR ` + waitingCoverage + `)
  UNION ALL
  SELECT 'goal:'||g.id||':'||CASE g.state WHEN 'reached' THEN floor(extract(epoch FROM g.reached_at))::text ELSE 'stopped' END,'goal',g.close_id,COALESCE(g.reached_at,g.finished_at),
-  CASE g.state WHEN 'reached' THEN 'Every uploaded document has a draft ready for review' ELSE g.events->-1->>'text' END,''
+  CASE g.state WHEN 'reached' THEN 'Preparation is ready for review' ELSE g.events->-1->>'text' END,''
   FROM close_goals g WHERE g.close_id IN (SELECT id FROM scope) AND g.author=$3
   AND (g.state='reached' OR (g.state='stopped' AND g.events->-1->>'actor' NOT IN ($3,'agent') AND g.finished_at>now()-interval '14 days'))
  UNION ALL
