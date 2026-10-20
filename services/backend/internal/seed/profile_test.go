@@ -70,3 +70,23 @@ func TestEveryMonthBalancesAndReadsAsACapture(t *testing.T) {
 		}
 	}
 }
+
+func TestDepositCaptureNamesItsBankAndCounterparty(t *testing.T) {
+	b := Books{Currency: "USD", Accounts: []Account{{ID: "11", Name: "Secondary Checking", Type: "Bank"}, {ID: "70", Name: "Services", Type: "Income"}}}
+	txn := Txn{Kind: "Deposit", ID: "92", Date: "2026-09-14", Number: "REC-20", Party: "Northwind", PartyID: "21", Amount: Money("20"), Lines: []Posting{{Account: "11", Debit: Money("20")}, {Account: "70", Credit: Money("20")}}}
+	var record struct {
+		DepositToAccountRef struct{ Value, Name string }
+		Line                []struct {
+			DepositLineDetail struct {
+				AccountRef struct{ Value, Name string }
+				Entity     struct{ Value, Name string }
+			}
+		}
+	}
+	if err := json.Unmarshal(b.Record(txn), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.DepositToAccountRef.Value != "11" || record.DepositToAccountRef.Name != "Secondary Checking" || len(record.Line) != 1 || record.Line[0].DepositLineDetail.AccountRef.Value != "70" || record.Line[0].DepositLineDetail.Entity.Value != "21" || record.Line[0].DepositLineDetail.Entity.Name != "Northwind" {
+		t.Fatalf("deposit lost destination or source identity: %+v", record)
+	}
+}
