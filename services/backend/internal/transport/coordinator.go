@@ -21,7 +21,7 @@ type cancellableJob struct {
 }
 
 func cancellableJobs(ctx context.Context, tx *sql.Tx, closeID string, lock bool) ([]cancellableJob, string, error) {
-	query := `SELECT j.id::text,e.name,j.state,i.revision FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled') ORDER BY j.id`
+	query := `SELECT j.id::text,e.name,j.state,i.revision FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled','supporting') ORDER BY j.id`
 	if lock {
 		query += ` FOR UPDATE OF j,i`
 	}
@@ -369,7 +369,7 @@ func recheckClose(ctx context.Context, tx *sql.Tx, org, subject, closeParam, con
 }
 
 func stopClose(ctx context.Context, tx *sql.Tx, closeParam, confirmed, reason, actor string) (int, *closeActionError) {
-	mailRows, err := tx.QueryContext(ctx, `SELECT m.state FROM email_outbox m WHERE m.request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled')) AND m.state IN ('queued','sending') FOR UPDATE OF m`, closeParam)
+	mailRows, err := tx.QueryContext(ctx, `SELECT m.state FROM email_outbox m WHERE m.request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled','supporting')) AND m.state IN ('queued','sending') FOR UPDATE OF m`, closeParam)
 	if err != nil {
 		return 0, closeRefusal(503, "Could not lock approved delivery.")
 	}
@@ -400,16 +400,16 @@ func stopClose(ctx context.Context, tx *sql.Tx, closeParam, confirmed, reason, a
 	if sending {
 		return 0, closeRefusal(409, "An approved client email is being sent. Check its outcome, then refresh before stopping remaining work.")
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE email_outbox m SET state='cancelled',error='Close work stopped before delivery.',finished_at=now(),claim=NULL WHERE m.state='queued' AND m.request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
+	_, err = tx.ExecContext(ctx, `UPDATE email_outbox m SET state='cancelled',error='Close work stopped before delivery.',finished_at=now(),claim=NULL WHERE m.state='queued' AND m.request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled','supporting'))`, closeID)
 	if err != nil {
 		return 0, closeRefusal(503, "Could not stop approved delivery.")
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE client_request_links SET revoked_at=now() WHERE revoked_at IS NULL AND request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
+	_, err = tx.ExecContext(ctx, `UPDATE client_request_links SET revoked_at=now() WHERE revoked_at IS NULL AND request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled','supporting'))`, closeID)
 	if err == nil {
-		_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL WHERE job_id IN (SELECT j.id FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
+		_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL WHERE job_id IN (SELECT j.id FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled','supporting'))`, closeID)
 	}
 	if err == nil {
-		_, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='cancelled',error=$2,finished_at=now() WHERE close_id=$1 AND id IN (SELECT job_id FROM preparation_intakes) AND state NOT IN ('completed','cancelled')`, closeID, "Stopped by "+actor+": "+reason)
+		_, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='cancelled',error=$2,finished_at=now() WHERE close_id=$1 AND id IN (SELECT job_id FROM preparation_intakes) AND state NOT IN ('completed','cancelled','supporting')`, closeID, "Stopped by "+actor+": "+reason)
 	}
 	if err != nil {
 		return 0, closeRefusal(503, "Could not stop work. Refresh and inspect current status.")

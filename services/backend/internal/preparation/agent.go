@@ -1192,6 +1192,11 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	if _, err = finish.ExecContext(persist, `UPDATE preparation_jobs SET state=$2,error=$3 WHERE id=$1`, id, state, message); err != nil {
 		return true, err
 	}
+	if llm.IsModelEngine(proposal.Engine) && (proposal.Kind == "payroll" || proposal.Kind == "unsupported") {
+		if err = RecordPayrollSupport(persist, finish, closeID, actor); err != nil {
+			return true, err
+		}
+	}
 	// Read as a prepaid invoice or a statement, this document may have been the last thing another invoice's job was left
 	// for a person over: a job not yet confirmed, whose every other unused document now proves to be another invoice, is read again.
 	// Siblings someone holds are skipped; a sibling still waiting on a document not yet read stays as it is.

@@ -37,7 +37,7 @@ type unresolvedCarryItem struct {
 
 func unresolvedCarry(ctx context.Context, tx *sql.Tx, closeID string) ([]unresolvedCarryItem, string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT kind,id,state FROM (
-	 SELECT 'job' kind,j.id::text id,j.state FROM preparation_jobs j WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled')
+	 SELECT 'job' kind,j.id::text id,j.state FROM preparation_jobs j WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled','supporting')
 	 UNION ALL
 	 SELECT 'draft',w.id::text,w.review_state FROM workpaper_review_state w WHERE w.close_id=$1 AND (w.review_state<>'approved' OR jsonb_array_length(COALESCE(w.paper->'blockers','[]'::jsonb))>0)
 	) pending ORDER BY kind,id::bigint LIMIT 21`, closeID)

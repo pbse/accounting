@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -357,6 +358,151 @@ func mixedClose(t *testing.T, serial, supplierCredit bool) {
 		}
 		_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(jsonb_set(proposal,'{kind}','"unsupported"'),'{sources,0,role}','"ledger"') WHERE source_id::text=$1`, clearing)
 		must(err)
+		var ledgerJob, payrollJob string
+		must(db.QueryRow(`SELECT job_id::text FROM preparation_intakes WHERE source_id::text=$1`, clearing).Scan(&ledgerJob))
+		must(db.QueryRow(`SELECT job_id::text FROM preparation_intakes WHERE source_id::text=$1`, summary).Scan(&payrollJob))
+		record := func() {
+			t.Helper()
+			tx, e := db.Begin()
+			must(e)
+			must(preparation.RecordPayrollSupport(context.Background(), tx, closeID, "fixture"))
+			must(tx.Commit())
+		}
+		token := strings.Repeat("m", 32)
+		h := modelHandler(t, apiWithStore(db, token))
+		var revision int
+		must(db.QueryRow(`SELECT revision FROM preparation_intakes WHERE job_id::text=$1`, ledgerJob).Scan(&revision))
+		answerBody, _ := json.Marshal(map[string]any{"revision": revision, "body": "Keep this ledger with the payroll summary."})
+		r := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/work/"+ledgerJob+"/answer", bytes.NewReader(answerBody))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("answer: %d %s", w.Code, w.Body.String())
+		}
+		var answers int
+		must(db.QueryRow(`SELECT count(*) FROM preparation_answers WHERE job_id::text=$1`, ledgerJob).Scan(&answers))
+		if answers != 1 {
+			t.Fatal("the Work answer did not enter the protected answer store")
+		}
+		_, err = db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`, ledgerJob)
+		must(err)
+		record()
+		if s, _ := state(ledgerJob); s != "needs_confirmation" {
+			t.Fatalf("a human answer was hidden: %s", s)
+		}
+		_, err = db.Exec(`DELETE FROM preparation_answers WHERE job_id::text=$1`, ledgerJob)
+		must(err)
+		_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(proposal,'{sources}',proposal->'sources'||jsonb_build_array(jsonb_build_object('id',$2::text,'role','invoice'))) WHERE job_id::text=$1`, ledgerJob, first)
+		must(err)
+		record()
+		if s, _ := state(ledgerJob); s != "needs_confirmation" {
+			t.Fatalf("an extra invoice source was hidden: %s", s)
+		}
+		_, err = db.Exec(`UPDATE preparation_intakes SET proposal=proposal #- '{sources,1}' WHERE job_id::text=$1`, ledgerJob)
+		must(err)
+		// A goal advance handles a ledger read before the payroll; roll back other goal work in this fixture.
+		goalTx, err := db.Begin()
+		must(err)
+		defer goalTx.Rollback()
+		_, err = goalTx.Exec(`SELECT id FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID)
+		must(err)
+		g := goalRow{close: closeID, org: "local-development", author: "fixture", state: "active", finish: "review"}
+		must(goalTx.QueryRow(`INSERT INTO close_goals(close_id,author) VALUES($1,'fixture') RETURNING id::text`, closeID).Scan(&g.id))
+		must(advanceGoal(context.Background(), goalTx, g, nil))
+		var goalState string
+		must(goalTx.QueryRow(`SELECT state FROM preparation_jobs WHERE id::text=$1`, ledgerJob).Scan(&goalState))
+		if goalState != "supporting" {
+			t.Fatalf("the goal did not attach ledger context: %s", goalState)
+		}
+		must(goalTx.Rollback())
+		// The opposite order: the agent finishes the ledger reading after the payroll is current.
+		_, err = db.Exec(`UPDATE preparation_intakes SET agent_retry_at=now()+interval '1 hour' WHERE job_id IN (SELECT id FROM preparation_jobs WHERE close_id=$1) AND job_id::text<>$2`, closeID, ledgerJob)
+		must(err)
+		_, err = db.Exec(`UPDATE preparation_jobs SET state='waiting_evidence' WHERE id::text=$1`, ledgerJob)
+		must(err)
+		invoiceModel := http.DefaultTransport
+		http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
+			output, _ := json.Marshal(map[string]any{"kind": "unsupported", "summary": "Payroll clearing ledger", "facts": []any{}, "questions": []string{"Which payroll does this ledger support?"}, "sources": []map[string]string{{"id": clearing, "role": "ledger"}, {"id": summary, "role": "support"}}})
+			body, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
+		})
+		if !read() {
+			t.Fatal("the agent did not read the ledger")
+		}
+		http.DefaultTransport = invoiceModel
+		_, err = db.Exec(`UPDATE preparation_intakes SET agent_retry_at=NULL WHERE job_id IN (SELECT id FROM preparation_jobs WHERE close_id=$1)`, closeID)
+		must(err)
+		var linked string
+		var drafts int
+		must(db.QueryRow(`SELECT COALESCE(i.agent_checkpoint->'support_for'->>'job_id',''),jsonb_array_length(j.workpaper_ids) FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id WHERE i.job_id::text=$1`, ledgerJob).Scan(&linked, &drafts))
+		if s, _ := state(ledgerJob); s != "supporting" || linked != payrollJob || drafts != 0 {
+			_, why := state(ledgerJob)
+			t.Fatalf("ledger context must link to payroll without a financial draft: %s %s %d; %s", s, linked, drafts, why)
+		}
+		if s, _ := state(payrollJob); s != "needs_confirmation" {
+			t.Fatalf("the payroll decision was lost: %s", s)
+		}
+		tx, err := db.Begin()
+		must(err)
+		progress, err := readGoalProgress(context.Background(), tx, closeID, "review")
+		tx.Rollback()
+		must(err)
+		found := false
+		for _, item := range progress.Items {
+			if item.JobID == ledgerJob {
+				found = true
+				if item.Status != "supporting" || len(item.Drafts) != 0 {
+					t.Fatalf("context inflated prepared work: %+v", item)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("ledger context disappeared from the close")
+		}
+		for _, view := range []string{"needs_confirmation", "blocked", "all"} {
+			r := httptest.NewRequest("GET", "/v1/closes/"+closeID+"/work?view="+view, nil)
+			r.Header.Set("Authorization", "Bearer "+token)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 200 {
+				t.Fatalf("work %s: %d %s", view, w.Code, w.Body.String())
+			}
+			var body struct {
+				Items []struct {
+					ID    string `json:"id"`
+					State string `json:"state"`
+				} `json:"items"`
+			}
+			must(json.Unmarshal(w.Body.Bytes(), &body))
+			visible := false
+			for _, item := range body.Items {
+				if item.ID == ledgerJob {
+					visible = true
+					if item.State != "supporting" {
+						t.Fatalf("work state: %+v", item)
+					}
+				}
+			}
+			if visible != (view == "all") {
+				t.Fatalf("ledger context visibility in %s: %s", view, w.Body.String())
+			}
+		}
+		must(db.QueryRow(`SELECT revision FROM preparation_intakes WHERE job_id::text=$1`, ledgerJob).Scan(&revision))
+		retryBody, _ := json.Marshal(map[string]any{"revision": revision})
+		r = httptest.NewRequest("POST", "/v1/closes/"+closeID+"/work/"+ledgerJob+"/retry", bytes.NewReader(retryBody))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if s, _ := state(ledgerJob); w.Code != 200 || s != "waiting_evidence" {
+			t.Fatalf("supporting ledger cannot be rechecked: %d %s %s", w.Code, s, w.Body.String())
+		}
+		// Keep this fixture settled for the following unrelated-evidence cases.
+		_, err = db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`, ledgerJob)
+		must(err)
+		record()
 	})
 	t.Run("independent customer invoices", func(t *testing.T) {
 		scope, err := db.Begin()

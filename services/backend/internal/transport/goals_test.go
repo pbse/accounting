@@ -328,7 +328,7 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	}
 	draft(alpha, `{"revises":"`+blocked+`"}`)
 	sweepCloseGoals(ctx, db)
-	if s = read(alpha); s.Goal.State != "reached" || lastEvent(s) != "Every uploaded document has a draft ready for review: 2 drafts from 2 documents." {
+	if s = read(alpha); s.Goal.State != "reached" || lastEvent(s) != "Preparation is ready for review: 2 drafts from 2 documents." {
 		t.Fatalf("the revised draft makes every document ready: %+v %+v", s.Goal, s.Progress.Items)
 	}
 	var attention struct {
@@ -340,7 +340,7 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	found := false
 	for _, g := range attention.Groups {
 		for _, e := range g.Events {
-			found = found || e.Kind == "goal" && e.Text == "Every uploaded document has a draft ready for review"
+			found = found || e.Kind == "goal" && e.Text == "Preparation is ready for review"
 		}
 	}
 	if !found {

@@ -10,7 +10,7 @@ import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { ProposedRequest } from "./ProposedRequest";
 
-export type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
+export type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped" | "supporting"; text: string; drafts: string[]; handable?: boolean };
 type Handoff = { id: string; job_id: string; account_id?: string; name: string; note: string; by: string; at: string; mine: boolean; handed: string };
 type Account = { account_id: string; name: string; state: string };
 type Person = { subject: string; name: string };
@@ -36,6 +36,7 @@ const sections: [Item["status"], string][] = [
   ["client", "Waiting on the client"],
   ["working", "I'm working on"],
   ["prepared", "Ready for review"],
+  ["supporting", "Used with payroll"],
   ["stopped", "Left out"],
 ];
 export const handOver = "Get this close ready for review";
