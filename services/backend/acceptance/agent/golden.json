@@ -617,7 +617,9 @@
     "list_evidence",
     "read_evidence_text"
    ],
-   "args": {
+   "alternative_tools": [["search"]],
+      "args": {
+        "search": {"words": "note.txt"},
     "read_evidence_text": {
      "evidence_id": "$evidence:note.txt"
     }

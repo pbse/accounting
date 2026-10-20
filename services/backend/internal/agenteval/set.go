@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -22,6 +23,8 @@ type Question struct {
 	Scope    string   `json:"scope"` // firm or close
 	Question string   `json:"question"`
 	Tools    []string `json:"tools,omitempty"`
+	// AlternativeTools names other complete recorded read routes that reach the same required evidence.
+	AlternativeTools [][]string `json:"alternative_tools,omitempty"`
 	// Args are the arguments each expected tool is recorded with. A value may name what the recording run created:
 	// $close, $evidence:<file name> or $workpaper:<n> (the close's nth draft, oldest first).
 	Args  map[string]map[string]any `json:"args,omitempty"`
@@ -126,9 +129,27 @@ func (s Set) Check() error {
 		case q.Card == "open_close" && q.Scope != "firm", q.Card == "portfolio" && q.Scope != "firm":
 			errs = append(errs, fmt.Errorf("question %s: the %s card is proposed firm-wide only", q.ID, q.Card))
 		}
+		for _, route := range q.AlternativeTools {
+			if len(route) == 0 {
+				errs = append(errs, fmt.Errorf("question %s: an alternative read route must not be empty", q.ID))
+			}
+		}
 		seen[q.ID] = true
 	}
 	return errors.Join(errs...)
+}
+
+// ReadTools lists all permitted reads for recording and scoring, without duplicates.
+func (q Question) ReadTools() []string {
+	var tools []string
+	for _, route := range append([][]string{q.Tools}, q.AlternativeTools...) {
+		for _, tool := range route {
+			if !slices.Contains(tools, tool) {
+				tools = append(tools, tool)
+			}
+		}
+	}
+	return tools
 }
 
 // Cases lists the acceptance cases the set asks about, in order of first use.
