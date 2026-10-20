@@ -44,7 +44,7 @@ func TestPlanSaysWhoEachStepIsWith(t *testing.T) {
 	}
 
 	// A document that needs a person comes before one the agent is reading; review waits on both.
-	p := goalProgress{Items: []goalItem{{Status: "needs_you"}, {Status: "working"}, {Status: "prepared"}, {Status: "stopped"}}, Needs: []string{"Review 1 held email reply on the Requests tab."}}
+	p := goalProgress{Items: []goalItem{{Status: "needs_you"}, {Status: "working"}, {Status: "prepared"}, {Status: "stopped"}, {Status: "supporting"}}, Needs: []string{"Review 1 held email reply on the Requests tab."}}
 	plan := goalPlan(p, connected, "7", "Acme", "2026-09", "review")
 	if got := states(plan); got != "books:agent documents:you accounts:waits verify:unknown review:waits" {
 		t.Fatalf("plan states: %s", got)
