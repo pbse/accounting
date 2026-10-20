@@ -418,7 +418,11 @@ func (b Books) Record(t Txn) json.RawMessage {
 			if a.Type == "Bank" {
 				continue
 			}
-			line = map[string]any{"Id": fmt.Sprint(i + 1), "Amount": json.Number(show(amount)), "DetailType": "DepositLineDetail", "DepositLineDetail": map[string]any{"AccountRef": map[string]string{"value": a.ID, "name": a.Name}}}
+			detail := map[string]any{"AccountRef": map[string]string{"value": a.ID, "name": a.Name}}
+			if t.Party != "" {
+				detail["Entity"] = map[string]string{"value": t.PartyID, "name": t.Party}
+			}
+			line = map[string]any{"Id": fmt.Sprint(i + 1), "Amount": json.Number(show(amount)), "DetailType": "DepositLineDetail", "DepositLineDetail": detail}
 		case "JournalEntry":
 			posting := "Debit"
 			if p.Debit == nil {
@@ -453,6 +457,13 @@ func (b Books) Record(t Txn) json.RawMessage {
 				if a.Type == "Credit Card" {
 					record["PaymentType"] = "CreditCard"
 				}
+			}
+		}
+	case "Deposit":
+		for _, p := range t.Lines {
+			if a := b.account(p.Account); a.Type == "Bank" && p.Debit != nil {
+				record["DepositToAccountRef"] = map[string]string{"value": a.ID, "name": a.Name}
+				break
 			}
 		}
 	case "Invoice", "Payment", "SalesReceipt", "CreditMemo":
