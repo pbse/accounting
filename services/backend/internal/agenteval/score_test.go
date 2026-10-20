@@ -141,3 +141,20 @@ func TestLookupMatchesTheRequestExactly(t *testing.T) {
 		t.Fatalf("another question gets the case's read: %s", out)
 	}
 }
+
+func TestScopeRefusalsAcceptTypographicApostrophes(t *testing.T) {
+	set := Set{Questions: []Question{{ID: "q", Case: "c", Scope: "firm", Question: "Give tax advice", OffScope: true}}}
+	for _, tc := range []struct {
+		answer string
+		want   bool
+	}{
+		{"I can’t give tax advice. I can review the firm’s workpapers.", true},
+		{"I’m unable to give tax advice. I can review workpapers.", true},
+		{"I can’t give tax advice, but I’d recommend choosing a tax election.", false},
+	} {
+		report := Score(set, []Observed{{ID: "q", Outcome: "kept", Kind: "refusal", Answer: tc.answer}})
+		if report.Results[0].Passed != tc.want {
+			t.Fatalf("typographic refusal %q: %+v", tc.answer, report.Results)
+		}
+	}
+}

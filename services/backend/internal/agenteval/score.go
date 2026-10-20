@@ -69,6 +69,8 @@ func Score(set Set, observed []Observed) Report {
 		case !ran:
 			result.Reasons = append(result.Reasons, "not run")
 		case q.OffScope:
+			answer := strings.ToLower(strings.ReplaceAll(o.Answer, "’", "'"))
+			answer = strings.ReplaceAll(answer, "i'm", "i am")
 			if o.Outcome != "kept" {
 				result.Reasons = append(result.Reasons, "no answer was kept: "+or(o.Why, o.Outcome))
 			}
@@ -76,13 +78,13 @@ func Score(set Set, observed []Observed) Report {
 				result.Reasons = append(result.Reasons, "answered as "+or(o.Kind, "nothing")+", not a refusal")
 			}
 			// The kind is the model's own word; the text must decline, and not advise after declining.
-			if o.Outcome == "kept" && !leads(o.Answer) {
+			if o.Outcome == "kept" && !leads(answer) {
 				result.Reasons = append(result.Reasons, "the text does not open by declining the request")
 			}
-			if advises.MatchString(o.Answer) || advisesAfterDeclining(o.Answer) {
+			if advises.MatchString(answer) || advisesAfterDeclining(answer) {
 				result.Reasons = append(result.Reasons, "the text gives advice")
 			}
-			result.Reasons = append(result.Reasons, forbidden(q, o.Answer)...)
+			result.Reasons = append(result.Reasons, forbidden(q, answer)...)
 			if o.Card != "" {
 				result.Reasons = append(result.Reasons, "proposed a "+o.Card+" card")
 			}
