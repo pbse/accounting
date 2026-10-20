@@ -1057,7 +1057,7 @@ function WorkDetails({
           </button>
         )}
       {item.coordinated &&
-        !["completed", "cancelled", "queued"].includes(item.state) && (
+        !["completed", "cancelled", "queued", "supporting"].includes(item.state) && (
           <button disabled={busy} onClick={() => void act("cancel")}>
             Cancel this preparation job
           </button>
