@@ -31,7 +31,7 @@ Start here to find the governing plan, implementation details and acceptance evi
 | [Slice 6 evidence](docs/slice6-evidence.md) | Runbook for the release's evidence: `scripts/evidence-run.sh` and `cmd/provider-check` record dated provider, acceptance and golden-set runs; what each B12 item needs; the accounting-review package; exactly what the user must provide. Status: prepared for execution, not complete. |
 | [Provider capability inventory](docs/provider-capabilities.md) | Per integration-contract row, what each provider path does on main and how far it is proven (live, synthetic, untested or missing), with the gaps that remain (phase A). As of 2026-10-06, nothing is proven against a live provider. |
 | [Books sources](docs/books-sources.md) | Adopted 2026-10-10 as a track that does not gate launch: books from Trial Balance and ledger files for any ledger, one month-books record every source writes, the client page that holds the connection, the client's ledger recorded at onboarding with a configured ledger catalog (proposed details), client-provided books, the ledger market and the PR sequence. |
-| [Validation history](docs/validation.md) | Dated commands/results, exercised behavior and explicit unverified areas. Consult before claiming a feature is validated. |
+| [Validation history](docs/validation.md) | Dated commands/results, exercised behavior and explicit unverified areas; October 20 separates bounded B04 actual-model/source UX proof, the open full chat gate, local restore and unconfigured B12 monitoring. Consult before claiming a feature is validated. |
 
 ## Find documents by build package
 

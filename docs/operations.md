@@ -2,6 +2,12 @@
 
 This is a runbook for the implemented controls, not an enterprise certification. Define owners, contractual retention, recovery objectives and escalation contacts before admitting client data. Deletion is always an explicit, admin-confirmed action; no automatic purge runs.
 
+## Current B12 execution status — October 20
+
+**Support and incident owner: Prashant Bansal**, reconfirmed by the owner. The outside uptime-monitor service and alert destination are **not configured**. The existing `/healthz/worker` and webhook controls need an external monitor, receiver and observed delivery/escalation; an API health response cannot detect a dead worker by itself. Do not claim working paging or partner operating acceptance until those checks run.
+
+Local restore receipt `2026-10-20T004725Z-b12-local-restore` completed in **3.678 seconds** with two synthetic firms, source hashes, pending jobs and scope intact. This verifies the existing local restore script, not hosted PITR, provider reconciliation, the four-hour RTO or five-minute RPO. The final release-image result is recorded in [validation](validation.md). Hosted load, independent security and identity/MFA/revocation/MCP, real scanner/email/provider checks and partner terms remain open.
+
 ## Release and migration
 
 Deploy the API and worker from the same reviewed revision. Fresh databases use all numbered migrations in numeric order; existing databases apply only unapplied migrations. Stop worker and API traffic before a schema change, preserve a verified backup, and restart them after migration and readiness checks. Migration 024 preserves unattributed historical email delivery events; investigate them, because they block close deletion for that firm. The GitHub staging job checks required schema objects but does not perform production migrations or grant deployment authorization. See [onboarding](onboarding.md).
@@ -28,11 +34,11 @@ For each close, a firm data administrator (`clients:all`, `data:manage`) records
 
 These are the targets [phase A](agent-first-build-plan.md#delivery-sequence-and-launch-gates) requires before testing (set 2026-10-05). **Owner of every control below: Prashant Bansal**, until someone else is named here. A target is what the release must be shown to meet; none is demonstrated yet.
 
-**Recovery.** The production database is Neon project `account` (PostgreSQL 18, Free plan). Backups are Neon's own point-in-time history; this repository adds no backup code (the owner's decision).
+**Recovery.** The October 5 target assumed Neon project `account`, PostgreSQL 18 and provider-managed point-in-time history. The current subscription, configured retention and recoverable window have not been reverified in this local pass; verify them before relying on the target. This repository adds no backup service.
 
 | Target | Value | Rests on |
 | --- | --- | --- |
-| RPO (data that can be lost) | **5 minutes**, for an incident noticed within **6 hours** | Neon's point-in-time restore. The Free plan keeps 6 hours of history (`history_retention_seconds` 21600); an incident noticed later cannot be undone that way. Only the project's one manual snapshot, if one was taken, reaches further back. |
+| RPO (data that can be lost) | **5 minutes**, for an incident noticed within **6 hours** | Provider-managed point-in-time restore with a verified recoverable window covering the incident. Six hours is the original assumed detection window, not a claim about the current provider plan or retention. |
 | RTO (time to serve again) | **4 hours** | Restoring in Neon, then [restoring without repeating external actions](#restore-without-repeating-external-actions) (provider history reconciled before workers resume). |
 
 - **Who restores.** The owner restores from the Neon console. A Neon restore keeps a backup branch, and agents never create Neon branches ([AGENTS.md](../AGENTS.md)), so no agent performs or rehearses it.
