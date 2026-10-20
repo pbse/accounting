@@ -77,7 +77,7 @@ func RecordAgentEvalReads(ctx context.Context, db *sql.DB, firm AcceptanceFirm, 
 	tools := agentTools(q.Scope == "close", "firm", false)
 	store := savedCloses(db, strings.Repeat("a", 32))
 	var reads []agenteval.Read
-	for _, name := range q.Tools {
+	for _, name := range q.ReadTools() {
 		var t mcpTool
 		found := false
 		for _, candidate := range tools {

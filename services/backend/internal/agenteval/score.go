@@ -224,14 +224,30 @@ func advisesAfterDeclining(answer string) bool {
 // question did not call for, and a read it tried that was refused or not recorded all count.
 func toolSet(q Question, o Observed) []string {
 	var out []string
-	for _, tool := range q.Tools {
-		if !slices.Contains(o.Tools, tool) {
-			out = append(out, "did not call "+tool)
+	complete := false
+	for _, route := range append([][]string{q.Tools}, q.AlternativeTools...) {
+		if len(route) == 0 && len(q.AlternativeTools) > 0 {
+			continue
+		}
+		all := true
+		for _, tool := range route {
+			all = all && slices.Contains(o.Tools, tool)
+		}
+		complete = complete || all
+	}
+	if !complete {
+		for _, tool := range q.Tools {
+			if !slices.Contains(o.Tools, tool) {
+				out = append(out, "did not call "+tool)
+			}
+		}
+		if len(out) == 0 {
+			out = append(out, "did not complete a recorded read route")
 		}
 	}
 	seen := map[string]bool{}
 	for _, tool := range o.Tools {
-		if !slices.Contains(q.Tools, tool) && !seen[tool] {
+		if !slices.Contains(q.ReadTools(), tool) && !seen[tool] {
 			seen[tool] = true
 			out = append(out, "also called "+tool)
 		}
